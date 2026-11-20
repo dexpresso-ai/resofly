@@ -23,6 +23,15 @@
  *   of naar keuze 20% van het totaal niet aftrekbaar.
  * Andere jaren staan er bewust niet in: liever geen bedrag dan een verkeerd
  * bedrag. Voeg een jaar toe zodra de bedragen vaststaan.
+ *
+ * GEEN SCHERM GEBRUIKT DIT NOG. Tot 19 november 2026 rekende het blok "Voor je
+ * aangifte" op Eigen vermogen hiermee, met de uren uit de app en een eigen
+ * startervinkje, los van wat bij Financiën → Inkomstenbelasting was
+ * opgeslagen. Bij € 45.000 winst met daar "urencriterium ja + starter" stond
+ * er op het ene scherm € 36.384,02 en op het andere € 39.285,00. Eigen
+ * vermogen toont nu de raming zelf (src/lib/inkomstenbelasting.ts). Dit
+ * bestand blijft als tweede, los geschreven som: inkomstenbelasting.test.ts
+ * rekent er de raming mee na. Bouw er geen scherm meer op.
  */
 
 export interface IncomeTaxYearRules {

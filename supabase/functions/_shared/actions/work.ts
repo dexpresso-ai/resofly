@@ -246,17 +246,22 @@ export const WORK_ACTIONS: ActionDef[] = [
   },
   {
     id: 'invoice.credit',
-    label: 'Een factuur crediteren (creditnota voor het hele bedrag)',
+    label: 'Een factuur crediteren (creditnota voor het onbetaalde restant)',
     module: 'finance',
     kind: 'write',
     risk: 'high',
     description:
-      'Maakt een creditfactuur voor het VOLLEDIGE bedrag van een verstuurde, nog niet betaalde factuur, net als de knop "Crediteren": de creditnota gaat ook naar de klant, omzet en btw worden teruggeboekt en de factuur gaat op geannuleerd. ' +
+      'Maakt een creditfactuur voor het RESTANT van een verstuurde factuur dat nog niet betaald is (of een deel daarvan met `amount_eur`), net als de knop "Crediteren": omzet en btw over dat bedrag worden teruggeboekt. ' +
+      'Is er niets betaald, dan gaat de factuur op geannuleerd; is er al een deel betaald, dan is de factuur daarna afgehandeld (betaald) en vervalt alleen het restant. ' +
+      'Met `send_to_client: false` krijgt de klant de creditfactuur niet (afboeken als oninbaar: de factuur gaat op afgeboekt). ' +
+      'Een volledig betaalde factuur crediteer je zo niet: dan gaat het om geld terug (terugbetaling). ' +
       'Zo herstel je een verstuurde factuur; wissen kan wettelijk niet. Daarna kun je met `propose_invoice` een nieuwe, goede factuur klaarzetten. Zoek de factuur met `list_invoices`.',
     keywords: ['crediteren', 'creditnota', 'creditfactuur', 'factuur', 'tegenboeken', 'corrigeren', 'annuleren', 'terugdraaien', 'fout'],
     input: {
       invoice_id: { type: 'string', description: 'Id van de factuur (uit list_invoices).' },
       reason: { type: 'string', description: 'De reden; die komt op de creditfactuur (standaard "Factuur vervalt").' },
+      amount_eur: { type: 'number', description: 'Optioneel: een deel van het onbetaalde restant crediteren, in euro inclusief btw. Leeg: het hele restant.' },
+      send_to_client: { type: 'boolean', description: 'Standaard true. false: interne creditnota zonder mail (afboeken als oninbaar).' },
     },
     required: ['invoice_id'],
     async plan(ctx, input) {
@@ -267,17 +272,37 @@ export const WORK_ACTIONS: ActionDef[] = [
         throw new ActionError(invoice.status === 'draft'
           ? 'Dit is nog een concept; dat pas je gewoon aan (propose_edit_invoice) in plaats van te crediteren.'
           : invoice.status === 'paid'
-            ? 'Deze factuur is betaald. Een betaalde factuur crediteer je niet met deze knop; registreer een terugbetaling of maak een gedeeltelijke creditnota in het scherm.'
+            ? 'Deze factuur is volledig betaald; er staat niets open om te crediteren. Gaat de verkoop (deels) niet door, registreer dan een terugbetaling met creditfactuur (invoice.register_refund).'
             : `Een factuur met status "${invoice.status}" kun je niet crediteren.`);
       }
+      // GEWIJZIGD (20261119190000): de server crediteert wat openstaat, niet
+      // het hele bedrag. De kaart zei "het hele bedrag, op geannuleerd", ook bij
+      // een factuur waarop al € 400 was betaald.
+      const { data: openRaw, error: openError } = await ctx.db.rpc('invoice_open_receivable_cents', { p_organization_id: ctx.organizationId, p_invoice_id: invoiceId });
+      if (openError) throw new ActionError('Het openstaande bedrag van deze factuur kon niet worden geladen.');
+      const openCents = Math.max(0, Math.round(Number(openRaw ?? 0)));
+      if (openCents <= 0) throw new ActionError(`Op factuur ${invoice.number ?? ''} staat niets meer open; er valt niets te crediteren.`);
+      const totalCents = Math.round(Number(invoice.total_amount ?? 0) * 100);
+      const paidCents = Math.max(0, totalCents - openCents);
+      const amountEur = optNum(input, 'amount_eur');
+      const amountCents = amountEur === null ? null : Math.round(amountEur * 100);
+      if (amountCents !== null && (amountCents <= 0 || amountCents > openCents)) {
+        throw new ActionError(`Er staat ${euro(openCents / 100)} open; crediteer een bedrag tussen € 0,01 en dat bedrag.`);
+      }
+      const creditCents = amountCents ?? openCents;
+      const sendToClient = input.send_to_client === false ? false : true;
       const client = invoice.client_id ? await row<{ name: string }>(ctx, 'clients', invoice.client_id, 'name', 'Klant') : null;
-      const reason = optStr(input, 'reason', 500) ?? 'Factuur vervalt';
+      const reason = optStr(input, 'reason', 500) ?? (sendToClient ? 'Factuur vervalt' : 'Oninbaar');
+      const after = creditCents < openCents
+        ? `daarna staat er nog ${euro((openCents - creditCents) / 100)} open`
+        : !sendToClient ? 'de factuur gaat op afgeboekt'
+          : paidCents > 0 ? `het betaalde deel (${euro(paidCents / 100)}) blijft staan en de factuur is afgehandeld` : 'de factuur gaat op geannuleerd';
       return {
-        title: `Factuur ${invoice.number ?? ''} crediteren`.replace(/\s+/g, ' '),
-        sub: joinShort([client?.name, invoice.total_amount !== null ? euro(Number(invoice.total_amount)) : null, `reden: ${reason}`], 140),
+        title: `Factuur ${invoice.number ?? ''} ${sendToClient ? 'crediteren' : 'afboeken als oninbaar'}`.replace(/\s+/g, ' '),
+        sub: joinShort([client?.name, `${euro(creditCents / 100)} van ${euro(totalCents / 100)}`, `reden: ${reason}`], 140),
         kind: 'money',
-        warning: 'Er gaat een creditfactuur voor het hele bedrag naar de klant, omzet en btw worden teruggeboekt en de factuur gaat op geannuleerd. Dit kun je niet ongedaan maken.',
-        payload: { invoice_id: invoiceId, number: invoice.number, reason },
+        warning: `Er komt een creditfactuur van ${euro(creditCents / 100)}${sendToClient ? ' die naar de klant gaat' : ' (de klant krijgt hem niet)'}; omzet en btw over dat bedrag worden teruggeboekt en ${after}. Dit kun je niet ongedaan maken.`,
+        payload: { invoice_id: invoiceId, number: invoice.number, reason, amount_cents: amountCents, send_to_client: sendToClient },
       };
     },
   },

@@ -110,7 +110,8 @@ export const BOOKKEEPING_EXECUTORS: Record<string, ActionExecutor> = {
       // book_purchase_invoice straks op 1600 zet.
       const lines = payload.lines as PurchaseInvoiceLine[];
       const fallbackAccountId = ctx.data.ledgerAccounts.find(a => a.code === '4500')?.id ?? null;
-      const totals = purchaseTotals(lines, fallbackAccountId);
+      // Met de btw-soorten, zoals het formulier: verlegde btw niet in het totaal.
+      const totals = purchaseTotals(lines, fallbackAccountId, { vatCodes: ctx.data.vatCodes, kor: ctx.data.companySettings?.kor_enabled ?? false });
       values.lines = lines;
       values.subtotal_cents = totals.subtotal_cents;
       values.vat_cents = totals.vat_cents;

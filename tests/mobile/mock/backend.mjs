@@ -700,7 +700,8 @@ function mailFolderRpc(fn, body) {
  * (2026-11-18). Een eenmanszaak met een bijtelling, een boete, € 1.562 op 4600
  * (eten, drinken en representatie) en vier activa (een personenauto
  * uitgesloten, een muis onder de € 450), of een vof met twee vennoten en een
- * uitgetreden vennoot. De eigenaar van de eenmanszaak heeft 1.235 uur. Het jaar komt uit de aanroep,
+ * uitgetreden vennoot. De eigenaar van de eenmanszaak heeft 1.235 uur en heeft
+ * het urencriterium niet zelf gekozen: het volgt zijn uren. Het jaar komt uit de aanroep,
  * zodat de pagina in elk jaar iets toont.
  */
 function incomeTaxInputs(form, body) {
@@ -722,7 +723,10 @@ function incomeTaxInputs(form, body) {
     ] : [],
     profiles: partnership
       ? [profile('pp-1', { starter: true }), profile('pp-2', { meetsHoursCriterion: null, aowStatus: 'in_jaar', aowMonth: 8, provisionalIncomeTaxCents: 0, provisionalZvwCents: 0 })]
-      : [profile(null, {})],
+      // Zonder eigen keuze (null): het urencriterium volgt de 1.235 uur van de
+      // eigenaar, en de keuzelijst toont de langste tekst, "Volgens Uren (nu
+      // 1.235 uur: ja)". Die moet op de telefoon passen.
+      : [profile(null, { meetsHoursCriterion: null })],
     corrections: [
       { id: 'itc-1', partnerId: partnership ? 'pp-2' : null, code: 'privegebruik_auto', label: 'Bijtelling auto van de zaak (22% van de cataloguswaarde)', amountCents: 294000 },
       { id: 'itc-2', partnerId: null, code: 'niet_aftrekbaar', label: 'Verkeersboete', amountCents: 9500 },

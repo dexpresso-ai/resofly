@@ -18,12 +18,18 @@
 //      bestand dat geen foto is, wordt geweigerd; een opslagstoring laat niets
 //      achter;
 //   6. een nee tegen AI: de bon gaat niet langs Claude, en "zelf invullen"
-//      hangt hem aan een met de hand gemaakt concept.
+//      hangt hem aan een met de hand gemaakt concept;
+//   7. de controle van 19 november 2026 (inkoop): het btw-bedrag van de bon
+//      telt (€ 10,00 blijft € 10,00), verlegde btw zit niet in het totaal en
+//      geeft geen valse waarschuwing, een verkoopcode komt niet op een bon, een
+//      onwaarschijnlijke datum geeft een waarschuwing en wordt niet geboekt,
+//      een klaargezet concept kan weg terwijl de foto blijft, en de werklijst
+//      raakt niets kwijt dat aandacht vraagt.
 import { randomBytes, randomUUID } from 'node:crypto';
 import { roep } from './functies.mjs';
 import { ai, BON } from './nep-ai.mjs';
 import { post } from './nepdiensten.mjs';
-import { rest, rpc, sqlRij, sqlRijen } from './supabase.mjs';
+import { rest, rpc, sql, sqlRij, sqlRijen } from './supabase.mjs';
 import { gelijk, gelukt, geweigerd, groep, stap, verwacht } from './toets.mjs';
 import { maakWereld, zetGerrieUit } from './wereld.mjs';
 
@@ -326,5 +332,177 @@ export default async function bonnen() {
     const bijlagen = sqlRijen(`select storage_key from public.attachments where entity_type = 'purchase_invoice' and entity_id = ${q(concept.id)}`);
     gelijk(bijlagen.map((b) => b.storage_key), [sleutel], 'de foto als bewijsstuk');
     geweigerd(await actie(w, w.medewerker, id, { action: 'link', purchaseInvoiceId: concept.id }), 'twee keer koppelen', [409]);
+  });
+
+  // ── 7. Controle inkoop, 19 november 2026 ─────────────────────────────
+  groep('Bonnen: btw-bedrag, verlegde btw, btw-codes, datum (controle 2026-11-19)');
+
+  /** Wat Claude de volgende keer leest, met eigen regels en totalen. */
+  const leestRegels = (winkel, nummer, regels, totalen, extra = {}) => {
+    ai.bon = { ...BON, supplier: { ...BON.supplier, name: winkel, ...(extra.supplier ?? {}) }, supplier_invoice_number: nummer, lines: regels, totals: totalen, ...(extra.datum ? { invoice_date: extra.datum } : {}) };
+  };
+  const totalenVan = (voorstel) => [voorstel.totals.subtotal_cents, voorstel.totals.vat_cents, voorstel.totals.total_cents];
+  const concept = (id) => sqlRij(`select status, date, subtotal_cents, vat_cents, total_cents, lines, extraction_meta->'warnings' as waarschuwingen from public.purchase_invoices where id = ${q(id)}`);
+  const boeking = (factuurId) => sqlRijen(`select la.code, jl.debit_cents, jl.credit_cents from public.journal_lines jl
+      join public.journal_entries je on je.id = jl.entry_id join public.ledger_accounts la on la.id = jl.account_id
+     where je.source_type = 'purchase_invoice' and je.source_id = ${q(factuurId)} and je.reverses_entry_id is null order by la.code`)
+    .map((r) => `${r.code}:${Number(r.debit_cents) - Number(r.credit_cents)}`);
+
+  await stap('een bon van € 10,00 blijft € 10,00: het btw-bedrag van de bon telt, ook in de boeking', async () => {
+    // € 8,26 × 21% = € 1,73; de winkel rekent € 1,74. Het concept was € 9,99,
+    // een cent naast de pinbetaling.
+    leestRegels('Bakkerij Lopik', 'BL-10', [{ description: 'Gebak', amount_excl_vat: 8.26, vat_rate: 21, account_code: null, vat_code: 'HOOG' }],
+      { subtotal_excl_vat: 8.26, vat_amount: 1.74, total_incl_vat: 10 });
+    const res = gelukt(await bon(w, w.eigenaar), 'bon insturen');
+    gelijk([res.item.status, res.invoice.total_cents], ['ready', 1000], 'totaal van het concept');
+    gelijk(totalenVan(res.item.proposal), [826, 174, 1000], 'totalen in het voorstel');
+    verwacht(!res.item.warnings.some((r) => /wijken af/.test(r)), `waarschuwing: ${res.item.warnings.join(' | ')}`);
+    const pi = concept(res.invoice.id);
+    gelijk([Number(pi.subtotal_cents), Number(pi.vat_cents), Number(pi.total_cents), pi.lines[0].vat_cents], [826, 174, 1000, 174], 'kop en regel');
+    gelukt(await rpc('book_purchase_invoice', { p_organization_id: w.orgId, p_purchase_invoice_id: res.invoice.id }, w.eigenaar.token), 'boeken');
+    gelijk(boeking(res.invoice.id), ['1500:174', '1600:-1000', '4500:826'], 'boeking: crediteuren is het bonbedrag');
+  });
+
+  await stap('klopt de berekende btw al, dan komt er geen btw-bedrag op de regel', async () => {
+    leest('Gamma Utrecht', 'GM-3', 23.4);
+    const res = gelukt(await bon(w, w.eigenaar), 'bon insturen');
+    verwacht(!('vat_cents' in concept(res.invoice.id).lines[0]), 'een btw-bedrag op de regel terwijl het berekende klopt');
+  });
+
+  await stap('verlegde btw (EU): totaal € 100, geen valse waarschuwing; de boeking geeft 4b aan', async () => {
+    // Eerder: "BTW € 21,00, totaal € 121,00" en de waarschuwing dat de
+    // bedragen afweken, bij elke goed gelezen verlegde factuur.
+    leestRegels('Google Ireland Ltd', 'GI-2026-11', [{ description: 'Google Ads', amount_excl_vat: 100, vat_rate: 0, account_code: null, vat_code: 'EU_VERW' }],
+      { subtotal_excl_vat: 100, vat_amount: 0, total_incl_vat: 100 }, { supplier: { country: 'IE', vat_number: 'IE6388047V' } });
+    const res = gelukt(await bon(w, w.eigenaar), 'factuur insturen');
+    gelijk(res.invoice.total_cents, 10000, 'totaal van het concept');
+    gelijk(totalenVan(res.item.proposal), [10000, 0, 10000], 'totalen in het voorstel');
+    gelijk(res.item.warnings, [], 'geen waarschuwing');
+    gelijk(res.item.confidence, 'high', 'zekerheid blijft hoog');
+    const pi = concept(res.invoice.id);
+    gelijk([pi.lines[0].vat_code, pi.lines[0].vat_rate, Number(pi.vat_cents), Number(pi.total_cents)], ['EU_VERW', 21, 0, 10000], 'regel en kop');
+    gelukt(await rpc('book_purchase_invoice', { p_organization_id: w.orgId, p_purchase_invoice_id: res.invoice.id }, w.eigenaar.token), 'boeken');
+    gelijk(boeking(res.invoice.id), ['1500:2100', '1520:-2100', '1600:-10000', '4500:10000'], 'boeking: € 100 op crediteuren, € 21 aangeven en aftrekken');
+  });
+
+  await stap('een verkoopcode komt niet op een bon: ICP wordt de inkoopkant, export wordt 0%', async () => {
+    leestRegels('Adobe Systems Ireland', 'AD-7', [{ description: 'Creative Cloud', amount_excl_vat: 60, vat_rate: 0, account_code: null, vat_code: 'ICP_DIENST' }],
+      { subtotal_excl_vat: 60, vat_amount: 0, total_incl_vat: 60 }, { supplier: { country: 'IE' } });
+    const icp = gelukt(await bon(w, w.eigenaar), 'factuur met ICP-code');
+    gelijk(concept(icp.invoice.id).lines[0].vat_code, 'EU_VERW', 'ICP diensten wordt Verwerving EU');
+    verwacht(icp.item.warnings.some((r) => /ICP_DIENST.*verkoopcode/.test(r)), `waarschuwing: ${icp.item.warnings.join(' | ')}`);
+    gelijk(icp.item.confidence, 'medium', 'zekerheid omlaag: een mens kijkt het na');
+
+    // Zonder btw: bij gelijk tarief stond "Export buiten EU" vooraan (alfabet).
+    leestRegels('Gemeente Lopik', 'LEGES-1', [{ description: 'Leges', amount_excl_vat: 35, vat_rate: 0, account_code: null, vat_code: null }],
+      { subtotal_excl_vat: 35, vat_amount: 0, total_incl_vat: 35 });
+    const nul = gelukt(await bon(w, w.eigenaar), 'bon zonder btw');
+    gelijk([concept(nul.invoice.id).lines[0].vat_code, nul.item.warnings], ['NUL', []], 'een regel zonder btw krijgt NUL');
+
+    leestRegels('Postkantoor Lopik', 'PK-4', [{ description: 'Postzegels', amount_excl_vat: 12, vat_rate: 0, account_code: null, vat_code: 'EXPORT' }],
+      { subtotal_excl_vat: 12, vat_amount: 0, total_incl_vat: 12 });
+    const exportCode = gelukt(await bon(w, w.eigenaar), 'bon met exportcode');
+    gelijk(concept(exportCode.invoice.id).lines[0].vat_code, 'NUL', 'export wordt NUL');
+    verwacht(exportCode.item.warnings.some((r) => /EXPORT.*verkoopcode/.test(r)), `waarschuwing: ${exportCode.item.warnings.join(' | ')}`);
+  });
+
+  await stap('een datum in 2062: waarschuwing, zekerheid omlaag, en boeken wordt geweigerd', async () => {
+    leestRegels('Praxis Utrecht', 'PX-2062', [{ description: 'Verf', amount_excl_vat: 10, vat_rate: 21, account_code: null, vat_code: 'HOOG' }],
+      { subtotal_excl_vat: 10, vat_amount: 2.1, total_incl_vat: 12.1 }, { datum: '2062-11-16' });
+    const res = gelukt(await bon(w, w.eigenaar), 'bon insturen');
+    verwacht(res.item.warnings.some((r) => /16-11-2062 ligt in de toekomst/.test(r)), `waarschuwing: ${res.item.warnings.join(' | ')}`);
+    gelijk(res.item.confidence, 'medium', 'zekerheid');
+    gelijk(concept(res.invoice.id).status, 'draft', 'concept');
+    const geboekt = await rpc('book_purchase_invoice', { p_organization_id: w.orgId, p_purchase_invoice_id: res.invoice.id }, w.eigenaar.token);
+    geweigerd(geboekt, 'boeken in 2062');
+    verwacht(/toekomst/.test(JSON.stringify(geboekt.json ?? geboekt.tekst ?? '')), `melding: ${JSON.stringify(geboekt.json ?? geboekt.tekst)}`);
+  });
+
+  await stap('een bon van vóór de startdatum van de boekhouding: waarschuwing op het concept', async () => {
+    sql(`update public.company_settings set bookkeeping_start_date = '2026-01-01' where organization_id = ${q(w.orgId)}`);
+    leestRegels('Bruna Utrecht', 'BR-2025', [{ description: 'Agenda', amount_excl_vat: 10, vat_rate: 21, account_code: null, vat_code: 'HOOG' }],
+      { subtotal_excl_vat: 10, vat_amount: 2.1, total_incl_vat: 12.1 }, { datum: '2025-12-30' });
+    const res = gelukt(await bon(w, w.eigenaar), 'bon insturen');
+    verwacht(res.item.warnings.some((r) => /30-12-2025 ligt vóór de startdatum van je boekhouding \(01-01-2026\)/.test(r)), `waarschuwing: ${res.item.warnings.join(' | ')}`);
+    verwacht((concept(res.invoice.id).waarschuwingen ?? []).some((r) => /startdatum/.test(r)), 'de waarschuwing staat niet op het concept');
+  });
+
+  groep('Bonnen: een klaargezet concept weggooien, en de werklijst (controle 2026-11-19)');
+  await stap('negeren van een klaargezette bon: het concept gaat weg, de foto blijft en is terug te halen', async () => {
+    leest('Etos Lopik', 'ET-1', 6.5);
+    const res = gelukt(await bon(w, w.eigenaar), 'bon insturen');
+    const sleutel = inbox(res.item.id).attachments[0].storage_key;
+    geweigerd(await actie(w, w.lezer, res.item.id, { action: 'reject' }), 'een lezer negeert niet', [403]);
+    const weg = gelukt(await actie(w, w.eigenaar, res.item.id, { action: 'reject' }), 'negeren');
+    gelijk([weg.item.status, weg.item.reason, weg.item.purchase_invoice_id], ['rejected', 'dismissed_by_user', null], 'genegeerd');
+    gelijk(Number(sqlRij(`select count(*) as n from public.purchase_invoices where id = ${q(res.invoice.id)}`).n), 0, 'concept weg');
+    gelijk(Number(sqlRij(`select count(*) as n from public.attachments where entity_type = 'purchase_invoice' and entity_id = ${q(res.invoice.id)}`).n), 0, 'geen losse bijlage-regel');
+    gelijk(inbox(res.item.id).attachments[0].storage_key, sleutel, 'de foto hoort nog bij het item');
+    verwacht(post.r2.has(sleutel), 'de foto is van R2 verdwenen');
+    leest('Etos Lopik', 'ET-1', 6.5);
+    const terug = gelukt(await actie(w, w.eigenaar, res.item.id, { action: 'restore' }), 'herstellen');
+    gelijk(terug.item.status, 'ready', 'weer een concept');
+    st.hersteld = { item: res.item.id, factuur: terug.item.purchase_invoice_id };
+  });
+
+  await stap('een concept dat geboekt en tegengeboekt is, blijft bewaard: negeren kan niet, de boekstukken zijn te vinden', async () => {
+    const { item, factuur } = nodig(st.hersteld, 'herstelde bon');
+    const journaal = gelukt(await rpc('book_purchase_invoice', { p_organization_id: w.orgId, p_purchase_invoice_id: factuur }, w.eigenaar.token), 'boeken');
+    const boekstuk = Array.isArray(journaal) ? journaal[0] : journaal;
+    const tegen = gelukt(await rpc('reverse_journal_entry', { p_entry_id: boekstuk.id, p_date: null }, w.eigenaar.token), 'tegenboeken');
+    const tegenboeking = Array.isArray(tegen) ? tegen[0] : tegen;
+    // Zonder datum: op de datum van het boekstuk zelf, niet op vandaag (20261119180000).
+    gelijk(tegenboeking.date, boekstuk.date, 'de tegenboeking staat op de datum van het boekstuk');
+    gelijk(concept(factuur).status, 'draft', 'weer een concept');
+    geweigerd(await actie(w, w.eigenaar, item, { action: 'reject' }), 'negeren na boeken', [409]);
+    gelijk(Number(sqlRij(`select count(*) as n from public.purchase_invoices where id = ${q(factuur)}`).n), 1, 'het concept staat er nog');
+    // Precies de vraag van loadPurchaseInvoiceRemovalFacts (src/lib/repository.ts):
+    // daarop weigert het formulier "Concept verwijderen".
+    const stukken = gelukt(await rest(`journal_entries?select=id,entry_number&organization_id=eq.${w.orgId}&source_type=eq.purchase_invoice&source_id=eq.${factuur}&order=date.asc`, { token: w.eigenaar.token }), 'boekstukken');
+    gelijk(stukken.length, 2, 'boeking en tegenboeking');
+    const bron = gelukt(await rest(`purchase_invoice_inbox?select=id,channel&organization_id=eq.${w.orgId}&purchase_invoice_id=eq.${factuur}&limit=1`, { token: w.eigenaar.token }), 'item van de werklijst');
+    gelijk(bron.map((r) => [r.id, r.channel]), [[item, 'receipt']], 'het item bij het concept');
+  });
+
+  await stap('een kaal concept (zonder bon, nooit geboekt) kan de eigenaar verwijderen; een lezer niet', async () => {
+    const leverancier = gelukt(await rest('suppliers?select=id', {
+      method: 'POST', token: w.eigenaar.token, prefer: 'return=representation',
+      body: { organization_id: w.orgId, name: 'Tikfout BV', status: 'active' },
+    }), 'leverancier')[0];
+    const kaal = gelukt(await rest('purchase_invoices?select=id', {
+      method: 'POST', token: w.eigenaar.token, prefer: 'return=representation',
+      body: {
+        organization_id: w.orgId, supplier_id: leverancier.id, date: '2026-11-18', status: 'draft', payment_status: 'unpaid', source: 'manual',
+        lines: [{ id: randomUUID(), description: 'Verkeerd ingevoerd', amount_cents: 1000, vat_code: 'HOOG', vat_rate: 21, account_id: null }],
+        subtotal_cents: 1000, vat_cents: 210, total_cents: 1210, currency: 'EUR',
+      },
+    }), 'concept')[0];
+    // De leverancier heeft nu een factuur: verwijderen geeft de fout die het
+    // scherm in gewone woorden zegt (describeSupplierDeleteError).
+    const leverancierWeg = await rest(`suppliers?id=eq.${leverancier.id}&organization_id=eq.${w.orgId}`, { method: 'DELETE', token: w.eigenaar.token });
+    geweigerd(leverancierWeg, 'leverancier met facturen verwijderen');
+    gelijk(leverancierWeg.json?.code, '23503', 'de foutcode waar het scherm op let');
+    await rest(`purchase_invoices?id=eq.${kaal.id}&organization_id=eq.${w.orgId}`, { method: 'DELETE', token: w.lezer.token });
+    gelijk(Number(sqlRij(`select count(*) as n from public.purchase_invoices where id = ${q(kaal.id)}`).n), 1, 'een lezer verwijdert niets');
+    gelukt(await rest(`purchase_invoices?id=eq.${kaal.id}&organization_id=eq.${w.orgId}`, { method: 'DELETE', token: w.eigenaar.token }), 'verwijderen');
+    gelijk(Number(sqlRij(`select count(*) as n from public.purchase_invoices where id = ${q(kaal.id)}`).n), 0, 'concept weg');
+  });
+
+  await stap('de werklijst raakt geen bon kwijt: wat aandacht vraagt komt altijd mee, ook na 200 nieuwere items', async () => {
+    // Een oude bon die niet gelezen is, en daarna 205 afgehandelde items.
+    sql(`insert into public.purchase_invoice_inbox (organization_id, dedup_key, subject, received_at, status, reason, channel)
+         values (${q(w.orgId)}, 'test:oud:' || gen_random_uuid(), 'Oude bon, niet gelezen', now() - interval '90 days', 'needs_review', 'nothing_extracted', 'receipt')`);
+    sql(`insert into public.purchase_invoice_inbox (organization_id, dedup_key, subject, received_at, status, channel)
+         select ${q(w.orgId)}, 'test:vol:' || gen_random_uuid(), 'Afgehandeld ' || n, now() - (n || ' minutes')::interval, 'booked', 'email' from generate_series(1, 205) n`);
+    const basis = `purchase_invoice_inbox?select=id,subject,status&organization_id=eq.${w.orgId}&order=received_at.desc,id.desc`;
+    // Zoals het was: de 200 nieuwste van alles. De oude bon zit er niet bij.
+    const oud = gelukt(await rest(`${basis}&status=neq.dropped&limit=200`, { token: w.eigenaar.token }), 'oude vraag');
+    verwacht(!oud.some((r) => r.subject === 'Oude bon, niet gelezen'), 'de oude vraag vond de bon wel: de test toetst niets');
+    // Zoals loadPurchaseInvoiceInbox het nu vraagt: eerst alles wat open is.
+    const open = gelukt(await rest(`${basis}&or=(status.in.(received,processing,needs_review,duplicate,failed),and(channel.eq.declaration,status.eq.ready))&offset=0&limit=500`, { token: w.eigenaar.token }), 'open items');
+    verwacht(open.some((r) => r.subject === 'Oude bon, niet gelezen'), 'de oude bon ontbreekt in de open items');
+    verwacht(open.every((r) => r.status !== 'booked' && r.status !== 'rejected'), 'een afgehandeld item bij de open items');
+    const klaar = gelukt(await rest(`${basis}&status=in.(ready,booked,rejected)&limit=200`, { token: w.eigenaar.token }), 'afgehandelde items');
+    gelijk(klaar.length, 200, 'de limiet geldt alleen voor wat is afgehandeld');
   });
 }

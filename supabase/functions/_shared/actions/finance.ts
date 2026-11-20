@@ -18,7 +18,8 @@ import { defaultInvoiceRecipient } from '../eInvoicing.ts';
  *  - de levenscyclus van een factuur: status, projectkoppeling, betaald melden;
  *  - de incasso-trap: herinneringen per factuur pauzeren, één gekozen factuur
  *    herinneren, en de formele WIK-aanmaning opstellen, versturen of annuleren;
- *  - terugbetaling met creditnota, en die creditnota mailen;
+ *  - terugbetaling vastleggen (de verkoop vervalt: met creditnota; te veel of
+ *    dubbel betaald: alleen geld terug), en een creditnota mailen;
  *  - het grootboek: verkoopfactuur en creditnota boeken, en een binnenkomende
  *    banktransactie tegen een geboekte factuur afletteren;
  *  - de historie lezen (versies, verzendhistorie, betalingen, terugbetalingen);
@@ -341,7 +342,7 @@ export const FINANCE_ACTIONS: ActionDef[] = [
     description:
       'Zet de status van een factuur met de hand. "paid" kan alleen voor een factuur van vóór de startdatum van de boekhouding (die vordering staat in de beginbalans). Voor elke andere factuur registreer je een betaling door de banktransactie te koppelen (`invoice.reconcile_bank_transaction`); contant geld gaat net zo, via een kasrekening als bankrekening. Een memoriaalpost op Debiteuren telt niet als betaling van de factuur. Daarna staat hij vanzelf op betaald. ' +
       'draft = concept, sent = verzonden, overdue = te laat, paid = betaald, cancelled = geannuleerd, void = ongeldig gemaakt, written_off = afgeboekt (oninbaar). ' +
-      'Let op: "void" en "written_off" zijn feitelijk eindstations, en de bedragen zelf verander je hiermee niet. Zoek de factuur met `list_invoices`.',
+      'Let op: "void" en "written_off" zijn feitelijk eindstations, en de bedragen zelf verander je hiermee niet. Een factuur die in het grootboek staat en waarop nog iets openstaat, annuleer of boek je niet af via de status: dat gaat met "Crediteren" bij de factuur in ResoFly (voor wat nog openstaat, ook na een deelbetaling; daar staat ook "Afboeken als oninbaar"). Zoek de factuur met `list_invoices`.',
     keywords: ['status', 'betaald', 'betaling registreren', 'markeren', 'voldaan', 'geannuleerd', 'afboeken', 'oninbaar', 'storneren', 'debiteuren'],
     input: {
       invoice_id: { type: 'string', description: 'Id van de factuur (exact, uit list_invoices).' },
@@ -358,6 +359,12 @@ export const FINANCE_ACTIONS: ActionDef[] = [
       }
       if (status === 'draft' && invoice.status !== 'draft') {
         throw new ActionError(`Factuur ${invoice.number} is uitgegeven en gaat niet terug naar concept. Crediteer hem en maak een nieuwe factuur.`);
+      }
+      // Een concept met een negatief totaal niet uitgeven (ook niet via de
+      // status): zo'n zelfgemaakte "creditfactuur" komt negatief op Debiteuren
+      // en is daarna niet af te letteren. Versturen weigert het ook.
+      if (invoice.status === 'draft' && ['sent', 'overdue', 'paid'].includes(status) && linesTotalEur(invoice.lines) < 0) {
+        throw new ActionError(`Factuur ${invoice.number} komt uit op een negatief bedrag (${euro(linesTotalEur(invoice.lines))}). Geld terug aan de klant factureer je niet met een negatieve factuur. Kies "Crediteren" bij de factuur waar dit over gaat (daar kan ook een deel van het bedrag); is die al betaald, gebruik dan \`invoice.register_refund\`.`);
       }
       // Een ongeboekte factuur op betaald zetten boekt hem meteen (invoices_autobook:
       // omzet en btw tegen 1300 Debiteuren), maar niet de betaling. De factuur heette
@@ -384,8 +391,8 @@ export const FINANCE_ACTIONS: ActionDef[] = [
           // Alleen de status op betaald zetten laat 1300 Debiteuren open staan
           // (en de factuur in de openstaande posten): de betaling hoort geboekt.
           throw new ActionError(status === 'paid'
-            ? `Factuur ${invoice.number} staat in het grootboek en er staat nog ${euro(Number(openCents) / 100)} open. Registreer de betaling door de banktransactie te koppelen (\`invoice.reconcile_bank_transaction\`); contant geld gaat net zo, via een kasrekening. Dan staat hij vanzelf op betaald.`
-            : `Factuur ${invoice.number} staat in het grootboek (omzet en btw zijn geboekt). Annuleren of afboeken gaat met een creditnota: kies "Crediteren" bij de factuur in ResoFly.`);
+            ? `Factuur ${invoice.number} staat in het grootboek en er staat nog ${euro(Number(openCents) / 100)} open. Registreer de betaling door de banktransactie te koppelen (\`invoice.reconcile_bank_transaction\`); contant geld gaat net zo, via een kasrekening. Dan staat hij vanzelf op betaald. Komt de rest niet meer binnen, kies dan "Crediteren" bij de factuur in ResoFly: de creditfactuur gaat over wat nog openstaat.`
+            : `Factuur ${invoice.number} staat in het grootboek (omzet en btw zijn geboekt) en er staat nog ${euro(Number(openCents) / 100)} open. Annuleren of afboeken gaat met een creditnota: kies "Crediteren" bij de factuur in ResoFly. Dat gaat over wat nog openstaat, ook als er al een deel betaald is; voor een oninbare factuur staat daar "Afboeken als oninbaar" (dan krijgt de klant geen creditfactuur).`);
         }
       }
       const warnings: Record<string, string> = {
@@ -680,20 +687,24 @@ export const FINANCE_ACTIONS: ActionDef[] = [
   // ── Terugbetaling en creditnota ──────────────────────────────────────────
   {
     id: 'invoice.register_refund',
-    label: 'Terugbetaling vastleggen en creditnota uitgeven',
+    label: 'Terugbetaling vastleggen (met creditnota, of te veel betaald terugstorten)',
     module: 'finance',
     kind: 'write',
     risk: 'high',
     description:
-      'Legt vast dat je een (deel van een) betaalde factuur hebt TERUGBETAALD, en geeft er standaard een creditnota bij uit met een eigen nummer. Dit is de OFFLINE variant: je maakt het bedrag zelf over (bijvoorbeeld via je bank) en registreert het hier. ' +
-      'Een terugbetaling via Mollie kan hier bewust NIET — dat zet echt geld in beweging bij de betaalprovider en doe je met de hand in het factuurscherm. ' +
-      'Alleen bij een betaalde factuur, en hoogstens het bedrag dat nog niet is terugbetaald. Bij een volledige terugbetaling gaat de factuur naar "Terugbetaald". Alleen owners en admins.',
-    keywords: ['terugbetaling', 'refund', 'creditnota', 'crediteren', 'terugstorten', 'geld terug', 'annulering', 'prijscorrectie'],
+      'Legt vast dat je geld hebt TERUGBETAALD op een betaalde factuur. Zeg met `purpose` waarom, want dat bepaalt of er een creditnota komt: ' +
+      '"sale" = de verkoop gaat (deels) niet door (annulering, retour, korting achteraf): er komt een creditnota met een eigen nummer, omzet en btw gaan terug, en bij een volledige terugbetaling gaat de factuur naar "Terugbetaald". ' +
+      '"overpayment" = de klant betaalde te veel of dubbel: alleen geld terug, GEEN creditnota; de factuur klopt, blijft "Betaald" en houdt zijn omzet en btw. De uitgaande bankbetaling boek je dan op 1300 Debiteuren, waar de dubbele ontvangst ook staat. ' +
+      'Vraag bij twijfel welke van de twee het is; een creditnota bij een dubbele betaling boekt terechte omzet weg. ' +
+      'Dit is de OFFLINE variant: je maakt het bedrag zelf over (bijvoorbeeld via je bank) en registreert het hier. Een terugbetaling via Mollie kan hier bewust NIET — dat zet echt geld in beweging bij de betaalprovider en doe je met de hand in het factuurscherm. ' +
+      'Alleen bij een betaalde factuur. Staat er op een verstuurde factuur nog iets open dat je wilt laten vervallen, dan is dat geen terugbetaling maar "Crediteren" bij de factuur in ResoFly. Alleen owners en admins.',
+    keywords: ['terugbetaling', 'refund', 'creditnota', 'crediteren', 'terugstorten', 'geld terug', 'annulering', 'prijscorrectie', 'dubbel betaald', 'te veel betaald'],
     input: {
       invoice_id: { type: 'string', description: 'Id van de factuur (exact, uit list_invoices).' },
       amount_eur: { type: 'number', description: "Terug te betalen bedrag in euro's, inclusief btw." },
-      reason: { type: 'string', description: 'Waarom je terugbetaalt (komt op de creditnota).' },
-      create_credit_note: { type: 'boolean', description: 'Creditnota uitgeven. Standaard true.' },
+      purpose: { type: 'string', enum: ['sale', 'overpayment'], description: 'Waarom: "sale" = de verkoop gaat (deels) niet door (met creditnota), "overpayment" = de klant betaalde te veel of dubbel (alleen geld terug, geen creditnota). Standaard "sale".' },
+      reason: { type: 'string', description: 'Waarom je terugbetaalt (komt bij "sale" op de creditnota).' },
+      create_credit_note: { type: 'boolean', description: 'Verouderd, gebruik `purpose`. false betekent hetzelfde als purpose "overpayment".' },
     },
     required: ['invoice_id', 'amount_eur'],
     async plan(ctx, input) {
@@ -702,34 +713,55 @@ export const FINANCE_ACTIONS: ActionDef[] = [
       const invoice = await row<{ number: string; status: string; client_id: string | null; lines: unknown; total_amount: number | null; refunded_amount: number | null }>(
         ctx, 'invoices', invoiceId, 'number, status, client_id, lines, total_amount, refunded_amount', 'Factuur');
       if (!['paid', 'refunded'].includes(invoice.status)) {
-        throw new ActionError(`Alleen een betaalde factuur kan worden terugbetaald; factuur ${invoice.number} staat op "${INVOICE_STATUS_LABELS[invoice.status] ?? invoice.status}".`);
+        // De weg die wel werkt: wat nog openstaat laat je vervallen met Crediteren.
+        throw new ActionError(`Factuur ${invoice.number} staat op "${INVOICE_STATUS_LABELS[invoice.status] ?? invoice.status}"; terugbetalen kan pas bij een betaalde factuur. Wil de gebruiker laten vervallen wat nog openstaat, dan is dat "Crediteren" bij de factuur in ResoFly.`);
       }
+      // Zelfde onderscheid als het venster Terugbetaling in de app. Het oude
+      // vinkje (create_credit_note: false) betekende "geen creditnota"; dat is
+      // nu het terugstorten van te veel betaald geld.
+      const purpose = optChoice(input, 'purpose', ['sale', 'overpayment'] as const)
+        ?? (bool(input, 'create_credit_note', true) ? 'sale' : 'overpayment');
+      const overpayment = purpose === 'overpayment';
       const totalCents = Math.round(docTotalEur(invoice) * 100);
       const alreadyCents = Math.round(toNumber(invoice.refunded_amount) * 100);
-      const remainingCents = Math.max(totalCents - alreadyCents, 0);
-      if (remainingCents <= 0) throw new ActionError(`Factuur ${invoice.number} is al volledig terugbetaald.`);
+      // Wat gecrediteerd is zonder terugbetaling (Crediteren van wat openstond)
+      // is nooit betaald en kan dus niet terug.
+      const { data: creditRows, error: creditError } = await orgQuery(ctx, 'credit_notes', 'total_amount, status, refund_id').eq('invoice_id', invoiceId);
+      if (creditError) throw new ActionError(`Creditnota's ophalen mislukt: ${creditError.message}`);
+      const creditedUnpaidCents = ((creditRows ?? []) as Array<{ total_amount: number | null; status: string; refund_id: string | null }>)
+        .filter((note) => note.status !== 'void' && !note.refund_id)
+        .reduce((sum, note) => sum + Math.round(toNumber(note.total_amount) * 100), 0);
+      const remainingCents = Math.max(totalCents - creditedUnpaidCents - alreadyCents, 0);
       const amountCents = Math.round(num(input, 'amount_eur') * 100);
       if (amountCents <= 0) throw new ActionError('Het terugbetaalbedrag moet groter dan nul zijn.');
-      if (amountCents > remainingCents) {
-        throw new ActionError(`Er staat nog ${euroCents(remainingCents)} open om terug te betalen op factuur ${invoice.number}; ${euroCents(amountCents)} is te veel.`);
+      // Te veel betaald geld hangt niet aan het factuurbedrag (bij een dubbele
+      // betaling is het precies dat bedrag nog eens).
+      if (!overpayment) {
+        if (remainingCents <= 0) throw new ActionError(`Factuur ${invoice.number} is al volledig terugbetaald. Betaalde de klant te veel of dubbel, gebruik dan purpose "overpayment".`);
+        if (amountCents > remainingCents) {
+          throw new ActionError(`Op factuur ${invoice.number} kan nog ${euroCents(remainingCents)} worden terugbetaald; ${euroCents(amountCents)} is te veel. Betaalde de klant te veel of dubbel, gebruik dan purpose "overpayment".`);
+        }
       }
       const reason = optStr(input, 'reason', 500);
-      const withCreditNote = bool(input, 'create_credit_note', true);
       const clientName = await clientNameOf(ctx, invoice.client_id);
       return {
-        title: `Terugbetaling van ${euroCents(amountCents)} vastleggen op factuur ${invoice.number}`,
+        title: overpayment
+          ? `Te veel betaald terugstorten: ${euroCents(amountCents)} op factuur ${invoice.number}`
+          : `Terugbetaling van ${euroCents(amountCents)} vastleggen op factuur ${invoice.number}`,
         sub: joinShort([
           clientName, reason,
-          withCreditNote ? 'met creditnota' : 'zonder creditnota',
-          amountCents === remainingCents ? 'volledige terugbetaling' : `nog ${euroCents(remainingCents - amountCents)} over`,
+          overpayment ? 'zonder creditnota; de factuur blijft betaald' : 'met creditnota',
+          overpayment ? null : amountCents === remainingCents ? 'volledige terugbetaling' : `nog ${euroCents(remainingCents - amountCents)} over`,
         ]),
         kind: 'money',
-        warning: withCreditNote
-          ? 'Er wordt een creditnota met een eigen, doorlopend nummer uitgegeven. Die trek je niet meer in — en het geld moet je zelf overmaken; dit legt alleen vast dát je dat doet.'
-          : 'Dit legt vast dat je het bedrag hebt terugbetaald; het geld moet je zelf overmaken. De factuuraggregaten worden meteen bijgewerkt.',
+        warning: overpayment
+          ? 'Dit legt vast dat je te veel of dubbel betaald geld terugstort; het geld moet je zelf overmaken. Er komt geen creditnota en de factuur blijft betaald: omzet en btw veranderen niet. Boek de uitgaande betaling bij Bank op 1300 Debiteuren, waar de dubbele ontvangst ook staat. Ging de verkoop zelf (deels) niet door, dan is dit de verkeerde keuze: gebruik dan purpose "sale".'
+          : 'Er wordt een creditnota met een eigen, doorlopend nummer uitgegeven en naar de klant gemaild; omzet en btw gaan terug. Die trek je niet meer in — en het geld moet je zelf overmaken; dit legt alleen vast dát je dat doet. Betaalde de klant alleen te veel of dubbel, dan is dit de verkeerde keuze: gebruik dan purpose "overpayment".',
         payload: {
           invoice_id: invoiceId, number: invoice.number, amount_cents: amountCents,
-          reason, create_credit_note: withCreditNote,
+          // De server leest create_credit_note: false als "te veel betaald"
+          // (invoice-workflow, refundPurposeOf); purpose gaat mee voor wie hem leest.
+          reason, create_credit_note: !overpayment, purpose,
           // Vaste sleutel per voorstel: een tweede keer op Uitvoeren drukken boekt
           // dan geen tweede terugbetaling.
           idempotency_key: `action-refund-${crypto.randomUUID()}`,

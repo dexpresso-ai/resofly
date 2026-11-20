@@ -41,14 +41,14 @@ import { hasAnthropicKey, SUPPORTED_MIME_TYPES } from './claudeInvoice.ts';
 import { userHasBudget } from './claudeSummary.ts';
 import {
   buildAiProposal, buildAiProposalFromText, buildUblProposal, bytesToBase64, computePurchaseTotals,
-  loadProposalContext,
+  loadProposalContext, purchaseTotalsOptions,
   type InvoiceProposal, type ProposalContext, type ProposalResult, type SupplierMatchKind, type SupplierRow,
 } from './invoiceProposal.ts';
 import { looksLikeUblXml } from './ubl.ts';
 import {
-  aiRefusedBy, autoBookEligible, declineAllowed, isDocumentAttachment, isUploadChannel, isXmlFile, looksLikeInvoice,
-  looksLikeInvoiceText, normEmail, normIban, normalizeDocumentMime, normNumber, purgeEligible, receiptTwinWarning,
-  retryEligibility, safeFileName, sameInvoice,
+  adoptDocumentVat, aiRefusedBy, autoBookEligible, declineAllowed, discardDraftAllowed, invoiceDateConcern, isDocumentAttachment,
+  isUploadChannel, isXmlFile, looksLikeInvoice, looksLikeInvoiceText, normEmail, normIban, normalizeDocumentMime, normNumber,
+  purgeEligible, receiptTwinWarning, retryEligibility, safeFileName, sameInvoice, todayInAmsterdam,
   type InboxAttachmentKind, type InboxChannel,
 } from './invoiceInboxRules.ts';
 
@@ -514,6 +514,13 @@ async function runPipeline(admin: SupabaseClient, row: InboxRow, opts: ProcessOp
 
 interface PipelineEnv { ctx: ProposalContext; settings: InboxSettings; budgetUserId: string | null; opts: ProcessOptions }
 
+/** Een regel van het concept, zoals hij in purchase_invoices.lines komt. */
+interface ConceptLine {
+  id: string; description: string; amount_cents: number; vat_code: string; vat_rate: number; account_id: string | null;
+  /** Het btw-bedrag van de bon of factuur, als dat afwijkt van grondslag × tarief. */
+  vat_cents?: number | null;
+}
+
 /**
  * Van voorstel naar uitkomst: leverancier -> dubbelcontrole -> concept ->
  * eventueel boeken. Schrijft altijd een eindstatus op de rij.
@@ -597,8 +604,8 @@ async function applyCandidate(
   }
 
   // 3. Concept klaarzetten ─────────────────────────────────────────────────────
-  const fallbackAccountId = ctx.accounts.find((a) => a.code === '4500')?.id ?? null;
-  const lines = proposal.lines
+  const totalsOptions = purchaseTotalsOptions(ctx);
+  const draftLines: ConceptLine[] = proposal.lines
     .map((l) => ({
       id: crypto.randomUUID(),
       description: l.description || '',
@@ -608,14 +615,25 @@ async function applyCandidate(
       account_id: l.account_id ?? supplier!.default_expense_account_id ?? null,
     }))
     .filter((l) => l.description.trim() || l.amount_cents);
+  // Het btw-bedrag van de bon of factuur overnemen als het een paar cent
+  // afwijkt (een bon van € 10,00 werd een concept van € 9,99). Hier opnieuw,
+  // en niet uit het voorstel: de rekening van de leverancier kan de regels
+  // anders groeperen, en per groep wordt afgerond.
+  const lines = adoptDocumentVat(draftLines, proposal.extracted_totals, totalsOptions).lines;
   if (lines.length === 0) {
     return await updateRow(admin, row.id, {
       ...base, status: 'needs_review', reason: 'nothing_extracted', warnings,
       supplier_id: supplier.id, supplier_match: supplierMatch, supplier_created: supplierCreated, processed_at: now,
     });
   }
-  const totals = computePurchaseTotals(lines, fallbackAccountId);
-  const date = proposal.date ?? now.slice(0, 10);
+  const totals = computePurchaseTotals(lines, totalsOptions.fallbackAccountId ?? null, totalsOptions);
+  const today = todayInAmsterdam();
+  const date = proposal.date ?? today;
+  // Een onwaarschijnlijke of niet gelezen datum: nooit vanzelf boeken, en de
+  // controleur leest waarom. (2062 in plaats van 2026 werd JP-2062-00001.)
+  let dateConcern = invoiceDateConcern(date, { today, bookkeepingStart: ctx.bookkeepingStart ?? null })?.message ?? null;
+  if (!proposal.date) dateConcern = 'De factuurdatum is niet gelezen; het concept staat op vandaag. Vul de datum van de bon of factuur in.';
+  if (dateConcern && !warnings.includes(dateConcern)) warnings.push(dateConcern);
   if (isReceipt) {
     const twin = receiptTwinWarning(await findReceiptTwin(admin, organizationId, supplier.id, date, totals.total_cents));
     if (twin) warnings.push(twin);
@@ -680,7 +698,7 @@ async function applyCandidate(
       ? 'Niet automatisch geboekt: dit item is ondanks de dubbelmelding klaargezet. Controleer het en boek het zelf.'
       : 'Niet automatisch geboekt: met de hand klaargezet. Controleer het concept en boek het zelf.');
   } else if (mayAutoBook) {
-    const eligible = autoBookEligible({ supplierCreated, supplierUnverified: Boolean(supplier.inbox_unverified), supplierMatch, confidence: proposal.confidence, warnings, lines, totals, ibanMismatch, ibanVerified, currency: proposal.currency });
+    const eligible = autoBookEligible({ supplierCreated, supplierUnverified: Boolean(supplier.inbox_unverified), supplierMatch, confidence: proposal.confidence, warnings, lines, totals, ibanMismatch, ibanVerified, currency: proposal.currency, dateConcern });
     if (eligible.ok) {
       const { error: bookError } = await admin.rpc('book_purchase_invoice', {
         p_organization_id: organizationId, p_purchase_invoice_id: purchaseInvoiceId, p_created_by: budgetUserId,
@@ -1088,19 +1106,60 @@ function decodeStart(bytes: Uint8Array): string {
 
 const REJECTABLE: InboxStatus[] = ['received', 'needs_review', 'duplicate', 'failed'];
 
-/** "Negeren": geen factuur, of niet van ons. De rij blijft bewaard. */
+/**
+ * "Negeren": geen factuur, of niet van ons. De rij blijft bewaard.
+ *
+ * Ook een item waar al een concept van klaarstaat ('ready'): een verkeerde
+ * bon (privé, dubbel gefotografeerd) kon tot 20261119 niet meer weg. Het
+ * concept zelf wissen zette het item terug op "aandacht nodig" en liet de
+ * bijlage-regel van het concept los in de database hangen. Nu gaat het
+ * concept weg en blijft de foto bij het item: onder Afgehandeld, terug te
+ * halen met Herstellen, tot de opruimronde hem na 30 dagen weggooit. Een
+ * concept dat ooit geboekt is, blijft staan (discardDraftAllowed).
+ */
 export async function rejectInboxItem(admin: SupabaseClient, row: InboxRow, actorUserId: string): Promise<InboxRow> {
-  if (!REJECTABLE.includes(row.status)) {
-    throw new HttpError(`Een item in status '${row.status}' kan niet genegeerd worden.`, 409);
-  }
   // Een declaratie zonder reden wegleggen, las voor de indiener als "afgewezen"
   // zonder dat hij wist waarom. Die gaat via declineDeclaration, met de reden.
   if (row.channel === 'declaration') {
     throw new HttpError('Een declaratie wijs je af met een reden (Afwijzen), zodat de indiener weet waarom.', 409);
   }
+  const withDraft = row.status === 'ready' && Boolean(row.purchase_invoice_id);
+  if (!REJECTABLE.includes(row.status) && !withDraft) {
+    throw new HttpError(`Een item in status '${row.status}' kan niet genegeerd worden.`, 409);
+  }
+  if (withDraft) await discardDraft(admin, row);
   return await updateRow(admin, row.id, {
     status: 'rejected', reason: 'dismissed_by_user', handled_by: actorUserId, handled_at: new Date().toISOString(),
+    ...(withDraft ? { purchase_invoice_id: null, auto_booked: false } : {}),
   });
+}
+
+/**
+ * Het concept van een item weggooien, met de bijlage-regels die ernaar wezen.
+ * Het bestand zelf blijft bij het inbox-item. Organisatie komt van de rij,
+ * nooit uit de invoer (de service-role slaat RLS over).
+ */
+async function discardDraft(admin: SupabaseClient, row: InboxRow): Promise<void> {
+  const invoiceId = row.purchase_invoice_id!;
+  const { data: invoice, error: invoiceError } = await admin.from('purchase_invoices').select('status')
+    .eq('id', invoiceId).eq('organization_id', row.organization_id).maybeSingle();
+  if (invoiceError) throw new HttpError(`Het concept laden mislukte: ${invoiceError.message}`, 500);
+  if (!invoice) return; // al weg: alleen het item nog wegleggen
+  const { count, error: countError } = await admin.from('journal_entries').select('id', { count: 'exact', head: true })
+    .eq('organization_id', row.organization_id).eq('source_type', 'purchase_invoice').eq('source_id', invoiceId);
+  if (countError) throw new HttpError(`Controle op boekstukken mislukte: ${countError.message}`, 500);
+  const verdict = discardDraftAllowed({
+    channel: row.channel, invoiceStatus: (invoice as { status: string }).status, journalEntries: count ?? 0,
+  });
+  if (!verdict.ok) throw new HttpError(verdict.why, 409);
+
+  const { data: removed, error } = await admin.from('purchase_invoices').delete()
+    .eq('id', invoiceId).eq('organization_id', row.organization_id).eq('status', 'draft')
+    .select('id');
+  if (error) throw new HttpError(`Het concept verwijderen mislukte: ${error.message}`, 500);
+  if (!(removed ?? []).length) throw new HttpError('Het concept is intussen geboekt. Boek eerst de journaalpost tegen als hij niet klopt.', 409);
+  await admin.from('attachments').delete()
+    .eq('organization_id', row.organization_id).eq('entity_type', 'purchase_invoice').eq('entity_id', invoiceId);
 }
 
 /** "Herstellen": terug op de werklijst en opnieuw verwerken. */

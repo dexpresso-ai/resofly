@@ -12,7 +12,7 @@ import { SetupBanner } from './Bookkeeping';
 import { parseBankFile } from '../lib/bankImport';
 import { consentState, isCancelledBankReturn, isSandboxLink, readBankReturn } from '../lib/bankLink';
 import {
-  bookBankTransaction, createBankRequisition, createManualBankTransaction, deleteManualBankTransaction, deleteRow,
+  bookBankTransaction, createBankRequisition, createManualBankTransaction, deleteDuplicateBankTransaction, deleteManualBankTransaction, deleteRow,
   fetchBankAllocationCandidates, finalizeBankRequisition, importBankTransactions, insertRow, listBankInstitutions,
   matchBankTransactionsInRounds, mergeBankTransactions, PossibleDuplicateBankTransactionError, selectBankReconciliation,
   setBankTransactionStatus, syncBankAccount, unbookBankTransaction, unmergeBankTransaction, updateManualBankTransaction, updateRow,
@@ -225,12 +225,31 @@ function BankTxRow({ txn, data, organizationId, canWrite, accountName, candidate
   }
 
   const unbook = () => {
-    if (!confirm('Deze geboekte transactie terugdraaien? Er komt een tegenboeking in het grootboek; de facturen staan daarna weer open.')) return;
+    // De tegenboeking komt op de datum van de boeking zelf (of, als dat
+    // tijdvak of boekjaar al dicht is, op de eerste open dag daarna). Eerder
+    // kwam hij op vandaag: terugdraaien en opnieuw boeken zette de kosten dan
+    // dubbel in de oude periode en negatief in de nieuwe.
+    if (!confirm('Deze geboekte transactie terugdraaien? Er komt een tegenboeking in het grootboek op dezelfde datum als de boeking, zodat de twee tegen elkaar wegvallen. Is dat btw-tijdvak of boekjaar al afgesloten, dan komt de tegenboeking op de eerste open dag daarna. De facturen staan daarna weer open, en je kunt de mutatie opnieuw boeken.')) return;
     void run(() => unbookBankTransaction(organizationId, txn.id), 'Terugdraaien mislukt');
   };
   const remove = () => {
     if (!confirm('Deze handmatige mutatie verwijderen?')) return;
     void run(() => deleteManualBankTransaction(organizationId, txn.id), 'Verwijderen mislukt');
+  };
+  // Dezelfde betaling twee keer ingelezen (een afschrift en later de
+  // bankkoppeling, met een andere omschrijving). Negeren hielp niet: een
+  // genegeerde mutatie telt mee in de aansluiting, dus het verschil bleef
+  // voorgoed staan. Dezelfde regel als de database: zelfde rekening, datum en
+  // bedrag, en dezelfde of geen tegenrekening.
+  const iban = (value: string | null | undefined) => (value ?? '').replace(/\s/g, '').toUpperCase();
+  const twin = !manual && !everBooked
+    ? data.bankTransactions.find(o => o.id !== txn.id && !o.is_manual && o.bank_account_id === txn.bank_account_id
+        && o.booking_date === txn.booking_date && o.amount_cents === txn.amount_cents
+        && (!iban(o.counterparty_iban) || !iban(txn.counterparty_iban) || iban(o.counterparty_iban) === iban(txn.counterparty_iban))) ?? null
+    : null;
+  const removeDuplicate = () => {
+    if (!confirm('Deze mutatie verwijderen omdat hij dubbel is ingelezen? De andere mutatie met dezelfde datum en hetzelfde bedrag blijft staan. Doe dit alleen als het om dezelfde betaling gaat: twee echte betalingen staan allebei op je afschrift.')) return;
+    void run(() => deleteDuplicateBankTransaction(organizationId, txn.id), 'Verwijderen mislukt');
   };
   const unmerge = () => {
     if (!confirm('Losmaken? De bankregel komt dan apart in "Af te letteren" te staan. Is de handmatige mutatie al geboekt, boek de bankregel dan niet nog eens.')) return;
@@ -263,7 +282,7 @@ function BankTxRow({ txn, data, organizationId, canWrite, accountName, candidate
           {/* Waaróp de matcher dit voorstelde of boekte (20261118190000). Zonder
               uitleg kun je een voorstel niet beoordelen, en vertrouwt niemand
               een automatische boeking. */}
-          {(isOpen || (txn.status === 'booked' && txn.auto_booked)) && txn.match_reason && txn.match_confidence !== 'tax_authority' && (
+          {(isOpen || txn.status === 'ignored' || (txn.status === 'booked' && txn.auto_booked)) && txn.match_reason && txn.match_confidence !== 'tax_authority' && (
             <small className={`bank-tx-hint bank-tx-reason${txn.match_confidence === 'purchase_amount' ? ' is-weak' : ''}`}>
               <Sparkles size={12} aria-hidden="true" /> {txn.status === 'booked' ? `Automatisch geboekt: ${txn.match_reason}` : txn.match_reason}
             </small>
@@ -304,6 +323,7 @@ function BankTxRow({ txn, data, organizationId, canWrite, accountName, candidate
           onBook={(allocations, description) => run(() => bookBankTransaction(organizationId, txn.id, { allocations, description }), 'Boeken mislukt')}>
           {manual && canWrite && <Button onClick={() => onEditManual(txn)} disabled={busy}><PenSquare size={14} /> Bewerken</Button>}
           {manual && canWrite && !everBooked && <Button onClick={remove} disabled={busy} title="Verwijderen"><Trash2 size={14} /> Verwijderen</Button>}
+          {twin && canWrite && <Button onClick={removeDuplicate} disabled={busy} title="Dezelfde betaling staat er twee keer: deze verwijderen"><Trash2 size={14} /> Dubbele verwijderen</Button>}
           <Button onClick={() => void run(() => setBankTransactionStatus(organizationId, txn.id, 'ignored'), 'Mislukt')}
             disabled={!canWrite || busy || (manual && Boolean(partner))}
             title={manual && partner ? 'Bevestigd door de bank: maak eerst los' : 'Negeren'}><X size={14} /> Negeren</Button>
@@ -322,6 +342,7 @@ function BankTxRow({ txn, data, organizationId, canWrite, accountName, candidate
           <span className="bk-muted">Genegeerd</span>
           <span className="bk-spacer" />
           {manual && canWrite && !everBooked && <Button onClick={remove} disabled={busy}><Trash2 size={14} /> Verwijderen</Button>}
+          {twin && canWrite && <Button onClick={removeDuplicate} disabled={busy} title="Dezelfde betaling staat er twee keer: deze verwijderen"><Trash2 size={14} /> Dubbele verwijderen</Button>}
           {canWrite && <Button onClick={() => void run(() => setBankTransactionStatus(organizationId, txn.id, 'unmatched'), 'Mislukt')} disabled={busy}>Weer openen</Button>}
         </div>
       )}
@@ -572,6 +593,12 @@ function BookedSummary({ txn, data }: { txn: BankTransaction; data: AppData }) {
         {entry?.entry_number && <span className="bk-muted">{entry.entry_number}</span>}
         {entry?.description && <span className="bank-booked-desc">{entry.description}</span>}
       </div>
+      {/* Viel de mutatie in een afgesloten btw-tijdvak of boekjaar, dan staat de
+          boeking op de eerste open dag daarna. Zeg dat erbij: anders zoek je
+          hem in de verkeerde periode. */}
+      {entry?.date && entry.date !== txn.booking_date && (
+        <small className="bank-tx-hint">Geboekt op {dateNL(entry.date)}: de periode van {dateNL(txn.booking_date)} was al afgesloten. De kosten of opbrengst en de btw tellen dus mee vanaf {dateNL(entry.date)}.</small>
+      )}
       {items.length > 0 && (
         <ul className="bank-booked-lines">
           {items.map(item => <li key={item.key}><span>{item.label}</span><span className="bank-booked-amount">{euroCents(item.cents)}</span></li>)}
@@ -733,7 +760,7 @@ function ReconciliationPanel({ rec }: { rec: BankReconciliation }) {
       {!ok && (
         <ul className="bank-recon-hints">
           {rec.ignored_count > 0 && (
-            <li>Genegeerde transacties staan wél op het afschrift en tellen dus mee in de aansluiting. Heb je een dubbele regel genegeerd, dan blijft het verschil zichtbaar tot de dubbele rij echt weg is.</li>
+            <li>Genegeerde transacties staan wél op het afschrift en tellen dus mee in de aansluiting. Heb je een dubbele regel genegeerd, dan blijft het verschil zichtbaar tot de dubbele rij echt weg is: open hem bij Genegeerd en kies "Dubbele verwijderen".</li>
           )}
           {(rec.manual_unconfirmed_count ?? 0) > 0 && (
             <li>

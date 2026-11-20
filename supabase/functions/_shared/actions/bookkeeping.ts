@@ -525,13 +525,13 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
     description:
       'Maakt een spiegelboeking die een geboekt boekstuk neutraliseert — het origineel blijft staan, het paar telt netto op tot nul. Een tegengeboekte inkoopfactuur gaat terug naar concept, zodat je hem kunt corrigeren en opnieuw boeken. ' +
       'Een verkoopfactuur of creditnota boek je NIET zo tegen (corrigeren gaat met "Crediteren"), en een betaling evenmin (bank: "Boeking ongedaan maken"; Mollie: terugbetalen). ' +
-      'Zoek het boekstuk met `list_journal_entries`. Kies de boekdatum van de tegenboeking (standaard vandaag); in een afgesloten periode boeken kan niet. ' +
+      'Zoek het boekstuk met `list_journal_entries`. Laat de datum weg: de tegenboeking komt dan op de datum van het boekstuk zelf, zodat de twee in dezelfde periode tegen elkaar wegvallen, of op de eerste open dag daarna als dat btw-tijdvak of boekjaar al is afgesloten. Geef alleen een datum mee als de gebruiker er uitdrukkelijk om vraagt. ' +
       'Jaarafsluitingen, resultaatbestemmingen, vennootschapsbelasting, DGA-rente en dividend draai je NIET zo terug — die hebben hun eigen terugweg (boekjaar heropenen, bestemming terugdraaien). ' +
       'DE TEGENBOEKING IS ZELF OOK EEN DEFINITIEVE BOEKING en is niet ongedaan te maken.',
     keywords: ['tegenboeken', 'terugdraaien', 'storneren', 'corrigeren', 'spiegelboeking', 'boekstuk', 'journaalpost'],
     input: {
       entry_id: { type: 'string', description: 'Id van het boekstuk (uit list_journal_entries).' },
-      date: { type: 'string', description: 'Boekdatum van de tegenboeking JJJJ-MM-DD. Standaard vandaag.' },
+      date: { type: 'string', description: 'Boekdatum van de tegenboeking JJJJ-MM-DD. Standaard: de datum van het boekstuk zelf (of de eerste open dag daarna). Meestal weglaten.' },
     },
     required: ['entry_id'],
     async plan(ctx, input) {
@@ -547,10 +547,14 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
       if (OWN_WAY_BACK[entry.source_type]) {
         throw new ActionError(`Boekstuk ${entry.entry_number ?? ''} boek je niet los tegen. ${OWN_WAY_BACK[entry.source_type]}`);
       }
-      const date = optIsoDate(input, 'date') ?? ctx.today;
+      // Zonder datum beslist de database: de datum van het boekstuk zelf, of
+      // de eerste open dag daarna. Hier stond vandaag: een boekstuk uit
+      // september dat in november werd tegengeboekt en opnieuw geboekt, telde
+      // dan dubbel in Q3 en negatief in Q4.
+      const date = optIsoDate(input, 'date') ?? null;
       return {
         title: `Boekstuk ${entry.entry_number ?? entryId.slice(0, 8)} tegenboeken`,
-        sub: joinShort([entry.description ?? '', `origineel ${entry.date}`, `tegenboeking op ${date}`], 140),
+        sub: joinShort([entry.description ?? '', `origineel ${entry.date}`, date ? `tegenboeking op ${date}` : 'tegenboeking op dezelfde datum (of de eerste open dag daarna)'], 140),
         warning: 'De spiegelboeking is zelf ook een definitief boekstuk; je kunt hem niet ongedaan maken.',
         kind: 'money',
         payload: { entry_id: entryId, entry_number: entry.entry_number, date },
@@ -1806,7 +1810,7 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
     risk: 'high',
     description:
       'Draait een geboekte banktransactie terug: er komt een TEGENBOEKING in het grootboek en de transactie staat weer open om opnieuw af te letteren. ' +
-      'De oorspronkelijke boeking blijft staan — het paar telt netto op tot nul. De tegenboeking is zelf definitief en niet ongedaan te maken; in een afgesloten periode lukt terugdraaien niet.',
+      'De oorspronkelijke boeking blijft staan — het paar telt netto op tot nul. De tegenboeking komt op de datum van de boeking zelf, of op de eerste open dag daarna als dat btw-tijdvak of boekjaar al is afgesloten; daarna kan de transactie opnieuw worden geboekt (in een afgesloten periode komt ook die boeking op de eerste open dag). De tegenboeking is zelf definitief en niet ongedaan te maken.',
     keywords: ['terugdraaien', 'unbook', 'tegenboeking', 'verkeerd geboekt', 'banktransactie'],
     input: { transaction_id: { type: 'string' } },
     required: ['transaction_id'],

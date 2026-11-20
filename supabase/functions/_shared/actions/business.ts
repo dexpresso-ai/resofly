@@ -1215,7 +1215,9 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
       'Alleen voor een eenmanszaak, vof, maatschap of cv. Een raming per kalenderjaar van wat de ondernemer, of elke vennoot over zijn winstaandeel, aan inkomstenbelasting (box 1, inclusief premie volksverzekeringen) en inkomensafhankelijke bijdrage Zvw betaalt: ' +
       'winst(aandeel) + het niet-aftrekbare deel van eten, drinken en representatie op 4600 (20% of tot de drempel van € 5.700, het gunstigste) + fiscale correcties − KIA = winst uit onderneming; − zelfstandigenaftrek (urencriterium), startersaftrek en overige ondernemersaftrek; − mkb-winstvrijstelling (12,70%) = belastbare winst; − verlies uit eerdere jaren; tarief box 1 met de aftrekbeperking; − algemene heffingskorting, arbeidskorting (over de winst vóór ondernemersaftrek) en bij de AOW-leeftijd de ouderenkorting; + Zvw-bijdrage; − betaalde voorlopige aanslagen = nog te betalen (negatief = terug). ' +
       'Een commanditaire vennoot is geen ondernemer: geen ondernemersaftrek, mkb-winstvrijstelling of arbeidskorting. Tarieven en bedragen van 2025 en 2026; een later jaar rekent met die van 2026 en zegt dat in `warnings`. Bedragen in centen. ' +
-      '`basis` "prognose" trekt de geboekte winst van het lopende jaar door naar 31 december (pas na de eerste maand). Het urencriterium, de startersaftrek, de AOW-leeftijd en de voorlopige aanslagen vult de gebruiker in op de pagina Inkomstenbelasting; staat het urencriterium op null, dan is er gerekend zonder zelfstandigenaftrek. Zonder opgeslagen gegevens volgt het urencriterium de geregistreerde uren: van de eigenaar bij een eenmanszaak, van het gekoppelde teamlid bij een vennoot (`hoursFromTimeTracking`, `registeredMinutes`). ' +
+      '`basis` "prognose" trekt de geboekte winst van het lopende jaar door naar 31 december (pas na de eerste maand). De startersaftrek, de AOW-leeftijd en de voorlopige aanslagen vult de gebruiker in op de pagina Inkomstenbelasting. ' +
+      'Het urencriterium volgt de geregistreerde uren (1.225 of meer) zolang de gebruiker daar niet zelf ja of nee heeft gekozen, ook als de rest van zijn gegevens wel is opgeslagen: de uren van de eigenaar bij een eenmanszaak, van het gekoppelde teamlid bij een vennoot. Dan is `hoursFromTimeTracking` true, staat in `registeredMinutes` wat er nu geregistreerd is, en is `meetsHoursCriterion` het ja of nee waarmee gerekend is. In de prognose gaan de uren in hetzelfde tempo mee naar 31 december (`projectedMinutes`), en bepaalt dat getal het urencriterium; zeg er dan bij dat het een doortrekking is. ' +
+      'Is `hoursFromTimeTracking` false, dan heeft de gebruiker zelf gekozen, of kent ResoFly de uren niet (`registeredMinutes` null); staat `meetsHoursCriterion` dan op null, dan is er gerekend zonder zelfstandigenaftrek. ' +
       'BELANGRIJK: dit rekent alleen met het zakelijke inkomen uit deze onderneming. Noem bij elk antwoord de `disclaimer`: ander inkomen, persoonlijke aftrekposten en kortingen die van de persoonlijke situatie afhangen, zijn niet meegenomen. Het is geen aangifte en geen advies.',
     keywords: ['inkomstenbelasting', 'ib', 'aangifte inkomstenbelasting', 'hoeveel belasting', 'belasting betalen', 'reserveren', 'zelfstandigenaftrek', 'startersaftrek', 'mkb-winstvrijstelling', 'kia', 'kleinschaligheidsinvesteringsaftrek', 'heffingskorting', 'arbeidskorting', 'zvw', 'zorgverzekeringswet', 'voorlopige aanslag', 'urencriterium', 'eenmanszaak', 'vof', 'vennoot'],
     input: {
@@ -1270,6 +1272,10 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
             saved: p.profileSaved,
             hoursFromTimeTracking: p.hoursFromTimeTracking,
             registeredMinutes: p.registeredMinutes,
+            // Alleen in de prognose, als het urencriterium de uren volgt: de
+            // uren doorgetrokken naar 31 december. Zonder dit veld zag Gerrie
+            // "300 uur" naast "urencriterium ja" en kon hij dat niet uitleggen.
+            projectedMinutes: p.projectedMinutes,
           },
           corrections: p.corrections.map((c) => ({ code: c.code, label: c.label, amountCents: c.amountCents, shared: c.shared, automatic: c.automatic })),
           estimate: p.estimate,

@@ -18,7 +18,13 @@
 //   5. vof en cv: per vennoot, met dezelfde verdeling als de jaarafsluiting
 //      (partnership_result_shares), en een commanditaire vennoot die geen
 //      ondernemer is;
-//   6. een stichting krijgt geen raming; het logboek zet alles onder Financiën.
+//   6. een stichting krijgt geen raming; het logboek zet alles onder Financiën;
+//   7. het urencriterium blijft de uren volgen zolang er niet zelf is gekozen
+//      (CHANGELOG_EENMANSZAAK_CONTROLE: wie met 300 uur alleen zijn voorlopige
+//      aanslag opsloeg, legde "nee" vast en hield met 1.400 uur geen
+//      zelfstandigenaftrek), ook in de prognose en in wat Gerrie leest.
+import { API_URL } from './omgeving.mjs';
+import { roep, roepRequest } from './functies.mjs';
 import { rest, rpc, sql, sqlRij, sqlRijen } from './supabase.mjs';
 import { gelijk, gelukt, geweigerd, groep, nietsVeranderd, stap, verwacht } from './toets.mjs';
 import { maakWereld } from './wereld.mjs';
@@ -45,6 +51,8 @@ function invoer(w, gebruiker, jaar = JAAR, orgId = w.orgId, extra = {}) {
   return rpc('get_income_tax_inputs', { p_organization_id: orgId, p_year: jaar, ...extra }, gebruiker.token);
 }
 
+// `p_meets_hours_criterion: null` is geen "nog niet ingevuld" meer: het
+// betekent "volgens Uren". Zo'n profiel volgt de geregistreerde uren.
 function profiel(w, gebruiker, waarden, orgId = w.orgId) {
   return rpc('save_income_tax_profile', {
     p_organization_id: orgId, p_year: JAAR, p_partner_id: null, p_meets_hours_criterion: null, p_starter: false,
@@ -127,7 +135,7 @@ export default async function inkomstenbelasting() {
     gelijk([inputs.partners, inputs.profiles, inputs.corrections, inputs.investments], [[], [], [], []], 'nog niets vastgelegd');
     gelijk([inputs.myMinutes, inputs.ownerMinutes], [600, 0], 'je eigen uren en die van de eigenaar (nog geen)');
     gelijk(gelukt(await invoer(w, w.medewerker, JAAR - 1), 'vorig jaar').resultCents, 500_000, 'de winst van het jaar ervoor');
-    // Zonder gegevens volgt het urencriterium de uren van de eigenaar: 0 uur, dus niet.
+    // Zonder eigen keuze volgt het urencriterium de uren van de eigenaar: 0 uur, dus niet.
     const zonder = raming(inputs);
     gelijk([zonder.persons[0].hoursFromTimeTracking, zonder.persons[0].estimate.zelfstandigenaftrekCents], [true, 0], 'geen zelfstandigenaftrek zonder uren');
     verwacht(zonder.persons[0].notes.some((n) => /volgens Uren: de eigenaar heeft 0 uur/.test(n)), 'de raming zegt waar het urencriterium vandaan komt');
@@ -287,7 +295,9 @@ export default async function inkomstenbelasting() {
     gelijk(gelukt(await invoer(w, w.boekhouder), 'boekhouder').partnerMinutes, null, 'de boekhouder ziet geen uren');
 
     gelukt(await profiel(w, w.medewerker, { p_partner_id: anna.id, p_meets_hours_criterion: true, p_starter: true }), 'Anna: urencriterium en starter');
-    gelukt(await profiel(w, w.medewerker, { p_partner_id: bram.id, p_meets_hours_criterion: false }), 'Bram: geen urencriterium');
+    // Bram heeft 1.300 uur, maar hier wordt zelf "nee" gekozen: een eigen
+    // keuze gaat vóór de uren (alleen null volgt ze).
+    gelukt(await profiel(w, w.medewerker, { p_partner_id: bram.id, p_meets_hours_criterion: false }), 'Bram: zelf nee gekozen');
     gelukt(await correctie(w, w.medewerker, { p_partner_id: bram.id, p_code: 'privegebruik_auto', p_label: 'Auto Bram', p_amount_cents: 200_000 }), 'correctie voor Bram');
     geweigerd(await correctie(w, w.medewerker, { p_partner_id: anderVennoot.id }), 'correctie op een vennoot van een ander');
     geweigerd(await profiel(w, w.medewerker, { p_partner_id: anderVennoot.id }), 'profiel van een vennoot van een ander');
@@ -305,6 +315,8 @@ export default async function inkomstenbelasting() {
     const [a, b] = o.persons;
     gelijk(a.estimate.kiaCents + b.estimate.kiaCents, o.kiaCents, 'de KIA helemaal verdeeld');
     gelijk([a.estimate.startersaftrekCents, b.estimate.zelfstandigenaftrekCents], [212_300, 0], 'starter Anna, geen aftrek voor Bram');
+    gelijk(b.hoursFromTimeTracking, false, 'Bram volgt de uren niet meer');
+    verwacht(b.notes.some((n) => /staat hier op nee/.test(n)), 'de raming zegt dat zijn 1.300 uur het "nee" hebben ingehaald');
     verwacht(b.corrections.some((c) => c.label === 'Auto Bram' && !c.shared) && !a.corrections.some((c) => c.label === 'Auto Bram'), 'de bijtelling alleen bij Bram');
     gelijk(o.totals.totalCents, a.estimate.totalCents + b.estimate.totalCents, 'het totaal is de som van de vennoten');
     // Het profiel van de eenmanszaak (zonder vennoot) telt bij een vof met vennoten niet mee.
@@ -335,5 +347,83 @@ export default async function inkomstenbelasting() {
     const wijzigingen = sqlRijen(`select metadata from public.audit_logs where organization_id = ${q(w.orgId)} and entity_type = 'income_tax_profile' and action = 'updated'`);
     verwacht(wijzigingen.length > 0, 'een bijgewerkt profiel staat in het logboek');
     verwacht(wijzigingen.every((r) => !JSON.stringify(r.metadata ?? {}).includes('800000')), 'geen bedragen in het logboek');
+  });
+
+  // Tot 19 november 2026 stuurde het scherm bij elke wijziging het hele
+  // profiel mee, met het uit de uren afgeleide ja of nee als eigen keuze. Wie
+  // in maart met 300 uur alleen zijn voorlopige aanslag opsloeg, legde zo
+  // "nee" vast en kreeg in november met 1.400 uur nog geen zelfstandigenaftrek.
+  await stap('alleen de voorlopige aanslag opslaan met 300 uur, daarna 1.400 uur: het urencriterium is ja', async () => {
+    const u = await maakWereld('ib-uren');
+    gelukt(await rechtsvorm(u, 'eenmanszaak'), 'rechtsvorm eenmanszaak');
+    gelukt(await rpc('ensure_default_ledger_accounts', { p_organization_id: u.orgId }, u.medewerker.token), 'rekeningschema');
+    const bank = await rekeningId(u, '1100');
+    const omzet = await rekeningId(u, '8000');
+    await boek(u, `${JAAR}-03-01`, 'Omzet maart', [
+      { account_id: bank, description: 'Omzet', debit_cents: 5_000_000, credit_cents: 0 },
+      { account_id: omzet, description: 'Omzet', debit_cents: 0, credit_cents: 5_000_000 },
+    ]);
+    const uren = (datum, uur) => sql(`insert into public.time_entries (organization_id, user_id, entry_date, minutes)
+      values (${q(u.orgId)}, ${q(u.eigenaar.id)}, ${q(datum)}, ${uur * 60})`);
+    const persoon = async (basis = 'geboekt') => raming(gelukt(await invoer(u, u.medewerker), 'invoer'), basis).persons[0];
+
+    uren(`${JAAR}-02-02`, 300);
+    let p = await persoon();
+    gelijk([p.hoursFromTimeTracking, p.registeredMinutes, p.profile.meetsHoursCriterion, p.estimate.zelfstandigenaftrekCents], [true, 300 * 60, false, 0], '300 uur: volgens Uren nog niet');
+
+    // Wat het scherm bewaart (PersonCard in src/features/IncomeTax.tsx):
+    // volgt het urencriterium de uren en blijft de keuzelijst op "Volgens
+    // Uren", dan gaat er null naar de database, niet het afgeleide "nee".
+    const teBewaren = p.hoursFromTimeTracking ? null : p.profile.meetsHoursCriterion;
+    gelijk(teBewaren, null, 'het afgeleide nee wordt niet meegestuurd');
+    const rij = gelukt(await profiel(u, u.medewerker, { p_meets_hours_criterion: teBewaren, p_provisional_income_tax_cents: 500_000 }), 'alleen de voorlopige aanslag opslaan');
+    gelijk([rij.meets_hours_criterion, rij.provisional_income_tax_cents], [null, 500_000], 'in de database: geen eigen keuze');
+    p = await persoon();
+    gelijk([p.profileSaved, p.hoursFromTimeTracking, p.profile.meetsHoursCriterion, p.estimate.provisionalIncomeTaxCents], [true, true, false, 500_000], 'opgeslagen, en het volgt de uren nog');
+
+    // Later in het jaar: 1.400 uur. Zonder iets op te slaan is het nu ja.
+    uren(`${JAAR}-09-01`, 1100);
+    p = await persoon();
+    gelijk([p.registeredMinutes, p.hoursFromTimeTracking, p.profile.meetsHoursCriterion], [1400 * 60, true, true], '1.400 uur: het urencriterium is ja');
+    // Dezelfde som als hierboven (€ 50.000 winst in 2026 met de zelfstandigenaftrek), min de voorlopige aanslag.
+    gelijk([p.estimate.zelfstandigenaftrekCents, p.estimate.incomeTaxCents, p.estimate.zvwCents, p.estimate.balanceCents], [120_000, 760_783, 206_622, 967_405 - 500_000], 'de zelfstandigenaftrek telt');
+
+    // In de prognose gaan de uren mee naar 31 december, net als de winst.
+    const prognose = await persoon('prognose');
+    verwacht(prognose.projectedMinutes !== null && prognose.projectedMinutes > 1400 * 60, `de uren zijn doorgetrokken (${prognose.projectedMinutes})`);
+    gelijk((await persoon()).projectedMinutes, null, 'zonder prognose geen doorgetrokken uren');
+
+    // Gerrie leest hetzelfde, met de doorgetrokken uren erbij.
+    const sleutel = gelukt(await roep('api-admin', {
+      token: u.beheerder.token, body: { action: 'createKey', organizationId: u.orgId, name: 'IB lezen', access: 'read' },
+    }), 'leessleutel').secret;
+    const actie = async (body) => {
+      const res = await roepRequest('api', new Request(`${API_URL}/functions/v1/api/v1/actions/owners.income_tax_estimate`, {
+        method: 'POST', headers: { authorization: `Bearer ${sleutel}`, 'content-type': 'application/json' }, body: JSON.stringify(body),
+      }));
+      const tekst = await res.text();
+      gelijk(res.status, 200, `owners.income_tax_estimate ${tekst.slice(0, 300)}`);
+      return tekst;
+    };
+    const geboekt = await actie({ year: JAAR });
+    verwacht(geboekt.includes('"hoursFromTimeTracking":true') && geboekt.includes(`"registeredMinutes":${1400 * 60}`) && geboekt.includes('"projectedMinutes":null'),
+      `Gerrie ziet dat het urencriterium de uren volgt (${geboekt.slice(0, 300)})`);
+    verwacht(geboekt.includes('"zelfstandigenaftrekCents":120000'), 'Gerrie rekent met de zelfstandigenaftrek');
+    // De handeling rekent met de datum van vandaag: na 30 december is er geen prognose meer.
+    const metPrognose = await actie({ year: JAAR, basis: 'prognose' });
+    if (metPrognose.includes('"basis":"prognose"')) {
+      verwacht(/"projectedMinutes":\d+/.test(metPrognose), `Gerrie krijgt de doorgetrokken uren (${metPrognose.slice(0, 300)})`);
+    }
+
+    // Wie zelf nee kiest, houdt nee, ook met 1.400 uur; de raming zegt het erbij.
+    gelukt(await profiel(u, u.medewerker, { p_meets_hours_criterion: false, p_provisional_income_tax_cents: 500_000 }), 'zelf nee kiezen');
+    p = await persoon();
+    gelijk([p.hoursFromTimeTracking, p.profile.meetsHoursCriterion, p.estimate.zelfstandigenaftrekCents], [false, false, 0], 'een eigen nee blijft staan');
+    verwacht(p.notes.some((n) => /staat hier op nee/.test(n)), 'de raming zegt dat de uren het nee hebben ingehaald');
+    // En terug naar "Volgens Uren": weer ja.
+    gelukt(await profiel(u, u.medewerker, { p_meets_hours_criterion: null, p_provisional_income_tax_cents: 500_000 }), 'terug naar Volgens Uren');
+    p = await persoon();
+    gelijk([p.hoursFromTimeTracking, p.profile.meetsHoursCriterion, p.estimate.zelfstandigenaftrekCents], [true, true, 120_000], 'weer volgens Uren');
+    gelijk(sql(`select count(*) from public.income_tax_profiles where organization_id = ${q(u.orgId)}`), '1', 'nog steeds één rij');
   });
 }

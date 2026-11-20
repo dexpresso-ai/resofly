@@ -1,4 +1,5 @@
 import type { Client, FinanceLine, Invoice, Project, Quote } from '../types';
+import { amsterdamTodayIso } from './dates.ts';
 
 /**
  * De rekenkern van Stroom (designvoorstel 2026-10-30): de stroom op Vandaag,
@@ -103,13 +104,29 @@ function daysSince(iso: string | null | undefined, now: Date): number | null {
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
-/** Spiegelt de cron- en Financiën-logica (Dashboard.tsx, invoiceOverdue). */
+/**
+ * Te laat = verstuurd, niet betaald, en de vervaldatum is voorbij. Dezelfde
+ * regel als de database (mark_invoices_overdue) en de pagina Facturen: de
+ * Nederlandse kalenderdag, en de vervaldag zelf is nog op tijd.
+ *
+ * Eerder stond hier de vervaldatum als tijdstip (middernacht UTC) tegenover de
+ * klok. Een factuur die vandaag vervalt stond daardoor vanaf 01:00 al rood als
+ * "te laat" op Vandaag, en een concept met een vervaldatum telde mee in "Te
+ * laat betaald", terwijl de pagina Facturen er één minder noemde.
+ */
 export function invoiceIsOverdue(invoice: Pick<Invoice, 'status' | 'due_date'>, now: Date = new Date()): boolean {
-  if (INVOICE_CLOSED.has(invoice.status)) return false;
+  if (INVOICE_CLOSED.has(invoice.status) || invoice.status === 'draft') return false;
   if (invoice.status === 'overdue') return true;
   if (!invoice.due_date) return false;
-  const due = new Date(invoice.due_date).getTime();
-  return !Number.isNaN(due) && due < now.getTime();
+  return invoice.due_date.slice(0, 10) < amsterdamTodayIso(now);
+}
+
+/** Hele kalenderdagen van vandaag (in Nederland) tot de vervaldatum; negatief als die voorbij is. */
+function daysUntilDue(dueDate: string, now: Date): number | null {
+  const due = Date.parse(`${dueDate.slice(0, 10)}T00:00:00Z`);
+  const today = Date.parse(`${amsterdamTodayIso(now)}T00:00:00Z`);
+  if (Number.isNaN(due) || Number.isNaN(today)) return null;
+  return Math.round((due - today) / DAY);
 }
 
 /** De datum waarop een factuur als betaald telt: de betaaldatum, anders de factuurdatum (zoals Vandaag). */
@@ -175,7 +192,7 @@ export function computeStream({ quotes, invoices, clients, amount, now = new Dat
       const overdue = invoiceIsOverdue(invoice, now);
       const reminded = daysSince(invoice.last_reminder_at ?? null, now);
       const calm = reminded != null && reminded < REMINDER_CALM_DAYS;
-      const dueIn = invoice.due_date ? Math.ceil((new Date(invoice.due_date).getTime() - now.getTime()) / DAY) : null;
+      const dueIn = invoice.due_date ? daysUntilDue(invoice.due_date, now) : null;
       const detail = calm
         ? `herinnering ${reminded === 0 ? 'vandaag' : `${plural(reminded, 'dag', 'dagen')} geleden`} verstuurd`
         : overdue

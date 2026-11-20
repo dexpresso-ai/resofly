@@ -33,7 +33,13 @@ function fakeDb(rows: Record<string, Array<Record<string, unknown>>>) {
       chain.then = (resolve: (value: unknown) => unknown) => resolve({ data: list, error: null, count: list.length });
       return chain;
     },
-    rpc() { throw new Error('geen rpc in deze test'); },
+    // Een rpc beantwoordt de test alleen als hij er een rij "rpc:<naam>" voor
+    // meegeeft (met `value`); anders is het een fout in de test.
+    rpc(name: string) {
+      const answer = rows[`rpc:${name}`];
+      if (!answer) throw new Error('geen rpc in deze test');
+      return Promise.resolve({ data: answer[0]?.value ?? null, error: null });
+    },
   };
 }
 
@@ -93,8 +99,18 @@ test('een actiepunt van een collega haal je niet weg', async () => {
 test('crediteren en intrekken alleen vanuit de juiste status', async () => {
   await refuses(action('invoice.credit').plan!(ctx({ invoices: [{ number: 'F-1', status: 'draft', client_id: null, total_amount: 100 }] }), { invoice_id: ID }), /concept/);
   await refuses(action('invoice.credit').plan!(ctx({ invoices: [{ number: 'F-1', status: 'paid', client_id: null, total_amount: 100 }] }), { invoice_id: ID }), /betaald/);
-  const credit = await action('invoice.credit').plan!(ctx({ invoices: [{ number: 'F-1', status: 'sent', client_id: null, total_amount: 121 }] }), { invoice_id: ID });
+  const credit = await action('invoice.credit').plan!(ctx({ invoices: [{ number: 'F-1', status: 'sent', client_id: null, total_amount: 121 }], 'rpc:invoice_open_receivable_cents': [{ value: 12100 }] }), { invoice_id: ID });
   assert.match(credit.warning ?? '', /niet ongedaan/);
+  assert.match(credit.warning ?? '', /op geannuleerd/);
+  // Deels betaald: alleen het restant, en de factuur is daarna afgehandeld.
+  // De kaart zei eerder "het hele bedrag, op geannuleerd".
+  const rest = await action('invoice.credit').plan!(ctx({ invoices: [{ number: 'F-2', status: 'sent', client_id: null, total_amount: 1210 }], 'rpc:invoice_open_receivable_cents': [{ value: 81000 }] }), { invoice_id: ID });
+  assert.match(rest.warning ?? '', /€\s?810,00/);
+  assert.match(rest.warning ?? '', /betaalde deel/);
+  assert.equal((rest.payload as { amount_cents: number | null }).amount_cents, null);
+  await refuses(action('invoice.credit').plan!(ctx({ invoices: [{ number: 'F-3', status: 'sent', client_id: null, total_amount: 100 }], 'rpc:invoice_open_receivable_cents': [{ value: 5000 }] }), { invoice_id: ID, amount_eur: 60 }), /tussen/);
+  const oninbaar = await action('invoice.credit').plan!(ctx({ invoices: [{ number: 'F-4', status: 'overdue', client_id: null, total_amount: 100 }], 'rpc:invoice_open_receivable_cents': [{ value: 10000 }] }), { invoice_id: ID, send_to_client: false });
+  assert.match(oninbaar.title, /afboeken als oninbaar/);
   await refuses(action('quote.withdraw').plan!(ctx({ quotes: [{ number: 'O-1', status: 'accepted', client_id: null }] }), { quote_id: ID }), /geaccepteerd/);
 });
 

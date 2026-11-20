@@ -4,7 +4,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { clientPosition, computeStream, intentGaps, parseIntent, type StreamInput } from './stroom.ts';
+import { clientPosition, computeStream, intentGaps, invoiceIsOverdue, parseIntent, type StreamInput } from './stroom.ts';
 import { computeTotals } from './money.ts';
 
 const NOW = new Date(2026, 9, 30, 10, 0, 0); // vrijdag 30 oktober 2026, 10:00
@@ -100,6 +100,34 @@ test('knopen: een week bij de klant wacht, verlopen en te laat zijn rood, een he
   const factuur = stream.stations.find(s => s.id === 'factuur');
   assert.equal(factuur?.late, 1);
   assert.equal(factuur?.sent, 1);
+});
+
+test('te laat: pas de dag ná de vervaldatum, in Nederlandse tijd, en nooit een concept', () => {
+  // De vervaldag zelf, 's avonds: nog op tijd. Eerder was dit al "te laat",
+  // omdat de vervaldatum als middernacht UTC tegenover de klok stond.
+  const avond = new Date('2026-11-19T17:30:00Z');
+  assert.equal(invoiceIsOverdue({ status: 'sent', due_date: '2026-11-19' }, avond), false);
+  assert.equal(invoiceIsOverdue({ status: 'sent', due_date: '2026-11-18' }, avond), true);
+  // 00:30 in Nederland op de 20e is nog 23:30 UTC op de 19e: de database
+  // (mark_invoices_overdue) rekent met de Nederlandse dag, wij dus ook.
+  assert.equal(invoiceIsOverdue({ status: 'sent', due_date: '2026-11-19' }, new Date('2026-11-19T23:30:00Z')), true);
+  // Een concept is nog niet verstuurd: het telde mee in "Te laat betaald".
+  assert.equal(invoiceIsOverdue({ status: 'draft', due_date: '2026-01-01' }, avond), false);
+  assert.equal(invoiceIsOverdue({ status: 'overdue', due_date: null }, avond), true);
+  for (const status of ['paid', 'cancelled', 'void', 'written_off', 'refunded']) {
+    assert.equal(invoiceIsOverdue({ status: status as never, due_date: '2026-01-01' }, avond), false, status);
+  }
+});
+
+test('de stroom op de vervaldag: "vervalt vandaag", en een dag later "1 dag te laat"', () => {
+  const detail = (now: Date) => computeStream({ quotes: [], invoices: [invoice({ id: 'i-vandaag', due_date: '2026-11-19' })] as never, clients, amount, now })
+    .items.find(item => item.refId === 'i-vandaag');
+  const opDeDag = detail(new Date('2026-11-19T17:30:00Z'));
+  assert.equal(opDeDag?.detail, 'vervalt vandaag');
+  assert.equal(opDeDag?.knot, null);
+  const dagLater = detail(new Date('2026-11-20T08:00:00Z'));
+  assert.equal(dagLater?.detail, '1 dag te laat');
+  assert.equal(dagLater?.knot, 'late');
 });
 
 test('stroomlijn: de verste open halte van een klant, met zijn zwaarste knoop', () => {

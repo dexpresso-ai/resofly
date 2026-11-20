@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import type { AppData } from '../types';
 import { buildXaf } from './xaf.ts';
 import {
-  balancesAt, decimalToCents, decodeXafBytes, openingLines, parseXaf, planRelations, proposeAccount, type TargetAccount,
+  balancesAt, decimalToCents, decodeXafBytes, mappingWarnings, openingLines, parseXaf, planRelations, proposeAccount, type TargetAccount,
 } from './xafImport.ts';
 
 /**
@@ -181,6 +181,83 @@ test('voorstellen voor het rekeningschema', () => {
   assert.equal(propose('1000', 'Kas'), null, 'geen kas in het standaardschema: zelf kiezen');
   assert.equal(propose('1300', 'Iets onbekends'), 'a1300', 'als laatste: hetzelfde nummer');
   assert.equal(propose('8000', 'Omzet'), null, 'een W&V-rekening van ResoFly is nooit een doel');
+});
+
+// Tot november 2026 gingen deze allemaal naar 1100 Bank, omdat de naam van een
+// bank erin staat: de lening, de creditcard en de spaarrekening telden op tot
+// één banksaldo (€ 24.290 credit in plaats van € 3.210 debet).
+test('een lening, creditcard of spaarrekening wordt geen Bank, ook niet met de naam van een bank erin', () => {
+  const propose = (code: string, name: string) => proposeAccount({ code, name }, resofly);
+  for (const [code, name] of [
+    ['0700', 'Lening Rabobank'], ['0710', 'Lening ING auto'], ['0720', 'Hypotheek o/g ABN AMRO'], ['0730', 'Rekening-courant krediet Rabobank'],
+    ['0740', 'Financiering bestelbus'], ['0750', 'Financial lease bedrijfsauto'], ['1150', 'Creditcard ING'], ['1151', 'Credit card Knab'],
+    ['1160', 'Spaarrekening Rabobank'], ['1170', 'Deposito ASN'], ['1180', 'Bankleningen'],
+  ] as const) {
+    const p = propose(code, name);
+    assert.equal(p.targetId, null, `${name} krijgt geen voorstel`);
+    assert.match(p.reason ?? '', /geen betaalrekening/, `${name}: het scherm zegt waarom`);
+  }
+  // Ook niet via hetzelfde nummer: een creditcard op 1100 in het oude pakket is nog geen Bank.
+  assert.equal(propose('1100', 'Creditcard ING').targetId, null);
+  assert.equal(propose('0100', 'Lening auto').targetId, null, 'en geen vast activum door het woord "auto"');
+  // Een gewone betaalrekening blijft Bank, en "dienstverlening" is geen lening.
+  assert.equal(propose('1010', 'Rabobank NL11RABO').targetId, 'a1100');
+  assert.equal(propose('1011', 'ING zakelijke rekening').targetId, 'a1100');
+  assert.equal(propose('1300', 'Nog te factureren dienstverlening').targetId, 'a1300');
+
+  // Staat de rekening al in ResoFly, dan wel: op naam, of op nummer bij een rekening die zelf ook een lening is.
+  const metLening: TargetAccount[] = [
+    ...resofly,
+    { id: 'a0700', code: '0700', name: 'Leningen', type: 'liability', subtype: null },
+    { id: 'a1160', code: '1160', name: 'Spaarrekening Rabobank', type: 'asset', subtype: null },
+  ];
+  assert.deepEqual(proposeAccount({ code: '0700', name: 'Lening Rabobank' }, metLening), { targetId: 'a0700', reason: 'Zelfde rekeningnummer' });
+  assert.deepEqual(proposeAccount({ code: '9999', name: 'Spaarrekening Rabobank' }, metLening), { targetId: 'a1160', reason: 'Zelfde naam' });
+  assert.equal(proposeAccount({ code: '0710', name: 'Lening ING auto' }, metLening).targetId, null, 'een ander nummer: zelf kiezen');
+});
+
+test('waarschuwingen bij de koppeling: meer rekeningen op de bank, of een bank die credit staat', () => {
+  const balances = [
+    { code: '0700', name: 'Lening Rabobank', type: 'B' as const, cents: -2_000_000 },
+    { code: '1100', name: 'Rabobank NL11RABO', type: 'B' as const, cents: 321_000 },
+    { code: '1150', name: 'Creditcard ING', type: 'B' as const, cents: -50_000 },
+    { code: '1300', name: 'Debiteuren', type: 'B' as const, cents: 100_000 },
+    { code: '1310', name: 'Dubieuze debiteuren', type: 'B' as const, cents: 5_000 },
+  ];
+  // Eén betaalrekening op de bank, debet: niets te melden. Twee rekeningen op Debiteuren ook niet.
+  assert.deepEqual(mappingWarnings(balances, { 1100: 'a1100', 1300: 'a1300', 1310: 'a1300' }, resofly), []);
+  // De gebruiker zet de creditcard er zelf bij: gemeld, met de namen.
+  const twee = mappingWarnings(balances, { 1100: 'a1100', 1150: 'a1100' }, resofly);
+  assert.equal(twee.length, 1);
+  assert.match(twee[0], /2 rekeningen uit de auditfile komen samen op 1100 Bank: 1100 Rabobank NL11RABO, 1150 Creditcard ING/);
+  // Met de lening erbij staat de bank credit: twee meldingen.
+  const drie = mappingWarnings(balances, { '0700': 'a1100', 1100: 'a1100', 1150: 'a1100' }, resofly);
+  assert.equal(drie.length, 2);
+  assert.match(drie[0], /3 rekeningen/);
+  assert.match(drie[1], /1100 Bank komt uit op € 17\.290,00 credit/);
+  // Eén rekening die rood staat: alleen de creditmelding.
+  const rood = mappingWarnings(balances, { 1150: 'a1100' }, resofly);
+  assert.equal(rood.length, 1);
+  assert.match(rood[0], /€ 500,00 credit/);
+  // Een saldo van nul telt niet als tweede rekening.
+  assert.deepEqual(mappingWarnings([...balances, { code: '1105', name: 'Oude bank', type: 'B' as const, cents: 0 }], { 1100: 'a1100', 1105: 'a1100' }, resofly), []);
+});
+
+// Zonder <openingBalance> zijn de saldi alleen de mutaties van het jaar: de
+// bank stond op € 210 in plaats van € 3.210 en de lening ontbrak, zonder melding.
+test('een auditfile zonder beginbalans geeft een waarschuwing', () => {
+  const metBeginbalans = parseXaf(otherPackage);
+  const met = balancesAt(metBeginbalans, '2026-01-01');
+  assert.equal(met.missingOpening, false);
+  assert.doesNotMatch(met.warnings.join(' '), /geen beginbalans/);
+
+  const zonder = balancesAt(parseXaf(otherPackage.replace(/<xaf:openingBalance>[\s\S]*<\/xaf:openingBalance>/, '')), '2026-01-01');
+  assert.equal(zonder.missingOpening, true);
+  assert.match(zonder.warnings.join(' '), /geen beginbalans: de saldi hieronder zijn alleen de boekingen vanaf 1-1-2025 uit dit bestand/);
+  assert.deepEqual(zonder.balance.map(b => [b.code, b.cents]), [['1000', 12101], ['1600', -2101]], 'alleen de mutaties: de bank en het kapitaal ontbreken');
+
+  // Wat ResoFly zelf schrijft, heeft altijd een beginbalans.
+  assert.equal(balancesAt(parseXaf(resoflyXaf()), '2026-01-01').missingOpening, false);
 });
 
 test('vof: kapitaal en privé van een vennoot gaan naar zijn eigen rekening', () => {

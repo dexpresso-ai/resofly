@@ -210,12 +210,26 @@ test('hoog inkomen: de aftrekbeperking en het maximum van de Zvw', () => {
   assert.equal(e.totalCents, 6_048_483);
 });
 
-test('aftrekbeperking alleen over het deel in de hoogste schijf', () => {
-  // Net boven de grens: de beperking is kleiner dan de aftrekposten.
-  const e = estimatePerson(R26, person({ profitShareCents: E(92_000) }));
-  const above = e.taxableIncomeCents - E(78_426);
-  assert.ok(above > 0 && above < e.entrepreneurDeductionCents + e.mkbExemptionCents);
-  assert.equal(e.deductionCapCents, applyRate(above, 49_500 - 37_560));
+test('aftrekbeperking: over de aftrekposten, tot waar het inkomen mét die posten boven de grens uitkomt', () => {
+  // Art. 2.10 lid 2: de aftrekposten tellen als het bovenste deel van het
+  // inkomen. Bij € 90.000 winst is het belastbare inkomen € 77.522,40, net
+  // onder de grens van € 78.426. Zonder de aftrekposten was het € 90.000:
+  // € 11.574 daarvan zat in de hoogste schijf, en over dat deel leveren ze
+  // 37,56% op in plaats van 49,50%. De verhoging is € 11.574 × 11,94%.
+  // Eerder stond hier het inkomen ná aftrek tegenover de grens: € 0.
+  const cap = (winst: number, rules = R26) => estimatePerson(rules, person({ profitShareCents: E(winst) })).deductionCapCents;
+  assert.equal(cap(78_000), 0, 'onder de grens: geen beperking');
+  assert.equal(cap(80_000), 18_794);
+  assert.equal(cap(90_000), 138_194);
+  assert.equal(cap(92_000), 152_015, 'boven € 90.626 zit het belastbare inkomen zelf ook boven de grens');
+  // Ver boven de grens: alle aftrekposten vallen in de hoogste schijf.
+  const hoog = estimatePerson(R26, person({ profitShareCents: E(130_000) }));
+  assert.equal(hoog.deductionCapCents, applyRate(hoog.entrepreneurDeductionCents + hoog.mkbExemptionCents, 49_500 - 37_560));
+  assert.equal(cap(100_000), 164_146);
+  // 2025: grens € 76.817, 49,50% tegenover 37,48%.
+  assert.equal(cap(80_000, R25), 38_260);
+  assert.equal(cap(90_000, R25), 158_460);
+  assert.equal(cap(100_000, R25), 178_573);
 });
 
 test('starter met een kleine winst: de volle aftrek, ook als er een verlies ontstaat', () => {
@@ -328,11 +342,25 @@ test('starter met KIA, correcties, overige aftrek en een oud verlies', () => {
   assert.equal(e.lossOffsetCents, E(5000));
   assert.equal(e.taxableIncomeCents, 1_628_112);
   assert.equal(e.bracketTaxCents, 582_050);
-  assert.equal(e.generalCreditCents, E(3115), 'het verrekende verlies verlaagt het verzamelinkomen');
+  assert.equal(e.generalCreditCents, E(3115), 'de volle korting: het verzamelinkomen blijft onder de afbouwgrens');
   assert.equal(e.labourCreditCents, 534_592, 'maar niet het arbeidsinkomen');
   assert.equal(e.incomeTaxCents, 0);
   assert.equal(e.zvwBaseCents, 2_128_112, 'en ook niet de grondslag van de Zvw');
   assert.equal(e.zvwCents, 103_213);
+});
+
+test('een oud verlies verlaagt de belasting, niet het verzamelinkomen voor de kortingen', () => {
+  // Het verzamelinkomen is het inkomen vóór verliesverrekening (art. 2.18).
+  // De afbouw van de algemene heffingskorting en van de ouderenkorting kijkt
+  // daarnaar. Eerder rekende de raming met het inkomen ná verrekening, en
+  // kreeg wie een oud verlies verrekende te veel korting.
+  const zonder = estimatePerson(R26, person({ profitShareCents: E(60_000), aowStatus: 'heel_jaar' }));
+  const met = estimatePerson(R26, person({ profitShareCents: E(60_000), aowStatus: 'heel_jaar', lossCarryForwardCents: E(20_000) }));
+  assert.equal(met.lossOffsetCents, E(20_000));
+  assert.equal(met.taxableIncomeCents, zonder.taxableIncomeCents - E(20_000));
+  assert.equal(met.generalCreditCents, zonder.generalCreditCents);
+  assert.equal(met.elderlyCreditCents, zonder.elderlyCreditCents);
+  assert.ok(zonder.generalCreditCents < phaseOutCredit(R26.generalCreditAow, 0), 'in de afbouw, anders zegt deze test niets');
 });
 
 test('een oud verlies gaat nooit verder dan nul', () => {
@@ -642,10 +670,22 @@ test('urencriterium: zonder opgeslagen keuze de uren van de eigenaar, met een ke
   const te = buildIncomeTaxOverview(inputs({ ownerMinutes: 1225 * 60 - 1 }), { basis: 'geboekt', today: TODAY });
   assert.equal(te?.persons[0].profile.meetsHoursCriterion, false);
   assert.ok(te?.persons[0].notes.some(n => /minder dan 1\.225/.test(n)));
-  // Een opgeslagen keuze wint, ook "nog niet ingevuld".
-  const gekozen = buildIncomeTaxOverview(inputs({ ownerMinutes: 2000 * 60, profiles: [defaultIncomeTaxProfile(null)] }), { basis: 'geboekt', today: TODAY });
-  assert.equal(gekozen?.persons[0].hoursFromTimeTracking, false);
-  assert.equal(gekozen?.persons[0].profile.meetsHoursCriterion, null);
+  // Een opgeslagen ja of nee wint van de uren.
+  const nee = buildIncomeTaxOverview(inputs({ ownerMinutes: 2000 * 60, profiles: [{ ...defaultIncomeTaxProfile(null), meetsHoursCriterion: false }] }), { basis: 'geboekt', today: TODAY });
+  assert.equal(nee?.persons[0].hoursFromTimeTracking, false);
+  assert.equal(nee?.persons[0].profile.meetsHoursCriterion, false);
+  assert.equal(nee?.persons[0].estimate.zelfstandigenaftrekCents, 0);
+  assert.ok(nee?.persons[0].notes.some(n => /Bij Uren staan 2\.000 uur, maar het urencriterium staat hier op nee/.test(n)), 'een "nee" dat de uren hebben ingehaald: zeg het');
+  // Opgeslagen zonder eigen keuze (alleen de voorlopige aanslag ingevuld): het
+  // urencriterium blijft de uren volgen. Eerder legde opslaan in maart het
+  // "nee" van die dag vast, en bleef de zelfstandigenaftrek in november weg.
+  const maart = { ...defaultIncomeTaxProfile(null), provisionalIncomeTaxCents: E(4000), updatedAt: '2026-03-10T09:00:00Z' };
+  const gevolgd = buildIncomeTaxOverview(inputs({ ownerMinutes: 1400 * 60, profiles: [maart] }), { basis: 'geboekt', today: TODAY });
+  assert.equal(gevolgd?.persons[0].profileSaved, true);
+  assert.equal(gevolgd?.persons[0].hoursFromTimeTracking, true);
+  assert.equal(gevolgd?.persons[0].profile.meetsHoursCriterion, true);
+  assert.equal(gevolgd?.persons[0].estimate.zelfstandigenaftrekCents, E(1200));
+  assert.equal(gevolgd?.persons[0].estimate.provisionalIncomeTaxCents, E(4000));
   // Zonder uren (geen leesrecht op Uren): niet ingevuld, zoals voorheen.
   const zonder = buildIncomeTaxOverview(inputs({ ownerMinutes: null }), { basis: 'geboekt', today: TODAY });
   assert.equal(zonder?.persons[0].hoursFromTimeTracking, false);
@@ -654,6 +694,57 @@ test('urencriterium: zonder opgeslagen keuze de uren van de eigenaar, met een ke
   const vof = buildIncomeTaxOverview(inputs({ legalForm: 'vof', isPartnershipForm: true, ownerMinutes: 2000 * 60 }), { basis: 'geboekt', today: TODAY });
   assert.equal(vof?.ownerMinutes, null);
   assert.equal(vof?.persons[0].profile.meetsHoursCriterion, null);
+});
+
+test('prognose: de uren gaan mee naar 31 december, net als de winst', () => {
+  // 17 november: 321 van de 365 dagen. 1.100 uur nu is in hetzelfde tempo
+  // ruim 1.250 op 31 december. Eerder trok de prognose alleen de winst door,
+  // en kreeg wie op koers lag een prognose zonder zelfstandigenaftrek.
+  const nu = buildIncomeTaxOverview(inputs({ ownerMinutes: 1100 * 60 }), { basis: 'geboekt', today: TODAY });
+  assert.equal(nu?.persons[0].profile.meetsHoursCriterion, false);
+  assert.equal(nu?.persons[0].projectedMinutes, null);
+  const straks = buildIncomeTaxOverview(inputs({ ownerMinutes: 1100 * 60 }), { basis: 'prognose', today: TODAY });
+  assert.equal(straks?.basis, 'prognose');
+  assert.equal(straks?.persons[0].projectedMinutes, Math.round(1100 * 60 * 365 / 321));
+  assert.equal(straks?.persons[0].profile.meetsHoursCriterion, true);
+  assert.equal(straks?.persons[0].estimate.zelfstandigenaftrekCents, E(1200));
+  assert.ok(straks?.persons[0].notes.some(n => /nu 1\.100 uur geregistreerd\. In hetzelfde tempo zijn dat er ongeveer 1\.250 op 31 december/.test(n)));
+  // Niet op koers: ook in de prognose geen aftrek.
+  const laag = buildIncomeTaxOverview(inputs({ ownerMinutes: 600 * 60 }), { basis: 'prognose', today: TODAY });
+  assert.equal(laag?.persons[0].profile.meetsHoursCriterion, false);
+  // Een eigen keuze wordt niet doorgetrokken.
+  const eigen = buildIncomeTaxOverview(inputs({ ownerMinutes: 1100 * 60, profiles: [{ ...defaultIncomeTaxProfile(null), meetsHoursCriterion: false }] }), { basis: 'prognose', today: TODAY });
+  assert.equal(eigen?.persons[0].projectedMinutes, null);
+  assert.equal(eigen?.persons[0].profile.meetsHoursCriterion, false);
+});
+
+test('begonnen in de loop van het jaar: de winst van daarvóór zit er niet in, en dat staat erbij', () => {
+  const kort = inputs({
+    bookkeepingStartDate: '2026-07-01',
+    overlappingFiscalYears: [{ id: 'fy', label: '2026', periodStart: '2026-07-01', periodEnd: '2026-12-31', status: 'open' }],
+  });
+  const overview = buildIncomeTaxOverview(kort, { basis: 'geboekt', today: TODAY });
+  assert.ok(overview);
+  assert.ok(overview.warnings.some(w => /begint op 1 juli 2026: deze raming telt de winst vanaf die dag/.test(w) && /Overige correctie/.test(w)));
+  // Een kort eerste boekjaar valt binnen het kalenderjaar: dat is geen gebroken boekjaar.
+  assert.ok(!overview.warnings.some(w => /niet gelijk met het kalenderjaar/.test(w)));
+  // Begonnen op 1 januari, of in een eerder jaar: geen melding.
+  for (const start of ['2026-01-01', '2024-01-01', null]) {
+    const gewoon = buildIncomeTaxOverview(inputs({ bookkeepingStartDate: start }), { basis: 'geboekt', today: TODAY });
+    assert.ok(!gewoon?.warnings.some(w => /begint op/.test(w)), String(start));
+  }
+});
+
+test('KIA: de raming zegt erbij dat je moet nalopen wat meetelt', () => {
+  const overview = buildIncomeTaxOverview(inputs({
+    investments: [{ assetId: 'a1', name: 'Personenauto', assetNumber: null, acquisitionDate: '2026-03-01', costCents: E(30_000), excluded: false }],
+  }), { basis: 'geboekt', today: TODAY });
+  assert.equal(overview?.kiaCents, E(8400));
+  assert.ok(overview?.persons[0].notes.some(n => /De KIA rekent met € 30\.000,00 aan investeringen uit Activa/.test(n) && /personenauto/.test(n)));
+  const uit = buildIncomeTaxOverview(inputs({
+    investments: [{ assetId: 'a1', name: 'Personenauto', assetNumber: null, acquisitionDate: '2026-03-01', costCents: E(30_000), excluded: true }],
+  }), { basis: 'geboekt', today: TODAY });
+  assert.ok(!uit?.persons[0].notes.some(n => /De KIA rekent/.test(n)));
 });
 
 test('vof: het urencriterium per vennoot uit de uren van zijn teamlid, zoals bij Vennoten', () => {

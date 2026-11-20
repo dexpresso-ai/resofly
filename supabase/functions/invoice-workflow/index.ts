@@ -13,7 +13,7 @@ import { loadInvoiceMollieKey, type InvoiceMollieKey } from '../_shared/invoiceM
 import { buildUblXml, deriveSalesLineCategory, validateUblInput, type UblDocumentInput, type UblLine, type VatKindRef } from '../_shared/ubl.ts';
 import { clientWantsEInvoice, defaultInvoiceRecipient, embeddedPdf, invoiceDeliveryChannel } from '../_shared/eInvoicing.ts';
 import { loadMollieInvoicingAllowed, SEND_METHOD_EMAIL_NO_PAYMENT_LINK } from '../_shared/invoiceSendMethod.ts';
-import { splitRefundOverVatGroups } from '../_shared/creditNoteSplit.ts';
+import { invoiceVatGroups, splitRefundOverVatGroups, type VatGroup } from '../_shared/creditNoteSplit.ts';
 import { invoiceVatNotes } from '../_shared/invoiceVatNotes.ts';
 import { loadVatCodeInfo } from '../_shared/vatCodeInfo.ts';
 import { loadDocumentDesign, renderCreditNotePdf, renderDunningLetterPdf, renderSalesDocumentPdf } from '../_shared/documentPdf.ts';
@@ -264,6 +264,11 @@ serve(async (req) => {
       case 'createInvoicePaymentCheckout': return json(req, { ok: true, ...(await createInvoicePaymentCheckout(user.id, organizationId, invoiceId, body)) });
       case 'createInvoiceRefund': return json(req, { ok: true, ...(await createInvoiceRefund(user.id, organizationId, role, invoiceId, body)) });
       case 'creditInvoice': return json(req, { ok: true, ...(await creditUnpaidInvoice(user.id, organizationId, invoiceId, body)) });
+      // Wat er te crediteren valt, voor het venster in de app (leest alleen).
+      case 'previewInvoiceCredit': return json(req, { ok: true, ...(await previewInvoiceCredit(organizationId, invoiceId)) });
+      // Weten vóór je verstuurt: op welke datum komt deze factuur in de boeken (leest alleen).
+      case 'previewInvoiceSend': return json(req, { ok: true, ...(await previewInvoiceSend(organizationId, invoiceId)) });
+      case 'issueRefundCreditNote': return json(req, { ok: true, ...(await issueRefundCreditNote(user.id, organizationId, role, body)) });
       case 'sendCreditNoteEmail': return json(req, { ok: true, ...(await sendCreditNoteEmail(user.id, organizationId, body)) });
       case 'markMockInvoicePaymentPaid': return json(req, { ok: true, payment: await markMockInvoicePaymentPaid(organizationId, String(body.providerPaymentId || '')) });
       case 'saveInvoiceMollieKey': return json(req, { ok: true, ...(await saveInvoiceMollieKey(user.id, organizationId, role, body)) });
@@ -312,6 +317,26 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
   if (!invoiceHasContent(invoice.lines)) {
     throw new WorkflowHttpError(`Factuur ${invoice.number} heeft nog geen regels. Zet erin wat je factureert voordat je hem verstuurt.`, 422);
   }
+  // Een factuur met een negatief totaal niet uitgeven. Zo'n zelfgemaakte
+  // "creditfactuur" kwam met een negatief bedrag op Debiteuren en bleef daar
+  // staan: een verkoopfactuur letter je alleen af met geld dat binnenkomt, en
+  // "op betaald zetten" liet de openstaande posten scheef. Alleen een concept:
+  // wat al de deur uit is, mag nog opnieuw gemaild worden.
+  if (invoice.status === 'draft') {
+    const draftTotalCents = calculateTotals(invoice.lines).totalCents;
+    if (draftTotalCents < 0) {
+      throw new WorkflowHttpError(`Factuur ${invoice.number} komt uit op een negatief bedrag (${formatEuro(draftTotalCents / 100)}). Geld terug aan de klant factureer je niet met een negatieve factuur: die kun je daarna niet afletteren. Open de factuur waar dit over gaat en kies "Crediteren" (daar kun je ook een deel van het bedrag crediteren); is die factuur al betaald, kies dan "Terugbetaling".`, 422);
+    }
+    // Het btw-tarief hoort bij de btw-code (de database weigert het uitgeven
+    // ook, enforce_invoice_lines_numeric). Hier al, vóór er een mail ontstaat:
+    // de status gaat pas ná het mailen op verstuurd.
+    await assertLineVatMatchesCode(organizationId, invoice);
+  }
+  // Komt de boeking niet op de factuurdatum (afgesloten tijdvak, toekomst), of
+  // komt de factuur helemaal niet in de boeken (vóór de startdatum)? Vóór het
+  // versturen bepaald, want daarna is hij geboekt. Het antwoord draagt de
+  // melding mee, ook voor Gerrie en de API; weigeren doen we hier niet.
+  const bookingNotice = await invoiceBookingNotice(organizationId, invoice);
 
   const [client, project, quote, company, content, mollieAllowed] = await Promise.all([
     loadClient(organizationId, invoice.client_id),
@@ -350,7 +375,7 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
   // Via Mollie: Mollie geeft de factuur uit, verstuurt hem over Peppol, mailt de
   // PDF-kopie en int de betaling. ResoFly stuurt dan zelf geen mail.
   if (deliveryChannel === 'e_invoice_mollie') {
-    return await sendInvoiceViaMollie({ userId, organizationId, invoice, client, project, quote, company, content, recipientEmail, recipientName, subject: typeof body.subject === 'string' ? body.subject : '' });
+    return { ...(await sendInvoiceViaMollie({ userId, organizationId, invoice, client, project, quote, company, content, recipientEmail, recipientName, subject: typeof body.subject === 'string' ? body.subject : '' })), bookingNotice };
   }
 
   // Al via Mollie uitgegeven: niet nog eens per mail. De klant heeft hem dan al
@@ -509,12 +534,118 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
     // false: de organisatie verstuurt per e-mail, er ging bewust geen betaallink mee.
     mollieAllowed,
     paymentLinkIncluded: Boolean(paymentUrl), paymentLinkError,
+    // null: de factuur is gewoon op zijn factuurdatum geboekt.
+    bookingNotice,
     attachment: { fileName: pdfAttachment.fileName, sizeBytes: pdfAttachment.sizeBytes, sha256: pdfAttachment.sha256, storageProvider: storedPdf.provider, storageKey: storedPdf.key },
     // Zonder e-facturatie gaat er bewust geen UBL mee; dat is geen gebrek.
     ubl: ublAttachment
       ? { attached: true, fileName: ublAttachment.fileName, warnings: ublAttachment.warnings, pdfEmbedded: ublAttachment.pdfEmbedded }
       : { attached: false, reason: null },
   };
+}
+
+// ------------------------------------------------------------
+// Weten vóór je verstuurt: waar komt de boeking terecht?
+// ------------------------------------------------------------
+// Versturen boekt de factuur (omzet en btw). Drie gevallen waarin dat anders
+// loopt dan de gebruiker denkt, en waar hij eerder niets van zag:
+//  - de factuurdatum valt in een afgesloten btw-tijdvak of boekjaar: de
+//    boeking gaat naar de eerste open dag, soms in het volgende boekjaar
+//    (een factuur van 20 december, verstuurd nadat het vierde kwartaal dicht
+//    was, telde als omzet van het jaar erna);
+//  - de factuurdatum ligt in de toekomst: de omzet telt pas dan mee;
+//  - de factuurdatum ligt vóór de startdatum van de boekhouding: de factuur
+//    gaat de deur uit maar wordt nooit geboekt. De meldingen daarna wezen naar
+//    elkaar ("zit al in de beginbalans" / "boek de factuur eerst").
+type BookingNotice = {
+  kind: 'closed_period' | 'future_date' | 'before_start';
+  invoiceDate: string;
+  /** De dag waarop omzet en btw geboekt worden; null als de factuur niet in de boeken komt. */
+  bookingDate: string | null;
+  message: string;
+  advice: string;
+};
+
+async function invoiceBookingNotice(organizationId: string, invoice: InvoiceRow): Promise<BookingNotice | null> {
+  // Al geboekt: versturen verandert daar niets meer aan.
+  if (invoice.journal_entry_id) return null;
+  const invoiceDate = String(invoice.date || '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(invoiceDate)) return null;
+  const today = amsterdamDate(new Date());
+
+  const { data: settings, error: settingsError } = await supabaseAdmin.from('company_settings')
+    .select('bookkeeping_start_date,fiscal_year_start_month').eq('organization_id', organizationId).maybeSingle();
+  if (settingsError) throwSupabaseError('company_settings lookup', settingsError);
+  const startDate = settings?.bookkeeping_start_date ? String(settings.bookkeeping_start_date).slice(0, 10) : null;
+  const startMonth = Math.min(12, Math.max(1, Number(settings?.fiscal_year_start_month) || 1));
+
+  if (startDate && invoiceDate < startDate) {
+    return {
+      kind: 'before_start',
+      invoiceDate,
+      bookingDate: null,
+      message: `Factuur ${invoice.number} heeft als datum ${formatDateNl(invoiceDate)}. Dat is vóór de startdatum van je boekhouding (${formatDateNl(startDate)}). De factuur wordt wel verstuurd, maar komt niet in het grootboek: omzet van vóór de startdatum hoort in je beginbalans te zitten. Hij telt dan niet mee in je omzet en je btw-aangifte in ResoFly.`,
+      advice: `Hoort deze omzet wel in deze boekhouding, zet de factuurdatum dan op vandaag (${formatDateNl(today)}) voordat je verstuurt. Verstuur je hem zo, dan boek je de betaling straks bij Bank op 1300 Debiteuren (niet op de factuur).`,
+    };
+  }
+
+  const { data: bookedOn, error: dateError } = await supabaseAdmin.rpc('first_open_booking_date', { p_organization_id: organizationId, p_date: invoiceDate });
+  if (dateError) throwRpcError('first_open_booking_date', dateError);
+  const bookingDate = String(bookedOn || invoiceDate).slice(0, 10);
+  if (bookingDate !== invoiceDate) {
+    const fiscalYear = (date: string) => { const [year, month] = date.split('-').map(Number); return month >= startMonth ? year : year - 1; };
+    const otherYear = fiscalYear(bookingDate) !== fiscalYear(invoiceDate)
+      ? ` Dat is een ander boekjaar: de omzet telt dan mee in ${fiscalYear(bookingDate)} in plaats van ${fiscalYear(invoiceDate)}, ook voor je inkomstenbelasting.`
+      : '';
+    return {
+      kind: 'closed_period',
+      invoiceDate,
+      bookingDate,
+      message: `Factuur ${invoice.number} heeft als datum ${formatDateNl(invoiceDate)}. Dat valt in een tijdvak dat al is afgesloten (de btw-aangifte is gedaan of het boekjaar is dicht). Omzet en btw worden daarom geboekt op ${formatDateNl(bookingDate)}, de eerste dag die nog open is.${otherYear}`,
+      advice: `Meestal is het beter de factuurdatum op vandaag (${formatDateNl(today)}) te zetten: dan staat op de factuur dezelfde datum als in je boeken.`,
+    };
+  }
+
+  if (invoiceDate > today) {
+    return {
+      kind: 'future_date',
+      invoiceDate,
+      bookingDate,
+      message: `Factuur ${invoice.number} heeft als datum ${formatDateNl(invoiceDate)}; dat is na vandaag. Omzet en btw worden op die datum geboekt en tellen dus pas dan mee, ook in je btw-aangifte.`,
+      advice: `Verstuur je hem vandaag, zet de factuurdatum dan op vandaag (${formatDateNl(today)}). De btw ben je verschuldigd in het tijdvak waarin je de factuur uitreikt.`,
+    };
+  }
+  return null;
+}
+
+async function previewInvoiceSend(organizationId: string, invoiceId: string): Promise<{ bookingNotice: BookingNotice | null }> {
+  if (!isUuid(invoiceId)) throw new WorkflowHttpError('Ongeldige factuur.', 400);
+  const invoice = await loadInvoice(organizationId, invoiceId);
+  return { bookingNotice: await invoiceBookingNotice(organizationId, invoice) };
+}
+
+/**
+ * Het btw-tarief van elke regel hoort bij zijn btw-code (vat_codes.rate). Alleen
+ * voor een code die deze organisatie kent; een onbekende code heeft geen tarief
+ * om mee te vergelijken. Spiegel van enforce_invoice_lines_numeric.
+ */
+async function assertLineVatMatchesCode(organizationId: string, invoice: InvoiceRow): Promise<void> {
+  const lines = Array.isArray(invoice.lines) ? invoice.lines : [];
+  const codes = [...new Set(lines.map((line) => String(line.vat_code ?? '').trim()).filter(Boolean))];
+  if (codes.length === 0) return;
+  const { data, error } = await supabaseAdmin.from('vat_codes').select('code,rate').eq('organization_id', organizationId).in('code', codes);
+  if (error) throwSupabaseError('btw-codes laden', error);
+  const rateByCode = new Map(((data ?? []) as Array<{ code: string; rate: number | string }>).map((row) => [String(row.code), Number(row.rate) || 0]));
+  for (const line of lines) {
+    const code = String(line.vat_code ?? '').trim();
+    if (!code || !rateByCode.has(code)) continue;
+    const codeRate = rateByCode.get(code) ?? 0;
+    const lineRate = Number(line.vat) || 0;
+    if (Math.abs(codeRate - lineRate) > 0.004) {
+      const label = String(line.description ?? '').trim().slice(0, 80) || '(zonder omschrijving)';
+      throw new WorkflowHttpError(`Regel "${label}" heeft btw-code ${code} maar een btw-tarief van ${lineRate}%. Bij die code hoort ${codeRate}%. Kies de btw van die regel opnieuw, of kies een andere code.`, 422);
+    }
+  }
 }
 
 // ============================================================
@@ -1415,25 +1546,55 @@ async function createInvoicePaymentCheckout(userId: string, organizationId: stri
   }
 }
 
+/**
+ * Waarom wordt er terugbetaald? Dat bepaalt of er een creditfactuur komt.
+ *  - 'sale': de verkoop gaat (deels) niet door. Creditfactuur, omzet en btw
+ *    gaan terug, en de terugbetaling telt bij de factuur.
+ *  - 'overpayment': de klant betaalde te veel of dubbel. Alleen geld terug; de
+ *    factuur klopt en blijft betaald.
+ * Er was één vinkje "creditfactuur aanmaken". Uit: de factuur ging op
+ * Terugbetaald terwijl omzet en btw bleven staan. Aan bij een dubbele
+ * betaling: terechte omzet werd weggeboekt. Wie nog het oude vinkje stuurt
+ * (createCreditNote: false, zonder purpose) bedoelt "geen creditfactuur" en
+ * krijgt dus 'overpayment'.
+ */
+type RefundPurpose = 'sale' | 'overpayment';
+function refundPurposeOf(body: Record<string, unknown>): RefundPurpose {
+  if (body.purpose === 'overpayment') return 'overpayment';
+  if (body.purpose === 'sale') return 'sale';
+  return body.createCreditNote === false ? 'overpayment' : 'sale';
+}
+
+const OVERPAYMENT_BANK_HINT = 'De factuur blijft betaald en er komt geen creditfactuur: omzet en btw veranderen niet. Boek de uitgaande betaling bij Bank op 1300 Debiteuren; daar staat de dubbele of te hoge ontvangst ook, dus samen is dat weer nul.';
+const OVERPAYMENT_MOLLIE_HINT = 'De factuur blijft betaald en er komt geen creditfactuur: omzet en btw veranderen niet. Het geld gaat van je Mollie-saldo terug naar de klant. De andere ontvangst (bij Bank) is nu de betaling van deze factuur: verdeel die bankmutatie op de factuur, of boek hem op 1300 Debiteuren.';
+
 async function createInvoiceRefund(userId: string, organizationId: string, role: OrganizationRole, invoiceId: string, body: Record<string, unknown>) {
   // Terugbetalingen zijn gevoelig: alleen owners en admins mogen ze registreren.
   if (!['owner', 'admin'].includes(role)) throw new WorkflowHttpError('Alleen owners en admins mogen terugbetalingen registreren.', 403);
   if (!isUuid(invoiceId)) throw new WorkflowHttpError('Ongeldige factuur.', 400);
 
   const invoice = await loadInvoice(organizationId, invoiceId);
-  if (!['paid', 'refunded'].includes(invoice.status)) throw new WorkflowHttpError('Alleen betaalde facturen kunnen worden terugbetaald.', 409);
+  // De melding wijst naar een weg die werkt: bij een factuur die nog (deels)
+  // openstaat is dat Crediteren. Er stond alleen "Alleen betaalde facturen
+  // kunnen worden terugbetaald", terwijl Crediteren hierheen verwees.
+  if (!['paid', 'refunded'].includes(invoice.status)) {
+    throw new WorkflowHttpError(`Factuur ${invoice.number} is niet betaald; terugbetalen kan pas bij een betaalde factuur. Wil je laten vervallen wat nog openstaat, kies dan "Crediteren" bij de factuur.`, 409);
+  }
   if (!invoice.client_id) throw new WorkflowHttpError('Deze factuur heeft geen klant gekoppeld.', 422);
 
   const totals = calculateTotals(invoice.lines);
   const invoiceTotalCents = totals.totalCents;
   if (invoiceTotalCents <= 0) throw new WorkflowHttpError('Deze factuur heeft geen positief bedrag om terug te betalen.', 422);
 
+  const purpose = refundPurposeOf(body);
   const amountCents = Math.round(Number(body.amountCents));
   if (!Number.isFinite(amountCents) || amountCents <= 0) throw new WorkflowHttpError('Vul een geldig terugbetaalbedrag (in centen) in.', 422);
-  if (amountCents > invoiceTotalCents) throw new WorkflowHttpError('Het terugbetaalbedrag mag niet groter zijn dan het factuurbedrag.', 422);
+  // Te veel betaald geld hangt niet aan het factuurbedrag: bij een dubbele
+  // betaling is het precies dat bedrag nog eens.
+  if (purpose === 'sale' && amountCents > invoiceTotalCents) throw new WorkflowHttpError('Het terugbetaalbedrag mag niet groter zijn dan het factuurbedrag. Betaalde de klant te veel of dubbel, kies dan "De klant betaalde te veel of dubbel".', 422);
 
   const reason = String(body.reason || '').trim() || null;
-  const createCreditNote = body.createCreditNote !== false; // standaard: wel een creditfactuur
+  const createCreditNote = purpose === 'sale';
   const kind: 'manual' | 'mollie' = body.kind === 'mollie' ? 'mollie' : 'manual';
   // Stabiele idempotency-key per terugbetaalactie (voorkomt dubbel boeken bij
   // dubbelklik/retry), maar staat bewust meerdere losse (deel)terugbetalingen toe.
@@ -1441,11 +1602,12 @@ async function createInvoiceRefund(userId: string, organizationId: string, role:
 
   // Fase 2: echte Mollie-terugbetaling (async afgehandeld via webhook).
   if (kind === 'mollie') {
-    return await createMollieInvoiceRefund({ userId, organizationId, invoice, invoiceTotalCents, totals, amountCents, reason, createCreditNote, idempotencyKey });
+    const result = await createMollieInvoiceRefund({ userId, organizationId, invoice, invoiceTotalCents, totals, amountCents, reason, createCreditNote, purpose, idempotencyKey });
+    return { ...result, purpose, bookingHint: purpose === 'overpayment' ? OVERPAYMENT_MOLLIE_HINT : null };
   }
 
   // Fase 1: handmatige (offline) terugbetaling — direct als 'refunded' geboekt.
-  const refund = await beginInvoiceRefund({ invoiceId, organizationId, userId, amountCents, reason, kind: 'manual', idempotencyKey, metadata: { create_credit_note: createCreditNote } });
+  const refund = await beginInvoiceRefund({ invoiceId, organizationId, userId, amountCents, reason, kind: 'manual', idempotencyKey, metadata: { create_credit_note: createCreditNote, purpose } });
 
   let creditNote: Record<string, unknown> | null = null;
   if (refund.credit_note_id) {
@@ -1459,33 +1621,146 @@ async function createInvoiceRefund(userId: string, organizationId: string, role:
     creditNote = await issueCreditNoteForRefund({ userId, organizationId, invoice, client, company, refund, amountCents, invoiceTotalCents, totals, reason });
   }
 
-  return { refund, creditNote };
+  return {
+    refund, creditNote, purpose,
+    // Hoe de uitgaande bankmutatie geboekt wordt; de app toont dit na afloop,
+    // en Gerrie en de API krijgen het in hun antwoord.
+    bookingHint: purpose === 'overpayment'
+      ? OVERPAYMENT_BANK_HINT
+      : 'De klant krijgt een creditfactuur; omzet en btw gaan terug. Boek de uitgaande betaling bij Bank op de creditfactuur.',
+  };
 }
 
 // ------------------------------------------------------------
-// Crediteren van een verzonden, onbetaalde factuur
+// Een terugbetaling zonder creditfactuur alsnog een creditfactuur geven
+// ------------------------------------------------------------
+// Terugbetalingen van vóór 19 november konden zonder creditfactuur worden
+// vastgelegd: de factuur stond dan op (deels) terugbetaald terwijl omzet en
+// btw bleven staan, en een creditnota kon er niet meer bij. Ook wie nu
+// "te veel betaald" koos terwijl de verkoop toch verviel, komt hier terecht.
+// Idempotent: bestaat de creditfactuur al, dan komt die terug.
+async function issueRefundCreditNote(userId: string, organizationId: string, role: OrganizationRole, body: Record<string, unknown>) {
+  if (!['owner', 'admin'].includes(role)) throw new WorkflowHttpError('Alleen owners en admins mogen terugbetalingen bijwerken.', 403);
+  const refundId = String(body.refundId || '');
+  if (!isUuid(refundId)) throw new WorkflowHttpError('Ongeldige terugbetaling.', 400);
+  const { data: refundRow, error: refundError } = await supabaseAdmin.from('invoice_refunds').select('*')
+    .eq('id', refundId).eq('organization_id', organizationId).maybeSingle();
+  if (refundError) throwSupabaseError('terugbetaling laden', refundError);
+  let refund = (refundRow ?? null) as RefundRow | null;
+  if (!refund) throw new WorkflowHttpError('Terugbetaling niet gevonden.', 404);
+  if (refund.credit_note_id) return { refund, creditNote: await loadCreditNote(organizationId, String(refund.credit_note_id)), alreadyIssued: true };
+  if (refund.status !== 'refunded') throw new WorkflowHttpError('Deze terugbetaling is nog niet verwerkt; de creditfactuur kan pas als het geld terug is.', 409);
+
+  const invoice = await loadInvoice(organizationId, refund.invoice_id);
+  if (!invoice.client_id) throw new WorkflowHttpError('Deze factuur heeft geen klant gekoppeld; een creditfactuur heeft een klant nodig.', 422);
+  const metadata = (refund.metadata ?? {}) as Record<string, unknown>;
+  const wasOverpayment = metadata.purpose === 'overpayment';
+  // Past de creditfactuur nog op de factuur? Vooraf, vóór de terugbetaling
+  // wordt bijgewerkt: de database weigert een creditnota boven het
+  // factuurbedrag, en dan stond de terugbetaling al als "verkoop vervalt" te
+  // boek zonder creditfactuur.
+  const totalCents = calculateTotals(invoice.lines).totalCents;
+  const creditedCents = await loadCreditedCents(organizationId, invoice.id);
+  if (creditedCents + refund.amount_cents > totalCents) {
+    throw new WorkflowHttpError(`Op factuur ${invoice.number} is al ${formatEuro(creditedCents / 100)} gecrediteerd. Met deze terugbetaling van ${formatEuro(refund.amount_cents / 100)} erbij wordt dat meer dan het factuurbedrag (${formatEuro(totalCents / 100)}); daar kan geen creditfactuur voor komen.`, 409);
+  }
+  // Voor een externe Mollie-terugbetaling stond het te crediteren deel al
+  // vast (credit_note_cents, het deel boven wat te veel betaald was); de
+  // gebruiker kiest hier bewust voor het hele bedrag.
+  const { credit_note_cents: _dropped, ...restMetadata } = metadata;
+  const { data: updatedRow, error: updateError } = await supabaseAdmin.from('invoice_refunds')
+    .update({ metadata: { ...restMetadata, create_credit_note: true, purpose: 'sale', credit_note_added_later: true }, updated_at: new Date().toISOString() })
+    .eq('id', refundId).eq('organization_id', organizationId).select('*').single();
+  if (updateError) throwSupabaseError('terugbetaling bijwerken', updateError);
+  refund = updatedRow as RefundRow;
+  // De terugbetaling telt nu bij de factuur (terugbetaald bedrag en status).
+  if (wasOverpayment) {
+    const { error: recomputeError } = await supabaseAdmin.rpc('recompute_invoice_refund_state', { p_invoice_id: refund.invoice_id, p_organization_id: organizationId });
+    if (recomputeError) throwRpcError('recompute_invoice_refund_state', recomputeError);
+  }
+  const creditNote = await ensureCreditNoteForRefund({ ...refund, initiated_by: refund.initiated_by ?? userId });
+  if (!creditNote) throw new WorkflowHttpError('De creditfactuur kon niet worden gemaakt. Probeer het opnieuw.', 409);
+  return { refund, creditNote, alreadyIssued: false };
+}
+
+// ------------------------------------------------------------
+// Crediteren: wat nog openstaat op een verzonden factuur
 // ------------------------------------------------------------
 // Een uitgegeven factuur annuleer je met een creditnota (art. 35a Wet OB): de
 // klant krijgt een creditfactuur en het grootboek boekt omzet en btw terug.
 // Op "geannuleerd" zetten zonder creditnota liet omzet en btw in de boeken en
 // in de aangifte staan; de database staat dat voor een geboekte factuur niet
-// meer toe. Voor een (deels) betaalde factuur loopt het via Terugbetalen.
+// meer toe.
+//
+// Tot 19 november kon dit alleen voor het hele bedrag van een factuur waarop
+// niets was betaald. Een deels betaalde factuur liep dood: hier "al (deels)
+// betaald; verwerk het restant met een terugbetaling of een memoriaalpost",
+// bij Terugbetaling "alleen betaalde facturen", en een memoriaalpost op 1300
+// liet de factuur open staan. Nu gaat de creditfactuur over wat nog openstaat
+// (of een deel daarvan), verdeeld over de btw-groepen van de factuur.
+type CreditState = {
+  totalCents: number;
+  /** Staat de factuur in het grootboek? Zo niet (vóór de startdatum), dan geldt het factuurbedrag min creditnota's. */
+  booked: boolean;
+  /** Wat er nog te crediteren valt: het openstaande bedrag. */
+  openCents: number;
+  creditedCents: number;
+  paidCents: number;
+};
+
+async function loadCreditedCents(organizationId: string, invoiceId: string): Promise<number> {
+  const { data, error } = await supabaseAdmin.from('credit_notes').select('total_amount,status')
+    .eq('organization_id', organizationId).eq('invoice_id', invoiceId).neq('status', 'void');
+  if (error) throwSupabaseError('creditnota\'s laden', error);
+  return ((data ?? []) as Array<{ total_amount: number | string | null }>).reduce((sum, row) => sum + Math.round(Number(row.total_amount || 0) * 100), 0);
+}
+
+async function loadCreditState(organizationId: string, invoice: InvoiceRow): Promise<CreditState> {
+  const totalCents = calculateTotals(invoice.lines).totalCents;
+  const [ledgerOpen, creditedCents] = await Promise.all([
+    loadInvoiceOpenCents(organizationId, invoice),
+    loadCreditedCents(organizationId, invoice.id),
+  ]);
+  const openCents = Math.max(0, ledgerOpen ?? (totalCents - creditedCents));
+  return { totalCents, booked: ledgerOpen !== null, openCents, creditedCents, paidCents: Math.max(0, totalCents - creditedCents - openCents) };
+}
+
+function assertCreditable(invoice: InvoiceRow): void {
+  if (['sent', 'overdue'].includes(invoice.status)) return;
+  if (invoice.status === 'draft') throw new WorkflowHttpError(`Factuur ${invoice.number} is nog een concept. Een concept pas je aan of verwijder je; crediteren is voor een verstuurde factuur.`, 409);
+  if (['paid', 'refunded'].includes(invoice.status)) throw new WorkflowHttpError(`Factuur ${invoice.number} is betaald; er staat niets meer open om te crediteren. Gaat de verkoop (deels) niet door, kies dan "Terugbetaling" bij de factuur: daar komt de creditfactuur vandaan.`, 409);
+  throw new WorkflowHttpError(`Factuur ${invoice.number} is al geannuleerd of afgeboekt; er valt niets meer te crediteren.`, 409);
+}
+
+async function previewInvoiceCredit(organizationId: string, invoiceId: string): Promise<{ credit: CreditState & { number: string; status: string } }> {
+  if (!isUuid(invoiceId)) throw new WorkflowHttpError('Ongeldige factuur.', 400);
+  const invoice = await loadInvoice(organizationId, invoiceId);
+  return { credit: { ...(await loadCreditState(organizationId, invoice)), number: invoice.number, status: invoice.status } };
+}
+
 async function creditUnpaidInvoice(userId: string, organizationId: string, invoiceId: string, body: Record<string, unknown>) {
   if (!isUuid(invoiceId)) throw new WorkflowHttpError('Ongeldige factuur.', 400);
   const invoice = await loadInvoice(organizationId, invoiceId);
-  if (!['sent', 'overdue'].includes(invoice.status)) {
-    throw new WorkflowHttpError('Alleen een verzonden of achterstallige factuur kun je zo crediteren. Een betaalde factuur crediteer je via Terugbetaling.', 409);
-  }
+  assertCreditable(invoice);
   if (!invoice.client_id) throw new WorkflowHttpError('Deze factuur heeft geen klant gekoppeld.', 422);
-  const totals = calculateTotals(invoice.lines);
-  if (totals.totalCents <= 0) throw new WorkflowHttpError('Deze factuur heeft geen positief bedrag om te crediteren.', 422);
-
-  // Alleen een factuur waarop nog niets is betaald of gecrediteerd: dan is de
-  // creditnota precies het spiegelbeeld en klopt het grootboek daarna exact.
-  const openCents = await loadInvoiceOpenCents(organizationId, invoice);
-  if (openCents !== null && openCents !== totals.totalCents) {
-    throw new WorkflowHttpError('Op deze factuur is al (deels) betaald of gecrediteerd. Verwerk het restant met een terugbetaling of een memoriaalpost.', 409);
+  const state = await loadCreditState(organizationId, invoice);
+  if (state.totalCents <= 0) throw new WorkflowHttpError('Deze factuur heeft geen positief bedrag om te crediteren.', 422);
+  if (state.openCents <= 0) {
+    throw new WorkflowHttpError(`Op factuur ${invoice.number} staat niets meer open; er valt niets te crediteren. Is hij volledig betaald, zet de status dan op Betaald; gaat ook het betaalde deel niet door, kies daarna "Terugbetaling".`, 409);
   }
+
+  // Het bedrag: standaard alles wat openstaat; een deel mag ook (de rest blijft
+  // dan open staan). Nooit meer dan er openstaat: het betaalde deel gaat niet
+  // via een creditnota op een open factuur terug, maar via Terugbetaling.
+  const requested = body.amountCents === undefined || body.amountCents === null || body.amountCents === '' ? null : Math.round(Number(body.amountCents));
+  if (requested !== null && (!Number.isFinite(requested) || requested <= 0)) throw new WorkflowHttpError('Vul een geldig bedrag in om te crediteren (in centen, meer dan 0).', 422);
+  const amountCents = requested ?? state.openCents;
+  if (amountCents > state.openCents) {
+    throw new WorkflowHttpError(state.paidCents > 0
+      ? `Op factuur ${invoice.number} staat nog ${formatEuro(state.openCents / 100)} open (${formatEuro(state.paidCents / 100)} is betaald); meer dan dat kun je niet crediteren. Crediteer wat openstaat: de factuur staat daarna op betaald, en met "Terugbetaling" draai je zo nodig ook het betaalde deel terug.`
+      : `Op factuur ${invoice.number} staat nog ${formatEuro(state.openCents / 100)} open; meer dan dat kun je niet crediteren.`, 422);
+  }
+
   const { data: paymentRows, error: paymentError } = await supabaseAdmin
     .from('invoice_payment_records').select('id,status,checkout_expires_at')
     .eq('organization_id', organizationId).eq('invoice_id', invoiceId)
@@ -1502,29 +1777,62 @@ async function creditUnpaidInvoice(userId: string, organizationId: string, invoi
     throw new WorkflowHttpError('Voor deze factuur loopt een betaling via Mollie. Wacht die af (of laat hem verlopen) voordat je crediteert.', 409);
   }
 
-  const reason = String(body.reason || '').trim() || 'Factuur gecrediteerd';
+  // Afboeken als oninbaar: dezelfde creditnota (omzet en btw gaan terug, de
+  // btw vraag je zo terug in je aangifte), maar de klant krijgt hem niet
+  // gemaild. Eerder kon afboeken alleen via Crediteren, en dan ging er een
+  // creditfactuur naar een klant die juist nog moest betalen.
+  const sendToClient = body.sendToClient !== false;
+  const reason = String(body.reason || '').trim() || (sendToClient ? 'Factuur gecrediteerd' : 'Oninbaar: afgeboekt');
   const [client, company] = await Promise.all([
     loadClient(organizationId, invoice.client_id),
     loadCompanySettings(organizationId),
   ]);
   const creditNote = await issueCreditNoteForRefund({
     userId, organizationId, invoice, client, company, refund: null,
-    amountCents: totals.totalCents, invoiceTotalCents: totals.totalCents, totals, reason,
+    amountCents, invoiceTotalCents: state.totalCents, totals: calculateTotals(invoice.lines), reason, sendToClient,
   });
 
-  // De factuur is nu volledig gecrediteerd: status geannuleerd (alleen de server
-  // zet dit voor een geboekte factuur).
-  const { error: statusError } = await supabaseAdmin
-    .from('invoices')
-    .update({ status: 'cancelled', updated_at: new Date().toISOString() })
-    .eq('id', invoiceId)
-    .eq('organization_id', organizationId);
-  if (statusError) throwSupabaseError('factuurstatus bijwerken', statusError);
-  await insertWorkflowEvent(organizationId, invoiceId, 'cancelled', 'Factuur gecrediteerd',
-    `Factuur ${invoice.number} is volledig gecrediteerd met creditfactuur ${String(creditNote.number ?? '')} en staat op geannuleerd.`,
-    { credit_note_id: creditNote.id ?? null, reason }, userId);
+  // Wat staat er daarna nog open? Niets: dan is de factuur afgehandeld.
+  //  - alles gecrediteerd: geannuleerd (zoals het was);
+  //  - een deel betaald, de rest gecrediteerd: betaald, want wat overblijft is betaald;
+  //  - afgeboekt als oninbaar: afgeboekt.
+  // Alleen de server zet dit voor een geboekte factuur.
+  const remainingCents = state.openCents - amountCents;
+  let newStatus: string | null = null;
+  if (remainingCents <= 0) {
+    newStatus = !sendToClient ? 'written_off' : state.paidCents > 0 ? 'paid' : 'cancelled';
+    const patch: Record<string, unknown> = { status: newStatus, updated_at: new Date().toISOString() };
+    if (newStatus === 'paid') patch.paid_at = new Date().toISOString();
+    const { error: statusError } = await supabaseAdmin
+      .from('invoices')
+      .update(patch)
+      .eq('id', invoiceId)
+      .eq('organization_id', organizationId);
+    if (statusError) throwSupabaseError('factuurstatus bijwerken', statusError);
+  }
+  const creditNumber = String(creditNote.number ?? '');
+  const amountText = formatEuro(amountCents / 100);
+  const summary = newStatus === 'cancelled'
+    ? `Factuur ${invoice.number} is volledig gecrediteerd met creditfactuur ${creditNumber} en staat op geannuleerd.`
+    : newStatus === 'paid'
+      ? `Creditfactuur ${creditNumber} van ${amountText} voor wat nog openstond op factuur ${invoice.number}. ${formatEuro(state.paidCents / 100)} was betaald; de factuur staat nu op betaald.`
+      : newStatus === 'written_off'
+        ? `Factuur ${invoice.number}: ${amountText} afgeboekt als oninbaar met interne creditnota ${creditNumber} (niet naar de klant gestuurd). De factuur staat op afgeboekt.`
+        : `Creditfactuur ${creditNumber} van ${amountText} op factuur ${invoice.number}; er staat nog ${formatEuro(remainingCents / 100)} open.`;
+  await insertWorkflowEvent(organizationId, invoiceId, newStatus === 'cancelled' ? 'cancelled' : newStatus === 'written_off' ? 'written_off' : 'credit_note_issued',
+    newStatus === 'written_off' ? 'Afgeboekt als oninbaar' : newStatus ? 'Factuur gecrediteerd' : 'Deel van de factuur gecrediteerd',
+    summary,
+    { credit_note_id: creditNote.id ?? null, reason, amount_cents: amountCents, paid_cents: state.paidCents, remaining_cents: Math.max(0, remainingCents), sent_to_client: sendToClient }, userId);
 
-  return { creditNote };
+  // De creditnota boekt zichzelf (trigger). Lukte dat niet, dan zegt het
+  // antwoord dat: anders staat de factuur afgehandeld terwijl 1300 nog openstaat.
+  const warnings: string[] = [];
+  if (state.booked) {
+    const { data: bookedNote } = await supabaseAdmin.from('credit_notes').select('journal_entry_id').eq('id', String(creditNote.id)).eq('organization_id', organizationId).maybeSingle();
+    if (!bookedNote?.journal_entry_id) warnings.push(`Creditnota ${creditNumber} staat nog niet in het grootboek. Open de factuur en kies bij de creditnota "Boek naar grootboek".`);
+  }
+
+  return { creditNote, status: newStatus ?? invoice.status, creditedCents: amountCents, remainingCents: Math.max(0, remainingCents), paidCents: state.paidCents, sentToClient: sendToClient, summary, warnings };
 }
 
 // ------------------------------------------------------------
@@ -1538,9 +1846,9 @@ async function creditUnpaidInvoice(userId: string, organizationId: string, invoi
 async function createMollieInvoiceRefund(input: {
   userId: string; organizationId: string; invoice: InvoiceRow; invoiceTotalCents: number;
   totals: ReturnType<typeof calculateTotals>; amountCents: number; reason: string | null;
-  createCreditNote: boolean; idempotencyKey: string;
+  createCreditNote: boolean; purpose: RefundPurpose; idempotencyKey: string;
 }): Promise<{ refund: RefundRow; creditNote: Record<string, unknown> | null }> {
-  const { userId, organizationId, invoice, amountCents, reason, createCreditNote, idempotencyKey } = input;
+  const { userId, organizationId, invoice, amountCents, reason, createCreditNote, purpose, idempotencyKey } = input;
 
   // 1. Vind de betaalde Mollie-betaling met genoeg resterend terugbetaalbaar bedrag.
   const payment = await findRefundableMolliePayment(organizationId, invoice.id, amountCents);
@@ -1552,7 +1860,7 @@ async function createMollieInvoiceRefund(input: {
   const refund = await beginInvoiceRefund({
     invoiceId: invoice.id, organizationId, userId, amountCents, reason,
     kind: 'mollie', idempotencyKey, paymentRecordId: payment.id,
-    metadata: { create_credit_note: createCreditNote },
+    metadata: { create_credit_note: createCreditNote, purpose },
   });
 
   // Idempotente retry: deze terugbetaling is al (deels) verwerkt.
@@ -1608,10 +1916,13 @@ async function createMollieInvoiceRefund(input: {
   return { refund: updated, creditNote };
 }
 
-async function issueCreditNoteForRefund(input: { userId: string | null; organizationId: string; invoice: InvoiceRow; client: ClientRow; company: CompanySettingsRow | null; refund: { id: string } | null; amountCents: number; invoiceTotalCents: number; totals: ReturnType<typeof calculateTotals>; reason: string | null }) {
+async function issueCreditNoteForRefund(input: { userId: string | null; organizationId: string; invoice: InvoiceRow; client: ClientRow; company: CompanySettingsRow | null; refund: { id: string } | null; amountCents: number; invoiceTotalCents: number; totals: ReturnType<typeof calculateTotals>; reason: string | null; /** false: interne creditnota (afboeken als oninbaar), niet naar de klant mailen. */ sendToClient?: boolean }) {
   const { userId, organizationId, invoice, client, company, refund, amountCents, invoiceTotalCents, totals, reason } = input;
   const currency = invoice.currency || 'EUR';
   const isFull = amountCents >= invoiceTotalCents;
+  // Zonder terugbetaling (Crediteren) is er geen geld teruggegaan: dan heet de
+  // regel een creditering. Er stond altijd "Gedeeltelijke terugbetaling".
+  const partLabel = refund ? 'Gedeeltelijke terugbetaling' : 'Gedeeltelijke creditering';
 
   let subtotal: number;
   let vat: number;
@@ -1631,12 +1942,18 @@ async function issueCreditNoteForRefund(input: { userId: string | null; organiza
     // weg zodat de ICP-opgaaf niet meecorrigeerde.
     total = amountCents / 100;
     const invoiceLines = Array.isArray(invoice.lines) ? invoice.lines : [];
-    const parts = splitRefundOverVatGroups(invoiceLines, amountCents);
+    // Maakt deze creditnota de factuur vol (samen met eerdere creditnota's
+    // precies het factuurbedrag), dan krijgt hij per btw-groep wat er van de
+    // factuur nog over is. Naar rato verdelen kon na een eerdere deelcreditering
+    // een cent verschuiven tussen omzet en btw: de factuur was dan volledig
+    // gecrediteerd terwijl er op de omzetrekening een cent bleef staan.
+    const parts = (await closingCreditParts(organizationId, invoice.id, invoiceLines, amountCents, invoiceTotalCents))
+      ?? splitRefundOverVatGroups(invoiceLines, amountCents);
     if (parts.length > 0) {
       subtotal = parts.reduce((sum, part) => sum + part.baseCents, 0) / 100;
       vat = parts.reduce((sum, part) => sum + part.vatCents, 0) / 100;
       lines = parts.map((part) => ({
-        description: `Gedeeltelijke terugbetaling factuur ${invoice.number}${parts.length > 1 ? ` (btw ${part.rate}%)` : ''}${reason ? ` – ${reason}` : ''}`,
+        description: `${partLabel} factuur ${invoice.number}${parts.length > 1 ? ` (btw ${part.rate}%)` : ''}${reason ? ` – ${reason}` : ''}`,
         quantity: 1,
         unit_price: part.baseCents / 100,
         vat: part.rate,
@@ -1648,7 +1965,7 @@ async function issueCreditNoteForRefund(input: { userId: string | null; organiza
       subtotal = Math.round(totals.subtotal * ratio * 100) / 100;
       vat = Math.round((total - subtotal) * 100) / 100;
       const blendedRate = subtotal > 0 ? Math.round((vat / subtotal) * 10000) / 100 : 0;
-      lines = [{ description: `Gedeeltelijke terugbetaling factuur ${invoice.number}${reason ? ` – ${reason}` : ''}`, quantity: 1, unit_price: subtotal, vat: blendedRate }];
+      lines = [{ description: `${partLabel} factuur ${invoice.number}${reason ? ` – ${reason}` : ''}`, quantity: 1, unit_price: subtotal, vat: blendedRate }];
     }
   }
 
@@ -1700,7 +2017,9 @@ async function issueCreditNoteForRefund(input: { userId: string | null; organiza
   const hasPdfAvailable = Boolean(finalCreditNote.pdf_data_base64 || (finalCreditNote.pdf_storage_provider === 'r2' && finalCreditNote.pdf_storage_key));
   // Bij e-facturatie naar het e-factuuradres, net als de factuur zelf.
   const creditRecipient = defaultInvoiceRecipient(client);
-  if (creditRecipient && RESEND_API_KEY && RESEND_FROM_EMAIL && hasPdfAvailable) {
+  // Een interne creditnota (afboeken als oninbaar) gaat niet naar de klant: die
+  // moet nog betalen, en een creditfactuur zegt hem dat het niet meer hoeft.
+  if (input.sendToClient !== false && creditRecipient && RESEND_API_KEY && RESEND_FROM_EMAIL && hasPdfAvailable) {
     try {
       await deliverCreditNoteEmail({ organizationId, userId, creditNote: finalCreditNote, invoice, client, company, recipientEmail: creditRecipient, recipientName: null, pdfBase64: pdfBase64 ?? undefined });
     } catch (emailError) {
@@ -1709,6 +2028,60 @@ async function issueCreditNoteForRefund(input: { userId: string | null; organiza
   }
 
   return finalCreditNote;
+}
+
+/**
+ * De btw-groepen van de laatste creditnota op een factuur: per groep (code +
+ * tarief) wat de factuur had, min wat eerdere creditnota's al terugnamen.
+ * Null als dit niet de sluitende creditnota is (dan verdelen we naar rato), of
+ * als de rest niet netjes uitkomt (een groep onder nul, of een andere som).
+ */
+async function closingCreditParts(organizationId: string, invoiceId: string, invoiceLines: InvoiceLine[], amountCents: number, invoiceTotalCents: number): Promise<VatGroup[] | null> {
+  const { data, error } = await supabaseAdmin.from('credit_notes').select('lines,total_amount,status')
+    .eq('organization_id', organizationId).eq('invoice_id', invoiceId).neq('status', 'void');
+  if (error) { console.warn('eerdere creditnota\'s laden mislukte; de creditnota wordt naar rato verdeeld', error.message); return null; }
+  const earlier = (data ?? []) as Array<{ lines: InvoiceLine[] | null; total_amount: number | string | null }>;
+  if (earlier.length === 0) return null;
+  const earlierCents = earlier.reduce((sum, note) => sum + Math.round(Number(note.total_amount || 0) * 100), 0);
+  if (earlierCents + amountCents !== invoiceTotalCents) return null;
+
+  const key = (group: VatGroup) => `${group.vatCode ?? ''}|${group.rate}`;
+  const rest = new Map(invoiceVatGroups(invoiceLines).map((group) => [key(group), { ...group }]));
+  for (const note of earlier) {
+    const noteLines = Array.isArray(note.lines) ? note.lines : [];
+    for (const line of noteLines) {
+      const group: VatGroup = { rate: Number(line.vat) || 0, vatCode: String(line.vat_code ?? '').trim() || null, baseCents: 0, vatCents: 0, grossCents: 0 };
+      const target = rest.get(key(group));
+      // Een regel met een "gemengd" tarief (oude creditnota's) past in geen groep.
+      if (!target) return null;
+      target.baseCents -= Math.round((Number(line.quantity) || 0) * (Number(line.unit_price) || 0) * 100);
+    }
+  }
+  // Per groep de grondslag die over is, met de btw daarover.
+  const parts: VatGroup[] = [];
+  let sum = 0;
+  for (const group of rest.values()) {
+    if (group.baseCents < 0) return null;
+    const vatCents = Math.round((group.baseCents * group.rate) / 100);
+    const grossCents = group.baseCents + vatCents;
+    if (grossCents === 0) continue;
+    parts.push({ rate: group.rate, vatCode: group.vatCode, baseCents: group.baseCents, vatCents, grossCents });
+    sum += grossCents;
+  }
+  if (parts.length === 0) return null;
+  // De grondslagen tellen nu exact op tot wat er van de factuur over is. Wat
+  // er dan nog aan btw over is, is het bedrag min die grondslagen; een verschil
+  // van een cent met grondslag × tarief (de afronding van eerdere creditnota's)
+  // komt in de btw van de grootste groep, zoals het grootboek het ook boekt.
+  const diff = amountCents - sum;
+  if (Math.abs(diff) > Math.max(2, parts.length)) return null;
+  if (diff !== 0) {
+    const biggest = parts.reduce((best, part) => (part.grossCents > best.grossCents ? part : best), parts[0]);
+    biggest.vatCents += diff;
+    biggest.grossCents += diff;
+    if (biggest.vatCents < 0) return null;
+  }
+  return parts;
 }
 
 // Volledige rijvorm van public.invoice_refunds zoals de RPC's die teruggeven.

@@ -16,7 +16,7 @@ import { Button, Input, Select } from '../components/Ui';
 import { dateNL, euro } from '../lib/format';
 import { createClientWithServerCode, insertRow } from '../lib/repository';
 import {
-  addDays, balancesAt, decodeXafBytes, openingLines, parseXaf, planRelations, proposeAccount, VAT_RETURN_CODES,
+  addDays, balancesAt, decodeXafBytes, mappingWarnings, openingLines, parseXaf, planRelations, proposeAccount, VAT_RETURN_CODES,
   type OpeningLineDraft, type XafFile,
 } from '../lib/xafImport';
 
@@ -88,11 +88,26 @@ export function XafImportPanel({
   }, [proposals, choices]);
   const accountById = useMemo(() => new Map(ledgerAccounts.map(a => [a.id, a])), [ledgerAccounts]);
   const unmapped = (balances?.balance ?? []).filter(b => !mapping[b.code]);
+  // Wat aan de koppeling niet lijkt te kloppen: meer rekeningen op de bank, of
+  // een bank die credit uitkomt (zie mappingWarnings).
+  const bankWarnings = useMemo(
+    () => (balances ? mappingWarnings(balances.balance, mapping, balanceAccounts) : []),
+    [balances, mapping, balanceAccounts],
+  );
   const plan = useMemo(() => (file ? planRelations(file, clients, suppliers) : null), [file, clients, suppliers]);
   const relationTotal = plan ? (canWriteClients ? plan.clients.length : 0) + plan.suppliers.length : 0;
 
   function apply() {
     if (!balances) return;
+    // Bij een bestand zonder beginbalans, meer rekeningen op de bank of een
+    // bank die credit staat eerst vragen. Deze knop ging zonder vraag door, en
+    // de beginbalans eronder zag er dan ingevuld en dus goed uit: een lening
+    // die in het banksaldo was verdwenen, viel pas maanden later op.
+    const doubts = [
+      ...(balances.missingOpening ? ['De auditfile heeft geen beginbalans: de saldi zijn alleen de boekingen uit het bestand.'] : []),
+      ...bankWarnings,
+    ];
+    if (doubts.length > 0 && !window.confirm(`Kijk dit eerst na:\n\n${doubts.map(d => `• ${d}`).join('\n\n')}\n\nToch in de beginbalans zetten?`)) return;
     try {
       onApply(switchDate, openingLines(balances.balance, mapping));
       setApplied(true);
@@ -175,7 +190,10 @@ export function XafImportPanel({
                 </Select>
                 {target && VAT_RETURN_CODES.has(target.code)
                   ? <small className="xaf-import-hint is-warn">Op {target.code} telt dit mee in je eerste btw-aangifte in ResoFly. Gaf je oude pakket het al aan? Kies dan 1530.</small>
-                  : proposal?.reason && mapping[b.code] === proposal.targetId && <small className="xaf-import-hint">Voorstel: {lowerFirst(proposal.reason)}</small>}
+                  : proposal?.reason && !proposal.targetId
+                    // Bewust geen voorstel (een lening, creditcard, spaarrekening): zeg waarom, tot er gekozen is.
+                    ? !mapping[b.code] && <small className="xaf-import-hint is-warn">{proposal.reason}</small>
+                    : proposal?.reason && mapping[b.code] === proposal.targetId && <small className="xaf-import-hint">Voorstel: {lowerFirst(proposal.reason)}</small>}
               </td>
             </tr>;
           })}</tbody>
@@ -185,6 +203,8 @@ export function XafImportPanel({
         Resultaat tot de overstapdatum: {euroCents(Math.abs(balances.resultCents))} {balances.resultCents <= 0 ? 'winst' : 'verlies'}.
         {' '}Dat komt via de sluitpost op het eigen vermogen. Ontbreekt een rekening in de lijst? Maak hem eerst aan onder Rekeningschema.
       </p>
+
+      {bankWarnings.map(warning => <div key={warning} className="xaf-import-warning">{warning}</div>)}
 
       <div className="xaf-import-actions">
         <Button variant="primary" onClick={apply} disabled={!canWrite || unmapped.length > 0 || balances.balance.length === 0}>Zet in de beginbalans</Button>

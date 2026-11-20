@@ -9,7 +9,7 @@ import { parseDutchAmountCents } from '../lib/money';
 import { downloadCsv } from '../lib/csv';
 import {
   IB_CORRECTION_LABELS, IB_DISCLAIMER, IB_FIRST_YEAR, IB_RULES, buildIncomeTaxOverview, formatRate,
-  type AowStatus, type IbCorrectionCode, type IbYearRules, type IncomeTaxBasis, type IncomeTaxInputs,
+  type AowStatus, type IbCorrectionCode, type IbProjection, type IbYearRules, type IncomeTaxBasis, type IncomeTaxInputs,
   type IncomeTaxOverview, type IncomeTaxPerson, type IncomeTaxProfile,
 } from '../lib/inkomstenbelasting';
 import {
@@ -19,6 +19,9 @@ import {
 /** `|| 0` ook voor −0: een aftrek van nul stond er anders als "€ -0,00". */
 const euroCents = (cents: number | null | undefined) => euro((cents || 0) / 100);
 const shareText = (bp: number | null) => (bp === null ? '' : `${(bp / 100).toLocaleString('nl-NL', { maximumFractionDigits: 2 })}%`);
+const hoursText = (minutes: number) => Math.floor(minutes / 60).toLocaleString('nl-NL');
+/** Het urencriterium in minuten: 1.225 uur. */
+const HOURS_CRITERION_MINUTES = 1225 * 60;
 const MONTHS = ['januari', 'februari', 'maart', 'april', 'mei', 'juni', 'juli', 'augustus', 'september', 'oktober', 'november', 'december'];
 
 /** Bedragen in het formulier zoals je ze typt: "1.500" is vijftienhonderd (parseDutchAmount). */
@@ -31,6 +34,11 @@ function textToCents(text: string): number | null {
   return cents === null || cents < 0 ? null : cents;
 }
 
+/**
+ * Beide zoals ze worden opgeslagen: bij het urencriterium is null "volgens
+ * Uren". Een concept met null naast een opgeslagen profiel met null is dus
+ * niet gewijzigd, ook al rekent de raming met het ja of nee uit de uren.
+ */
 function sameProfile(a: IncomeTaxProfile, b: IncomeTaxProfile): boolean {
   return a.meetsHoursCriterion === b.meetsHoursCriterion && a.starter === b.starter && a.aowStatus === b.aowStatus
     && (a.aowStatus !== 'in_jaar' || a.aowMonth === b.aowMonth)
@@ -170,6 +178,14 @@ export function IncomeTaxPage({ data, organizationId, canWrite }: {
   };
 
   const dirtyKeys = overview ? overview.persons.filter(p => drafts[p.key] && !sameProfile(drafts[p.key], savedProfile(inputs, p))).map(p => p.key) : [];
+  // Een ander jaar begint met de gegevens van dat jaar; wat hier nog niet is
+  // opgeslagen, verdween daarbij zonder vraag. Wie een voorlopige aanslag had
+  // getypt en even naar vorig jaar keek, was hem kwijt.
+  const changeYear = (next: number) => {
+    if (next === year) return;
+    if (dirtyKeys.length > 0 && !window.confirm(`Je hebt voor ${year} iets gewijzigd en nog niet opgeslagen. Ga je naar ${next}, dan gaat dat verloren. Toch doorgaan?`)) return;
+    setYear(next);
+  };
   const fiscalYearClosed = (inputs?.overlappingFiscalYears.length ?? 0) > 0 && inputs!.overlappingFiscalYears.every(fy => fy.status === 'closed');
   const multiple = (overview?.persons.length ?? 0) > 1;
 
@@ -183,7 +199,7 @@ export function IncomeTaxPage({ data, organizationId, canWrite }: {
             : 'Een raming van de inkomstenbelasting en de Zvw-bijdrage over je winst, met de ondernemersaftrek, de mkb-winstvrijstelling, de KIA en de heffingskortingen.'}</p>
         </div>
         <div className="bk-head-actions">
-          <Select value={String(year)} onChange={e => setYear(Number(e.target.value))} aria-label="Kalenderjaar">
+          <Select value={String(year)} onChange={e => changeYear(Number(e.target.value))} aria-label="Kalenderjaar">
             {years.map(y => <option key={y} value={String(y)}>{y}</option>)}
           </Select>
           {overview?.projection && (
@@ -237,7 +253,11 @@ export function IncomeTaxPage({ data, organizationId, canWrite }: {
               <p className="bk-muted">Het jaar loopt nog: dit is de raming over de winst die nu geboekt is.{overview.projection ? ' Kies Prognose heel jaar om de winst door te trekken naar 31 december.' : ''}</p>
             )}
             {!isPartnershipForm && overview.ownerMinutes !== null && (
-              <p className="bk-muted">De eigenaar heeft in {year} {Math.floor(overview.ownerMinutes / 60).toLocaleString('nl-NL')} uur geregistreerd bij Uren; het urencriterium vraagt er 1.225.</p>
+              <p className="bk-muted">
+                De eigenaar heeft in {year} {hoursText(overview.ownerMinutes)} uur geregistreerd bij Uren; het urencriterium vraagt er 1.225.
+                {/* De prognose trekt de winst door; dan hoort de lezer ook de doorgetrokken uren te zien. */}
+                {overview.persons[0]?.projectedMinutes != null && ` In hetzelfde tempo zijn dat er ongeveer ${hoursText(overview.persons[0].projectedMinutes)} op 31 december.`}
+              </p>
             )}
             {!isPartnershipForm && overview.ownerMinutes === null && inputs.myMinutes !== null && (
               <p className="bk-muted">Jij hebt in {year} {Math.floor(inputs.myMinutes / 60).toLocaleString('nl-NL')} uur geregistreerd; het urencriterium vraagt er 1.225.</p>
@@ -256,6 +276,7 @@ export function IncomeTaxPage({ data, organizationId, canWrite }: {
               multiple={multiple}
               partnershipForm={isPartnershipForm}
               isPrognose={overview.basis === 'prognose'}
+              projection={overview.basis === 'prognose' ? overview.projection : null}
               canWrite={canWrite}
               busy={busy}
               dirty={dirtyKeys.includes(person.key)}
@@ -306,8 +327,10 @@ function savedProfile(inputs: IncomeTaxInputs | null, person: IncomeTaxPerson): 
 
 type MoneyField = 'lossCarryForwardCents' | 'otherEntrepreneurDeductionCents' | 'provisionalIncomeTaxCents' | 'provisionalZvwCents';
 
-function PersonCard({ person, rules, year, multiple, partnershipForm, isPrognose, canWrite, busy, dirty, investmentTotalCents, kiaCents, onChange, onSave, onReset }: {
+function PersonCard({ person, rules, year, multiple, partnershipForm, isPrognose, projection, canWrite, busy, dirty, investmentTotalCents, kiaCents, onChange, onSave, onReset }: {
   person: IncomeTaxPerson; rules: IbYearRules; year: number; multiple: boolean; partnershipForm: boolean; isPrognose: boolean;
+  /** Alleen in de prognose: het tempo waarmee de winst (en de uren) zijn doorgetrokken. */
+  projection: IbProjection | null;
   canWrite: boolean; busy: boolean; dirty: boolean; investmentTotalCents: number; kiaCents: number;
   onChange: (profile: IncomeTaxProfile) => void; onSave: () => void; onReset: () => void;
 }) {
@@ -321,7 +344,22 @@ function PersonCard({ person, rules, year, multiple, partnershipForm, isPrognose
   }));
   const invalid = (Object.keys(texts) as MoneyField[]).filter(k => textToCents(texts[k]) === null);
 
-  const change = (patch: Partial<IncomeTaxProfile>) => onChange({ ...profile, ...patch });
+  // `profile` is waarmee gerekend is: volgt het urencriterium de uren, dan
+  // staat daar het ja of nee van vandaag in. Dat mag niet in het concept en
+  // niet naar de database. Eerder ging het hele profiel mee bij elke
+  // wijziging: wie in maart met 300 uur alleen zijn voorlopige aanslag
+  // opsloeg, legde daarmee "nee" vast als eigen keuze, en kreeg in november
+  // met 1.400 uur nog steeds geen zelfstandigenaftrek. Zolang de keuzelijst op
+  // "Volgens Uren" staat, blijft het null.
+  const stored: IncomeTaxProfile = person.hoursFromTimeTracking ? { ...profile, meetsHoursCriterion: null } : profile;
+  const change = (patch: Partial<IncomeTaxProfile>) => onChange({ ...stored, ...patch });
+
+  // Wat "Volgens Uren" nu zou geven, ook als er zelf ja of nee is gekozen. In
+  // de prognose met de uren doorgetrokken, net als buildIncomeTaxOverview.
+  const followMinutes = person.registeredMinutes === null ? null
+    : person.projectedMinutes ?? (projection ? Math.round((Math.max(0, person.registeredMinutes) * projection.totalDays) / projection.elapsedDays) : person.registeredMinutes);
+  const followMeets = followMinutes !== null && followMinutes >= HOURS_CRITERION_MINUTES;
+  const projectedShown = followMinutes !== null && person.registeredMinutes !== null && projection !== null;
   const changeMoney = (field: MoneyField, value: string) => {
     setTexts(prev => ({ ...prev, [field]: value }));
     const cents = textToCents(value);
@@ -379,14 +417,20 @@ function PersonCard({ person, rules, year, multiple, partnershipForm, isPrognose
             <>
               <label className="bk-setting-field">
                 <span>Urencriterium {year}</span>
-                <Select value={profile.meetsHoursCriterion === null ? '' : profile.meetsHoursCriterion ? 'ja' : 'nee'} disabled={!canWrite || busy}
+                <Select value={stored.meetsHoursCriterion === null ? '' : stored.meetsHoursCriterion ? 'ja' : 'nee'} disabled={!canWrite || busy}
                   onChange={ev => change({ meetsHoursCriterion: ev.target.value === '' ? null : ev.target.value === 'ja' })}>
-                  <option value="">Nog niet ingevuld</option>
+                  <option value="">{person.registeredMinutes === null || followMinutes === null ? 'Nog niet ingevuld'
+                    : `Volgens Uren (nu ${hoursText(person.registeredMinutes)} uur${projectedShown ? `, prognose ${hoursText(followMinutes)}` : ''}: ${followMeets ? 'ja' : 'nee'})`}</option>
                   <option value="ja">Ja, 1.225 uur of meer</option>
                   <option value="nee">Nee, minder dan 1.225 uur</option>
                 </Select>
                 <small className="bk-muted">
-                  {person.registeredMinutes !== null && `Bij Uren: ${Math.floor(person.registeredMinutes / 60).toLocaleString('nl-NL')} uur in ${year}${person.hoursFromTimeTracking ? ', en daarmee is dit ingevuld. Kies zelf als dat niet klopt, en sla op.' : '.'} `}
+                  {person.registeredMinutes !== null && followMinutes !== null && (
+                    `Bij Uren: ${hoursText(person.registeredMinutes)} uur in ${year}${projectedShown ? `, in dit tempo ongeveer ${hoursText(followMinutes)} op 31 december` : ''}. `
+                    + (person.hoursFromTimeTracking
+                      ? `Het urencriterium volgt je uren, ${projectedShown ? 'in de prognose' : 'nu'}: ${followMeets ? 'ja' : 'nee'}. Kies zelf ja of nee als dat niet klopt, en sla op. `
+                      : `Je hebt zelf ${profile.meetsHoursCriterion ? 'ja' : 'nee'} gekozen; kies Volgens Uren om de uren weer te volgen. `)
+                  )}
                   Alle uren aan de onderneming tellen, ook indirecte, en meer dan de helft van de werktijd (behalve als starter).
                 </small>
               </label>
@@ -413,7 +457,7 @@ function PersonCard({ person, rules, year, multiple, partnershipForm, isPrognose
             </label>
           )}
           {field('lossCarryForwardCents', 'Verlies uit eerdere jaren', 'Nog te verrekenen verlies uit werk en woning, volgens je aanslag of verliesbeschikking.')}
-          {!isCommanditair && field('otherEntrepreneurDeductionCents', 'Overige ondernemersaftrek', 'S&O-, meewerk- of stakingsaftrek, als je die hebt.')}
+          {!isCommanditair && field('otherEntrepreneurDeductionCents', 'Overige ondernemersaftrek', 'S&O-, meewerk- of stakingsaftrek. Ook zelfstandigenaftrek uit eerdere jaren die je toen niet kon benutten: hoogstens wat je winst nu boven de zelfstandigenaftrek van dit jaar uitkomt.')}
           {field('provisionalIncomeTaxCents', `Voorlopige aanslag IB ${year}`, 'Wat je al betaalt of betaald hebt.')}
           {field('provisionalZvwCents', `Voorlopige aanslag Zvw ${year}`, 'De bijdrage Zorgverzekeringswet, een aparte aanslag.')}
           {canWrite && (
@@ -655,7 +699,9 @@ function specificationRows(overview: IncomeTaxOverview, rules: IbYearRules): (st
       ...p.corrections.map(c => [who, 'Correctie', `${c.label} (${IB_CORRECTION_LABELS[c.code] ?? c.code})`, amount(c.amountCents)] as (string | number)[]),
       [who, 'KIA', '', amount(-e.kiaCents)],
       [who, 'Winst uit onderneming', '', amount(e.profitCents)],
-      [who, 'Zelfstandigenaftrek', p.profile.meetsHoursCriterion === null ? 'urencriterium niet ingevuld' : p.profile.meetsHoursCriterion ? 'urencriterium gehaald' : 'urencriterium niet gehaald', amount(-e.zelfstandigenaftrekCents)],
+      // `p.profile` is waarmee gerekend is; "volgens Uren" zegt dat het ja of nee uit de uren komt en niet zelf gekozen is.
+      [who, 'Zelfstandigenaftrek', p.profile.meetsHoursCriterion === null ? 'urencriterium niet ingevuld'
+        : `urencriterium ${p.profile.meetsHoursCriterion ? 'gehaald' : 'niet gehaald'}${p.hoursFromTimeTracking ? ` (volgens Uren${p.projectedMinutes !== null ? ', doorgetrokken naar 31 december' : ''})` : ''}`, amount(-e.zelfstandigenaftrekCents)],
       [who, 'Startersaftrek', '', amount(-e.startersaftrekCents)],
       [who, 'Overige ondernemersaftrek', '', amount(-e.otherEntrepreneurDeductionCents)],
       [who, 'Mkb-winstvrijstelling', formatRate(rules.mkbExemptionRate), amount(-e.mkbExemptionCents)],

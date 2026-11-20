@@ -264,6 +264,12 @@ export interface XafBalances {
   resultCents: number;
   /** Debet min credit van alles wat meetelt; 0 als het bestand sluit. */
   differenceCents: number;
+  /**
+   * Het bestand heeft geen <openingBalance>: de saldi zijn dan alleen de
+   * boekingen uit het bestand. Staat ook in `warnings`; het scherm vraagt er
+   * een bevestiging voor.
+   */
+  missingOpening: boolean;
   warnings: string[];
 }
 
@@ -290,6 +296,16 @@ export function balancesAt(file: XafFile, switchDate: string): XafBalances {
     warnings.push(`De overstapdatum ligt na het einde van deze auditfile (${file.endDate}). Wat daartussen geboekt is, ontbreekt in deze saldi.`);
   }
   if (later > 0) warnings.push(`${later} boekingsregel(s) op of na de overstapdatum tellen niet mee: die horen al in ResoFly.`);
+  // Zonder <openingBalance> zijn de saldi alleen de mutaties uit het bestand.
+  // Een auditfile van 2024 zonder beginbalans gaf de bank € 210 in plaats van
+  // € 3.210, en geen lening, inventaris of eigen vermogen, zonder één woord
+  // erbij. Voor wie in dat jaar begon klopt het wel; daarom een waarschuwing
+  // en geen fout.
+  const missingOpening = file.opening.length === 0;
+  if (missingOpening) {
+    const since = file.startDate ? ` vanaf ${dutchDate(file.startDate)}` : '';
+    warnings.push(`Deze auditfile heeft geen beginbalans: de saldi hieronder zijn alleen de boekingen${since} uit dit bestand. Bestond je administratie daarvoor al, dan ontbreekt wat er toen stond (bank, leningen, activa, eigen vermogen). Maak in je oude pakket een auditfile mét beginbalans, of vul de beginbalans hieronder zelf aan.`);
+  }
 
   const balance: XafBalance[] = [];
   let resultCents = 0;
@@ -305,7 +321,13 @@ export function balancesAt(file: XafFile, switchDate: string): XafBalances {
   if (unknown.length) warnings.push(`Rekening ${unknown.sort().join(', ')} staat niet in het rekeningschema van de auditfile; ResoFly behandelt hem als balansrekening.`);
   if (differenceCents !== 0) warnings.push('De auditfile sluit niet: debet en credit zijn niet gelijk. De sluitpost vangt het verschil op, maar kijk of het bestand compleet is.');
   balance.sort((a, b) => a.code.localeCompare(b.code, 'nl', { numeric: true }));
-  return { balance, resultCents, differenceCents, warnings };
+  return { balance, resultCents, differenceCents, missingOpening, warnings };
+}
+
+/** "2024-01-01" → "1-1-2024", zonder Intl: hetzelfde in de browser en in `npm test`. */
+function dutchDate(date: string): string {
+  const [y, m, d] = date.slice(0, 10).split('-').map(Number);
+  return y && m && d ? `${d}-${m}-${y}` : date;
 }
 
 export function addDays(date: string, days: number): string {
@@ -327,6 +349,7 @@ export interface TargetAccount {
 
 export interface AccountProposal {
   targetId: string | null;
+  /** Waarom dit voorstel. Zonder voorstel (targetId null): waarom ResoFly er bewust geen doet, of null. */
   reason: string | null;
 }
 
@@ -348,6 +371,25 @@ const KEYWORDS: ReadonlyArray<{ test: RegExp; subtype: string; reason: string }>
 ];
 
 const BALANCE_TYPES = new Set(['asset', 'liability', 'equity']);
+
+/**
+ * Een lening, hypotheek, krediet, financiering, lease, creditcard,
+ * spaarrekening of deposito is geen betaalrekening, ook niet als de naam van
+ * een bank erin staat. Tot november 2026 herkende "Lening Rabobank" het woord
+ * "rabobank" en ging naar 1100 Bank, net als "Creditcard ING" en
+ * "Spaarrekening Rabobank". Vier rekeningen telden zo op tot één banksaldo:
+ * € 3.210 op de bank en € 28.000 aan leningen werden "Bank € 24.290 credit",
+ * en de lening stond nergens meer. "Lening auto" werd door het woord "auto"
+ * bovendien een vast activum. Zo'n rekening krijgt daarom geen voorstel uit een
+ * woord of een nummer: de gebruiker kiest (of maakt eerst) de juiste rekening.
+ *
+ * "verlening" (dienstverlening) is geen lening.
+ */
+function isNotPaymentAccount(name: string): boolean {
+  return /lening|hypothe|krediet|financiering|lease|credit ?card|creditkaart|spaar|deposito|\b(loan|mortgage|savings?)\b/.test(name.replace(/verlening/g, ''));
+}
+
+const NOT_PAYMENT_ACCOUNT_REASON = 'Geen voorstel: een lening, krediet, lease, creditcard of spaarrekening is geen betaalrekening en hoort niet op 1100 Bank. Kies de rekening die erbij hoort, of maak hem eerst aan onder Rekeningschema.';
 
 /** De naam van een vennotenrekening in ResoFly, genormaliseerd, zonder de vennoot. */
 const PARTNER_PREFIX: Readonly<Record<string, string>> = {
@@ -389,6 +431,13 @@ export function proposeAccount(account: { code: string; name: string }, targets:
   const name = normalize(account.name);
   const byName = options.find(t => normalize(t.name) === name);
   if (byName) return { targetId: byName.id, reason: 'Zelfde naam' };
+  if (isNotPaymentAccount(name)) {
+    // Alleen hetzelfde nummer bij een rekening die zelf ook zo heet ("0700
+    // Leningen" voor "0700 Lening Rabobank"); nooit de bank, en geen woord
+    // als "rabobank" of "auto" uit de naam.
+    const sameKind = options.find(t => t.code === account.code && t.subtype !== 'bank' && isNotPaymentAccount(normalize(t.name)));
+    return sameKind ? { targetId: sameKind.id, reason: 'Zelfde rekeningnummer' } : { targetId: null, reason: NOT_PAYMENT_ACCOUNT_REASON };
+  }
   const partner = partnerAccount(name, options);
   if (partner) return { targetId: partner.id, reason: 'Vennoot' };
   for (const keyword of KEYWORDS) {
@@ -426,6 +475,44 @@ export function openingLines(balances: XafBalance[], mapping: Readonly<Record<st
     sums.set(target, (sums.get(target) ?? 0) + b.cents);
   }
   return [...sums.entries()].filter(([, cents]) => cents !== 0).map(([account_id, cents]) => ({ account_id, cents }));
+}
+
+const euroText = (cents: number) => {
+  const abs = Math.abs(Math.trunc(cents));
+  return `€ ${Math.trunc(abs / 100).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')},${String(abs % 100).padStart(2, '0')}`;
+};
+
+/**
+ * Wat er aan de gekozen koppeling niet lijkt te kloppen, per bankrekening van
+ * ResoFly (subtype bank, 1100):
+ *  - meer dan één rekening uit de auditfile komt erop samen. openingLines telt
+ *    ze stil op; een lening of creditcard die de gebruiker zelf op de bank zet,
+ *    verdwijnt dan in één saldo;
+ *  - het saldo komt credit uit. Een betaalrekening staat zelden rood: meestal
+ *    zit er dan een schuld tussen.
+ * Het scherm toont ze en vraagt een bevestiging vóór het overnemen; tot
+ * november 2026 ging "Zet in de beginbalans" zonder vraag door.
+ */
+export function mappingWarnings(
+  balances: XafBalance[],
+  mapping: Readonly<Record<string, string | null | undefined>>,
+  targets: TargetAccount[],
+): string[] {
+  const warnings: string[] = [];
+  for (const target of targets) {
+    if (target.subtype !== 'bank') continue;
+    const sources = balances.filter(b => mapping[b.code] === target.id && b.cents !== 0);
+    if (sources.length === 0) continue;
+    const label = `${target.code} ${target.name}`;
+    if (sources.length > 1) {
+      warnings.push(`${sources.length} rekeningen uit de auditfile komen samen op ${label}: ${sources.map(b => `${b.code} ${b.name}`).join(', ')}. Ze worden één saldo. Dat klopt alleen als het allemaal betaalrekeningen zijn; een lening, creditcard of spaarrekening hoort op een eigen rekening.`);
+    }
+    const total = sources.reduce((sum, b) => sum + b.cents, 0);
+    if (total < 0) {
+      warnings.push(`${label} komt uit op ${euroText(total)} credit: een schuld aan de bank. Sta je niet rood, kijk dan of er een lening, krediet of creditcard op deze rekening is gezet.`);
+    }
+  }
+  return warnings;
 }
 
 // ── Klanten en leveranciers ──────────────────────────────────────────────────
