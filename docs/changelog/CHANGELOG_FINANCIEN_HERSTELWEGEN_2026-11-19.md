@@ -224,5 +224,18 @@ Wat ze met bestaande gegevens doen:
 Ook de edge functions (`invoice-workflow`, de handelingen van Gerrie, MCP en
 de API, en `invoice-inbox`) gaan mee.
 
-**Staging:** zie de commit van de uitrol op `staging` en de workflow *Deploy
-Supabase (staging)*.
+**Staging: uitgerold op 20 november 2026** (merge `bfdfff4`):
+
+- *Deploy Supabase (staging)* run 250: beide migraties toegepast, alle edge
+  functions uitgerold, de rooktest geslaagd (ook "anon heeft geen rechten in
+  public").
+- *Frontend checks* run 270: alles groen (de controles, de migraties vanaf nul
+  en de edge functions, met de mobiele lay-outtest in licht en donker).
+- Cloudflare Pages bouwt de app bij de push naar `staging`; dat is van hieruit
+  niet te zien (het netwerk blokkeert het domein).
+
+De staging-database zelf is niet ingezien; de controle is de uitrol (de CLI
+breekt af bij een fout in een migratie), de rooktest, en dezelfde migraties op
+een lege en een gevulde lokale database.
+
+Voor productie: dezelfde twee migraties, in volgorde.
