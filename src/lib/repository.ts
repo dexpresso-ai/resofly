@@ -4162,8 +4162,27 @@ export async function bookAllUnbookedSalesInvoices(organizationId: UUID): Promis
   return Number(data ?? 0);
 }
 
-/** Maakt een tegenboeking van een geboekt boekstuk. */
-export async function reverseJournalEntry(entryId: UUID, date?: string): Promise<JournalEntry> {
+/**
+ * De grootboekrekeningen waar een bankrekening aan hangt. Voor het
+ * memoriaalvenster: een memoriaalregel daarop ziet de bank niet. Een kleine,
+ * losse vraag: op de pagina Grootboek is de groep 'bank' (met alle
+ * transacties) niet geladen.
+ */
+export async function loadBankLedgerAccountIds(organizationId: UUID): Promise<UUID[]> {
+  const { data, error } = await supabase
+    .from('bank_accounts')
+    .select('ledger_account_id')
+    .eq('organization_id', organizationId);
+  if (error) throw bookkeepingError(error);
+  return ((data ?? []) as Array<{ ledger_account_id: UUID | null }>).map(r => r.ledger_account_id).filter((id): id is UUID => Boolean(id));
+}
+
+/**
+ * Maakt een tegenboeking van een geboekt boekstuk. Zonder datum kiest de
+ * database: de datum van het boekstuk zelf, of de eerste open dag daarna als
+ * dat btw-tijdvak of boekjaar dicht is (20261119180000; daarvóór: vandaag).
+ */
+export async function reverseJournalEntry(entryId: UUID, date?: string | null): Promise<JournalEntry> {
   const { data, error } = await supabase.rpc('reverse_journal_entry', {
     p_entry_id: entryId,
     p_date: date ?? null,
@@ -5691,27 +5710,100 @@ const PURCHASE_INVOICE_INBOX_COLUMNS = `${PURCHASE_INVOICE_INBOX_COLUMNS_BASE},c
 const PURCHASE_INVOICE_INBOX_HINT =
   'Voer de migratie 20260918010000_purchase_invoice_inbox.sql uit in Supabase om de factuur-inbox te activeren.';
 
+/** Wat nog loopt of op een mens wacht; spiegel van inboxNeedsAttention en inboxIsBusy (invoiceInbox.ts). */
+const INBOX_OPEN_STATUSES = ['received', 'processing', 'needs_review', 'duplicate', 'failed'];
+const INBOX_HANDLED_STATUSES = ['ready', 'booked', 'rejected'];
+const INBOX_HANDLED_LIMIT = 200;
+const INBOX_PAGE_SIZE = 500;
+
 /**
  * Alles wat binnenkwam (behalve transport-drops), nieuwste eerst: mail op het
  * factuuradres, en bonnen en declaraties uit de app. Leeg zolang de migratie
  * ontbreekt.
+ *
+ * Wat aandacht vraagt, komt er altijd in; de limiet van 200 geldt alleen voor
+ * wat is afgehandeld. Eerder gold die limiet voor alles samen: een bon die
+ * Gerrie niet las, raakte na 200 nieuwere items uit beeld, terwijl de teller
+ * hem wel bleef tellen.
  */
 export async function loadPurchaseInvoiceInbox(organizationId: UUID): Promise<PurchaseInvoiceInboxItem[]> {
-  const query = (columns: string) => supabase
+  const base = (columns: string) => supabase
     .from('purchase_invoice_inbox')
     .select(columns)
     .eq('organization_id', organizationId)
-    .neq('status', 'dropped')
     .order('received_at', { ascending: false })
-    .limit(200);
-  let { data, error } = await query(PURCHASE_INVOICE_INBOX_COLUMNS);
+    .order('id', { ascending: false });
+
+  const load = async (columns: string, withChannel: boolean) => {
+    const rows: Array<Record<string, unknown>> = [];
+    // Open items: alle pagina's (de API geeft er per verzoek hooguit duizend).
+    for (let page = 0; page < 40; page += 1) {
+      const open = base(columns);
+      const { data, error } = await (withChannel
+        ? open.or(`status.in.(${INBOX_OPEN_STATUSES.join(',')}),and(channel.eq.declaration,status.eq.ready)`)
+        : open.in('status', INBOX_OPEN_STATUSES)
+      ).range(page * INBOX_PAGE_SIZE, (page + 1) * INBOX_PAGE_SIZE - 1);
+      if (error) return { rows, error };
+      const batch = (data ?? []) as unknown as Array<Record<string, unknown>>;
+      rows.push(...batch);
+      if (batch.length < INBOX_PAGE_SIZE) break;
+    }
+    const { data, error } = await base(columns).in('status', INBOX_HANDLED_STATUSES).limit(INBOX_HANDLED_LIMIT);
+    if (error) return { rows, error };
+    rows.push(...((data ?? []) as unknown as Array<Record<string, unknown>>));
+    return { rows, error: null };
+  };
+
+  let { rows, error } = await load(PURCHASE_INVOICE_INBOX_COLUMNS, true);
   // De app loopt vóór op de database: zonder de kolom channel is alles mail.
-  if (error && isMissingColumn(error, 'channel')) ({ data, error } = await query(PURCHASE_INVOICE_INBOX_COLUMNS_BASE));
+  if (error && isMissingColumn(error, 'channel')) ({ rows, error } = await load(PURCHASE_INVOICE_INBOX_COLUMNS_BASE, false));
   if (error) {
     if (isMissingRelation(error)) { console.warn(PURCHASE_INVOICE_INBOX_HINT); return []; }
     throw error;
   }
-  return ((data ?? []) as unknown as Array<Record<string, unknown>>).map(normalizeInboxItem);
+  // Een declaratie die op goedkeuring wacht, zit in beide vragen: één keer tonen.
+  const seen = new Set<string>();
+  return rows
+    .filter(row => { const id = String(row.id); if (seen.has(id)) return false; seen.add(id); return true; })
+    .map(normalizeInboxItem)
+    .sort((a, b) => b.received_at.localeCompare(a.received_at));
+}
+
+/**
+ * Wat er aan een concept-inkoopfactuur hangt, voor "Concept verwijderen":
+ * de boekstukken met deze factuur als bron (dan is hij ooit geboekt en
+ * tegengeboekt) en het item van de werklijst waar hij uit kwam. Rechtstreeks
+ * uit de database: op de pagina Inkoopfacturen zijn de journaalposten niet
+ * geladen (dataGroups.ts).
+ */
+export async function loadPurchaseInvoiceRemovalFacts(
+  organizationId: UUID,
+  purchaseInvoiceId: UUID,
+): Promise<{ entryNumbers: string[]; inboxItem: { id: UUID; channel: 'email' | 'receipt' | 'declaration' } | null }> {
+  const { data: entries, error: entriesError } = await supabase
+    .from('journal_entries')
+    .select('id, entry_number')
+    .eq('organization_id', organizationId)
+    .eq('source_type', 'purchase_invoice')
+    .eq('source_id', purchaseInvoiceId)
+    .order('date', { ascending: true });
+  if (entriesError) throw bookkeepingError(entriesError);
+
+  const inboxQuery = (columns: string) => supabase
+    .from('purchase_invoice_inbox')
+    .select(columns)
+    .eq('organization_id', organizationId)
+    .eq('purchase_invoice_id', purchaseInvoiceId)
+    .limit(1);
+  let { data: items, error: itemsError } = await inboxQuery('id, channel');
+  if (itemsError && isMissingColumn(itemsError, 'channel')) ({ data: items, error: itemsError } = await inboxQuery('id'));
+  if (itemsError && !isMissingRelation(itemsError)) throw itemsError;
+  const item = ((items ?? []) as unknown as Array<{ id: UUID; channel?: string | null }>)[0] ?? null;
+
+  return {
+    entryNumbers: ((entries ?? []) as Array<{ id: UUID; entry_number: string | null }>).map(e => e.entry_number || 'zonder nummer'),
+    inboxItem: item ? { id: item.id, channel: item.channel === 'receipt' || item.channel === 'declaration' ? item.channel : 'email' } : null,
+  };
 }
 
 function normalizeInboxItem(raw: Record<string, unknown>): PurchaseInvoiceInboxItem {

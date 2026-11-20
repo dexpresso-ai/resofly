@@ -4149,7 +4149,7 @@ as $function$
     (p_organization_id, '4700', 'Opleiding en vakliteratuur', 'expense', 'education', null, false, 'overige_bedrijfskosten'),
     -- TOEGEVOEGD (20261119180000). Niet 4950: daar boekt de desinvestering van een activum
     -- het boekresultaat op.
-    (p_organization_id, '4750', 'Bankkosten en verzekeringen (geen btw)', 'expense', 'bank_costs', null, false, 'overige_bedrijfskosten'),
+    (p_organization_id, '4750', 'Bankkosten en verzekeringen (geen btw)', 'expense', 'bank_costs', 'VRIJ', false, 'overige_bedrijfskosten'),
     (p_organization_id, '7000', 'Inkoopwaarde en uitbesteed werk', 'expense', 'cost_of_sales', 'HOOG', false, 'inkoopwaarde')
   on conflict (organization_id, code) do nothing;
 $function$;
@@ -4170,6 +4170,14 @@ begin
     perform public.ensure_ib_ledger_accounts(r.organization_id);
   end loop;
 end $$;
+
+-- De standaardcode VRIJ: wie 4750 kiest, krijgt dan geen 21% voorgesteld
+-- (bij de bank, en in het inkoopformulier dat de rekening volgt). Alleen waar
+-- de rekening nog leeg is en de code bestaat.
+update public.ledger_accounts la
+set default_vat_code = 'VRIJ'
+where la.code = '4750' and la.subtype = 'bank_costs' and la.default_vat_code is null
+  and exists (select 1 from public.vat_codes vc where vc.organization_id = la.organization_id and vc.code = 'VRIJ');
 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- 16. Een boekjaar dat per vergissing is geopend, kan weer weg

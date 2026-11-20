@@ -125,7 +125,14 @@ export function autoBookEligible(input: {
   ibanVerified?: boolean;
   /** Valuta van de factuur. Het grootboek boekt in euro's zonder omrekening. */
   currency?: string | null;
+  /**
+   * De factuurdatum is onwaarschijnlijk (invoiceDateConcern) of niet gelezen.
+   * Een bon waarop 2062 was gelezen in plaats van 2026 werd zonder vraag
+   * geboekt als JP-2062-00001: een boekjaar dat niemand ooit opent.
+   */
+  dateConcern?: string | null;
 }): { ok: true } | { ok: false; why: string } {
+  if (input.dateConcern) return { ok: false, why: 'de factuurdatum is onwaarschijnlijk of niet gelezen' };
   if (input.supplierCreated) return { ok: false, why: 'de leverancier is nieuw aangemaakt' };
   if (input.supplierUnverified) return { ok: false, why: 'de leverancier is door de inbox aangemaakt en nog niet door iemand bevestigd' };
   if (input.ibanMismatch) return { ok: false, why: 'het IBAN op de factuur wijkt af van het IBAN van deze leverancier' };
@@ -144,6 +151,252 @@ export function autoBookEligible(input: {
   if (input.totals.total_cents <= 0) return { ok: false, why: 'het totaal is niet positief' };
   // Een bedrag in vreemde valuta zou 1-op-1 als euro's in het grootboek komen.
   if (input.currency && input.currency.trim().toUpperCase() !== 'EUR') return { ok: false, why: 'de factuur is niet in euro\'s' };
+  return { ok: true };
+}
+
+// ── Inkoop: btw-soorten, totalen en de datum ────────────────────────────────────
+//
+// Spiegel van src/lib/purchaseInvoice.ts (het formulier en de lijst) en van
+// book_purchase_invoice in de database. src/lib/purchaseInvoice.test.ts houdt
+// de twee TypeScript-kanten gelijk.
+
+/**
+ * Soorten btw-code die op een INKOOPregel horen. Een verkoopcode (ICP, btw
+ * verlegd verkoop) op een inkoopregel gaf een boeking die in geen enkele
+ * rubriek van de aangifte kwam: "ICP diensten" voor Google Ads sloeg 4b over.
+ */
+export const PURCHASE_VAT_KINDS = ['standard', 'reduced', 'zero', 'exempt', 'reverse_charge_purchase', 'eu_acquisition', 'import_non_eu', 'kor'];
+
+/**
+ * De leverancier rekent geen btw: je geeft hem zelf aan (2a, 4a, 4b) en trekt
+ * hem af. Die btw hoort dus niet in het totaal van de factuur. De ICP-soorten
+ * staan erbij omdat de database ze tot 20261119180000 zo boekte; een bestaand
+ * concept met zo'n code telt dan hetzelfde als de boeking.
+ */
+export const SELF_ASSESSED_VAT_KINDS = ['reverse_charge_purchase', 'eu_acquisition', 'import_non_eu', 'icp_goods', 'icp_services'];
+
+/**
+ * Gewone btw (21% en 9%): alleen hier vul je het btw-bedrag van de leverancier
+ * in (vat_cents op de regel). Verlegde btw reken je zelf uit, en bij 0% is er
+ * geen btw.
+ */
+export const DEDUCTIBLE_VAT_KINDS = ['standard', 'reduced'];
+
+/** Hoort deze btw-code op een inkoopregel? Export (3a) is omzet, geen inkoop. */
+export function isPurchaseVatCode(code: { kind: string; sales_box?: string | null }): boolean {
+  if (!PURCHASE_VAT_KINDS.includes(code.kind)) return false;
+  return !(code.kind === 'zero' && code.sales_box === '3a');
+}
+
+/**
+ * Afronden zoals Postgres: de helft van nul af. Math.round rondt -220,5 af
+ * naar -220, de database naar -221; bij een creditnota van de leverancier
+ * scheelde het totaal dan een cent met de boeking.
+ */
+export function roundCents(value: number): number {
+  return value < 0 ? -Math.round(-value) : Math.round(value);
+}
+
+export interface PurchaseTotalsLine {
+  amount_cents: number;
+  vat_rate: number;
+  vat_code?: string | null;
+  account_id?: string | null;
+  /** Het btw-bedrag zoals het op de factuur staat; leeg = grondslag × tarief. */
+  vat_cents?: number | null;
+}
+
+export interface PurchaseTotals {
+  subtotal_cents: number;
+  /** De btw die de leverancier in rekening brengt. */
+  vat_cents: number;
+  /** Wat je de leverancier betaalt; gelijk aan de crediteurenregel (1600) van de boeking. */
+  total_cents: number;
+  /** Verlegde btw (2a, 4a, 4b): zelf aangeven, niet aan de leverancier betalen. */
+  self_assessed_vat_cents: number;
+  /** Met de KOR: btw die je niet aftrekt en die bij de kosten komt. */
+  non_deductible_vat_cents: number;
+}
+
+export interface PurchaseTotalsOptions {
+  /** Een regel zonder rekening valt in de database op 4500. */
+  fallbackAccountId?: string | null;
+  /** De soort van een btw-code; onbekend telt als 'standard', net als in de database. */
+  kindOf?: (code: string) => string | null | undefined;
+  /** Kleineondernemersregeling: geen aftrek; de btw van de leverancier komt bij de kosten. */
+  kor?: boolean;
+}
+
+const lineVatCents = (line: PurchaseTotalsLine): number | null => {
+  const raw = line.vat_cents;
+  if (raw === null || raw === undefined || (raw as unknown) === '') return null;
+  const value = Number(raw);
+  return Number.isFinite(value) && Number.isInteger(value) ? value : null;
+};
+
+/**
+ * De totalen van een inkoopfactuur, zoals book_purchase_invoice ze boekt: per
+ * (kostenrekening, btw-code, tarief) afgerond en dan opgeteld.
+ *
+ * Tot 20261119180000 telde de btw altijd bij het totaal. Een verlegde factuur
+ * van € 100 toonde dan "BTW € 21,00, totaal € 121,00", terwijl er € 100 op
+ * crediteuren kwam; en het btw-bedrag van de leverancier was niet in te
+ * voeren, zodat een bon van € 10,00 een concept van € 9,99 werd.
+ */
+export function purchaseLineTotals(lines: PurchaseTotalsLine[], options: PurchaseTotalsOptions = {}): PurchaseTotals {
+  const groups = new Map<string, { base: number; computedBase: number; given: number; rate: number; kind: string }>();
+  let subtotal = 0;
+  for (const line of lines) {
+    const base = Number(line.amount_cents) || 0;
+    subtotal += base;
+    const rate = Number(line.vat_rate) || 0;
+    const code = String(line.vat_code ?? '').trim();
+    const kind = (code && options.kindOf ? options.kindOf(code) : null) || 'standard';
+    const account = line.account_id || options.fallbackAccountId || '';
+    const key = `${account}|${code}|${kind}|${rate}`;
+    const group = groups.get(key) ?? { base: 0, computedBase: 0, given: 0, rate, kind };
+    // Zoals book_purchase_invoice: het btw-bedrag van de regel telt, behalve
+    // bij verlegde btw en bij 0%. Ook met de KOR: je betaalt wat er staat.
+    const given = !SELF_ASSESSED_VAT_KINDS.includes(kind) && rate !== 0 ? lineVatCents(line) : null;
+    group.base += base;
+    if (given === null) group.computedBase += base;
+    else group.given += given;
+    groups.set(key, group);
+  }
+  let vat = 0;
+  let selfAssessed = 0;
+  let nonDeductible = 0;
+  groups.forEach((group) => {
+    const amount = group.given + roundCents((group.computedBase * group.rate) / 100);
+    if (SELF_ASSESSED_VAT_KINDS.includes(group.kind)) { selfAssessed += amount; return; }
+    vat += amount;
+    if (options.kor) nonDeductible += amount;
+  });
+  return {
+    subtotal_cents: subtotal, vat_cents: vat, total_cents: subtotal + vat,
+    self_assessed_vat_cents: selfAssessed, non_deductible_vat_cents: nonDeductible,
+  };
+}
+
+/** Tot zoveel centen verschil is het afronding, daarboven een leesfout. */
+export const VAT_ADOPT_TOLERANCE_CENTS = 2;
+
+/**
+ * Het btw-bedrag van de bon of factuur overnemen als het een paar cent afwijkt
+ * van grondslag × tarief. Een winkel rekent de btw uit het bedrag inclusief
+ * (€ 10,00 = € 8,26 + € 1,74); wij rekenden hem uit het bedrag exclusief
+ * (€ 8,26 × 21% = € 1,73), en het concept was dan € 9,99: een cent naast de
+ * pinbetaling. Het verschil komt als vat_cents op de grootste regel met
+ * aftrekbare btw. Is het verschil groter, dan blijft alles zoals het is en
+ * waarschuwt de totalencontrole.
+ */
+export function adoptDocumentVat<T extends PurchaseTotalsLine>(
+  lines: T[],
+  document: { total_cents?: number | null; vat_cents?: number | null } | null | undefined,
+  options: PurchaseTotalsOptions = {},
+): { lines: T[]; adopted: boolean } {
+  const same = { lines, adopted: false };
+  if (!document) return same;
+  const target = (totals: PurchaseTotals): number | null => {
+    if (document.total_cents !== null && document.total_cents !== undefined) return document.total_cents - totals.total_cents;
+    if (document.vat_cents !== null && document.vat_cents !== undefined) return document.vat_cents - totals.vat_cents;
+    return null;
+  };
+  const before = purchaseLineTotals(lines, options);
+  const diff = target(before);
+  if (diff === null || diff === 0 || Math.abs(diff) > VAT_ADOPT_TOLERANCE_CENTS) return same;
+  // Staat het btw-bedrag er ook op, dan moet het verschil dáár zitten. Zit de
+  // cent in het bedrag exclusief, dan trekken we geen btw af die er niet staat.
+  if (document.total_cents !== null && document.total_cents !== undefined
+    && document.vat_cents !== null && document.vat_cents !== undefined
+    && before.vat_cents + diff !== document.vat_cents) return same;
+
+  let index = -1;
+  lines.forEach((line, i) => {
+    const code = String(line.vat_code ?? '').trim();
+    const kind = (code && options.kindOf ? options.kindOf(code) : null) || 'standard';
+    if (!DEDUCTIBLE_VAT_KINDS.includes(kind) || !(Number(line.vat_rate) > 0) || !Number(line.amount_cents)) return;
+    if (index < 0 || Math.abs(Number(line.amount_cents)) > Math.abs(Number(lines[index].amount_cents))) index = i;
+  });
+  if (index < 0) return same;
+
+  const own = lineVatCents(lines[index]) ?? roundCents((Number(lines[index].amount_cents) * Number(lines[index].vat_rate)) / 100);
+  const withVat = (value: number) => lines.map((line, i) => (i === index ? { ...line, vat_cents: value } : line));
+  // De regel valt nu buiten de afronding van zijn groep; de rest van de groep
+  // kan daardoor een cent verspringen. Daarom één keer narekenen en bijstellen.
+  let next = withVat(own + diff);
+  const rest = target(purchaseLineTotals(next, options));
+  if (rest) next = withVat(own + diff + rest);
+  if (target(purchaseLineTotals(next, options)) !== 0) return same;
+  return { lines: next, adopted: true };
+}
+
+export interface InvoiceDateConcern { kind: 'future' | 'before_start' | 'old'; message: string }
+
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+const dateNl = (iso: string) => `${iso.slice(8, 10)}-${iso.slice(5, 7)}-${iso.slice(0, 4)}`;
+
+/** Vandaag in Nederland als JJJJ-MM-DD (de server draait op UTC). */
+export function todayInAmsterdam(now: Date = new Date()): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Amsterdam', year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
+}
+
+/**
+ * Is deze factuurdatum onwaarschijnlijk? In de toekomst, vóór de startdatum
+ * van de boekhouding, of meer dan een jaar terug. Een bon met 2062 in plaats
+ * van 2026 werd zonder vraag in boekjaar 2062 geboekt, en een bon van vóór de
+ * start kwam in een jaar dat al in het oude pakket was afgesloten.
+ */
+export function invoiceDateConcern(
+  date: string | null | undefined,
+  options: { today: string; bookkeepingStart?: string | null },
+): InvoiceDateConcern | null {
+  if (!date || !ISO_DATE.test(date) || !ISO_DATE.test(options.today)) return null;
+  if (date > options.today) {
+    return { kind: 'future', message: `De factuurdatum ${dateNl(date)} ligt in de toekomst. Controleer de dag en het jaar.` };
+  }
+  const start = options.bookkeepingStart && ISO_DATE.test(options.bookkeepingStart) ? options.bookkeepingStart : null;
+  if (start && date < start) {
+    return {
+      kind: 'before_start',
+      message: `De factuurdatum ${dateNl(date)} ligt vóór de startdatum van je boekhouding (${dateNl(start)}). Klopt de datum, dan komt de boeking als nagekomen post op de startdatum.`,
+    };
+  }
+  const yearAgo = `${String(Number(options.today.slice(0, 4)) - 1).padStart(4, '0')}${options.today.slice(4)}`;
+  if (date < yearAgo) {
+    return { kind: 'old', message: `De factuurdatum ${dateNl(date)} is meer dan een jaar geleden. Controleer het jaar.` };
+  }
+  return null;
+}
+
+/**
+ * Welke 0%-code krijgt een inkoopregel zonder btw? Nooit "Export buiten EU":
+ * dat is een verkoopcode, en hij stond bij gelijk tarief vooraan omdat de
+ * codes op alfabet komen (EXPORT vóór NUL).
+ */
+export function pickZeroPurchaseCode<T extends { code: string; kind: string; sales_box?: string | null }>(codes: T[]): T | undefined {
+  const zero = codes.filter((v) => v.kind === 'zero' && v.sales_box !== '3a' && !/export/i.test(v.code));
+  return zero.find((v) => v.code === 'NUL') ?? zero[0];
+}
+
+/**
+ * Mag "Negeren" het concept van dit item weggooien? Alleen een concept dat
+ * nooit geboekt is: bij een tegengeboekt concept verwijzen de boekstukken
+ * ernaar, en dan blijft het met zijn bewijsstuk bewaard (bewaarplicht). De
+ * foto zelf blijft altijd bij het item.
+ */
+export function discardDraftAllowed(input: {
+  channel: string | null;
+  invoiceStatus: string | null;
+  journalEntries: number;
+}): { ok: true } | { ok: false; why: string } {
+  if (input.channel === 'declaration') return { ok: false, why: 'Een declaratie wijs je af met een reden (Afwijzen), zodat de indiener weet waarom.' };
+  if (input.invoiceStatus && input.invoiceStatus !== 'draft') {
+    return { ok: false, why: 'Deze factuur is al geboekt. Boek eerst de journaalpost tegen (Grootboek → Journaal) als hij niet klopt.' };
+  }
+  if (input.journalEntries > 0) {
+    return { ok: false, why: 'Dit concept is eerder geboekt en tegengeboekt. De boekstukken verwijzen ernaar, dus het blijft met zijn bewijsstuk bewaard. Verbeter het en boek het opnieuw.' };
+  }
   return { ok: true };
 }
 

@@ -3869,7 +3869,9 @@ function App() {
         // Een lege kostenrekening valt server-side terug op de vangnetrekening 4500;
         // de btw-som moet daar hier al van uitgaan, anders sluit het totaal niet aan.
         const fallbackAccountId = data.ledgerAccounts.find((a) => a.code === '4500')?.id ?? null;
-        const totals = purchaseTotals(lines, fallbackAccountId);
+        // Met de btw-soorten: verlegde, EU- en invoer-btw horen niet in het
+        // totaal (de leverancier krijgt alleen de grondslag), met de KOR wel.
+        const totals = purchaseTotals(lines, fallbackAccountId, { vatCodes: data.vatCodes, kor: data.companySettings?.kor_enabled ?? false });
         const internalNumber = nextPurchaseNumber(data);
         await insertRow<PurchaseInvoice>('purchase_invoices', activeOrg.id, {
           supplier_id: proposal.supplier_id,

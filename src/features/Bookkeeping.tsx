@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BookOpen, Calculator, Camera, Download, FileDown, FileText, Hourglass, Inbox, Layers, Mail, PenLine, PenSquare, Plus, RotateCcw, Scale, Sparkles, Trash2, Upload } from 'lucide-react';
 import type {
-  AccountLedgerRow, AppData, JournalEntry, JournalLine, LedgerAccount, LedgerAccountType, PartnershipPartner, PurchaseInvoice, PurchaseInvoiceInboxItem, PurchaseInvoiceLine, Supplier, TrialBalanceRow, UUID, VatCode,
+  AccountLedgerRow, AppData, JournalEntry, JournalLine, LedgerAccount, LedgerAccountType, PartnershipPartner, PurchaseInvoice, PurchaseInvoiceInboxItem, Supplier, TrialBalanceRow, UUID, VatCode,
 } from '../types';
 import { REPORT_GROUPS_BY_TYPE, REPORT_GROUP_LABELS } from '../types';
 import { Modal } from '../components/Modal';
@@ -14,9 +14,15 @@ import { PageIcon } from '../components/PageIcon';
 import { dateNL, euro, uid } from '../lib/format';
 import {
   bookPurchaseInvoice, createOpeningBalance, deleteRow, ensureDefaultLedgerAccounts, fetchPurchaseInvoicePaymentStatus, insertRow,
-  listPartnershipPartners, loadInboundAlias, loadPurchaseInvoiceInbox, openingBalancePlugAccount, payPurchaseInvoicePrivately,
+  listPartnershipPartners, loadBankLedgerAccountIds, loadInboundAlias, loadPurchaseInvoiceInbox, loadPurchaseInvoiceRemovalFacts,
+  openingBalancePlugAccount, payPurchaseInvoicePrivately,
   postManualJournalEntry, reportAccountLedger, reportTrialBalance, reverseJournalEntry, updateRow, setUpBookkeeping
 } from '../lib/repository';
+import {
+  cleanLineVat, computedLineVat, draftRemoval, invoiceDateConcern, lineVatEditable, purchaseLineTotals, purchaseTotalsOptions,
+  purchaseVatChoices, withLineVat, SELF_ASSESSED_VAT_KINDS, type PurchaseLine, type PurchaseTotals,
+} from '../lib/purchaseInvoice';
+import { vatCodeForAccount } from '../lib/bankAllocation';
 import { downloadXaf } from '../lib/xaf';
 import { downloadStoredFile, uploadToR2 } from '../lib/r2';
 import { scanInvoice, SCAN_ACCEPT, SCAN_MAX_BYTES, type ScanResult } from '../lib/invoice-scan-api';
@@ -191,7 +197,9 @@ function SupplierForm({ data, organizationId, canWrite, supplier, seed, expenseA
     if (!supplier || !confirm('Leverancier verwijderen?')) return;
     setBusy(true); setError(null);
     try { await deleteRow('suppliers', supplier.id, organizationId); onSaved(); }
-    catch (e) { setError(e instanceof Error ? e.message : 'Verwijderen mislukt'); setBusy(false); }
+    // Een leverancier met facturen gaf de ruwe melding van de database
+    // ("violates foreign key constraint purchase_invoices_supplier_id_fkey").
+    catch (e) { setError(describeSupplierDeleteError(e)); setBusy(false); }
   }
 
   return (
@@ -233,7 +241,8 @@ function SupplierForm({ data, organizationId, canWrite, supplier, seed, expenseA
         <Field label="Standaard BTW-code">
           <Select value={form.default_vat_code || ''} onChange={e => set('default_vat_code', e.target.value)} disabled={!canWrite}>
             <option value="">— geen —</option>
-            {data.vatCodes.map(v => <option key={v.id} value={v.code}>{v.label}</option>)}
+            {/* Alleen inkoopcodes; een verkoopcode als standaard kwam op elke nieuwe regel. */}
+            {purchaseVatChoices(data.vatCodes, form.default_vat_code).map(({ code: v, misplaced }) => <option key={v.id} value={v.code}>{v.label}{misplaced ? ' (verkoopcode)' : ''}</option>)}
           </Select>
         </Field>
       </div>
@@ -259,25 +268,64 @@ export function nextPurchaseNumber(data: AppData, date = new Date()): string {
  *  de crediteurenregel (1600) van de grootboekboeking, ook als twee regels met
  *  hetzelfde tarief op verschillende kostenrekeningen staan.
  *  fallbackAccountId spiegelt de server-coalesce van een lege rekening → 4500,
- *  zodat een blanco regel en een expliciete 4500-regel in dezelfde groep vallen. */
-export function purchaseTotals(lines: PurchaseInvoiceLine[], fallbackAccountId: UUID | null = null) {
-  const groups = new Map<string, { base: number; rate: number }>();
-  let subtotal = 0;
-  for (const l of lines) {
-    const base = Number(l.amount_cents) || 0;
-    subtotal += base;
-    const rate = l.vat_rate || 0;
-    // Groepeer zoals de backend: op (account_id, vat_code, tarief). Een lege
-    // rekening valt (net als server-side coalesce) op de vangnetrekening 4500.
-    const account = l.account_id || fallbackAccountId || '';
-    const key = `${account}|${(l.vat_code ?? '').trim()}|${rate}`;
-    const g = groups.get(key);
-    if (g) g.base += base;
-    else groups.set(key, { base, rate });
+ *  zodat een blanco regel en een expliciete 4500-regel in dezelfde groep vallen.
+ *
+ *  Met `context` (de btw-codes en de KOR) telt verlegde btw niet bij het totaal
+ *  en geldt het btw-bedrag van de leverancier op de regel; het rekenwerk staat
+ *  in lib/purchaseInvoice.ts. Zonder `context` telt alle btw mee, zoals vóór
+ *  20261119: een aanroeper die de btw-codes kent, geeft ze mee. */
+export function purchaseTotals(
+  lines: PurchaseLine[],
+  fallbackAccountId: UUID | null = null,
+  context?: { vatCodes: Array<Pick<VatCode, 'code' | 'kind'>>; kor?: boolean | null },
+): PurchaseTotals {
+  return purchaseLineTotals(lines, context
+    ? purchaseTotalsOptions(context.vatCodes, { kor: context.kor, fallbackAccountId })
+    : { fallbackAccountId });
+}
+
+/** De btw-codes en de KOR van deze organisatie, voor purchaseTotals. */
+function totalsContext(data: AppData) {
+  return { vatCodes: data.vatCodes, kor: data.companySettings?.kor_enabled ?? false };
+}
+
+/**
+ * Onder de totalen: btw die niet in het totaal zit (verlegd) of die je niet
+ * aftrekt (KOR). Eerder stond er bij een verlegde factuur van € 100 "BTW
+ * € 21,00, totaal € 121,00", en wie daarop de code op 0% zette, gaf rubriek
+ * 2a of 4b niet meer aan.
+ */
+function VatOutsideTotal({ totals, kor }: { totals: PurchaseTotals; kor: boolean }) {
+  return <>
+    {totals.self_assessed_vat_cents !== 0 && (
+      <div className="bk-muted">
+        btw verlegd: {euroCents(totals.self_assessed_vat_cents)}, {kor ? 'geef je zelf aan en betaal je; met de KOR trek je hem niet af' : 'geef je zelf aan en trek je af'} (zit niet in het totaal)
+      </div>
+    )}
+    {totals.non_deductible_vat_cents !== 0 && (
+      <div className="bk-muted">met de KOR trek je de btw niet af: {euroCents(totals.non_deductible_vat_cents)} komt bij de kosten</div>
+    )}
+  </>;
+}
+
+/** De ruwe databasefout bij het verwijderen van een leverancier, in gewone woorden. */
+function describeSupplierDeleteError(e: unknown): string {
+  const err = e as { code?: string; message?: string; details?: string } | undefined;
+  const text = `${err?.message ?? ''} ${err?.details ?? ''}`;
+  if (err?.code === '23503' || /foreign key|purchase_invoices_supplier_id_fkey/i.test(text)) {
+    return 'Deze leverancier heeft inkoopfacturen en kan daarom niet weg. Een geboekte factuur blijft bewaard, met zijn leverancier. Staan er alleen concepten die er niet horen, verwijder die dan eerst.';
   }
-  let vat = 0;
-  groups.forEach(g => { vat += Math.round((g.base * g.rate) / 100); });
-  return { subtotal_cents: subtotal, vat_cents: vat, total_cents: subtotal + vat };
+  return (e instanceof Error ? e.message : err?.message) || 'Verwijderen mislukt';
+}
+
+/**
+ * Een regel uit een voorstel (scan of werklijst) als regel van het formulier.
+ * Het btw-bedrag van de bon gaat mee als het voorstel dat overnam: anders
+ * rekende het formulier het opnieuw uit en was de bon van € 10,00 weer € 9,99.
+ */
+function seedLine(l: { description: string; amount_cents: number; vat_code: string; vat_rate: number; account_id: UUID | null; vat_cents?: number | null }): PurchaseLine {
+  const line: PurchaseLine = { id: uid(), description: l.description, amount_cents: l.amount_cents, vat_code: l.vat_code, vat_rate: l.vat_rate, account_id: l.account_id };
+  return typeof l.vat_cents === 'number' && Number.isInteger(l.vat_cents) ? { ...line, vat_cents: l.vat_cents } : line;
 }
 
 const purchaseStatusLabel: Record<PurchaseInvoice['status'], string> = {
@@ -414,6 +462,14 @@ export function PurchaseInvoicesPage({ data, organizationId, canWrite, onChanged
     if (found) { setSeed(null); setEdit(found); setPendingOpenId(null); }
   }, [pendingOpenId, data.purchaseInvoices]);
   const supplierName = (id: string | null) => data.suppliers.find(s => s.id === id)?.name ?? '—';
+  // De bedragen in de lijst komen uit de regels, zoals de boeking: bij een
+  // verlegde factuur stond er nog de oude kop met de btw in het totaal.
+  const fallbackAccountId = useMemo(() => data.ledgerAccounts.find(a => a.code === '4500')?.id ?? null, [data.ledgerAccounts]);
+  const kor = data.companySettings?.kor_enabled ?? false;
+  const listTotals = (pi: PurchaseInvoice): PurchaseTotals => pi.lines?.length
+    ? purchaseTotals(pi.lines, fallbackAccountId, totalsContext(data))
+    : { subtotal_cents: pi.subtotal_cents, vat_cents: pi.vat_cents, total_cents: pi.total_cents, self_assessed_vat_cents: 0, non_deductible_vat_cents: 0 };
+  const dateConcernOf = (date: string) => invoiceDateConcern(date, { today: todayIso(), bookkeepingStart: data.companySettings?.bookkeeping_start_date ?? null });
   const channelOf = (pi: PurchaseInvoice) => (pi.extraction_meta as { channel?: string } | null)?.channel ?? null;
   const viaEmail = (pi: PurchaseInvoice) => channelOf(pi) === 'email';
   const viaReceipt = (pi: PurchaseInvoice) => channelOf(pi) === 'receipt' || channelOf(pi) === 'declaration';
@@ -444,7 +500,7 @@ export function PurchaseInvoicesPage({ data, organizationId, canWrite, onChanged
         notes: '',
         currency: (p?.currency || 'EUR').toUpperCase(),
       },
-      lines: (p?.lines ?? []).map(l => ({ id: uid(), description: l.description, amount_cents: l.amount_cents, vat_code: l.vat_code, vat_rate: l.vat_rate, account_id: l.account_id })),
+      lines: (p?.lines ?? []).map(l => seedLine(l)),
       pendingFile: null,
       extractionMeta: { channel: item.channel, inbox_id: item.id, filled_in_by_hand: true, ...(item.submitted_by ? { submitted_by: item.submitted_by } : {}) },
       ai: { confidence: 'low', warnings: [] },
@@ -461,16 +517,25 @@ export function PurchaseInvoicesPage({ data, organizationId, canWrite, onChanged
 
   async function book(pi: PurchaseInvoice) {
     if (!canWrite) return;
+    // Een onwaarschijnlijke datum (2062 in plaats van 2026) werd vanuit de
+    // lijst zonder vraag geboekt, in een boekjaar dat niemand ooit opent.
+    const concern = dateConcernOf(pi.date);
+    if (concern && !confirm(`${concern.message}\n\nToch boeken?`)) return;
     setBusyId(pi.id); setError(null); setNotice(null);
     try {
-      await bookPurchaseInvoice(organizationId, pi.id);
+      const entry = await bookPurchaseInvoice(organizationId, pi.id);
       // Stond de betaling al op de bank (een incasso, een pinbetaling), dan
       // heeft de database hem bij het boeken meteen afgeletterd
       // (20261118190000). Zeg dat: anders zoek je hem nog op de Bankpagina.
       const label = `Inkoopfactuur ${pi.internal_number || pi.supplier_invoice_number || ''}`.trim();
       const paid = await fetchPurchaseInvoicePaymentStatus(organizationId, pi.id).catch(() => null);
-      if (paid?.payment_status === 'paid') setNotice(`${label} is geboekt. De betaling stond al op de bank en is meteen afgeletterd: de factuur staat op betaald.`);
-      else if (paid?.payment_status === 'partially_paid') setNotice(`${label} is geboekt. Een betaling die al op de bank stond, is meteen afgeletterd: de factuur is deels betaald.`);
+      // Kwam de boeking op een andere dag dan de factuurdatum (het tijdvak was
+      // al afgesloten, of de factuur is van vóór de start), zeg dat dan: anders
+      // zoek je hem in de verkeerde periode.
+      const moved = entry?.date && entry.date !== pi.date ? ` De boeking staat op ${dateNL(entry.date)}, niet op de factuurdatum ${dateNL(pi.date)}: die periode is afgesloten of ligt vóór de start van je boekhouding.` : '';
+      if (paid?.payment_status === 'paid') setNotice(`${label} is geboekt. De betaling stond al op de bank en is meteen afgeletterd: de factuur staat op betaald.${moved}`);
+      else if (paid?.payment_status === 'partially_paid') setNotice(`${label} is geboekt. Een betaling die al op de bank stond, is meteen afgeletterd: de factuur is deels betaald.${moved}`);
+      else if (moved) setNotice(`${label} is geboekt.${moved}`);
       onChanged();
     }
     catch (e) { setError(e instanceof Error ? e.message : 'Boeken mislukt'); }
@@ -507,14 +572,14 @@ export function PurchaseInvoicesPage({ data, organizationId, canWrite, onChanged
         ? <div className="empty"><div className="e-big">Nog geen inkoopfacturen</div></div>
         : <div className="bk-table-wrap"><table className="bk-table">
             <thead><tr><th>Nummer</th><th>Leverancier</th><th>Datum</th><th className="bk-num">Excl.</th><th className="bk-num">BTW</th><th className="bk-num">Totaal</th><th>Status</th><th></th></tr></thead>
-            <tbody>{data.purchaseInvoices.map(pi => (
+            <tbody>{data.purchaseInvoices.map(pi => { const t = listTotals(pi); return (
               <tr key={pi.id} className="bk-row">
                 <td onClick={() => setEdit(pi)}><strong>{pi.internal_number || '—'}</strong>{pi.supplier_invoice_number && <small className="bk-muted"> · {pi.supplier_invoice_number}</small>}{viaEmail(pi) && <span className="bk-via-email" title="Per e-mail binnengekomen op je factuuradres"><Mail size={12} /></span>}{viaReceipt(pi) && <span className="bk-via-email" title={channelOf(pi) === 'declaration' ? 'Declaratie van een teamlid' : 'Bon, in de app gefotografeerd'}><Camera size={12} /></span>}</td>
                 <td onClick={() => setEdit(pi)}>{supplierName(pi.supplier_id)}</td>
                 <td onClick={() => setEdit(pi)}>{dateNL(pi.date)}</td>
-                <td className="bk-num">{euroCents(pi.subtotal_cents)}</td>
-                <td className="bk-num">{euroCents(pi.vat_cents)}</td>
-                <td className="bk-num"><strong>{euroCents(pi.total_cents)}</strong></td>
+                <td className="bk-num">{euroCents(t.subtotal_cents)}</td>
+                <td className="bk-num">{euroCents(t.vat_cents)}{t.self_assessed_vat_cents !== 0 && <small className="bk-muted" title={kor ? 'Verlegde btw: geef je zelf aan en betaal je; met de KOR trek je hem niet af' : 'Verlegde btw: geef je zelf aan en trek je af. Zit niet in het totaal.'}><br />verlegd {euroCents(t.self_assessed_vat_cents)}</small>}</td>
+                <td className="bk-num"><strong>{euroCents(t.total_cents)}</strong></td>
                 <td><span className={`status-pill bk-status-${purchaseListStatus(pi).key}`}>{purchaseListStatus(pi).label}</span></td>
                 <td className="bk-cell-action">
                   {/* Bij een declaratie is boeken de goedkeuring die de indiener ziet. */}
@@ -525,7 +590,7 @@ export function PurchaseInvoicesPage({ data, organizationId, canWrite, onChanged
                       : <span className="bk-muted">{pi.journal_entry_id ? 'In grootboek' : ''}</span>}
                 </td>
               </tr>
-            ))}</tbody>
+            ); })}</tbody>
           </table></div>}
       {privatePay && <PrivatePaymentModal invoice={privatePay} organizationId={organizationId} legalForm={legalForm}
         onClose={() => setPrivatePay(null)}
@@ -743,7 +808,9 @@ function PurchaseInvoiceInboxRow({ item, data, organizationId, canWrite, onChang
     {canWrite && !isBusyStatus && <div className="inbound-row-actions">
       {/* Een declaratie keur je goed door hem te boeken; dat ziet de indiener. */}
       {declaration.approve && <Button variant="primary" disabled={busy != null} onClick={() => {
-        if (!window.confirm('Goedkeuren boekt deze declaratie als inkoopfactuur in het grootboek. Daarna ligt hij vast. Doorgaan?')) return;
+        // Een onwaarschijnlijke datum hoort bij de vraag: goedkeuren boekt meteen.
+        const concern = linked ? invoiceDateConcern(linked.date, { today: todayIso(), bookkeepingStart: data.companySettings?.bookkeeping_start_date ?? null }) : null;
+        if (!window.confirm(`${concern ? `${concern.message}\n\n` : ''}Goedkeuren boekt deze declaratie als inkoopfactuur in het grootboek. Daarna ligt hij vast. Doorgaan?`)) return;
         void act('approve', async () => { await bookPurchaseInvoice(organizationId, item.purchase_invoice_id!); onWorkspaceChanged(); });
       }}>{busy === 'approve' ? 'Bezig…' : 'Goedkeuren'}</Button>}
       {/* Bij een duplicaat is er geen eigen concept maar wél een bestaande
@@ -777,6 +844,13 @@ function PurchaseInvoiceInboxRow({ item, data, organizationId, canWrite, onChang
       {actions.reject && !isDeclaration && <Button disabled={busy != null} onClick={() => act('reject', () => runInvoiceInboxAction(organizationId, item.id, { action: 'reject' }))}>
         {busy === 'reject' ? 'Bezig…' : 'Negeren'}
       </Button>}
+      {/* Een bon of mail waar al een concept van klaarstaat, maar die er niet
+          hoort (privé, twee keer gefotografeerd): het concept gaat weg, de foto
+          blijft bij het item. Tot 20261119 kon zo'n concept nergens meer heen. */}
+      {item.status === 'ready' && !isDeclaration && linked?.status === 'draft' && <Button disabled={busy != null} onClick={() => {
+        if (!window.confirm(`Het concept verdwijnt. ${item.channel === 'email' ? 'De mail' : 'De bon'} blijft bewaard onder Afgehandeld (Genegeerd); daar haal je hem binnen 30 dagen terug met Herstellen. Doorgaan?`)) return;
+        void act('reject', async () => { await runInvoiceInboxAction(organizationId, item.id, { action: 'reject' }); onWorkspaceChanged(); });
+      }}>{busy === 'reject' ? 'Bezig…' : 'Negeren'}</Button>}
       {declaration.decline && !declining && <Button disabled={busy != null} onClick={() => setDeclining(true)}>Afwijzen</Button>}
       {actions.restore && <Button disabled={busy != null} onClick={() => act('restore', () => runInvoiceInboxAction(organizationId, item.id, { action: 'restore' }))}>
         {busy === 'restore' ? 'Bezig…' : 'Herstellen en verwerken'}
@@ -824,7 +898,7 @@ export interface InvoiceFormSeed {
    *  'manual' (zelf ingevuld vanaf de werklijst, als Gerrie het niet las). */
   source: 'ai_scan' | 'import' | 'manual';
   form: { supplier_invoice_number: string; date: string; due_date: string; notes: string; currency?: string };
-  lines: PurchaseInvoiceLine[];
+  lines: PurchaseLine[];
   pendingFile: File | null;
   extractionMeta: Record<string, unknown>;
   ai: { confidence: 'high' | 'medium' | 'low'; warnings: string[] };
@@ -880,8 +954,8 @@ function InvoiceScanModal({ data, organizationId, onClose, onSeed }: {
   function apply() {
     if (!result || !file) return;
     const p = result.proposal;
-    const lines: PurchaseInvoiceLine[] = p.lines.length
-      ? p.lines.map(l => ({ id: uid(), description: l.description, amount_cents: l.amount_cents, vat_code: l.vat_code, vat_rate: l.vat_rate, account_id: l.account_id }))
+    const lines: PurchaseLine[] = p.lines.length
+      ? p.lines.map(l => seedLine(l))
       : [{ id: uid(), description: '', amount_cents: 0, vat_code: 'HOOG', vat_rate: 21, account_id: null }];
     onSeed({
       supplierId: p.supplier.matchedId,
@@ -989,6 +1063,7 @@ function InvoiceScanModal({ data, organizationId, onClose, onSeed }: {
             <div><span>Subtotaal</span><strong>{euroCents(p.totals.subtotal_cents)}</strong></div>
             <div><span>BTW</span><strong>{euroCents(p.totals.vat_cents)}</strong></div>
             <div className="bk-total-grand"><span>Totaal</span><strong>{euroCents(p.totals.total_cents)}</strong></div>
+            <VatOutsideTotal totals={purchaseTotals(p.lines.map(l => seedLine(l)), null, totalsContext(data))} kor={data.companySettings?.kor_enabled ?? false} />
             {p.extracted_totals?.total_cents != null && p.extracted_totals.total_cents !== p.totals.total_cents && (
               <div className="bk-muted">Op de factuur vermeld totaal: {euroCents(p.extracted_totals.total_cents)}</div>
             )}
@@ -1058,21 +1133,58 @@ function PurchaseInvoiceForm({ data, organizationId, canWrite, invoice, seed, on
   } : {
     supplier_id: '', supplier_invoice_number: '', internal_number: nextPurchaseNumber(data), date: today, due_date: '', project_id: '', notes: '', currency: 'EUR',
   });
-  const [lines, setLines] = useState<PurchaseInvoiceLine[]>(() => invoice?.lines?.length
+  const [lines, setLines] = useState<PurchaseLine[]>(() => invoice?.lines?.length
     ? invoice.lines
     : seed?.lines?.length
     ? seed.lines
     : [{ id: uid(), description: '', amount_cents: 0, vat_code: defaultVat?.code ?? 'HOOG', vat_rate: defaultVat?.rate ?? 21, account_id: null }]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Waarom "Concept verwijderen" hier niet kan (er hangt iets aan dat bewaard blijft).
+  const [removalNote, setRemovalNote] = useState<string | null>(null);
   const set = (k: string, v: unknown) => setForm(f => ({ ...f, [k]: v }));
 
-  const updateLine = (id: string, patch: Partial<PurchaseInvoiceLine>) =>
-    setLines(ls => ls.map(l => l.id === id ? { ...l, ...patch } : l));
+  const kor = data.companySettings?.kor_enabled ?? false;
+  const vatByCode = useMemo(() => new Map(data.vatCodes.map(v => [v.code, v])), [data.vatCodes]);
+  const totalsOptions = useMemo(
+    () => purchaseTotalsOptions(data.vatCodes, { kor, fallbackAccountId }),
+    [data.vatCodes, kor, fallbackAccountId],
+  );
+  // Regels waarvan de btw-code al gekozen is: door de gebruiker, of omdat ze
+  // uit een opgeslagen factuur of een voorstel komen. Alleen een nieuwe regel
+  // laat zijn btw-code de rekening volgen. Eerder stond een nieuwe regel op
+  // 21%, welke rekening je ook koos.
+  const vatChosen = useRef<Set<string>>(new Set((invoice?.lines?.length ? invoice.lines : seed?.lines ?? []).map(l => l.id)));
+
+  /** De btw-code van een nog niet gekozen regel laten volgen: de voorkeur (van de leverancier), anders die van de rekening. */
+  const followVat = (line: PurchaseLine, accountId: UUID | null, preferred?: string | null): PurchaseLine => {
+    // Met de KOR stelt de rekening niets voor (vatCodeForAccount): de regel blijft zoals hij is.
+    if (vatChosen.current.has(line.id) || kor) return line;
+    const account = accountId ? data.ledgerAccounts.find(a => a.id === accountId) : null;
+    const wanted = preferred || vatCodeForAccount(line.vat_code, account);
+    const code = purchaseVatChoices(data.vatCodes, null).find(c => c.code.code === wanted)?.code;
+    if (!code || code.code === line.vat_code) return line;
+    return withLineVat({ ...line, vat_code: code.code, vat_rate: code.rate }, null);
+  };
+
+  const updateLine = (id: string, patch: Partial<PurchaseLine>) =>
+    setLines(ls => ls.map(l => {
+      if (l.id !== id) return l;
+      const next = { ...l, ...patch };
+      // Een ingevuld btw-bedrag hoort bij het bedrag en het tarief van toen.
+      // Verandert een van de twee, dan rekent de regel weer zelf.
+      const stale = ('amount_cents' in patch && patch.amount_cents !== l.amount_cents) || ('vat_code' in patch && patch.vat_code !== l.vat_code);
+      return stale ? withLineVat(next, null) : next;
+    }));
   const addLine = () => setLines(ls => [...ls, { id: uid(), description: '', amount_cents: 0, vat_code: defaultVat?.code ?? 'HOOG', vat_rate: defaultVat?.rate ?? 21, account_id: null }]);
   const removeLine = (id: string) => setLines(ls => ls.length > 1 ? ls.filter(l => l.id !== id) : ls);
 
-  const totals = purchaseTotals(lines, fallbackAccountId);
+  // De naam van de inkoopcode van een soort, zoals deze organisatie hem noemt.
+  const vatLabelOfKind = (kind: string, fallback: string) =>
+    purchaseVatChoices(data.vatCodes, null).find(c => c.code.kind === kind)?.code.label ?? fallback;
+
+  const totals = purchaseLineTotals(lines, totalsOptions);
+  const dateConcern = readOnly ? null : invoiceDateConcern(form.date, { today, bookkeepingStart: data.companySettings?.bookkeeping_start_date ?? null });
 
   async function save() {
     if (!form.supplier_id) { setError('Kies een leverancier.'); return; }
@@ -1098,11 +1210,13 @@ function PurchaseInvoiceForm({ data, organizationId, canWrite, invoice, seed, on
         const createdSupplier = await insertRow<Supplier>('suppliers', organizationId, { ...seed.newSupplier, status: 'active' });
         supplierId = createdSupplier.id;
       }
-      const t = purchaseTotals(cleaned, fallbackAccountId);
+      // Een btw-bedrag blijft alleen staan waar de boeking het gebruikt.
+      const stored = cleanLineVat(cleaned, totalsOptions);
+      const t = purchaseLineTotals(stored, totalsOptions);
       const values = {
         supplier_id: supplierId, supplier_invoice_number: form.supplier_invoice_number || null,
         internal_number: form.internal_number || nextPurchaseNumber(data), date: form.date, due_date: form.due_date || null,
-        project_id: form.project_id || null, notes: form.notes || null, lines: cleaned,
+        project_id: form.project_id || null, notes: form.notes || null, lines: stored,
         subtotal_cents: t.subtotal_cents, vat_cents: t.vat_cents, total_cents: t.total_cents,
         currency: String(form.currency || 'EUR').toUpperCase(),
       };
@@ -1131,14 +1245,38 @@ function PurchaseInvoiceForm({ data, organizationId, canWrite, invoice, seed, on
     } catch (e) { setError(e instanceof Error ? e.message : 'Opslaan mislukt'); setBusy(false); }
   }
 
+  /**
+   * Een concept weggooien. Tot 20261119 kon dat nergens: een verkeerd concept
+   * bleef voorgoed in de lijst staan. Hangt er iets aan wat bewaard moet
+   * blijven (boekstukken, een declaratie, een bewijsstuk), dan legt het
+   * formulier uit waar het wel kan; zie draftRemoval in lib/purchaseInvoice.ts.
+   */
+  async function removeDraft() {
+    if (!invoice || readOnly) return;
+    setBusy(true); setError(null); setRemovalNote(null);
+    try {
+      const facts = await loadPurchaseInvoiceRemovalFacts(organizationId, invoice.id);
+      const attachments = data.attachments.filter(a => a.entity_type === 'purchase_invoice' && a.entity_id === invoice.id).length;
+      const plan = draftRemoval({ status: invoice.status, entryNumbers: facts.entryNumbers, inboxItem: facts.inboxItem, attachments });
+      if (plan.kind === 'blocked') { setRemovalNote(plan.message); setBusy(false); return; }
+      if (!confirm(plan.confirm)) { setBusy(false); return; }
+      // Van de werklijst: via Negeren, zodat de foto bij het item bewaard blijft.
+      if (plan.kind === 'discard_inbox_item') await runInvoiceInboxAction(organizationId, plan.inboxId, { action: 'reject' });
+      else await deleteRow('purchase_invoices', invoice.id, organizationId);
+      onSaved();
+    } catch (e) { setError(e instanceof Error ? e.message : 'Verwijderen mislukt'); setBusy(false); }
+  }
+
   return (
     <Modal className="bk-modal-wide" title={invoice ? `Inkoopfactuur ${invoice.internal_number ?? ''}` : 'Nieuwe inkoopfactuur'} onClose={onClose}
       footer={<div className="bk-foot">
+        {invoice && !readOnly && <Button variant="danger" onClick={() => void removeDraft()} disabled={busy}><Trash2 size={14} /> Concept verwijderen</Button>}
         <span className="bk-spacer" />
         <Button onClick={onClose}>Sluiten</Button>
         {!readOnly && <Button variant="primary" onClick={save} disabled={busy}>{busy ? 'Bezig…' : 'Opslaan als concept'}</Button>}
       </div>}>
       {error && <div className="error">{error}</div>}
+      {removalNote && <div className="bk-note" role="alert">{removalNote}</div>}
       {String(form.currency || 'EUR').toUpperCase() !== 'EUR' && (
         <div className="bk-note" role="alert">
           Deze factuur is in {String(form.currency).toUpperCase()}. Het grootboek boekt in euro's: reken de bedragen om (koers van de factuurdatum), vul ze in euro's in en zet de valuta op EUR. Boeken in een andere valuta weigert ResoFly.
@@ -1177,7 +1315,9 @@ function PurchaseInvoiceForm({ data, organizationId, canWrite, invoice, seed, on
           <Select value={form.supplier_id || ''} onChange={e => {
             const sup = data.suppliers.find(s => s.id === e.target.value);
             set('supplier_id', e.target.value);
-            if (sup?.default_expense_account_id) setLines(ls => ls.map(l => l.account_id ? l : { ...l, account_id: sup.default_expense_account_id }));
+            // De standaardrekening van de leverancier op regels zonder rekening,
+            // en zijn standaard btw-code op regels waar nog geen code gekozen is.
+            if (sup?.default_expense_account_id) setLines(ls => ls.map(l => l.account_id ? l : followVat({ ...l, account_id: sup.default_expense_account_id }, sup.default_expense_account_id, sup.default_vat_code)));
           }} disabled={readOnly}>
             <option value="">— kies —</option>
             {seed?.newSupplier && <option value="__new__">➕ Nieuwe leverancier: {seed.newSupplier.name}</option>}
@@ -1195,27 +1335,92 @@ function PurchaseInvoiceForm({ data, organizationId, canWrite, invoice, seed, on
           </Select>
         </Field>
       </div>
+      {dateConcern && <div className="bk-note" role="alert">{dateConcern.message}</div>}
 
       <div className="bk-lines">
         <div className="bk-lines-head"><span>Omschrijving</span><span>Grootboek</span><span>BTW</span><span className="bk-num">Bedrag excl.</span><span /></div>
-        {lines.map(l => (
+        {lines.map(l => {
+          const code = vatByCode.get(l.vat_code);
+          const kind = code?.kind ?? 'standard';
+          // Alleen inkoopcodes. Wie "ICP diensten" koos voor Google Ads, kreeg
+          // een boeking in geen enkele rubriek. Een bestaand concept met een
+          // verkoopcode toont die nog wel, met de waarschuwing hieronder.
+          const choices = purchaseVatChoices(data.vatCodes, l.vat_code);
+          const misplaced = !readOnly && (choices.find(c => c.code.code === l.vat_code)?.misplaced ?? false);
+          const vatEditable = lineVatEditable(kind, l.vat_rate);
+          const computedVat = computedLineVat(l);
+          const lineVat = vatEditable && typeof l.vat_cents === 'number' ? l.vat_cents : computedVat;
+          const selfAssessed = SELF_ASSESSED_VAT_KINDS.includes(kind) && computedVat !== 0;
+          // 4600 heeft geen standaard btw-code, dus de regel blijft op 21% staan.
+          // Bij een restaurantbon is dat fout: btw op eten en drinken in de
+          // horeca is niet aftrekbaar (art. 15 lid 5 Wet OB).
+          const horeca = !readOnly && vatEditable && data.ledgerAccounts.find(a => a.id === l.account_id)?.subtype === 'mixed_costs';
+          const showNote = misplaced || selfAssessed || (vatEditable && (!readOnly || lineVat !== computedVat));
+          return (
           <div className="bk-line" key={l.id}>
             <Input value={l.description} placeholder="Omschrijving" onChange={e => updateLine(l.id, { description: e.target.value })} disabled={readOnly} />
-            <Select value={l.account_id || ''} onChange={e => updateLine(l.id, { account_id: e.target.value || null })} disabled={readOnly}>
+            <Select value={l.account_id || ''} onChange={e => {
+              const accountId = e.target.value || null;
+              setLines(ls => ls.map(x => x.id === l.id ? followVat({ ...x, account_id: accountId }, accountId) : x));
+            }} disabled={readOnly}>
               <option value="">— rekening —</option>
               {expenseAccounts.map(a => <option key={a.id} value={a.id}>{a.code} · {a.name}</option>)}
             </Select>
             <Select value={l.vat_code} onChange={e => {
-              const vc = data.vatCodes.find(v => v.code === e.target.value);
+              const vc = vatByCode.get(e.target.value);
+              vatChosen.current.add(l.id);
               updateLine(l.id, { vat_code: e.target.value, vat_rate: vc?.rate ?? 0 });
             }} disabled={readOnly}>
-              {data.vatCodes.map(v => <option key={v.id} value={v.code}>{v.label}</option>)}
+              {choices.map(({ code: v, misplaced: sales }) => <option key={v.id} value={v.code}>{v.label}{sales ? ' (verkoopcode)' : ''}</option>)}
+              {l.vat_code && !code && <option value={l.vat_code}>{l.vat_code} (onbekende code)</option>}
             </Select>
             <Input className="bk-num" type="number" step="0.01" value={(l.amount_cents / 100).toString()}
               onChange={e => updateLine(l.id, { amount_cents: Math.round((parseFloat(e.target.value) || 0) * 100) })} disabled={readOnly} />
             {!readOnly && <button className="bk-line-del" onClick={() => removeLine(l.id)} title="Regel verwijderen">×</button>}
+            {/* Onder de regel, over de volle breedte: het btw-bedrag van de
+                leverancier, of waarom de btw hier niet in het totaal zit. */}
+            {showNote && (
+              <div className="bk-muted" style={{ gridColumn: '1 / -1', display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', justifyContent: 'flex-end', fontSize: '.8rem' }}>
+                {misplaced && (
+                  <span role="alert" style={{ flex: '1 1 260px', color: 'var(--accent-o, #f0b24b)' }}>
+                    {kind === 'zero'
+                      ? <>{code?.label ?? l.vat_code} is een verkoopcode: omzet naar buiten de EU. Kies voor een inkoop zonder btw “{vatLabelOfKind('zero', 'BTW 0%')}”, en voor een dienst van buiten de EU “{vatLabelOfKind('import_non_eu', 'Invoer buiten EU')}”.</>
+                      : <>{code?.label ?? l.vat_code} is een verkoopcode. Op een inkoopfactuur komt hij in geen enkele rubriek van je btw-aangifte, en boeken wordt geweigerd. Kies een inkoopcode: voor een leverancier uit een ander EU-land “{vatLabelOfKind('eu_acquisition', 'Verwerving EU')}”, voor verlegde btw binnen Nederland “{vatLabelOfKind('reverse_charge_purchase', 'BTW verlegd (inkoop)')}”.</>}
+                  </span>
+                )}
+                {selfAssessed && !misplaced && (
+                  <span>btw verlegd: {euroCents(computedVat)}, {kor ? 'geef je zelf aan en betaal je' : 'geef je zelf aan en trek je af'}. De leverancier rekent hem niet; hij zit dus niet in het totaal.</span>
+                )}
+                {vatEditable && (
+                  <label style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>
+                    <span>
+                      Btw-bedrag
+                      {lineVat !== computedVat && <> (berekend: {euroCents(computedVat)})</>}
+                    </span>
+                    <Input className="bk-num" type="number" step="0.01" style={{ width: 110 }} aria-label="Btw-bedrag volgens de factuur"
+                      title="Het btw-bedrag zoals het op de factuur of bon staat. Wijkt het een cent af van het berekende, vul dan het bedrag van de factuur in: dan klopt het totaal met wat je betaalt."
+                      value={(lineVat / 100).toString()}
+                      onChange={e => {
+                        const value = e.target.value.trim() === '' ? null : Math.round((parseFloat(e.target.value) || 0) * 100);
+                        setLines(ls => ls.map(x => x.id === l.id ? withLineVat(x, value) : x));
+                      }} disabled={readOnly} />
+                  </label>
+                )}
+                {horeca && (
+                  <span style={{ flexBasis: '100%', textAlign: 'right' }}>
+                    Een bon van een restaurant of café? Die btw trek je niet af: vul het bedrag inclusief btw in en kies “{vatLabelOfKind('zero', 'BTW 0%')}”. Boodschappen en relatiegeschenken boek je wel met btw.
+                  </span>
+                )}
+                {vatEditable && Math.abs(lineVat - computedVat) > 5 && (
+                  <span role="alert" style={{ flexBasis: '100%', textAlign: 'right', color: 'var(--accent-o, #f0b24b)' }}>
+                    Dit wijkt meer dan een paar cent af van {l.vat_rate}% van {euroCents(l.amount_cents)}. Klopt de btw-code en het bedrag exclusief?
+                  </span>
+                )}
+              </div>
+            )}
           </div>
-        ))}
+          );
+        })}
         {!readOnly && <button className="bk-add-line" onClick={addLine}><Plus size={14} /> Regel toevoegen</button>}
       </div>
 
@@ -1223,6 +1428,7 @@ function PurchaseInvoiceForm({ data, organizationId, canWrite, invoice, seed, on
         <div><span>Subtotaal</span><strong>{euroCents(totals.subtotal_cents)}</strong></div>
         <div><span>BTW</span><strong>{euroCents(totals.vat_cents)}</strong></div>
         <div className="bk-total-grand"><span>Totaal</span><strong>{euroCents(totals.total_cents)}</strong></div>
+        <VatOutsideTotal totals={totals} kor={kor} />
       </div>
       <Field label="Notities"><Textarea value={form.notes} onChange={e => set('notes', e.target.value)} disabled={readOnly} rows={2} /></Field>
       {invoice && data.attachments.some(a => a.entity_type === 'purchase_invoice' && a.entity_id === invoice.id) && <div className="bk-attachments">
@@ -1424,6 +1630,7 @@ function JournalView({ data, organizationId, canWrite, onChanged }: PageProps) {
   const [showPrepaid, setShowPrepaid] = useState(false);
   const [reversing, setReversing] = useState<JournalEntry | null>(null);
   const [reverseDate, setReverseDate] = useState(() => todayIso());
+  const [notice, setNotice] = useState<string | null>(null);
   const accountLabel = (id: string) => {
     const a = data.ledgerAccounts.find(x => x.id === id);
     return a ? `${a.code} · ${a.name}` : id;
@@ -1440,8 +1647,12 @@ function JournalView({ data, organizationId, canWrite, onChanged }: PageProps) {
 
   function askReverse(entry: JournalEntry) {
     if (!canWrite) return;
-    setError(null);
-    setReverseDate(todayIso());
+    setError(null); setNotice(null);
+    // De datum van het boekstuk zelf, niet vandaag. Wie in november een
+    // boekstuk uit september tegenboekte en opnieuw boekte, had de kosten
+    // dubbel in het derde kwartaal en negatief in het vierde (of in het
+    // verkeerde jaar).
+    setReverseDate(entry.date);
     setReversing(entry);
   }
 
@@ -1449,7 +1660,20 @@ function JournalView({ data, organizationId, canWrite, onChanged }: PageProps) {
     if (!reversing) return;
     const entry = reversing;
     setBusyId(entry.id); setError(null);
-    try { await reverseJournalEntry(entry.id, reverseDate); setReversing(null); onChanged(); }
+    try {
+      // Onaangeroerd: geen datum meesturen. Dan kiest de database de datum van
+      // het boekstuk, of de eerste open dag daarna als die periode dicht is.
+      const chosen = reverseDate && reverseDate !== entry.date ? reverseDate : null;
+      const reversal = await reverseJournalEntry(entry.id, chosen);
+      setReversing(null);
+      if (reversal?.date) {
+        const moved = !chosen && reversal.date !== entry.date
+          ? ` Dat is de eerste open dag: het btw-tijdvak of boekjaar van ${dateNL(entry.date)} is afgesloten.`
+          : '';
+        setNotice(`Boekstuk ${entry.entry_number ?? ''} is tegengeboekt met ${reversal.entry_number ?? 'een spiegelboeking'} op ${dateNL(reversal.date)}.${moved}`.replace('  ', ' '));
+      }
+      onChanged();
+    }
     catch (e) { setError(e instanceof Error ? e.message : 'Tegenboeken mislukt'); }
     finally { setBusyId(null); }
   }
@@ -1464,6 +1688,7 @@ function JournalView({ data, organizationId, canWrite, onChanged }: PageProps) {
         </div>
       </div>
       {error && <div className="error">{error}</div>}
+      {notice && <div className="bk-note" role="status">{notice}</div>}
       {showPrepaid && (
         <PrepaidForm data={data} organizationId={organizationId} canWrite={canWrite} item={null}
           onClose={() => setShowPrepaid(false)} onChanged={onChanged} />
@@ -1483,8 +1708,25 @@ function JournalView({ data, organizationId, canWrite, onChanged }: PageProps) {
             <Button onClick={() => setReversing(null)}>Annuleren</Button>
             <Button variant="primary" onClick={confirmReverse} disabled={busyId === reversing.id}><RotateCcw size={14} /> {busyId === reversing.id ? 'Bezig…' : 'Tegenboeken'}</Button>
           </div>}>
-          <p className="bk-muted">Er wordt een spiegelboeking gemaakt die {reversing.entry_number} neutraliseert. Kies de boekdatum van de tegenboeking (standaard vandaag); in een afgesloten periode boeken kan niet.</p>
-          <Field label="Boekdatum tegenboeking"><Input type="date" value={reverseDate} onChange={e => setReverseDate(e.target.value)} /></Field>
+          <p className="bk-muted">Er komt een spiegelboeking die {reversing.entry_number} opheft.</p>
+          {error && <div className="error">{error}</div>}
+          {reversing.source_type === 'opening_balance' ? (
+            // Een beginbalans gaat altijd terug op zijn eigen datum (de database
+            // dwingt dat af): op een andere dag telde alles ervoor dubbel.
+            <Field label="Boekdatum tegenboeking" hint="Een beginbalans boek je altijd terug op zijn eigen datum. Wil je hem verbeteren? Dat gaat in één keer op het tabblad Beginbalans, met Beginbalans corrigeren.">
+              <Input type="date" value={reversing.date} disabled />
+            </Field>
+          ) : (
+            <Field label="Boekdatum tegenboeking" hint="Dezelfde datum als het boekstuk, zodat de twee tegen elkaar wegvallen in dezelfde periode. Is dat btw-tijdvak of boekjaar al afgesloten, dan komt de tegenboeking op de eerste open dag daarna.">
+              <Input type="date" value={reverseDate} onChange={e => setReverseDate(e.target.value)} />
+            </Field>
+          )}
+          {reversing.source_type !== 'opening_balance' && reverseDate && reverseDate !== reversing.date && (
+            <div className="bk-note" role="alert">
+              Je kiest een andere datum dan het boekstuk ({dateNL(reversing.date)}). Vallen die twee in een ander btw-tijdvak of boekjaar, dan staan de kosten of de omzet in de ene periode te hoog en in de andere te laag.
+              {' '}<button type="button" className="bk-link-button" onClick={() => setReverseDate(reversing.date)}>Terug naar {dateNL(reversing.date)}</button>
+            </div>
+          )}
         </Modal>
       )}
       {data.journalEntries.length === 0 && (
@@ -1555,6 +1797,31 @@ type MemorialLine = { key: string; account_id: string; description: string; debi
 
 const parseEuro = (v: string): number => Math.round((parseFloat(v.replace(',', '.')) || 0) * 100);
 
+/**
+ * Wat een memoriaalregel op deze rekening NIET doet. Een memoriaal is een
+ * losse journaalpost: de bank, het activaregister en de facturen weten er
+ * niets van, en een omzetregel zonder btw-code staat niet in de aangifte.
+ * Zonder deze uitleg liep het grootboek stil uit de pas met de bankafschriften
+ * of bleef een "afgeboekte" factuur gewoon openstaan.
+ */
+function memorialLineNotes(account: LedgerAccount | undefined, vatCode: string, linkedToBank: boolean): string[] {
+  if (!account) return [];
+  const notes: string[] = [];
+  if (account.type === 'revenue' && !vatCode) {
+    notes.push('Zonder btw-code telt deze regel niet mee in je btw-aangifte; kies een code als het omzet met btw is.');
+  }
+  if (linkedToBank || account.subtype === 'bank' || account.code === '1100') {
+    notes.push('De bank volgt deze regel niet: het saldo in het grootboek wijkt daarna af van je bankafschriften. Een betaling of ontvangst boek je bij Bank.');
+  }
+  if (account.subtype === 'accumulated_depreciation' || account.subtype === 'fixed_asset' || account.code === '0150') {
+    notes.push('Het activaregister volgt deze regel niet: de boekwaarde bij Activa blijft zoals hij was. Aanschaf, afschrijving en verkoop van een bedrijfsmiddel boek je bij Activa.');
+  }
+  if (account.subtype === 'accounts_receivable' || account.code === '1300') {
+    notes.push('De factuur zelf volgt deze regel niet: hij blijft open of betaald staan zoals hij stond. Een ontvangst boek je bij Bank, een fout in een factuur herstel je met Crediteren.');
+  }
+  return notes;
+}
+
 function MemorialModal({ data, organizationId, onClose, onSaved }: {
   data: AppData; organizationId: UUID; onClose: () => void; onSaved: () => void;
 }) {
@@ -1566,6 +1833,17 @@ function MemorialModal({ data, organizationId, onClose, onSaved }: {
   const [error, setError] = useState<string | null>(null);
 
   const accounts = data.ledgerAccounts.filter(a => a.is_active);
+  // Grootboekrekeningen waar een bankrekening aan hangt (ook een eigen
+  // rekening die niet 1100 heet). Lukt het ophalen niet, dan blijft de
+  // waarschuwing op het soort rekening en op 1100 staan.
+  const [bankLedgerIds, setBankLedgerIds] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    let cancelled = false;
+    loadBankLedgerAccountIds(organizationId)
+      .then(ids => { if (!cancelled) setBankLedgerIds(new Set(ids)); })
+      .catch(() => { /* de waarschuwing valt terug op het soort rekening */ });
+    return () => { cancelled = true; };
+  }, [organizationId]);
   const activeProjects = useMemo(() => data.projects.filter(p => !p.archived), [data.projects]);
   const accountById = useMemo(() => new Map(data.ledgerAccounts.map(a => [a.id, a])), [data.ledgerAccounts]);
   const update = (key: string, patch: Partial<MemorialLine>) => setLines(ls => ls.map(l => (l.key === key ? { ...l, ...patch } : l)));
@@ -1636,6 +1914,7 @@ function MemorialModal({ data, organizationId, onClose, onSaved }: {
           // 3b, maar nooit in de opgaaf; dan liepen die twee uiteen.
           const isReceivable = acc?.subtype === 'accounts_receivable' || acc?.type === 'revenue';
           const isPayable = acc?.subtype === 'accounts_payable';
+          const notes = memorialLineNotes(acc, l.vat_code, bankLedgerIds.has(l.account_id));
           return (
           <div className="bk-line bk-line-memorial" key={l.key}>
             <Select value={l.account_id} onChange={e => update(l.key, { account_id: e.target.value, client_id: '', supplier_id: '' })}>
@@ -1671,6 +1950,11 @@ function MemorialModal({ data, organizationId, onClose, onSaved }: {
             <Input className="bk-num" type="number" step="0.01" min="0" value={l.credit} placeholder="0,00"
               onChange={e => update(l.key, { credit: e.target.value, debit: e.target.value ? '' : l.debit })} />
             <button className="bk-line-del" onClick={() => setLines(ls => (ls.length > 2 ? ls.filter(x => x.key !== l.key) : ls))} title="Regel verwijderen">×</button>
+            {notes.length > 0 && (
+              <div className="bk-muted" role="note" style={{ gridColumn: '1 / -1', fontSize: '.8rem' }}>
+                {notes.map(note => <div key={note}>{note}</div>)}
+              </div>
+            )}
           </div>
           );
         })}
@@ -1706,6 +1990,16 @@ function OpeningBalanceView({ data, organizationId, canWrite, onChanged, canWrit
   const [lines, setLines] = useState<OpeningLine[]>([emptyLine(), emptyLine(), emptyLine()]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Na "Beginbalans corrigeren": het nummer van het boekstuk dat is tegengeboekt.
+  const [correctedFrom, setCorrectedFrom] = useState<string | null>(null);
+  // De laatste tegengeboekte beginbalans: zijn regels kun je overnemen als je
+  // het formulier intussen verliet (of hem in het Journaal tegenboekte).
+  const previous = useMemo(
+    () => data.journalEntries
+      .filter(e => e.source_type === 'opening_balance' && e.status === 'posted' && e.reversed_by_entry_id && !e.reverses_entry_id)
+      .sort((a, b) => (b.created_at ?? '').localeCompare(a.created_at ?? ''))[0] ?? null,
+    [data.journalEntries],
+  );
   // Welke rekening de sluitpost krijgt, hangt aan de rechtsvorm: bij een BV gaat
   // het meegebrachte vermogen naar de reserves, niet naar het aandelenkapitaal.
   // De database beslist dat; hier alleen ophalen zodat het scherm niet iets
@@ -1762,10 +2056,17 @@ function OpeningBalanceView({ data, organizationId, canWrite, onChanged, canWrit
     });
   }
 
+  // Een beginbalans is de stand op de dag dat je begon. Een datum in de
+  // toekomst (2052 in plaats van 2025) werd zonder vraag vastgelegd, in een
+  // boekjaar dat niemand ooit opent.
+  const dateInFuture = Boolean(date) && date > todayIso();
+  const futureMessage = `De datum ${date ? dateNL(date) : ''} ligt in de toekomst. Een beginbalans is de stand op de dag dat je met deze boekhouding begon; kies die dag (meestal de startdatum van je boekhouding).`;
+
   async function save() {
     if (!canWrite || filled.length === 0) return;
+    if (dateInFuture) { setError(futureMessage); return; }
     const partnerWarning = plugOnNoPartner ? ' Die staat op geen enkele vennoot; zet het kapitaal liever per vennoot op zijn kapitaalrekening.' : '';
-    if (!confirm(`Beginbalans per ${dateNL(date)} vastleggen? Het verschil van ${euroCents(Math.abs(equity))} wordt automatisch op ${plugLabel} gezet.${partnerWarning} Dit kan maar één keer.`)) return;
+    if (!confirm(`Beginbalans per ${dateNL(date)} vastleggen? Het verschil van ${euroCents(Math.abs(equity))} wordt automatisch op ${plugLabel} gezet.${partnerWarning} Klopt er later iets niet, dan verbeter je hem hier met Beginbalans corrigeren.`)) return;
     setBusy(true); setError(null);
     try {
       await createOpeningBalance(organizationId, date, filled.map(l => ({
@@ -1774,9 +2075,58 @@ function OpeningBalanceView({ data, organizationId, canWrite, onChanged, canWrit
         debit_cents: parseEuro(l.debit),
         credit_cents: parseEuro(l.credit),
       })));
+      setCorrectedFrom(null);
       onChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Beginbalans vastleggen mislukt');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /**
+   * De regels en de datum van een eerdere beginbalans in het formulier zetten.
+   * De sluitpost blijft eruit: die rekent het formulier opnieuw uit, zodat een
+   * verbeterd bedrag niet naast de oude sluitpost komt te staan.
+   */
+  function fillFrom(entry: JournalEntry) {
+    const old = data.journalLines
+      .filter(l => l.entry_id === entry.id)
+      .sort((a, b) => a.line_index - b.line_index)
+      .filter(l => !/\(sluitpost beginbalans\)\s*$/i.test(l.description ?? ''));
+    setDate(entry.date);
+    setLines(old.length
+      ? old.map(l => ({
+          key: uid(),
+          account_id: l.account_id,
+          debit: l.debit_cents ? (l.debit_cents / 100).toFixed(2) : '',
+          credit: l.credit_cents ? (l.credit_cents / 100).toFixed(2) : '',
+        }))
+      : [emptyLine(), emptyLine(), emptyLine()]);
+  }
+
+  // Het boekjaar van de beginbalans moet open zijn: in een afgesloten jaar kan
+  // de tegenboeking niet op de datum van de beginbalans komen.
+  const closedYear = existing
+    ? data.fiscalYears.find(fy => fy.status === 'closed' && existing.date >= fy.period_start && existing.date <= fy.period_end) ?? null
+    : null;
+
+  /**
+   * De beginbalans verbeteren: het boekstuk tegenboeken op zijn eigen datum en
+   * de oude regels klaarzetten. Eerder moest dat via het Journaal, waar de
+   * tegenboeking op vandaag kwam: tot die dag telde alles dubbel.
+   */
+  async function correct() {
+    if (!canWrite || !existing || closedYear) return;
+    if (!confirm(`Beginbalans per ${dateNL(existing.date)} corrigeren?\n\nBoekstuk ${existing.entry_number ?? ''} wordt tegengeboekt op dezelfde datum, zodat er niets dubbel telt. Daarna staan de oude regels klaar: verbeter ze en leg de beginbalans opnieuw vast. Tot je dat doet, is er geen beginbalans.`)) return;
+    setBusy(true); setError(null);
+    try {
+      await reverseJournalEntry(existing.id, existing.date);
+      fillFrom(existing);
+      setCorrectedFrom(existing.entry_number ?? 'de beginbalans');
+      onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Beginbalans corrigeren mislukt');
     } finally {
       setBusy(false);
     }
@@ -1786,7 +2136,16 @@ function OpeningBalanceView({ data, organizationId, canWrite, onChanged, canWrit
     const entryLines = data.journalLines.filter(l => l.entry_id === existing.id).sort((a, b) => a.line_index - b.line_index);
     return (
       <div className="bk-accounts">
-        <p className="bk-muted">De beginbalans is vastgelegd op {dateNL(existing.date)} (boekstuk {existing.entry_number}). Klopt er iets niet, boek het boekstuk dan tegen via het Journaal en leg een nieuwe beginbalans vast.</p>
+        <div className="bk-subhead">
+          <p className="bk-muted">
+            De beginbalans is vastgelegd op {dateNL(existing.date)} (boekstuk {existing.entry_number}).
+            {' '}Klopt er iets niet? Met Beginbalans corrigeren wordt dit boekstuk tegengeboekt op dezelfde datum en staan de regels klaar om te verbeteren en opnieuw vast te leggen.
+            {' '}Het boekjaar van {dateNL(existing.date)} moet daarvoor open zijn.
+          </p>
+          <Button disabled={!canWrite || busy || Boolean(closedYear)} onClick={() => void correct()}><RotateCcw size={14} /> {busy ? 'Bezig…' : 'Beginbalans corrigeren'}</Button>
+        </div>
+        {closedYear && <div className="bk-note">Boekjaar {closedYear.label} is afgesloten. Heropen het eerst bij Boekjaren; daarna kun je de beginbalans corrigeren en sluit je het jaar opnieuw af.</div>}
+        {error && <div className="error">{error}</div>}
         <div className="bk-table-wrap"><table className="bk-table">
           <thead><tr><th>Rekening</th><th>Omschrijving</th><th className="bk-num">Debet</th><th className="bk-num">Credit</th></tr></thead>
           <tbody>{entryLines.map(l => {
@@ -1834,15 +2193,28 @@ function OpeningBalanceView({ data, organizationId, canWrite, onChanged, canWrit
         <p className="bk-muted">
           Stap je over van een ander pakket? Vul hier de eindbalans van je oude administratie in (banksaldo, openstaande debiteuren/crediteuren, activa).
           Het verschil tussen debet en credit wordt automatisch als eigen vermogen geboekt, zodat de balans sluit.
+          Staat er een bedrijfsmiddel op (een auto, een laptop)? Zet de aanschafwaarde op de activarekening en wat er tot nu toe is afgeschreven op de cumulatieve afschrijving. Voer het daarna ook op bij Activa en kies daar ‘Koppelen aan de beginbalans’: dan wordt erop afgeschreven zonder dat de aanschaf nog een keer wordt geboekt.
           Btw die je in je oude pakket al hebt aangegeven maar nog moet betalen (of terugkrijgen), zet je op 1530 Te betalen omzetbelasting.
           Op 1500, 1510 of 1520 telt hij mee in de eerstvolgende aangifte en betaal je hem twee keer.
         </p>
         <Button variant="primary" disabled={!canWrite || busy || filled.length === 0} onClick={save}>{busy ? 'Bezig…' : 'Beginbalans vastleggen'}</Button>
       </div>
       {error && <div className="error">{error}</div>}
+      {correctedFrom && (
+        <div className="bk-note" role="status">
+          Boekstuk {correctedFrom} is tegengeboekt. Hieronder staan de oude regels: verbeter ze en klik op Beginbalans vastleggen. Tot dan is er geen beginbalans.
+        </div>
+      )}
+      {!correctedFrom && previous && canWrite && (
+        <div className="bk-note">
+          De vorige beginbalans (boekstuk {previous.entry_number}, per {dateNL(previous.date)}) is tegengeboekt en er is nog geen nieuwe.
+          {' '}<button type="button" className="bk-link-button" onClick={() => { fillFrom(previous); setCorrectedFrom(previous.entry_number ?? 'de beginbalans'); }}>Regels van die beginbalans overnemen</button>
+        </div>
+      )}
       <div className="bk-form-grid">
         <Field label="Per datum" hint="Meestal de boekhoud-startdatum (zie Instellingen → Boekhouding)."><Input type="date" value={date} onChange={e => setDate(e.target.value)} disabled={!canWrite} /></Field>
       </div>
+      {dateInFuture && <div className="bk-note" role="alert">{futureMessage}</div>}
       {isPartnershipForm && (
         <div className="bk-note bk-opening-partners">
           <div className="bk-subhead">

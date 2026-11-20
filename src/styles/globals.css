@@ -8089,7 +8089,10 @@ body.pgal-shielded .pgal-shield{position:fixed;inset:0;z-index:300;display:flex;
    (omschrijving) over de volle breedte. */
 @media(max-width:760px){
   .bk-lines-head{display:none}
-  .bk-line{grid-template-columns:1fr 1fr;align-items:start;gap:7px;padding:10px}
+  /* minmax(0,…): een kolom van 1fr krimpt niet onder de breedte van zijn
+     inhoud, en de regels van het inkoopformulier liepen op de telefoon rechts
+     uit hun kader. */
+  .bk-line{grid-template-columns:minmax(0,1fr) minmax(0,1fr);align-items:start;gap:7px;padding:10px}
   .bk-line>:first-child{grid-column:1/-1}
   .bk-line>:last-child{grid-column:1/-1;width:100%}
 

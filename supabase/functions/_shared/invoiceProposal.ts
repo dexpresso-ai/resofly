@@ -26,7 +26,10 @@ import {
 } from './claudeInvoice.ts';
 import { recordAiUsage } from './claudeSummary.ts';
 import { parseUblDocument, type ParsedUblDocument } from './ublParse.ts';
-import { isXmlFile, normEmail, normIban, normName, normVat } from './invoiceInboxRules.ts';
+import {
+  adoptDocumentVat, invoiceDateConcern, isPurchaseVatCode, isXmlFile, normEmail, normIban, normName, normVat,
+  pickZeroPurchaseCode, purchaseLineTotals, todayInAmsterdam, type PurchaseTotalsOptions,
+} from './invoiceInboxRules.ts';
 
 export { SUPPORTED_MIME_TYPES, isXmlFile, normEmail, normIban, normName, normVat };
 
@@ -41,6 +44,12 @@ export interface ProposalLine {
   /** Gevalideerde grootboekrekening-id (of null -> vangnet bij boeken). */
   account_id: string | null;
   account_code: string | null;
+  /**
+   * Het btw-bedrag van de bon of factuur, als dat een paar cent afwijkt van
+   * grondslag × tarief (adoptDocumentVat). book_purchase_invoice boekt dan dit
+   * bedrag (20261119180000). Ontbreekt het, dan geldt grondslag × tarief.
+   */
+  vat_cents?: number;
 }
 
 export interface SupplierProposal {
@@ -86,7 +95,11 @@ export interface ProposalResult {
 // ── Context van de organisatie ─────────────────────────────────────────────────
 
 export interface AccountRow { id: string; code: string; name: string; type: string; subtype: string | null }
-export interface VatRow { code: string; label: string; rate: number; kind: string }
+export interface VatRow {
+  code: string; label: string; rate: number; kind: string;
+  /** Rubriek van de grondslag; '3a' is export, en dat is omzet, geen inkoop. */
+  sales_box?: string | null;
+}
 export interface SupplierRow {
   id: string; name: string; vat_number: string | null; iban: string | null; email: string | null;
   default_expense_account_id: string | null; default_vat_code: string | null;
@@ -94,7 +107,13 @@ export interface SupplierRow {
   inbox_unverified?: boolean | null;
 }
 
-export interface ProposalContext { accounts: AccountRow[]; vatCodes: VatRow[]; suppliers: SupplierRow[] }
+export interface ProposalContext {
+  accounts: AccountRow[]; vatCodes: VatRow[]; suppliers: SupplierRow[];
+  /** Kleineondernemersregeling: geen aftrek, de btw zit in de kosten. */
+  kor?: boolean;
+  /** Startdatum van de boekhouding (JJJJ-MM-DD); een factuur daarvóór is verdacht. */
+  bookkeepingStart?: string | null;
+}
 
 /** Kandidaatrekeningen = zelfde filter als de UI-dropdown (kosten + activa). */
 export async function loadAccounts(admin: SupabaseClient, organizationId: string): Promise<AccountRow[]> {
@@ -108,10 +127,27 @@ export async function loadAccounts(admin: SupabaseClient, organizationId: string
 
 export async function loadVatCodes(admin: SupabaseClient, organizationId: string): Promise<VatRow[]> {
   const { data, error } = await admin.from('vat_codes')
-    .select('code, label, rate, kind')
+    .select('code, label, rate, kind, sales_box')
     .eq('organization_id', organizationId).eq('is_active', true).order('code');
   if (error) throw new HttpError(`BTW-codes laden mislukt: ${error.message}`, 500);
-  return (data ?? []).map((v) => ({ code: String(v.code), label: String(v.label), rate: Number(v.rate) || 0, kind: String(v.kind) }));
+  return (data ?? []).map((v) => ({
+    code: String(v.code), label: String(v.label), rate: Number(v.rate) || 0, kind: String(v.kind),
+    sales_box: (v as { sales_box?: string | null }).sales_box ?? null,
+  }));
+}
+
+/**
+ * De KOR en de startdatum van de boekhouding. Ontbreken de bedrijfsgegevens
+ * of lukt het lezen niet, dan gelden de gewone regels (geen KOR, geen
+ * startdatum): een voorstel mag daar niet op stranden.
+ */
+export async function loadBookkeepingSettings(admin: SupabaseClient, organizationId: string): Promise<{ kor: boolean; bookkeepingStart: string | null }> {
+  const { data, error } = await admin.from('company_settings')
+    .select('kor_enabled, bookkeeping_start_date')
+    .eq('organization_id', organizationId).maybeSingle();
+  if (error) console.warn('bedrijfsgegevens laden voor het voorstel mislukt:', error.message);
+  const row = (data ?? null) as { kor_enabled?: boolean | null; bookkeeping_start_date?: string | null } | null;
+  return { kor: Boolean(row?.kor_enabled), bookkeepingStart: row?.bookkeeping_start_date ?? null };
 }
 
 export async function loadSuppliers(admin: SupabaseClient, organizationId: string): Promise<SupplierRow[]> {
@@ -123,12 +159,31 @@ export async function loadSuppliers(admin: SupabaseClient, organizationId: strin
 }
 
 export async function loadProposalContext(admin: SupabaseClient, organizationId: string): Promise<ProposalContext> {
-  const [accounts, vatCodes, suppliers] = await Promise.all([
+  const [accounts, vatCodes, suppliers, settings] = await Promise.all([
     loadAccounts(admin, organizationId),
     loadVatCodes(admin, organizationId),
     loadSuppliers(admin, organizationId),
+    loadBookkeepingSettings(admin, organizationId),
   ]);
-  return { accounts, vatCodes, suppliers };
+  return { accounts, vatCodes, suppliers, kor: settings.kor, bookkeepingStart: settings.bookkeepingStart };
+}
+
+/** Hoe de totalen van een inkoopfactuur voor deze organisatie tellen (soort per btw-code, KOR, vangnetrekening). */
+export function purchaseTotalsOptions(ctx: ProposalContext): PurchaseTotalsOptions {
+  const kindByCode = new Map(ctx.vatCodes.map((v) => [v.code, v.kind]));
+  return {
+    fallbackAccountId: ctx.accounts.find((a) => a.code === '4500')?.id ?? null,
+    kindOf: (code) => kindByCode.get(code),
+    kor: Boolean(ctx.kor),
+  };
+}
+
+/**
+ * De waarschuwing bij een onwaarschijnlijke factuurdatum. Een waarschuwing
+ * verlaagt de zekerheid en houdt het concept bij een mens (autoBookEligible).
+ */
+export function dateWarning(date: string | null, ctx: ProposalContext): string | null {
+  return invoiceDateConcern(date, { today: todayInAmsterdam(), bookkeepingStart: ctx.bookkeepingStart ?? null })?.message ?? null;
 }
 
 // ── Bestandssoort ──────────────────────────────────────────────────────────────
@@ -206,8 +261,18 @@ export async function buildAiProposalFromText(
 
 const accountRefs = (ctx: ProposalContext): AccountRef[] =>
   ctx.accounts.map((a) => ({ code: a.code, name: a.name, type: a.type, subtype: a.subtype }));
+// Alleen inkoopcodes: met de hele lijst koos het model "Export buiten EU" of
+// "ICP diensten" voor een inkoopfactuur, en dat zijn verkoopcodes.
 const vatRefs = (ctx: ProposalContext): VatCodeRef[] =>
-  ctx.vatCodes.map((v) => ({ code: v.code, label: v.label, rate: v.rate, kind: v.kind }));
+  ctx.vatCodes.filter(isPurchaseCode).map((v) => ({ code: v.code, label: v.label, rate: v.rate, kind: v.kind }));
+
+/** Een inkoopcode; een 0%-code die "export" heet valt af, ook als de rubriek ontbreekt. */
+const isPurchaseCode = (v: VatRow): boolean => isPurchaseVatCode(v) && !(v.kind === 'zero' && /export/i.test(v.code));
+
+/** Waar een verkoopcode op een inkoopregel op neerkomt: dezelfde regeling, van de inkoopkant gezien. */
+const PURCHASE_KIND_FOR_SALES_KIND: Record<string, string> = {
+  icp_goods: 'eu_acquisition', icp_services: 'eu_acquisition', reverse_charge_sales: 'reverse_charge_purchase',
+};
 
 /**
  * Van ruwe AI-uitlezing naar gevalideerd voorstel: rekeningen en btw-codes
@@ -234,17 +299,30 @@ function finishAiProposal(
   const vatByRate = new Map<number, VatRow>();
   for (const v of vatCodes) {
     const pri = DOMESTIC_KIND_PRIORITY[v.kind];
-    if (pri === undefined) continue;
+    // Geen exportcode: bij 0% stond "Export buiten EU" vooraan (alfabet), en
+    // zo kreeg een bonregel zonder btw een verkoopcode.
+    if (pri === undefined || !isPurchaseCode(v)) continue;
     const cur = vatByRate.get(v.rate);
     if (!cur || pri < DOMESTIC_KIND_PRIORITY[cur.kind]) vatByRate.set(v.rate, v);
   }
-  const fallbackVat = vatByCode.get('HOOG') ?? vatByRate.get(21) ?? vatCodes[0] ?? null;
+  const zeroCode = pickZeroPurchaseCode(vatCodes);
+  if (zeroCode) vatByRate.set(0, zeroCode);
+  const fallbackVat = vatByCode.get('HOOG') ?? vatByRate.get(21) ?? vatCodes.find(isPurchaseCode) ?? null;
 
   const warnings: string[] = [];
 
   const lines: ProposalLine[] = extraction.lines.map((l) => {
     // BTW-code: geldige code > code bij tarief > vangnet. De code bepaalt het tarief.
     let vc = l.vat_code ? vatByCode.get(l.vat_code) : undefined;
+    if (vc && !isPurchaseCode(vc)) {
+      // Een verkoopcode op een inkoopregel kwam in geen enkele rubriek van de
+      // aangifte. Neem de inkoopkant van dezelfde regeling, of anders de code
+      // bij het tarief, en laat een mens het nakijken.
+      const sales = vc;
+      const kind = PURCHASE_KIND_FOR_SALES_KIND[sales.kind];
+      vc = kind ? vatCodes.find((v) => v.kind === kind) : undefined;
+      warnings.push(`De btw-code ${sales.code} (${sales.label}) is een verkoopcode en hoort niet op een inkoopfactuur${vc ? `; de regel "${l.description || 'zonder omschrijving'}" staat nu op ${vc.code} (${vc.label})` : ''}. Controleer de btw-code.`);
+    }
     if (!vc) vc = vatByRate.get(round2(l.vat_rate));
     if (!vc) vc = fallbackVat ?? undefined;
     const vat_code = vc?.code ?? (l.vat_code ?? 'HOOG');
@@ -266,11 +344,16 @@ function finishAiProposal(
 
   if (lines.length === 0) warnings.push('Er zijn geen factuurregels herkend. Vul ze handmatig aan.');
 
-  const totals = computeCentsTotals(lines);
-
   // Totalencontrole tegen wat op de factuur staat — op totaal, subtotaal én BTW,
   // zodat een verkeerd BTW-tarief/regelbedrag ook wordt opgemerkt (niet alleen het
   // grand total). Geen totalen uitgelezen = geen controle mogelijk -> waarschuw.
+  //
+  // Verlegde btw (2a, 4a, 4b) telt niet mee: de leverancier rekent hem niet.
+  // Eerder telde hij wel mee, en dan kreeg elke goed gelezen verlegde factuur
+  // de waarschuwing dat de bedragen afweken. Wie daarop de code op 0% zette,
+  // gaf rubriek 2a of 4b niet meer aan.
+  const totalsOptions = purchaseTotalsOptions(ctx);
+  let totals = pickTotals(purchaseLineTotals(lines, totalsOptions));
   let extractedTotals: InvoiceProposal['extracted_totals'] = null;
   if (extraction.totals.total_incl_vat != null || extraction.totals.subtotal_excl_vat != null || extraction.totals.vat_amount != null) {
     extractedTotals = {
@@ -278,6 +361,13 @@ function finishAiProposal(
       vat_cents: extraction.totals.vat_amount != null ? Math.round(extraction.totals.vat_amount * 100) : null,
       total_cents: extraction.totals.total_incl_vat != null ? Math.round(extraction.totals.total_incl_vat * 100) : null,
     };
+    // Een paar cent verschil is afronding: neem dan het btw-bedrag van de bon
+    // over, zodat het concept op hetzelfde totaal uitkomt als de bon.
+    const adopted = adoptDocumentVat(lines, extractedTotals, totalsOptions);
+    if (adopted.adopted) {
+      lines.splice(0, lines.length, ...adopted.lines);
+      totals = pickTotals(purchaseLineTotals(lines, totalsOptions));
+    }
     const off = (a: number | null, b: number) => a != null && Math.abs(a - b) > 2;
     if (off(extractedTotals.total_cents, totals.total_cents) || off(extractedTotals.subtotal_cents, totals.subtotal_cents) || off(extractedTotals.vat_cents, totals.vat_cents)) {
       warnings.push(
@@ -289,6 +379,9 @@ function finishAiProposal(
   } else if (lines.length > 0) {
     warnings.push('De factuurtotalen konden niet worden uitgelezen om de bedragen te controleren. Controleer de regels en BTW extra goed.');
   }
+
+  const dateConcern = dateWarning(extraction.invoice_date, ctx);
+  if (dateConcern) warnings.push(dateConcern);
 
   // Leverancier matchen op harde identifiers, anders op e-mail of exacte naam.
   const match = matchSupplier(extraction.supplier, suppliers);
@@ -368,6 +461,8 @@ export function resolveVatCodeForCategory(
     }
     return candidates[0];
   };
+  // De 0%-code voor inkoop: NUL, nooit "Export buiten EU" (die stond op alfabet vooraan).
+  const zero = () => pickZeroPurchaseCode(vatCodes);
 
   switch (category) {
     case 'S': {
@@ -390,11 +485,11 @@ export function resolveVatCodeForCategory(
       return { vat_code: 'HOOG', vat_rate: documentRate };
     }
     case 'Z': {
-      const hit = byKind(['zero']);
+      const hit = zero();
       return { vat_code: hit?.code ?? 'NUL', vat_rate: 0 };
     }
     case 'E': {
-      const hit = byKind(['exempt']) ?? byKind(['zero']);
+      const hit = byKind(['exempt']) ?? zero();
       if (!hit) warnings.push('Geen vrijgesteld-btw-code gevonden; controleer de btw per regel.');
       return { vat_code: hit?.code ?? 'VRIJ', vat_rate: 0 };
     }
@@ -413,22 +508,19 @@ export function resolveVatCodeForCategory(
       const hit = byKind(['reverse_charge_purchase']);
       if (hit) return { vat_code: hit.code, vat_rate: hit.rate };
       warnings.push('De e-factuur bevat verlegde btw (categorie AE), maar deze organisatie heeft geen verlegd-inkoopcode (VERL_INK). De regel staat nu op 0% — corrigeer de btw-code vóór het boeken.');
-      const zero = byKind(['zero']);
-      return { vat_code: zero?.code ?? 'NUL', vat_rate: 0 };
+      return { vat_code: zero()?.code ?? 'NUL', vat_rate: 0 };
     }
     case 'K': {
       // Intracommunautaire levering van de verkoper = EU-verwerving bij ons.
       const hit = byKind(['eu_acquisition']);
       if (hit) return { vat_code: hit.code, vat_rate: hit.rate };
       warnings.push('De e-factuur is een intracommunautaire levering (categorie K), maar deze organisatie heeft geen EU-verwervingscode (EU_VERW). De regel staat nu op 0% — corrigeer de btw-code vóór het boeken.');
-      const zero = byKind(['zero']);
-      return { vat_code: zero?.code ?? 'NUL', vat_rate: 0 };
+      return { vat_code: zero()?.code ?? 'NUL', vat_rate: 0 };
     }
     default: {
       // G (export) / O (buiten heffing) en onbekende categorieën: 0% + controle.
       warnings.push(`Btw-categorie '${category}' uit de e-factuur is als 0% overgenomen — controleer de btw-code per regel.`);
-      const zero = byKind(['zero']);
-      return { vat_code: zero?.code ?? 'NUL', vat_rate: 0 };
+      return { vat_code: zero()?.code ?? 'NUL', vat_rate: 0 };
     }
   }
 }
@@ -516,6 +608,16 @@ export async function buildUblProposal(
     );
   }
 
+  // Wijkt de afgeronde btw een paar cent af van de e-factuur, dan geldt het
+  // bedrag van de e-factuur (zie adoptDocumentVat).
+  const totalsOptions = purchaseTotalsOptions(ctx);
+  const adopted = adoptDocumentVat(lines, extractedTotals, totalsOptions);
+  const finalLines = adopted.adopted ? adopted.lines : lines;
+  const finalTotals = adopted.adopted ? pickTotals(purchaseLineTotals(finalLines, totalsOptions)) : totals;
+
+  const dateConcern = dateWarning(doc.issueDate, ctx);
+  if (dateConcern) warnings.push(dateConcern);
+
   // Duplicaatsignalering: er is geen unique constraint op leveranciersfactuurnummers,
   // dus een tweede import van dezelfde e-factuur zou stilzwijgend dubbel in de
   // kosten lopen. Signaleren, niet blokkeren (nummerhergebruik komt voor).
@@ -559,8 +661,8 @@ export async function buildUblProposal(
       notes: doc.note,
       confidence: 'high',
       warnings,
-      lines,
-      totals,
+      lines: finalLines,
+      totals: finalTotals,
       extracted_totals: extractedTotals,
     },
     extraction_meta: {
@@ -582,19 +684,8 @@ export function round2(n: number): number {
   return Math.round((Number(n) || 0) * 100) / 100;
 }
 
-/** Totalen voor het VOORSTEL: btw per tarief afgerond (zoals de scan altijd toonde). */
-export function computeCentsTotals(lines: Array<{ amount_cents: number; vat_rate: number }>): ProposalTotals {
-  const byRate = new Map<number, number>();
-  let subtotal = 0;
-  for (const l of lines) {
-    const base = Number(l.amount_cents) || 0;
-    subtotal += base;
-    byRate.set(l.vat_rate || 0, (byRate.get(l.vat_rate || 0) || 0) + base);
-  }
-  let vat = 0;
-  byRate.forEach((base, rate) => { vat += Math.round((base * rate) / 100); });
-  return { subtotal_cents: subtotal, vat_cents: vat, total_cents: subtotal + vat };
-}
+const pickTotals = (t: ProposalTotals): ProposalTotals =>
+  ({ subtotal_cents: t.subtotal_cents, vat_cents: t.vat_cents, total_cents: t.total_cents });
 
 /**
  * Header-totalen van een CONCEPT-inkoopfactuur: btw per (kostenrekening,
@@ -602,26 +693,17 @@ export function computeCentsTotals(lines: Array<{ amount_cents: number; vat_rate
  * `purchaseTotals` in de frontend én aan book_purchase_invoice, zodat het
  * opgeslagen totaal cent-exact aansluit op de crediteurenregel (1600).
  * `fallbackAccountId` spiegelt de server-coalesce van een lege rekening -> 4500.
+ *
+ * Met `options` (soort per btw-code, KOR) telt verlegde btw niet bij het
+ * totaal en geldt een btw-bedrag op de regel (vat_cents); zie
+ * purchaseLineTotals in invoiceInboxRules.ts.
  */
 export function computePurchaseTotals(
-  lines: Array<{ amount_cents: number; vat_rate: number; vat_code: string; account_id: string | null }>,
+  lines: Array<{ amount_cents: number; vat_rate: number; vat_code: string; account_id: string | null; vat_cents?: number | null }>,
   fallbackAccountId: string | null,
+  options: Omit<PurchaseTotalsOptions, 'fallbackAccountId'> = {},
 ): ProposalTotals {
-  const groups = new Map<string, { base: number; rate: number }>();
-  let subtotal = 0;
-  for (const l of lines) {
-    const base = Number(l.amount_cents) || 0;
-    subtotal += base;
-    const rate = l.vat_rate || 0;
-    const account = l.account_id || fallbackAccountId || '';
-    const key = `${account}|${(l.vat_code ?? '').trim()}|${rate}`;
-    const g = groups.get(key);
-    if (g) g.base += base;
-    else groups.set(key, { base, rate });
-  }
-  let vat = 0;
-  groups.forEach((g) => { vat += Math.round((g.base * g.rate) / 100); });
-  return { subtotal_cents: subtotal, vat_cents: vat, total_cents: subtotal + vat };
+  return pickTotals(purchaseLineTotals(lines, { ...options, fallbackAccountId }));
 }
 
 export type SupplierMatchKind = 'vat' | 'iban' | 'email' | 'name';
