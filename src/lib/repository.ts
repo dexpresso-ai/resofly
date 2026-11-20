@@ -1975,7 +1975,7 @@ export async function deleteTimeEntry(organizationId: UUID, id: UUID): Promise<v
  * laadt ze bij elke start en na elke wijziging, en het briefpapier kon
  * honderden KB's zijn. `invoice_template_data_url` ontbreekt dan (undefined =
  * niet geladen); een PDF haalt het op met withInvoiceLetterhead. Staat de app
- * eerder op Cloudflare dan de migratie (20261119110000), dan de hele rij.
+ * eerder op Cloudflare dan de migratie (20261120100000), dan de hele rij.
  */
 export async function loadCompanySettings(organizationId: UUID): Promise<CompanySettings | null> {
   const { data, error } = await supabase.rpc('company_settings_core', { p_organization_id: organizationId });

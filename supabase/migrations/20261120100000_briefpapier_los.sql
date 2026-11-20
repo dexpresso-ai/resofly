@@ -17,6 +17,12 @@
 -- select van die ene kolom, pas als er een PDF gemaakt wordt.
 --
 -- Veilig om opnieuw te draaien (create or replace).
+--
+-- Versie: geschreven als 20261119110000, maar staging kreeg eerst
+-- 20261119180000 en 20261119190000. Een oudere versie weigert `supabase db
+-- push` ("Found local migration files to be inserted before the last
+-- migration on remote database"), en de deploy zou daar stoppen, vóór de edge
+-- functions en de rooktest.
 
 create or replace function public.company_settings_core(p_organization_id uuid)
 returns jsonb

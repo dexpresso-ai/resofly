@@ -16,7 +16,7 @@ documentopmaak in Instellingen.
 ## Wat er nu is
 
 - **De kern laadt de instellingen zonder het briefpapier**, via de RPC
-  `company_settings_core` (migratie `20261119110000_briefpapier_los.sql`):
+  `company_settings_core` (migratie `20261120100000_briefpapier_los.sql`):
   `to_jsonb(rij) - 'invoice_template_data_url'`. Een kolom die later bijkomt,
   komt vanzelf mee. Een vaste kolomlijst of een view zou zo'n kolom stil
   weglaten, en het instellingenformulier zou dan bij opslaan de standaardwaarde
@@ -65,3 +65,11 @@ teruggedraaide transactie:
   `npm run test:inrichten` (157): alles geslaagd.
 - `npm run test:mobile -- --theme=both`: draait in de CI ("Frontend checks")
   voordat dit naar staging gaat.
+
+## Samengevoegd met staging (20 november)
+
+- De migratie heet nu `20261120100000_briefpapier_los.sql` (was
+  `20261119110000`). Staging had op 20 november al `20261119180000` en
+  `20261119190000` toegepast. Een oudere versie weigert `supabase db push`, en
+  de deploy zou daar stoppen, vóór de edge functions en de rooktest. De inhoud
+  is niet veranderd. `EXPORT_SCHEMA_VERSION` gaat mee.

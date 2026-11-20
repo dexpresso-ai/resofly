@@ -74,3 +74,13 @@ gzip) is één bestand gebleven.
   287 px (max 280). De vijfde was `light/tablet/forecast-cashflow`: de app-schil
   stond er niet binnen 20 seconden, dus vóór de pagina zelf laadde. Apart
   slaagde die pagina drie keer op drie (24 metingen).
+
+## Samengevoegd met staging (20 november)
+
+Staging had intussen `purchaseTotals` de btw-soorten en de KOR meegegeven
+(financiën: herstelwegen). Git voegde dat zonder melding samen tot een oude
+`purchaseTotals` in `lib/purchaseInvoiceNumbers.ts` naast de nieuwe in
+`features/Bookkeeping.tsx`. Nu staat de versie van staging, letterlijk, in
+`lib/purchaseInvoiceNumbers.ts`; Bookkeeping, `main.tsx` en de handelingen
+van Gerrie halen hem daar. `Invoices` en `Quotes` blijven los geladen, met de
+nieuwe imports van het factuurherstel in `main.tsx`.

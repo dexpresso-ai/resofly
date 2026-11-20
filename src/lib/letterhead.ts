@@ -5,7 +5,7 @@
  * Waarom: het is een data-URL tot honderden KB's, en de kern laadt bij elke
  * start en na elke wijziging. Alleen een PDF heeft het nodig. Sinds november
  * 2026 laadt de kern de bedrijfsinstellingen via de RPC company_settings_core
- * (migratie 20261119110000), zonder dit ene veld.
+ * (migratie 20261120100000), zonder dit ene veld.
  *
  * Daardoor betekent het veld drie dingen:
  *  - undefined: niet geladen. Het kan er zijn; kijk naar invoice_template_kind;
