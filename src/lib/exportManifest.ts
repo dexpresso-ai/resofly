@@ -106,7 +106,9 @@ export const EXPORT_FORMAT_VERSION = 1;
 // 20261120100000 (briefpapier los) zet alleen de functie company_settings_core
 // erbij; geen tabellen of kolommen. Het briefpapier gaat gewoon mee in de export.
 // 20261122140000 (Nederlandse datum) vervangt vijf functies; geen tabellen of kolommen.
-export const EXPORT_SCHEMA_VERSION = '20261122140000';
+// 20261122142000 (wettelijke rente) zet één rij in statutory_interest_rates
+// (landelijke tarieven, geen gegevens van een organisatie); geen tabellen of kolommen.
+export const EXPORT_SCHEMA_VERSION = '20261122142000';
 
 export type TableKind =
   | 'export'

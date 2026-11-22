@@ -1375,6 +1375,10 @@ function InvoiceDunningPanel({ invoice, client, notice, canWrite, onPropose, onS
   // (art. 6:96 lid 6 BW). Geen KvK- en geen btw-nummer is daarvoor een teken.
   const maybeConsumer = !isConsumer && client != null && !String(client.kvk_number ?? '').trim() && !String(client.vat_number ?? '').trim();
   const open = notice.status === 'proposed' || notice.status === 'confirmed' || notice.status === 'failed';
+  // De rente verandert per 1 januari en 1 juli. Staat het nieuwe tarief nog
+  // niet in ResoFly, dan rekende het voorstel stil met het oude; nu zegt het
+  // voorstel dat erbij (invoice-workflow zet de tekst in rate_snapshot).
+  const rateWarning = typeof notice.rate_snapshot?.rateWarning === 'string' ? notice.rate_snapshot.rateWarning : null;
   return <div className="invoice-reminder-panel">
     <div className="invoice-reminder-summary">
       <span className="quote-version-pill"><strong>{dunningStatusLabel(notice.status)}</strong>
@@ -1391,6 +1395,7 @@ function InvoiceDunningPanel({ invoice, client, notice, canWrite, onPropose, onS
       <div className="quote-version-pill total"><strong>{isConsumer ? 'Nu te voldoen' : 'Totaal te voldoen'}</strong><span>{c(isConsumer ? dueNowCents : notice.total_claim_cents)}</span></div>
     </div>
     {open && maybeConsumer && <div className="bk-note"><AlertTriangle size={14} /> {client!.name} staat als <strong>zakelijke</strong> klant, maar zonder KvK- en btw-nummer. Is het een particulier? Annuleer dit voorstel, zet bij de klant het type op "Consument" en stel de aanmaning opnieuw op: voor een particulier gelden de veertiendagenbrief en de wettelijke rente.</div>}
+    {open && rateWarning && <div className="bk-note"><AlertTriangle size={14} /> {rateWarning}</div>}
     {open && canWrite && <div className="invoice-reminder-summary">
       {onSend && <Button variant="primary" onClick={() => onSend(notice)} title="Bevestigt de bedragen (rente herberekend op vandaag) en verstuurt de formele 14-dagenbrief per e-mail."><Send size={14}/> {notice.status === 'failed' ? 'Opnieuw versturen' : 'Bevestig & verstuur'}</Button>}
       {onCancel && notice.status !== 'confirmed' && <Button onClick={() => onCancel(notice)} title="Annuleer dit aanmaningsvoorstel."><XCircle size={14}/> Annuleer voorstel</Button>}

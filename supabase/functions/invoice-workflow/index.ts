@@ -7,7 +7,7 @@ import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
 import { getModuleLevel } from '../_shared/edgeAuth.ts';
 import { renderEmailTemplate, type EmailTemplateContent, type EmailTemplateContentKey } from '../_shared/emailTemplates/index.ts';
 import { loadEmailBrand, withEmailBrand } from '../_shared/emailBrand.ts';
-import { calculateDunningClaim, type DunningClaim, type InterestKind, type RatePeriod } from '../_shared/dunning.ts';
+import { calculateDunningClaim, staleRate, staleRateMessage, type DunningClaim, type InterestKind, type RatePeriod } from '../_shared/dunning.ts';
 import { encryptionKeyConfigured, encryptSecret, mollieKeySuffix, readMollieProfile, validateMollieApiKey, type MollieKeyMode, type MollieProfile } from '../_shared/mollieSecrets.ts';
 import { loadInvoiceMollieKey, type InvoiceMollieKey } from '../_shared/invoiceMollieKey.ts';
 import { buildUblXml, deriveSalesLineCategory, validateUblInput, type UblDocumentInput, type UblLine, type VatKindRef } from '../_shared/ubl.ts';
@@ -1031,7 +1031,7 @@ async function loadDunningNotice(organizationId: string, noticeId: string): Prom
   return data as DunningNoticeRow;
 }
 
-function buildRateSnapshot(claim: DunningClaim, interestKind: InterestKind): Record<string, unknown> {
+function buildRateSnapshot(claim: DunningClaim, interestKind: InterestKind, rateWarning: string | null = null): Record<string, unknown> {
   const currentRateBasisPoints = claim.interest.segments.length ? claim.interest.segments[claim.interest.segments.length - 1].rateBasisPoints : 0;
   return {
     interestKind,
@@ -1039,13 +1039,17 @@ function buildRateSnapshot(claim: DunningClaim, interestKind: InterestKind): Rec
     dailyInterestCents: claim.interest.dailyRateCentsAtEnd,
     currentRateBasisPoints,
     segments: claim.interest.segments,
+    // Loopt de tarieftabel achter op het halfjaar van de rekendatum, dan staat
+    // dat in het voorstel (het scherm toont het). Eerst rekende een aanmaning
+    // na 1 januari stil door met het tarief van het vorige halfjaar.
+    ...(rateWarning ? { rateWarning } : {}),
   };
 }
 
 // Bereken de vordering (hoofdsom + rente + WIK-kosten) op een peildatum. De hoofdsom
 // is het factuurtotaal incl. btw; de rentesoort volgt het klanttype (consument →
 // wettelijke rente, zakelijk → handelsrente).
-async function computeDunningClaim(organizationId: string, invoice: InvoiceRow, calcDate: string): Promise<{ clientKind: ClientKind; interestKind: InterestKind; claim: DunningClaim }> {
+async function computeDunningClaim(organizationId: string, invoice: InvoiceRow, calcDate: string): Promise<{ clientKind: ClientKind; interestKind: InterestKind; claim: DunningClaim; rateWarning: string | null }> {
   if (!invoice.client_id) throw new WorkflowHttpError('Deze factuur heeft geen klant gekoppeld.', 422);
   if (!invoice.due_date) throw new WorkflowHttpError('Deze factuur heeft geen vervaldatum; een aanmaning is niet mogelijk.', 422);
   const [clientKind, ratePeriods, settings] = await Promise.all([
@@ -1069,7 +1073,8 @@ async function computeDunningClaim(organizationId: string, invoice: InvoiceRow, 
     ratePeriods,
     collectionCostsVatRateBasisPoints: costsVatBp,
   });
-  return { clientKind, interestKind, claim };
+  const stale = claim.interestCents > 0 ? staleRate(interestKind, ratePeriods, calcDate) : null;
+  return { clientKind, interestKind, claim, rateWarning: stale ? staleRateMessage(stale) : null };
 }
 
 // Cron: stelt aanmaningen VOOR (status 'proposed'). Verstuurt nooit zelf.
@@ -1096,9 +1101,9 @@ async function runDunningBatch(): Promise<{ candidates: number; proposed: number
     try {
       const invoice = await loadInvoice(candidate.organization_id, candidate.invoice_id);
       if (['paid', 'cancelled', 'void', 'written_off', 'refunded'].includes(invoice.status)) continue;
-      const { clientKind, interestKind, claim } = await computeDunningClaim(candidate.organization_id, invoice, calcDate);
+      const { clientKind, interestKind, claim, rateWarning } = await computeDunningClaim(candidate.organization_id, invoice, calcDate);
       if (claim.principalCents <= 0) continue;
-      await beginDunningNoticeRpc({ organizationId: candidate.organization_id, invoiceId: candidate.invoice_id, actorUserId: null, clientKind, interestKind, claim });
+      await beginDunningNoticeRpc({ organizationId: candidate.organization_id, invoiceId: candidate.invoice_id, actorUserId: null, clientKind, interestKind, claim, rateWarning });
       proposed += 1;
     } catch (error) {
       failed += 1;
@@ -1119,9 +1124,9 @@ async function proposeDunningNotice(userId: string, organizationId: string, invo
   const { data: existing } = await supabaseAdmin.from('invoice_dunning_notices').select('id,status').eq('organization_id', organizationId).eq('invoice_id', invoiceId).neq('status', 'cancelled').maybeSingle();
   if (existing) throw new WorkflowHttpError('Er bestaat al een aanmaning voor deze factuur.', 409);
   const calcDate = todayIsoDate();
-  const { clientKind, interestKind, claim } = await computeDunningClaim(organizationId, invoice, calcDate);
+  const { clientKind, interestKind, claim, rateWarning } = await computeDunningClaim(organizationId, invoice, calcDate);
   if (claim.principalCents <= 0) throw new WorkflowHttpError('Deze factuur heeft geen openstaand bedrag om aan te manen.', 422);
-  return await beginDunningNoticeRpc({ organizationId, invoiceId, actorUserId: userId, clientKind, interestKind, claim });
+  return await beginDunningNoticeRpc({ organizationId, invoiceId, actorUserId: userId, clientKind, interestKind, claim, rateWarning });
 }
 
 // Aanmaning bevestigen én versturen: rente wordt op de VERZENDDATUM herberekend
@@ -1153,7 +1158,7 @@ async function sendDunningNotice(userId: string, organizationId: string, body: R
     loadEmailTemplateContent(organizationId, 'invoice.dunning.wik14'),
     loadDunningSettings(organizationId),
   ]);
-  const { clientKind, interestKind, claim } = computed;
+  const { clientKind, interestKind, claim, rateWarning } = computed;
   if (claim.principalCents <= 0) throw new WorkflowHttpError('Deze factuur heeft geen openstaand bedrag.', 422);
 
   const recipientEmail = String(body.recipientEmail || client.email || '').trim().toLowerCase();
@@ -1213,7 +1218,7 @@ async function sendDunningNotice(userId: string, organizationId: string, body: R
   await takeEmailQuota(supabaseAdmin, organizationId, 1, (message, status) => new WorkflowHttpError(message, status));
   let resendResponse: Response;
   const prepared = await beginDunningSend({
-    noticeId, organizationId, userId, claim, deadlineDate, interestKind, clientKind,
+    noticeId, organizationId, userId, claim, deadlineDate, interestKind, clientKind, rateWarning,
     tokenHash, expiresAt, recipientEmail, recipientName, subject, publicUrl,
     attachmentFileName: attachment.fileName, attachmentMimeType: attachment.mimeType, attachmentSizeBytes: attachment.sizeBytes, attachmentSha256: attachment.sha256,
   });
@@ -1279,7 +1284,7 @@ async function findDueDunningCandidates(limit: number): Promise<Array<{ organiza
   }));
 }
 
-async function beginDunningNoticeRpc(input: { organizationId: string; invoiceId: string; actorUserId: string | null; clientKind: ClientKind; interestKind: InterestKind; claim: DunningClaim }): Promise<{ noticeId: string }> {
+async function beginDunningNoticeRpc(input: { organizationId: string; invoiceId: string; actorUserId: string | null; clientKind: ClientKind; interestKind: InterestKind; claim: DunningClaim; rateWarning?: string | null }): Promise<{ noticeId: string }> {
   const { claim } = input;
   const { data, error } = await supabaseAdmin.rpc('begin_dunning_notice', {
     p_organization_id: input.organizationId,
@@ -1296,7 +1301,7 @@ async function beginDunningNoticeRpc(input: { organizationId: string; invoiceId:
     p_total_claim_cents: claim.totalClaimCents,
     p_calculation_date: claim.calculationDate,
     p_due_date: claim.dueDate,
-    p_rate_snapshot: buildRateSnapshot(claim, input.interestKind),
+    p_rate_snapshot: buildRateSnapshot(claim, input.interestKind, input.rateWarning ?? null),
   });
   if (error) throwRpcError('begin_dunning_notice', error);
   const payload = data as { noticeId?: string } | null;
@@ -1305,7 +1310,7 @@ async function beginDunningNoticeRpc(input: { organizationId: string; invoiceId:
 }
 
 async function beginDunningSend(input: {
-  noticeId: string; organizationId: string; userId: string | null; claim: DunningClaim; deadlineDate: string; interestKind: InterestKind; clientKind: ClientKind;
+  noticeId: string; organizationId: string; userId: string | null; claim: DunningClaim; deadlineDate: string; interestKind: InterestKind; clientKind: ClientKind; rateWarning?: string | null;
   tokenHash: string; expiresAt: string; recipientEmail: string; recipientName: string; subject: string; publicUrl: string;
   attachmentFileName: string; attachmentMimeType: string; attachmentSizeBytes: number; attachmentSha256: string;
 }): Promise<{ deliveryId: string }> {
@@ -1328,7 +1333,7 @@ async function beginDunningSend(input: {
     p_total_claim_cents: claim.totalClaimCents,
     p_calculation_date: claim.calculationDate,
     p_deadline_date: input.deadlineDate,
-    p_rate_snapshot: buildRateSnapshot(claim, input.interestKind),
+    p_rate_snapshot: buildRateSnapshot(claim, input.interestKind, input.rateWarning ?? null),
     p_token_hash: input.tokenHash,
     p_token_expires_at: input.expiresAt,
     p_recipient_email: input.recipientEmail,
