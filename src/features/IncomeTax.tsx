@@ -5,10 +5,11 @@ import { Button, Input, Select, Skeleton } from '../components/Ui';
 import { PageIcon } from '../components/PageIcon';
 import { dateNL, euro } from '../lib/format';
 import { formatISODate } from '../lib/dates';
+import { incomeTaxOpening } from '../lib/jaarwissel';
 import { parseDutchAmountCents } from '../lib/money';
 import { downloadCsv } from '../lib/csv';
 import {
-  IB_CORRECTION_LABELS, IB_DISCLAIMER, IB_FIRST_YEAR, IB_RULES, buildIncomeTaxOverview, formatRate,
+  IB_CORRECTION_LABELS, IB_DISCLAIMER, IB_FIRST_YEAR, buildIncomeTaxOverview, formatRate, incomeTaxRulesFor,
   type AowStatus, type IbCorrectionCode, type IbProjection, type IbYearRules, type IncomeTaxBasis, type IncomeTaxInputs,
   type IncomeTaxOverview, type IncomeTaxPerson, type IncomeTaxProfile,
 } from '../lib/inkomstenbelasting';
@@ -85,7 +86,13 @@ export function IncomeTaxPage({ data, organizationId, canWrite }: {
     return out;
   }, [currentYear]);
 
-  const [year, setYear] = useState(Math.max(currentYear, IB_FIRST_YEAR));
+  // Van januari tot 1 mei opent de pagina op vorig jaar: het jaar van je
+  // aangifte. Eerst opende ze altijd op het lopende jaar, in januari dus op
+  // "Winst 2027 € 0,00". De knop bovenaan brengt je naar het andere jaar.
+  const [opening] = useState(() => incomeTaxOpening({
+    today: formatISODate(new Date()), firstYear: IB_FIRST_YEAR, bookkeepingStart: data.companySettings?.bookkeeping_start_date ?? null,
+  }));
+  const [year, setYear] = useState(opening.year);
   const [inputs, setInputs] = useState<IncomeTaxInputs | null>(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -170,7 +177,10 @@ export function IncomeTaxPage({ data, organizationId, canWrite }: {
     void run(() => saveIncomeTaxProfile(organizationId, year, draft), `Gegevens van ${person.name} opgeslagen voor ${year}.`, () => dropDraft(person.key));
   };
 
-  const rules: IbYearRules | null = overview ? IB_RULES[overview.rulesYear] ?? null : null;
+  // De regels waarmee de raming rekende. Voor een jaar na de laatste tabel is
+  // dat niet de tabel van `rulesYear` zelf: de zelfstandigenaftrek is dan al
+  // die van het nieuwe jaar.
+  const rules: IbYearRules | null = overview ? incomeTaxRulesFor(overview.year)?.rules ?? null : null;
 
   const exportCsv = () => {
     if (!overview || !rules) return;
@@ -216,6 +226,17 @@ export function IncomeTaxPage({ data, organizationId, canWrite }: {
         <Info size={16} aria-hidden="true" />
         <p><strong>Alleen zakelijk inkomen.</strong> {IB_DISCLAIMER}</p>
       </div>
+
+      {opening.filingYear !== null && (
+        <p className="bk-note ib-filing-year">
+          {year === opening.filingYear
+            ? `Tot 1 mei doe je aangifte over ${opening.filingYear}. Daarom zie je hier eerst ${opening.filingYear}.`
+            : `Tot 1 mei doe je aangifte over ${opening.filingYear}. Je kijkt nu naar ${year}.`}{' '}
+          <button type="button" className="bk-link-button" onClick={() => changeYear(year === opening.filingYear ? currentYear : opening.filingYear!)}>
+            {year === opening.filingYear ? `Naar ${currentYear}` : `Naar ${opening.filingYear}`}
+          </button>
+        </p>
+      )}
 
       {error && <div className="error">{error}</div>}
       {message && <p className="bk-note">{message}</p>}
@@ -297,13 +318,13 @@ export function IncomeTaxPage({ data, organizationId, canWrite }: {
             onDelete={id => void run(() => deleteIncomeTaxCorrection(organizationId, id), 'Correctie verwijderd.')} />
 
           <p className="bk-muted ib-rules">
-            Tarieven {rules.year}{!overview.rulesExact ? ` (gebruikt voor ${year})` : ''}: {rules.brackets.map((b, i) => {
+            Tarieven {rules.year}{!overview.rulesExact ? ` (voorlopig gebruikt voor ${year}; die van ${year} staan nog niet vast)` : ''}: {rules.brackets.map((b, i) => {
               const from = i === 0 ? null : rules.brackets[i - 1].upToCents;
               return b.upToCents !== null
                 ? `${from === null ? 'tot' : `${euroCents(from)} tot`} ${euroCents(b.upToCents)} ${formatRate(b.rate)}`
                 : `daarboven ${formatRate(b.rate)}`;
             }).join(' · ')} (inclusief premie volksverzekeringen; met de AOW-leeftijd {formatRate(rules.aowFirstBracketRate)} in de eerste schijf).
-            Zelfstandigenaftrek {euroCents(rules.zelfstandigenaftrekCents)}, startersaftrek {euroCents(rules.startersaftrekCents)},
+            Zelfstandigenaftrek {euroCents(rules.zelfstandigenaftrekCents)}{!overview.rulesExact ? ` (het bedrag van ${year})` : ''}, startersaftrek {euroCents(rules.startersaftrekCents)},
             mkb-winstvrijstelling {formatRate(rules.mkbExemptionRate)}, aftrekbeperking tot {formatRate(rules.deductionCapRate)},
             Zvw-bijdrage {formatRate(rules.zvwRate)} tot {euroCents(rules.zvwMaxBaseCents)}.
             Bronnen: Belastingdienst en de Wet IB 2001. Een raming, geen aangifte: die doe je zelf of via je boekhouder.

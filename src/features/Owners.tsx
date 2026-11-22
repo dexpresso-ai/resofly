@@ -5,13 +5,14 @@ import { Button, Input, Select, Skeleton } from '../components/Ui';
 import { PageIcon } from '../components/PageIcon';
 import { euro, formatMinutes, minutesToHours } from '../lib/format';
 import { formatISODate } from '../lib/dates';
+import { missingFiscalYear } from '../lib/jaarwissel';
 import { HOUR_CRITERION_MINUTES, projectHourCriterion } from '../lib/hourCriterion';
 import { memberName } from '../lib/members';
 import {
-  IB_CORRECTION_LABELS, IB_RULES, buildIncomeTaxOverview, formatRate, incomeTaxRulesFor, type IncomeTaxInputs,
+  IB_CORRECTION_LABELS, buildIncomeTaxOverview, formatRate, incomeTaxRulesFor, type IncomeTaxInputs,
 } from '../lib/inkomstenbelasting';
 import {
-  listFiscalYears, listPartnershipPartners, loadIncomeTaxInputs, loadOwnersEquityOverview, loadPartnershipPartnerHours,
+  listFiscalYears, listPartnershipPartners, loadIncomeTaxInputs, loadOwnersEquityOverview, loadPartnershipPartnerHours, openFiscalYear,
   savePartnershipPartner, setPartnershipPartnerMember, setUpBookkeeping,
 } from '../lib/repository';
 
@@ -107,6 +108,21 @@ export function OwnersPage({ data, organizationId, canWrite, onChanged, canReadH
   const selectedYear = years.find(y => y.id === fiscalYearId) ?? null;
   const hoursYear = selectedYear ? Number(selectedYear.period_start.slice(0, 4)) : Number(today.slice(0, 4));
   const showHours = isPartnershipForm && canReadHours;
+  // Na de jaarwissel: het nieuwe boekjaar opent vanzelf bij de eerste boeking.
+  // Tot dan stond hier alleen het oude jaar, zonder uitleg.
+  const yearToOpen = missingFiscalYear({ today, calendarYearOnly: isIb, years });
+  const openMissingYear = async () => {
+    if (yearToOpen === null) return;
+    setBusy(true); setError(null); setMessage(null);
+    try {
+      const opened = await openFiscalYear(organizationId, { periodStart: `${yearToOpen}-01-01`, periodEnd: `${yearToOpen}-12-31` });
+      await loadBase();
+      setFiscalYearId(opened.id);
+      setMessage(`Boekjaar ${yearToOpen} is geopend.`);
+      onChanged();
+    } catch (e) { setError(e instanceof Error ? e.message : 'Boekjaar openen mislukt'); }
+    finally { setBusy(false); }
+  };
   const anyLinked = partners.some(p => p.user_id);
 
   const loadBase = useCallback(async () => {
@@ -227,6 +243,12 @@ export function OwnersPage({ data, organizationId, canWrite, onChanged, canReadH
 
       {error && <div className="error">{error}</div>}
       {message && <p className="bk-note">{message}</p>}
+      {yearToOpen !== null && (
+        <p className="bk-note">
+          Er is nog geen boekjaar {yearToOpen}. Het komt er vanzelf bij je eerste boeking in {yearToOpen}.
+          {canWrite && <>{' '}<button type="button" className="bk-link-button" disabled={busy} onClick={() => void openMissingYear()}>Boekjaar {yearToOpen} nu openen</button></>}
+        </p>
+      )}
 
       {/* ── Vennoten ── */}
       {isPartnershipForm && (
@@ -496,7 +518,9 @@ function IncomeTaxSection({ data, organizationId, overview, onOpenIncomeTax }: {
   }
   if (!loaded) return <div className="bk-report-loading"><Skeleton lines={4} /></div>;
   const person = ib?.persons[0] ?? null;
-  const rules = ib ? IB_RULES[ib.rulesYear] ?? null : null;
+  // De regels waarmee de raming rekende (voor een jaar na de laatste tabel
+  // met de zelfstandigenaftrek van dat jaar), niet de kale tabel van rulesYear.
+  const rules = ib ? incomeTaxRulesFor(ib.year)?.rules ?? null : null;
   if (!ib || !person || !rules) {
     return (
       <div className="bk-report">

@@ -114,7 +114,12 @@ export const EXPORT_FORMAT_VERSION = 1;
 // 20261122110000 (uren factureren) zet time_entry_invoices erbij: welke
 // urenregistratie op welke verkoopfactuur staat. Dat hoort bij de administratie
 // van de klant en gaat mee.
-export const EXPORT_SCHEMA_VERSION = '20261122110000';
+// 20261122140000 (Nederlandse datum) vervangt vijf functies; geen tabellen of kolommen.
+// 20261122141000 (boekjaar opent vanzelf) zet een functie en een trigger op
+// journal_entries; geen tabellen of kolommen.
+// 20261122142000 (wettelijke rente) zet één rij in statutory_interest_rates
+// (landelijke tarieven, geen gegevens van een organisatie); geen tabellen of kolommen.
+export const EXPORT_SCHEMA_VERSION = '20261122142000';
 
 export type TableKind =
   | 'export'

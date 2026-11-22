@@ -7,6 +7,7 @@ import { PageIcon } from '../components/PageIcon';
 import { dateNL, euro } from '../lib/format';
 import { formatISODate } from '../lib/dates';
 import { vatFilingDeadline } from '../lib/vatPeriods';
+import { vatOpening } from '../lib/jaarwissel';
 import { downloadCsv } from '../lib/csv';
 import {
   closeVatPeriod, computeIcpDeclaration, computeVatReturn, computeVatSupplementDelta, createVatSupplement,
@@ -132,10 +133,15 @@ export function VatReturnsPage({ data, organizationId, canWrite, onChanged }: { 
   const settingPeriod: ViewPeriod = data.companySettings?.vat_return_period === 'monthly' ? 'monthly' : 'quarterly';
   const kor = Boolean(data.companySettings?.kor_enabled);
 
-  const [view, setView] = useState<ViewPeriod>(settingPeriod);
-  const [year, setYear] = useState(now.getFullYear());
-  const [month, setMonth] = useState(now.getMonth() + 1);
-  const [quarter, setQuarter] = useState(Math.floor(now.getMonth() / 3) + 1);
+  // De pagina opent op het oudste tijdvak dat nog moet, hetzelfde als de
+  // herinnering op het dashboard. Eerst opende ze altijd op het tijdvak van
+  // vandaag: wie op 2 januari op "Btw-aangifte Q4 2026 nog doen" klikte, zag
+  // "Saldo Q1 2027 € 0,00" en moest het jaar zelf terugzetten.
+  const [opening] = useState(() => vatOpening({ today: formatISODate(now), frequency: settingPeriod, nextDue: data.vatReturnNextDue }));
+  const [view, setView] = useState<ViewPeriod>(opening.view);
+  const [year, setYear] = useState(opening.year);
+  const [month, setMonth] = useState(opening.month);
+  const [quarter, setQuarter] = useState(opening.quarter);
   const [live, setLive] = useState<VatReturnRubrieken | null>(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);

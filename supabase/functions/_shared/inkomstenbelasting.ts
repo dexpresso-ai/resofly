@@ -203,14 +203,44 @@ export const IB_FIRST_YEAR = 2025;
 export const IB_LAST_YEAR = 2026;
 
 /**
+ * Wat voor de jaren ná de laatste tabel al in de wet staat.
+ *
+ * De zelfstandigenaftrek daalt volgens een rij in art. 3.76 lid 2 Wet IB 2001
+ * die al sinds het Belastingplan 2023 vastligt: 2025 € 2.470, 2026 € 1.200,
+ * 2027 en later € 900. Dat bedrag hangt niet af van het Belastingplan van het
+ * jaar zelf.
+ *
+ * Al het andere voor 2027 stond op 22 november 2026 niet vast en staat er
+ * daarom niet in: de schijven en tarieven van box 1, de heffingskortingen, de
+ * Zvw-bijdrage, de KIA-grenzen en de drempel voor gemengde kosten worden pas
+ * eind december gepubliceerd, en het Belastingplan 2027 lag nog bij de Eerste
+ * Kamer. De bronnen die wél cijfers noemden (accountantskantoren die het
+ * wetsvoorstel samenvatten) spraken elkaar tegen over het tarief van de
+ * eerste schijf. Voor de startersaftrek ligt er een voorstel om hem in 2027
+ * sterk te verlagen; tot dat wet is, rekenen we met het bedrag dat nu in de
+ * wet staat, en zegt de raming erbij dat het lager kan worden.
+ *
+ * Tot 22 november 2026 rekende een later jaar met alles van 2026, ook met de
+ * zelfstandigenaftrek van € 1.200. Wie daar in januari zijn voorlopige aanslag
+ * 2027 op instelde, zat bij € 40.000 winst ruim € 100 te laag.
+ *
+ * Zodra de Belastingdienst de bedragen van 2027 publiceert: een tabel 2027 in
+ * IB_RULES, IB_LAST_YEAR naar 2027, en de test "een jaar na de laatste tabel"
+ * schuift een jaar op.
+ */
+const ZELFSTANDIGENAFTREK_FROM_2027_CENTS = 900 * EURO;
+
+/**
  * De regels voor een jaar. Voor een jaar na het laatst bekende rekenen we met
- * het laatst bekende (exact = false, het scherm zegt dat erbij); vóór 2025
- * niets, want daar staan de tabellen niet in.
+ * de tabel van het laatst bekende jaar, met daarin wat voor het nieuwe jaar al
+ * in de wet staat (exact = false, het scherm zegt dat erbij). `rules.year`
+ * blijft dan het jaar van de tabel. Vóór 2025 niets, want daar staan de
+ * tabellen niet in.
  */
 export function incomeTaxRulesFor(year: number): { rules: IbYearRules; exact: boolean } | null {
   if (!Number.isInteger(year) || year < IB_FIRST_YEAR) return null;
   if (IB_RULES[year]) return { rules: IB_RULES[year], exact: true };
-  return { rules: IB_RULES[IB_LAST_YEAR], exact: false };
+  return { rules: { ...IB_RULES[IB_LAST_YEAR], zelfstandigenaftrekCents: ZELFSTANDIGENAFTREK_FROM_2027_CENTS }, exact: false };
 }
 
 // ── Rekenen zonder afrondingsfouten ─────────────────────────────────────────
@@ -854,7 +884,9 @@ export function buildIncomeTaxOverview(inputs: IncomeTaxInputs, options: { basis
   const { rules, exact } = found;
   const warnings: string[] = [];
   if (!exact) {
-    warnings.push(`De tarieven en bedragen voor ${inputs.year} staan nog niet in ResoFly. Deze raming rekent met die van ${rules.year}; de uitkomst is daardoor minder precies.`);
+    // Zeg wat al klopt en wat niet: "minder precies" alleen vertelde de zzp'er
+    // niet of hij de raming voor zijn voorlopige aanslag kon gebruiken.
+    warnings.push(`Voorlopige raming: de tarieven, heffingskortingen en overige bedragen voor ${inputs.year} staan nog niet vast. Deze raming rekent met de zelfstandigenaftrek van ${inputs.year} (${euroText(rules.zelfstandigenaftrekCents)}) en verder met de bedragen van ${rules.year}. De uitkomst kan daardoor iets hoger of lager worden.`);
   }
 
   const projection = projectYearResult({
@@ -934,6 +966,9 @@ export function buildIncomeTaxOverview(inputs: IncomeTaxInputs, options: { basis
     return typeof minutes === 'number' && Number.isFinite(minutes) ? minutes : null;
   };
 
+  // Voor een jaar zonder eigen tabel: hoeveel hoger de raming zonder
+  // startersaftrek uitkomt. Zie de melding over de startersaftrek hieronder.
+  let withoutStartersaftrekCents = 0;
   const persons: IncomeTaxPerson[] = people.map(who => {
     const saved = profileFor(who.partnerId);
     const registeredMinutes = minutesOf(who);
@@ -959,7 +994,7 @@ export function buildIncomeTaxOverview(inputs: IncomeTaxInputs, options: { basis
         .map(c => ({ id: c.id, code: c.code, label: c.label, amountCents: c.amountCents, shared: false, automatic: false })),
     ];
     const isEntrepreneur = who.kind !== 'commanditair';
-    const estimate = estimatePerson(rules, {
+    const personInput: IbPersonInput = {
       profitShareCents: profitShares.get(who.key) ?? 0,
       correctionsCents: corrections.reduce((sum, c) => sum + c.amountCents, 0),
       kiaCents: kiaShares.get(who.key) ?? 0,
@@ -972,7 +1007,11 @@ export function buildIncomeTaxOverview(inputs: IncomeTaxInputs, options: { basis
       lossCarryForwardCents: profile.lossCarryForwardCents,
       provisionalIncomeTaxCents: profile.provisionalIncomeTaxCents,
       provisionalZvwCents: profile.provisionalZvwCents,
-    });
+    };
+    const estimate = estimatePerson(rules, personInput);
+    if (!exact && estimate.startersaftrekCents > 0) {
+      withoutStartersaftrekCents += estimatePerson({ ...rules, startersaftrekCents: 0 }, personInput).totalCents - estimate.totalCents;
+    }
     return {
       key: who.key,
       partnerId: who.partnerId,
@@ -1009,6 +1048,17 @@ export function buildIncomeTaxOverview(inputs: IncomeTaxInputs, options: { basis
   if (startDate && startDate > yearStart && startDate <= yearEnd) {
     const [, startMonth, startDay] = startDate.split('-').map(Number);
     warnings.push(`Je boekhouding in ResoFly begint op ${startDay} ${MONTHS[startMonth - 1]} ${inputs.year}: deze raming telt de winst vanaf die dag. Had je eerder in ${inputs.year} al winst uit deze onderneming, tel die er dan bij onder Fiscale correcties (soort "Overige correctie"). Anders valt de raming te laag uit.`);
+  }
+
+  // De startersaftrek is het enige bedrag waarvan we weten dat het voor 2027
+  // waarschijnlijk flink anders wordt (zie ZELFSTANDIGENAFTREK_FROM_2027_CENTS).
+  // Het bedrag uit het voorstel noemen we niet: het is nog geen wet. Wel wat
+  // er op het spel staat, uitgerekend voor deze winst. Eerst stond hier "een
+  // paar honderd euro", maar bij een winst vanaf zo'n € 40.000 scheelt het
+  // bijna € 900, en daar stelt een starter zijn voorlopige aanslag op in.
+  // Weg zodra er een tabel 2027 is.
+  if (withoutStartersaftrekCents > 0) {
+    warnings.push(`In deze raming zit de startersaftrek van ${euroText(rules.startersaftrekCents)}, het bedrag dat nu in de wet staat. Er ligt een wetsvoorstel om de startersaftrek vanaf 2027 bijna helemaal te schrappen. Zonder startersaftrek komt deze raming ${euroText(withoutStartersaftrekCents)} hoger uit. Houd daar rekening mee als je je voorlopige aanslag instelt.`);
   }
 
   const totals = persons.reduce((t, p) => ({
