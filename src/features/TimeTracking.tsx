@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { useElapsedLabel, useRunningTimer } from '../lib/useTimer';
-import { CalendarDays, ChevronLeft, ChevronRight, Clock, Pencil, Play, Plus, Square, Target, Trash2 } from 'lucide-react';
+import { CalendarDays, ChevronLeft, ChevronRight, Clock, Pencil, Play, Plus, Receipt, Square, Target, Trash2 } from 'lucide-react';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { Modal } from '../components/Modal';
 import { BarChart, LineChart } from '../components/Charts';
@@ -11,7 +11,7 @@ import { createTimeEntry, deleteTimeEntry, updateTimeEntry } from '../lib/reposi
 // Urencriterium Belastingdienst: 1225 uur per kalenderjaar (incl. indirecte uren).
 import { HOUR_CRITERION_MINUTES, projectHourCriterion } from '../lib/hourCriterion';
 import type { ReportRow } from '../lib/reporting';
-import { defaultBillableForProject, resolveRateCents } from '../lib/timeRates';
+import { defaultBillableForProject, hoursLabel, invoicedLabel, openHoursSummary, resolveRateCents } from '../lib/timeRates';
 import type { AppData, IndirectHoursCategory, OrganizationMember, TimeEntry, TimeEntrySource, TimeEntryType, UUID } from '../types';
 
 /* ── Helpers ──────────────────────────────────────────────────────────── */
@@ -363,7 +363,7 @@ function HourCriterionCard({ data, currentUserId }: { data: AppData; currentUser
 
 /* ── Hoofdpagina ──────────────────────────────────────────────────────── */
 
-export function TimeTracking({ data, organizationId, currentUserId, teamMembers, canWrite, canAdmin, onChanged }: {
+export function TimeTracking({ data, organizationId, currentUserId, teamMembers, canWrite, canAdmin, onChanged, onInvoiceHours }: {
   data: AppData;
   organizationId: UUID;
   currentUserId: UUID | null;
@@ -371,6 +371,8 @@ export function TimeTracking({ data, organizationId, currentUserId, teamMembers,
   canWrite: boolean;
   canAdmin: boolean;
   onChanged: () => void | Promise<void>;
+  /** Opent "Uren factureren". Ontbreekt bij wie geen facturen mag maken. */
+  onInvoiceHours?: (defaults: { clientId?: UUID | null; projectId?: UUID | null }) => void;
 }) {
   const [period, setPeriod] = useState<Period>('week');
   const [customFrom, setCustomFrom] = useState(() => formatISODate(startOfWeek(new Date())));
@@ -424,6 +426,13 @@ export function TimeTracking({ data, organizationId, currentUserId, teamMembers,
   const valueCents = entries.reduce((s, e) => s + timeEntryValueCents(e), 0);
   const dayCount = Math.max(1, Math.round((range.to.getTime() - range.from.getTime()) / 86400000) + 1);
   const avgPerDay = totalMinutes / dayCount;
+
+  // Nog te factureren: over ALLE uren, niet alleen de gekozen periode. Uren van
+  // vorige maand die nog openstaan vielen anders buiten beeld zodra je naar
+  // "deze week" keek. Wel binnen het klant- en projectfilter.
+  const openHours = useMemo(() => openHoursSummary(data.timeEntries.filter(e =>
+    (!filterClient || e.client_id === filterClient) && (!filterProject || e.project_id === filterProject) && e.client_id)),
+  [data.timeEntries, filterClient, filterProject]);
 
   // Grafiekrijen (waarden in uren).
   const perDayRows: ReportRow[] = useMemo(() => {
@@ -502,6 +511,7 @@ export function TimeTracking({ data, organizationId, currentUserId, teamMembers,
               <button type="button" className={scope === 'team' ? 'active' : ''} onClick={() => setScope('team')}>Heel team</button>
             </div>
           )}
+          {onInvoiceHours && <Button onClick={() => onInvoiceHours({ clientId: filterClient || null, projectId: filterProject || null })}><Receipt size={14} /> Uren factureren</Button>}
           {canWrite && <Button variant="primary" onClick={() => setModal({ entry: null })}><Plus size={14} /> Uren</Button>}
         </div>
       </section>
@@ -521,6 +531,10 @@ export function TimeTracking({ data, organizationId, currentUserId, teamMembers,
         <div className="tt-kpi"><span className="tt-kpi-val">{formatMinutes(totalMinutes)}</span><span className="tt-kpi-lbl">Totaal geregistreerd</span></div>
         <div className="tt-kpi"><span className="tt-kpi-val">{formatMinutes(billableMinutes)}</span><span className="tt-kpi-lbl">Declarabel</span></div>
         <div className="tt-kpi"><span className="tt-kpi-val">{valueCents > 0 ? euro(valueCents / 100) : '—'}</span><span className="tt-kpi-lbl">Declarabele waarde</span></div>
+        <div className="tt-kpi" title="Declarabele uren met een tarief die nog op geen factuur staan, over alle periodes">
+          <span className="tt-kpi-val">{openHours.valueCents > 0 ? euro(openHours.valueCents / 100) : '—'}</span>
+          <span className="tt-kpi-lbl">Nog te factureren{openHours.minutes > 0 ? ` · ${hoursLabel(openHours.minutes)}` : ''}</span>
+        </div>
         <div className="tt-kpi"><span className="tt-kpi-val">{entries.length}</span><span className="tt-kpi-lbl">Registraties</span></div>
         <div className="tt-kpi"><span className="tt-kpi-val">{formatMinutes(Math.round(avgPerDay))}</span><span className="tt-kpi-lbl">Gemiddeld per dag</span></div>
       </section>
@@ -577,7 +591,10 @@ export function TimeTracking({ data, organizationId, currentUserId, teamMembers,
                   const project = e.project_id ? data.projects.find(p => p.id === e.project_id) : null;
                   const client = e.client_id ? data.clients.find(c => c.id === e.client_id) : null;
                   const value = timeEntryValueCents(e);
-                  const editable = canWrite && e.source !== 'calendar';
+                  // Uren op een factuur liggen in de database vast; de knoppen
+                  // zouden alleen een foutmelding geven.
+                  const invoiced = invoicedLabel(e, data.invoices);
+                  const editable = canWrite && e.source !== 'calendar' && !invoiced;
                   return (
                     <div className="tt-entry-row" key={e.id}>
                       <span className="tt-entry-dur">{formatMinutes(e.minutes)}</span>
@@ -590,9 +607,11 @@ export function TimeTracking({ data, organizationId, currentUserId, teamMembers,
                         </span>
                       </div>
                       <span className={`tt-source-badge tt-source-${e.source}`}>{e.source === 'calendar' && <CalendarDays size={11} />}{SOURCE_LABEL[e.source]}</span>
-                      <button type="button" className={`tt-billable-pill${e.billable ? ' is-billable' : ''}`} disabled={!canWrite} onClick={() => toggleBillable(e)} title="Declarabel aan/uit">
-                        {e.billable ? 'Declarabel' : 'Niet decl.'}
-                      </button>
+                      {invoiced
+                        ? <span className="tt-billable-pill tt-invoiced-pill" title="Deze uren staan op een factuur en liggen vast">{invoiced}</span>
+                        : <button type="button" className={`tt-billable-pill${e.billable ? ' is-billable' : ''}`} disabled={!canWrite} onClick={() => toggleBillable(e)} title="Declarabel aan/uit">
+                          {e.billable ? 'Declarabel' : 'Niet decl.'}
+                        </button>}
                       <span className="tt-entry-value">{value > 0 ? euro(value / 100) : '—'}</span>
                       <div className="tt-entry-actions">
                         {editable && <button type="button" className="icon-btn" onClick={() => setModal({ entry: e })} title="Bewerken"><Pencil size={14} /></button>}

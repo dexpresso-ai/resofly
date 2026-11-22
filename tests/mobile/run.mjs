@@ -214,6 +214,13 @@ const PAGES = {
   'tickets-search': { page: 'tickets', storage: { 'resofly.tickets.view': 'list' }, prepare: ['.ticket-search-toggle', { fill: '.ticket-search input', value: 'website' }] },
   'tickets-filters': { page: 'tickets', storage: { 'resofly.tickets.view': 'list' }, prepare: '.ticket-filter-toggle' },
   'client-tickets': { page: 'client', clientId: seed.clients[0].id, prepare: '.client-tab-btn:has-text("Tickets")' },
+  // Uren factureren (2026-11-22): het venster vanaf de klant, met regels, een
+  // lange omschrijving en de waarschuwing over uren zonder tarief. Op de
+  // telefoon mag geen bedrag of aantal uren eraf vallen.
+  'time-invoice': {
+    page: 'client', clientId: seed.projects[0].client_id, prepare: 'button:has-text("Uren factureren")', contained: '.time-invoice-modal',
+    mustShow: [{ selector: '.time-invoice-total strong', text: 'excl. btw', label: 'het totaal' }],
+  },
   // Inkomstenbelasting (2026-11-18): de raming als eenmanszaak en als vof, met
   // de disclaimer bovenaan. Per persoon het formulier naast de berekening; op de
   // telefoon onder elkaar, zonder dat een bedrag of een lange naam eraf valt.

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, Bell, BookOpen, CreditCard, Download, Eye, FileText, Mail, Pause, Play, RefreshCw, RotateCcw, ShieldCheck, Send, XCircle } from 'lucide-react';
+import { AlertTriangle, Bell, BookOpen, Copy, CreditCard, Download, Eye, FileText, Mail, Pause, Play, RefreshCw, RotateCcw, ShieldCheck, Send, XCircle } from 'lucide-react';
 import type { AppData, Client, CreditNote, DunningNotice, FinanceLine, FinanceStatus, Invoice, InvoiceChargeback, InvoiceEmailDelivery, InvoicePaymentRecord, InvoiceRefund, InvoiceVersion, Quote, QuoteEmailDelivery, QuoteVersion } from '../types';
 import { Modal } from '../components/Modal';
 import { FinanceDocPreview, type SentPdfSource } from '../components/FinanceDocPreview';
@@ -73,8 +73,8 @@ export function Quotes({
   />;
 }
 
-export function Invoices({ data, canWrite, canAdmin = false, onNew, onEdit, onSend, onSendReminder, onToggleRemindersPaused, onDownloadPdf, onDownloadUbl, onRefund, onDownloadCreditNote, onDownloadCreditNoteUbl, onEmailCreditNote, onPostCreditNote, onCreditNoteForRefund, onPostToLedger, onCreditInvoice, onBookAllUnbooked, onProposeDunning, onSendDunning, onCancelDunning, onSyncMollie, onDownloadMolliePdf }: { data: AppData; canWrite: boolean; canAdmin?: boolean; onNew: () => void; onEdit: (i: Invoice) => void; onSend: (i: Invoice) => void; onSendReminder?: (i: Invoice) => void; onToggleRemindersPaused?: (i: Invoice, paused: boolean) => void; onDownloadPdf?: (i: Invoice) => void; onDownloadUbl?: (i: Invoice) => void; onRefund?: (invoice: Invoice, input: RefundInput) => Promise<void>; onDownloadCreditNote?: (creditNote: CreditNote) => void; onDownloadCreditNoteUbl?: (creditNote: CreditNote) => void; onEmailCreditNote?: (creditNote: CreditNote) => void; onPostCreditNote?: (creditNote: CreditNote) => void; onCreditNoteForRefund?: (refund: InvoiceRefund) => Promise<void>; onPostToLedger?: (i: Invoice) => void; onCreditInvoice?: (i: Invoice, input: CreditInput) => Promise<void>; onBookAllUnbooked?: () => void; onProposeDunning?: (i: Invoice) => void; onSendDunning?: (n: DunningNotice) => void; onCancelDunning?: (n: DunningNotice) => void; onSyncMollie?: (i: Invoice, options?: { silent?: boolean }) => Promise<void>; onDownloadMolliePdf?: (i: Invoice) => void }) {
-  return <FinanceList kind="invoice" title="Facturen" docs={data.invoices} data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={onNew} onEdit={onEdit} onSendInvoice={onSend} onSendInvoiceReminder={onSendReminder} onToggleInvoiceRemindersPaused={onToggleRemindersPaused} onDownloadInvoicePdf={onDownloadPdf} onDownloadInvoiceUbl={onDownloadUbl} onRefundInvoice={onRefund} onDownloadCreditNote={onDownloadCreditNote} onDownloadCreditNoteUbl={onDownloadCreditNoteUbl} onEmailCreditNote={onEmailCreditNote} onPostCreditNote={onPostCreditNote} onCreditNoteForRefund={onCreditNoteForRefund} onPostInvoiceToLedger={onPostToLedger} onCreditInvoice={onCreditInvoice} onBookAllUnbooked={onBookAllUnbooked} onProposeDunning={onProposeDunning} onSendDunning={onSendDunning} onCancelDunning={onCancelDunning} onSyncMollie={onSyncMollie} onDownloadMolliePdf={onDownloadMolliePdf}/>;
+export function Invoices({ data, canWrite, canAdmin = false, onNew, onEdit, onSend, onSendReminder, onToggleRemindersPaused, onDownloadPdf, onDownloadUbl, onRefund, onDownloadCreditNote, onDownloadCreditNoteUbl, onEmailCreditNote, onPostCreditNote, onCreditNoteForRefund, onPostToLedger, onCreditInvoice, onCopyInvoice, onBookAllUnbooked, onProposeDunning, onSendDunning, onCancelDunning, onSyncMollie, onDownloadMolliePdf }: { data: AppData; canWrite: boolean; canAdmin?: boolean; onNew: () => void; onEdit: (i: Invoice) => void; onSend: (i: Invoice) => void; onSendReminder?: (i: Invoice) => void; onToggleRemindersPaused?: (i: Invoice, paused: boolean) => void; onDownloadPdf?: (i: Invoice) => void; onDownloadUbl?: (i: Invoice) => void; onRefund?: (invoice: Invoice, input: RefundInput) => Promise<void>; onDownloadCreditNote?: (creditNote: CreditNote) => void; onDownloadCreditNoteUbl?: (creditNote: CreditNote) => void; onEmailCreditNote?: (creditNote: CreditNote) => void; onPostCreditNote?: (creditNote: CreditNote) => void; onCreditNoteForRefund?: (refund: InvoiceRefund) => Promise<void>; onPostToLedger?: (i: Invoice) => void; onCreditInvoice?: (i: Invoice, input: CreditInput) => Promise<void>; /** Nieuw concept met dezelfde klant en regels. */ onCopyInvoice?: (i: Invoice) => void; onBookAllUnbooked?: () => void; onProposeDunning?: (i: Invoice) => void; onSendDunning?: (n: DunningNotice) => void; onCancelDunning?: (n: DunningNotice) => void; onSyncMollie?: (i: Invoice, options?: { silent?: boolean }) => Promise<void>; onDownloadMolliePdf?: (i: Invoice) => void }) {
+  return <FinanceList kind="invoice" title="Facturen" docs={data.invoices} data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={onNew} onEdit={onEdit} onSendInvoice={onSend} onSendInvoiceReminder={onSendReminder} onToggleInvoiceRemindersPaused={onToggleRemindersPaused} onDownloadInvoicePdf={onDownloadPdf} onDownloadInvoiceUbl={onDownloadUbl} onRefundInvoice={onRefund} onDownloadCreditNote={onDownloadCreditNote} onDownloadCreditNoteUbl={onDownloadCreditNoteUbl} onEmailCreditNote={onEmailCreditNote} onPostCreditNote={onPostCreditNote} onCreditNoteForRefund={onCreditNoteForRefund} onPostInvoiceToLedger={onPostToLedger} onCreditInvoice={onCreditInvoice} onCopyInvoice={onCopyInvoice} onBookAllUnbooked={onBookAllUnbooked} onProposeDunning={onProposeDunning} onSendDunning={onSendDunning} onCancelDunning={onCancelDunning} onSyncMollie={onSyncMollie} onDownloadMolliePdf={onDownloadMolliePdf}/>;
 }
 
 function FinanceList<T extends Quote | Invoice>({
@@ -106,6 +106,7 @@ function FinanceList<T extends Quote | Invoice>({
   onCreditNoteForRefund,
   onPostInvoiceToLedger,
   onCreditInvoice,
+  onCopyInvoice,
   onBookAllUnbooked,
   onProposeDunning,
   onSendDunning,
@@ -140,6 +141,7 @@ function FinanceList<T extends Quote | Invoice>({
   onPostCreditNote?: (creditNote: CreditNote) => void; onCreditNoteForRefund?: (refund: InvoiceRefund) => Promise<void>;
   onPostInvoiceToLedger?: (i: Invoice) => void;
   onCreditInvoice?: (i: Invoice, input: CreditInput) => Promise<void>;
+  onCopyInvoice?: (i: Invoice) => void;
   onBookAllUnbooked?: () => void;
   onProposeDunning?: (i: Invoice) => void;
   onSendDunning?: (n: DunningNotice) => void;
@@ -186,6 +188,7 @@ function FinanceList<T extends Quote | Invoice>({
     onPostCreditNote={onPostCreditNote} onCreditNoteForRefund={onCreditNoteForRefund}
     onPostToLedger={onPostInvoiceToLedger}
     onCredit={onCreditInvoice}
+    onCopy={onCopyInvoice}
     onBookAllUnbooked={onBookAllUnbooked}
     onProposeDunning={onProposeDunning}
     onSendDunning={onSendDunning}
@@ -584,6 +587,7 @@ function InvoiceTable({
   onCreditNoteForRefund,
   onPostToLedger,
   onCredit,
+  onCopy,
   onBookAllUnbooked,
   onProposeDunning,
   onSendDunning,
@@ -610,6 +614,7 @@ function InvoiceTable({
   onPostCreditNote?: (creditNote: CreditNote) => void; onCreditNoteForRefund?: (refund: InvoiceRefund) => Promise<void>;
   onPostToLedger?: (invoice: Invoice) => void;
   onCredit?: (invoice: Invoice, input: CreditInput) => Promise<void>;
+  onCopy?: (invoice: Invoice) => void;
   onBookAllUnbooked?: () => void;
   onProposeDunning?: (invoice: Invoice) => void;
   onSendDunning?: (notice: DunningNotice) => void;
@@ -720,6 +725,7 @@ function InvoiceTable({
       onPostCreditNote={onPostCreditNote} onCreditNoteForRefund={onCreditNoteForRefund}
       onPostToLedger={onPostToLedger}
       onCredit={onCredit}
+      onCopy={onCopy}
       onProposeDunning={onProposeDunning}
       onSendDunning={onSendDunning}
       onCancelDunning={onCancelDunning}
@@ -829,6 +835,7 @@ function InvoiceDetailModal({
   onCreditNoteForRefund,
   onPostToLedger,
   onCredit,
+  onCopy,
   onProposeDunning,
   onSendDunning,
   onCancelDunning,
@@ -853,6 +860,7 @@ function InvoiceDetailModal({
   onPostCreditNote?: (creditNote: CreditNote) => void; onCreditNoteForRefund?: (refund: InvoiceRefund) => Promise<void>;
   onPostToLedger?: (invoice: Invoice) => void;
   onCredit?: (invoice: Invoice, input: CreditInput) => Promise<void>;
+  onCopy?: (invoice: Invoice) => void;
   onProposeDunning?: (invoice: Invoice) => void;
   onSendDunning?: (notice: DunningNotice) => void;
   onCancelDunning?: (notice: DunningNotice) => void;
@@ -967,7 +975,7 @@ function InvoiceDetailModal({
         <div className="quote-detail-section-head"><div><span>Acties</span><strong>Versturen, betaallink en de verstuurde pdf</strong></div></div>
         <InvoiceStatusStrip invoice={invoice} delivery={latestDelivery} payment={latestPayment} eInvoiceDelivery={eInvoiceDelivery} upcomingEInvoiceTo={eInvoiceClient && !invoiceHasStoredPdf(invoice) ? invoiceRecipientFor(client) : null} upcomingVia={eInvoiceChannel} paymentLinks={mollieInvoicingAllowed(data.companySettings?.invoice_send_method)} />
         {mollieDelivery && <MollieEInvoicePanel invoice={invoice} delivery={mollieDelivery} partialNote={molliePartialNote(events)} onSync={onSyncMollie} onDownloadPdf={onDownloadMolliePdf} />}
-        <InvoiceActions invoice={invoice} canWrite={canWrite} canAdmin={canAdmin} payment={latestPayment} payments={payments} eInvoice={eInvoiceChannel === 'mollie' && !eInvoiceDelivery ? 'mollie' : eInvoiceClient} mollieIssued={Boolean(mollieDelivery)} onEdit={() => onEdit(invoice)} onSend={onSend} onSendReminder={onSendReminder} onDownloadPdf={onDownloadPdf} onDownloadUbl={onDownloadUbl} onRefund={canAdmin && onRefund ? () => setShowRefund(true) : undefined} onPostToLedger={onPostToLedger} onCredit={onCredit ? () => setShowCredit(true) : undefined} beforeBookkeepingStart={beforeBookkeepingStart} creditedUnpaidCents={creditedUnpaidCents} />
+        <InvoiceActions invoice={invoice} canWrite={canWrite} canAdmin={canAdmin} payment={latestPayment} payments={payments} eInvoice={eInvoiceChannel === 'mollie' && !eInvoiceDelivery ? 'mollie' : eInvoiceClient} mollieIssued={Boolean(mollieDelivery)} onEdit={() => onEdit(invoice)} onSend={onSend} onSendReminder={onSendReminder} onDownloadPdf={onDownloadPdf} onDownloadUbl={onDownloadUbl} onRefund={canAdmin && onRefund ? () => setShowRefund(true) : undefined} onPostToLedger={onPostToLedger} onCredit={onCredit ? () => setShowCredit(true) : undefined} onCopy={onCopy} beforeBookkeepingStart={beforeBookkeepingStart} creditedUnpaidCents={creditedUnpaidCents} />
         {beforeBookkeepingStart && <p className="refund-note">Deze factuur heeft een datum van vóór de startdatum van je boekhouding ({dateNL(bookkeepingStart)}) en staat daarom niet in het grootboek: die omzet hoort in je beginbalans. Komt de betaling binnen, boek die dan bij Bank op <strong>1300 Debiteuren</strong> (niet op de factuur) en zet de factuur hier zelf op Betaald.</p>}
         {showRefund && onRefund && <RefundModal invoice={invoice} mollieRefundable={mollieRefundable} inFlightCents={inFlightCents} creditedUnpaidCents={creditedUnpaidCents} onClose={() => setShowRefund(false)} onSubmit={(input) => onRefund(invoice, input)} />}
         {showCredit && onCredit && <CreditModal invoice={invoice} onClose={() => setShowCredit(false)} onSubmit={(input) => onCredit(invoice, input)} />}
@@ -1148,7 +1156,7 @@ function InvoiceStatusStrip({ invoice, delivery, payment, eInvoiceDelivery = nul
   </div>;
 }
 
-function InvoiceActions({ invoice, canWrite, canAdmin = false, payment, payments, eInvoice = false, mollieIssued = false, onEdit, onSend, onSendReminder, onDownloadPdf, onDownloadUbl, onRefund, onPostToLedger, onCredit, beforeBookkeepingStart = false, creditedUnpaidCents = 0 }: { invoice: Invoice; canWrite: boolean; canAdmin?: boolean; payment: InvoicePaymentRecord | null; /** Alle betalingen van deze factuur, nieuwste eerst. */ payments: InvoicePaymentRecord[]; eInvoice?: boolean | 'mollie'; mollieIssued?: boolean; onEdit: () => void; onSend?: (invoice: Invoice) => void; onSendReminder?: (invoice: Invoice) => void; onDownloadPdf?: (invoice: Invoice) => void; onDownloadUbl?: (invoice: Invoice) => void; onRefund?: () => void; onPostToLedger?: (invoice: Invoice) => void; /** Opent het venster Crediteren. */ onCredit?: () => void; /** De factuurdatum ligt vóór de startdatum van de boekhouding: boeken kan niet. */ beforeBookkeepingStart?: boolean; /** Gecrediteerd zonder terugbetaling: dat deel is nooit betaald. */ creditedUnpaidCents?: number }) {
+function InvoiceActions({ invoice, canWrite, canAdmin = false, payment, payments, eInvoice = false, mollieIssued = false, onEdit, onSend, onSendReminder, onDownloadPdf, onDownloadUbl, onRefund, onPostToLedger, onCredit, onCopy, beforeBookkeepingStart = false, creditedUnpaidCents = 0 }: { invoice: Invoice; canWrite: boolean; canAdmin?: boolean; payment: InvoicePaymentRecord | null; /** Alle betalingen van deze factuur, nieuwste eerst. */ payments: InvoicePaymentRecord[]; eInvoice?: boolean | 'mollie'; mollieIssued?: boolean; onEdit: () => void; onSend?: (invoice: Invoice) => void; onSendReminder?: (invoice: Invoice) => void; onDownloadPdf?: (invoice: Invoice) => void; onDownloadUbl?: (invoice: Invoice) => void; onRefund?: () => void; onPostToLedger?: (invoice: Invoice) => void; /** Opent het venster Crediteren. */ onCredit?: () => void; /** Opent een nieuw concept met dezelfde klant en regels. */ onCopy?: (invoice: Invoice) => void; /** De factuurdatum ligt vóór de startdatum van de boekhouding: boeken kan niet. */ beforeBookkeepingStart?: boolean; /** Gecrediteerd zonder terugbetaling: dat deel is nooit betaald. */ creditedUnpaidCents?: number }) {
   const invoiceClosed = ['paid', 'cancelled', 'void', 'written_off', 'refunded'].includes(invoice.status);
   // Precies de regel van de database (enforce_invoice_immutability), over alle
   // betalingen van de factuur: een verlopen of mislukte link vergrendelt niet,
@@ -1199,6 +1207,7 @@ function InvoiceActions({ invoice, canWrite, canAdmin = false, payment, payments
     {canRemind && <Button onClick={() => onSendReminder?.(invoice)} title={`Stuurt betalingsherinnering niveau ${nextReminderLevel} naar de klant.`}><Bell size={14}/> Stuur herinnering (niveau {nextReminderLevel})</Button>}
     {canDownloadStored && !mollieIssued && <Button onClick={() => onDownloadPdf?.(invoice)}><Download size={14}/> Download verzonden PDF</Button>}
     {onDownloadUbl && !mollieIssued && !['cancelled', 'void'].includes(invoice.status) && <Button onClick={() => onDownloadUbl(invoice)} title="Download deze factuur als UBL 2.1 e-factuur (Peppol BIS 3.0) met de PDF erin — voor overheden en boekhoudpakketten."><Download size={14}/> E-factuur (UBL)</Button>}
+    {canWrite && onCopy && <Button onClick={() => onCopy(invoice)} title="Opent een nieuw concept met dezelfde klant en regels, met een nieuw nummer en de datum van vandaag. Handig voor een vaste maandprijs."><Copy size={14}/> Kopiëren</Button>}
     {canRefund && <Button variant="danger" onClick={() => onRefund?.()}><RotateCcw size={14}/> Terugbetaling</Button>}
     {canCredit && <Button variant="danger" onClick={() => onCredit?.()} title="Maakt een creditfactuur voor wat nog openstaat (of een deel daarvan) en boekt omzet en btw terug. Hier boek je ook een oninbare factuur af."><RotateCcw size={14}/> Crediteren</Button>}
     {canPostToLedger && <Button onClick={() => onPostToLedger?.(invoice)} title="Boekt de omzet en af te dragen BTW van deze factuur in het grootboek."><BookOpen size={14}/> Boek naar grootboek</Button>}

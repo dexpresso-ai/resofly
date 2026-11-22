@@ -4,6 +4,7 @@ import type { AppData, Client, ClientCall, ClientEmail, ClientEmailThread, Clien
 import { holderName, matchesHolder, memberColor, memberInitials, membersWhoCanHold } from '../lib/members';
 import { activeFieldDefinitions, customFieldsSearchText, formatCustomFieldValue } from '../components/CustomFields';
 import { dateNL, euro, formatMinutes, minutesToHours, priorityLabel, total } from '../lib/format';
+import { hoursLabel, openHoursSummary } from '../lib/timeRates';
 import { TICKET_STATUS_LABELS, TICKET_WORKLIST_STATUSES, groupNotesByTicket, isTicketArchived, ticketLastActivity, ticketMatchesStatus, ticketResolvedAt } from '../lib/tickets';
 import { listTime } from '../lib/communication';
 import { callCounterpart, callDirectionLabel, callDurationLabel, callOutcomeLabel, callSubject, formatPhone, telHref } from '../lib/calls';
@@ -479,6 +480,7 @@ export function ClientDetailPage({
   onNewQuote,
   onEditQuote,
   onNewInvoice,
+  onInvoiceHours,
   onEditInvoice,
   onOpenProject,
   onNewProject,
@@ -510,6 +512,8 @@ export function ClientDetailPage({
   onNewQuote: () => void;
   onEditQuote: (quote: Quote) => void;
   onNewInvoice: () => void;
+  /** Opent "Uren factureren". Ontbreekt bij wie geen facturen mag maken. */
+  onInvoiceHours?: (defaults: { clientId?: string | null; projectId?: string | null }) => void;
   onEditInvoice: (invoice: Invoice) => void;
   onOpenProject: (project: Project) => void;
   onNewProject: () => void;
@@ -585,6 +589,8 @@ export function ClientDetailPage({
     .filter(invoice => !['draft', 'cancelled', 'void'].includes(invoice.status))
     .reduce((sum, invoice) => sum + total(invoice.lines).subtotal, 0);
   const effectiveRate = clientTrackedMinutes > 0 && invoicedSubtotal > 0 ? invoicedSubtotal / (clientTrackedMinutes / 60) : null;
+  // Declarabel, met tarief en nog op geen factuur: wat "Uren factureren" oppakt.
+  const openHours = openHoursSummary(data.timeEntries.filter(entry => entry.client_id === client.id));
 
   // Zoek/filter over het volledige klantdossier (projecten, offertes, facturen
   // en notities). De KPI's en facturatie-waarschuwing blijven het totaalbeeld
@@ -683,6 +689,7 @@ export function ClientDetailPage({
         <Button onClick={() => setSendingFiles(true)} disabled={!canWrite} title="Bestanden veilig naar deze klant sturen"><Send size={14} /> Bestanden versturen</Button>
         <Button onClick={onNewProject} disabled={!canWrite}>+ Project</Button>
         <Button onClick={onNewQuote} disabled={!canWrite}>+ Offerte</Button>
+        {onInvoiceHours && openHours.minutes > 0 && <Button onClick={() => onInvoiceHours({ clientId: client.id })} title={`${hoursLabel(openHours.minutes)} nog te factureren (${euro(openHours.valueCents / 100)} excl. btw)`}>Uren factureren · {hoursLabel(openHours.minutes)}</Button>}
         <Button variant="primary" onClick={onNewInvoice} disabled={!canWrite}>+ Factuur</Button>
       </div>
     </section>
