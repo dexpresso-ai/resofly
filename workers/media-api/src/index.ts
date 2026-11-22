@@ -4227,9 +4227,10 @@ function assertInternalKeyOrg(request: Request, key: string): void {
   if (organizationId) assertKeyInOrg(key, organizationId);
 }
 
-/** Bewijsstukken (factuur-, offerte-, contract- en jaarrekening-PDF's) zijn
- *  onveranderlijk en dus nooit via de app te verwijderen. */
-const IMMUTABLE_KEY_SEGMENTS = new Set(['invoice-pdfs', 'quote-pdfs', 'contract-pdfs', 'annual-account-pdfs']);
+/** Bewijsstukken (factuur-, offerte-, contract- en jaarrekening-PDF's, en de
+ *  e-facturen zoals ze verstuurd zijn) zijn onveranderlijk en dus nooit via de
+ *  app te verwijderen. */
+const IMMUTABLE_KEY_SEGMENTS = new Set(['invoice-pdfs', 'quote-pdfs', 'contract-pdfs', 'annual-account-pdfs', 'e-invoices']);
 
 /** Mappen waarin een bewijsstuk van de boekhouding kan staan dat pas vastligt
  *  als zijn document geboekt of verstuurd is. Of dat zo is, weet de database. */
@@ -4271,7 +4272,7 @@ const SEGMENT_MODULE: Record<string, string> = {
   quote: 'finance', invoice: 'finance', supplier: 'finance', purchase_invoice: 'finance',
   fixed_asset: 'finance', annual_account: 'finance', contract: 'finance',
   'invoice-pdfs': 'finance', 'quote-pdfs': 'finance', 'contract-pdfs': 'finance',
-  'annual-account-pdfs': 'finance', purchase_invoice_inbox: 'finance',
+  'annual-account-pdfs': 'finance', purchase_invoice_inbox: 'finance', 'e-invoices': 'finance',
   chat_message: 'chat',
 };
 

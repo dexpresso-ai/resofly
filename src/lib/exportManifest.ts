@@ -291,6 +291,9 @@ export const EXPORT_MANIFEST: Readonly<Record<string, TableRule>> = {
   invoice_version_items: { kind: 'export' },
   invoice_workflow_events: { kind: 'export' },
   invoice_email_deliveries: { kind: 'export' },
+  // De e-facturen en e-creditnota's zoals ze verstuurd zijn (20261122132000).
+  // Tot dan zat er geen enkele e-factuur in de export, alleen de pdf's.
+  sent_e_invoices: { kind: 'export', files: ['storage_key'] },
   invoice_email_events: { kind: 'export' },
   invoice_payment_records: { kind: 'export' },
   invoice_public_links: { kind: 'export', omit: TOKEN_HASH_OMIT },
@@ -536,6 +539,7 @@ const FILE_FOLDERS: Readonly<Record<string, string>> = {
   'quote-pdfs': 'offertes-pdf',
   invoice: 'facturen',
   'invoice-pdfs': 'facturen-pdf',
+  'e-invoices': 'e-facturen',
   contract: 'contracten',
   'contract-pdfs': 'contracten-pdf',
   annual_account: 'jaarrekeningen',

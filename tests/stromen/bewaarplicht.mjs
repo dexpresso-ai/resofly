@@ -20,6 +20,7 @@ import { gelijk, gelukt, geweigerd, groep, stap, verwacht } from './toets.mjs';
 import { inkoopfactuur, klant, leverancier, maakEenmanszaak, nodig, q, rekening, verstuurdeFactuur, wf } from './eenmanszaak.mjs';
 import { SERVICE_KEY } from './omgeving.mjs';
 import { post } from './nepdiensten.mjs';
+import { roep } from './functies.mjs';
 
 function bijlage(w, soort, id, naam, sleutel) {
   return rest('attachments?select=*', {
@@ -104,6 +105,117 @@ async function bewijsstukken() {
   });
 }
 
+// ── 2. De e-factuur zoals hij verstuurd is ───────────────────────────────
+
+const sha = (bytes) => createHash('sha256').update(bytes).digest('hex');
+const vanBase64 = (b64) => Buffer.from(b64, 'base64');
+
+async function eFactuur() {
+  groep('Bewaarplicht — de e-factuur blijft bewaard zoals hij verstuurd is');
+  const w = await stap('een eenmanszaak met een klant met e-facturatie, en een e-factuur die de deur uit is', async () => {
+    const w0 = await maakEenmanszaak('efactuur');
+    const t = (w0.t = {});
+    t.gemeente = await klant(w0, 'Gemeente Voorbeeld', 'business');
+    sql(`update public.clients set e_invoicing_enabled = true, e_invoice_email = 'facturen@gemeente.test', kvk_number = '12345678' where id = ${q(t.gemeente.id)}`);
+    t.factuur = await verstuurdeFactuur(w0, { ...t.gemeente, email: 'facturen@gemeente.test' }, '2026-10-08', [{ description: 'Reportage', quantity: 1, unit_price: 750, vat_rate: 21 }]);
+    return w0;
+  });
+  if (!w) return;
+  const t = w.t;
+
+  await stap('bij het versturen is het bestand zelf bewaard: dezelfde bytes als de bijlage in de mail', async () => {
+    const mail = post.mails.filter((m) => m.to.includes('facturen@gemeente.test')).at(-1);
+    const xml = nodig(mail?.bijlagen.find((b) => /-ubl\.xml$/.test(b.naam)), 'de e-factuur in de mail');
+    t.verstuurd = sha(xml.bytes);
+    const rij = sqlRij(`select id, doc_type, document_number, recipient_email, file_name, sha256, size_bytes, storage_provider, storage_key, sent_at, delivery_id from public.sent_e_invoices where invoice_id = ${q(t.factuur.id)}`);
+    gelijk([rij?.doc_type, rij?.document_number, rij?.recipient_email, rij?.sha256], ['invoice', t.factuur.number, 'facturen@gemeente.test', t.verstuurd], 'de rij van de verzending');
+    verwacht(rij.sent_at !== null && rij.delivery_id !== null, 'verzendmoment en verzending zijn vastgelegd');
+    verwacht(rij.storage_provider === 'r2' && rij.storage_key.startsWith(`${w.orgId}/e-invoices/${t.factuur.id}/`) && rij.storage_key.endsWith('.xml'), `opslagsleutel: ${rij.storage_key}`);
+    gelijk(sha(nodig(post.r2.get(rij.storage_key), 'het bestand op R2')), t.verstuurd, 'het bestand op R2 is de verstuurde e-factuur');
+    gelijk(sqlRij(`select e_invoice_sha256 from public.invoice_email_deliveries where id = ${q(rij.delivery_id)}`).e_invoice_sha256, t.verstuurd, 'dezelfde hash als bij de verzending');
+    t.rij = rij;
+  });
+
+  await stap('de klant verhuist en de zzp\'er krijgt een ander IBAN: de download blijft precies het verstuurde bestand', async () => {
+    sql(`update public.clients set address_line1 = 'Nieuwe Kade 99', city = 'Rotterdam', name = 'Gemeente Anders' where id = ${q(t.gemeente.id)}`);
+    sql(`update public.company_settings set iban = 'NL02ABNA0123456789', company_name = 'Van Dijk Beeld' where organization_id = ${q(w.orgId)}`);
+    const res = gelukt(await wf(w, 'downloadInvoiceUbl', { invoiceId: t.factuur.id }), 'e-factuur downloaden');
+    gelijk([res.ubl.stored, sha(vanBase64(res.ubl.base64)), res.ubl.warnings.length], [true, t.verstuurd, 0], 'byte voor byte het verstuurde bestand');
+    const tekst = vanBase64(res.ubl.base64).toString('utf8');
+    verwacht(tekst.includes('Gemeente Voorbeeld') && !tekst.includes('Gemeente Anders') && !tekst.includes('NL02ABNA0123456789'), 'met de gegevens van toen');
+  });
+
+  await stap('na crediteren (factuur geannuleerd) is de e-factuur van toen er nog, en de e-creditnota is ook bewaard', async () => {
+    const uit = gelukt(await wf(w, 'creditInvoice', { invoiceId: t.factuur.id, reason: 'Opdracht vervallen' }), 'crediteren');
+    gelijk(sqlRij(`select status from public.invoices where id = ${q(t.factuur.id)}`).status, 'cancelled', 'de factuur is geannuleerd');
+    const res = gelukt(await wf(w, 'downloadInvoiceUbl', { invoiceId: t.factuur.id }), 'e-factuur van een geannuleerde factuur');
+    gelijk(sha(vanBase64(res.ubl.base64)), t.verstuurd, 'nog steeds het verstuurde bestand');
+    const cn = sqlRij(`select id, number from public.credit_notes where invoice_id = ${q(t.factuur.id)}`);
+    const rij = sqlRij(`select sha256, sent_at, doc_type, document_number from public.sent_e_invoices where credit_note_id = ${q(nodig(cn?.id, 'creditnota'))}`);
+    const mail = post.mails.filter((m) => m.to.includes('facturen@gemeente.test')).at(-1);
+    const xml = nodig(mail?.bijlagen.find((b) => /^creditfactuur-.*-ubl\.xml$/.test(b.naam)), 'de e-creditnota in de mail');
+    gelijk([rij?.doc_type, rij?.document_number, rij?.sha256, rij?.sent_at !== null], ['credit_note', cn.number, sha(xml.bytes), true], 'de e-creditnota is bewaard zoals verstuurd');
+    const dl = gelukt(await wf(w, 'downloadCreditNoteUbl', { creditNoteId: cn.id }), 'e-creditnota downloaden');
+    gelijk([dl.ubl.stored, sha(vanBase64(dl.ubl.base64))], [true, rij.sha256], 'de download is dat bestand');
+    void uit;
+  });
+
+  await stap('de bewaarde e-factuur ligt vast: niet te wijzigen of te wissen, ook niet met de service-role', async () => {
+    geweigerd(await rest(`sent_e_invoices?id=eq.${t.rij.id}`, { method: 'PATCH', token: SERVICE_KEY, body: { sha256: 'x'.repeat(64) } }), 'hash wijzigen');
+    geweigerd(await rest(`sent_e_invoices?id=eq.${t.rij.id}`, { method: 'PATCH', token: SERVICE_KEY, body: { sent_at: new Date().toISOString() } }), 'verzendmoment verzetten');
+    geweigerd(await rest(`sent_e_invoices?id=eq.${t.rij.id}`, { method: 'DELETE', token: SERVICE_KEY }), 'wissen');
+    await rest(`sent_e_invoices?id=eq.${t.rij.id}`, { method: 'DELETE', token: w.eigenaar.token });
+    await rest('sent_e_invoices', { method: 'POST', token: w.eigenaar.token, body: { organization_id: w.orgId, invoice_id: t.factuur.id, doc_type: 'invoice', document_number: 'X', recipient_email: 'x@x.test', file_name: 'x.xml', size_bytes: 1, sha256: 'x', storage_provider: 'database', data_base64: 'eA==' } });
+    gelijk(Number(sqlRij(`select count(*) as n from public.sent_e_invoices where invoice_id = ${q(t.factuur.id)} and doc_type = 'invoice'`).n), 1, 'er staat precies de ene rij');
+    const eigen = gelukt(await rest(`sent_e_invoices?select=id&invoice_id=eq.${t.factuur.id}`, { token: w.eigenaar.token }), 'lezen als eigenaar');
+    gelijk(eigen.length, 2, 'de eigenaar leest zijn e-factuur en e-creditnota');
+    const vreemde = await maakEenmanszaak('efactuur-ander');
+    gelijk(gelukt(await rest(`sent_e_invoices?select=id&invoice_id=eq.${t.factuur.id}`, { token: vreemde.eigenaar.token }), 'lezen als een ander').length, 0, 'een andere organisatie leest niets');
+    geweigerd(await roepAls(vreemde, w.orgId, t.factuur.id), 'downloaden als een ander');
+  });
+
+  await stap('lukt het bewaren niet, dan gaat er niets weg', async () => {
+    const k = await klant(w, 'Provincie Voorbeeld', 'business');
+    sql(`update public.clients set e_invoicing_enabled = true, e_invoice_email = 'facturen@provincie.test', kvk_number = '23456789' where id = ${q(k.id)}`);
+    const concept = gelukt(await rest('invoices?select=*', { method: 'POST', token: w.eigenaar.token, prefer: 'return=representation', body: {
+      organization_id: w.orgId, created_by: w.eigenaar.id, client_id: k.id, project_id: null, number: `F2026-${randomUUID().slice(0, 6)}`, date: '2026-10-09', due_date: '2026-10-23', status: 'draft', notes: null,
+      lines: [{ id: randomUUID(), description: 'Advies', quantity: 1, unit_price: 100, vat_rate: 21 }],
+    } }), 'concept')[0];
+    // De eerste opslag (de PDF) lukt, de tweede (de e-factuur) niet.
+    const echt = globalThis.fetch;
+    let teller = 0;
+    globalThis.fetch = (invoer, init) => {
+      const url = typeof invoer === 'string' ? invoer : invoer.url;
+      const sleutel = init?.headers?.['X-Storage-Key'] ?? '';
+      if (/\/internal\/invoice-snapshot$/.test(url) && /\/e-invoices\//.test(sleutel)) { teller += 1; return Promise.resolve(new Response('storing', { status: 503 })); }
+      return echt(invoer, init);
+    };
+    let res;
+    try {
+      res = await wf(w, 'sendInvoiceEmail', { invoiceId: concept.id, recipientEmail: 'facturen@provincie.test', recipientName: 'Provincie', includePaymentLink: false });
+    } finally { globalThis.fetch = echt; }
+    geweigerd(res, 'versturen terwijl de e-factuur niet bewaard kan worden', [502]);
+    gelijk(teller, 1, 'de storing is geraakt');
+    gelijk(post.mails.filter((m) => m.to.includes('facturen@provincie.test')).length, 0, 'er is geen mail verstuurd');
+    gelijk(Number(sqlRij(`select count(*) as n from public.sent_e_invoices where invoice_id = ${q(concept.id)}`).n), 0, 'en er staat geen rij');
+  });
+
+  await stap('een gewone factuur (nooit als e-factuur verstuurd) wordt nog live opgebouwd, en het scherm zegt dat erbij', async () => {
+    const k = await klant(w, 'Bureau Zuid', 'business');
+    sql(`update public.clients set kvk_number = '34567890' where id = ${q(k.id)}`);
+    const f = await verstuurdeFactuur(w, k, '2026-10-10', [{ description: 'Fotoshoot', quantity: 1, unit_price: 200, vat_rate: 21 }]);
+    const res = gelukt(await wf(w, 'downloadInvoiceUbl', { invoiceId: f.id }), 'e-factuur van een gewone factuur');
+    gelijk(res.ubl.stored, false, 'niet het bewaarde bestand');
+    verwacht(res.ubl.warnings.some((x) => /niet als e-factuur verstuurd/.test(x)), `aandachtspunten: ${res.ubl.warnings.join(' | ')}`);
+    gelijk(Number(sqlRij(`select count(*) as n from public.sent_e_invoices where invoice_id = ${q(f.id)}`).n), 0, 'downloaden bewaart niets');
+  });
+}
+
+function roepAls(ander, orgId, invoiceId) {
+  return roep('invoice-workflow', { token: ander.eigenaar.token, body: { action: 'downloadInvoiceUbl', organizationId: orgId, invoiceId } });
+}
+
 export default async function bewaarplicht() {
   await bewijsstukken();
+  await eFactuur();
 }

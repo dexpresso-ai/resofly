@@ -34,7 +34,7 @@ type InvoiceRow = {
   number: string; date: string; due_date: string | null; lines: InvoiceLine[]; status: string; notes: string | null;
   public_token_hash?: string | null; public_token_expires_at?: string | null;
   reminder_level?: number | null; last_reminder_at?: string | null; reminders_paused?: boolean | null; currency?: string | null;
-  journal_entry_id?: string | null;
+  journal_entry_id?: string | null; sent_at?: string | null;
 };
 type ClientRow = {
   id: string; name: string; contact_name: string | null; email: string | null;
@@ -198,13 +198,19 @@ serve(async (req) => {
       return json(req, { ok: true, ...(await downloadCreditNotePdf(organizationId, body)) });
     }
 
-    // E-factuur (UBL 2.1 / Peppol BIS 3.0) genereren is niet-muterend: de XML
-    // wordt live opgebouwd uit factuur + klant + bedrijfsgegevens, dus elke
-    // actieve member (ook viewer) mag downloaden — net als de PDF-snapshot.
-    // De PDF gaat erin mee, zodat wie de XML inleest de factuur ook ziet.
+    // E-factuur (UBL 2.1 / Peppol BIS 3.0) downloaden is niet-muterend, dus elke
+    // actieve member (ook viewer) mag het — net als de PDF-snapshot.
+    // Is de factuur als e-factuur verstuurd, dan komt precies dat bestand terug
+    // (sent_e_invoices). Tot 22 november 2026 werd de XML bij elke download
+    // opnieuw opgebouwd: na een verhuizing van de klant of een nieuw IBAN was
+    // dat een ander document dan de klant kreeg, en voor een gecrediteerde
+    // factuur kwam er geen meer. Alleen een factuur die nooit als e-factuur weg
+    // is, wordt nog live opgebouwd, met de PDF erin.
     if (action === 'downloadInvoiceUbl') {
       if (!isUuid(invoiceId)) throw new WorkflowHttpError('Ongeldige factuur.', 400);
       const invoice = await loadInvoice(organizationId, invoiceId);
+      const sent = await loadSentEInvoice(organizationId, { invoiceId, creditNoteId: null });
+      if (sent) return json(req, { ok: true, ubl: sent });
       // Geen officiële e-factuur genereren voor een geannuleerde/ongeldige factuur:
       // die zou naar buiten kunnen als geldig document terwijl hij dat niet is.
       if (['cancelled', 'void'].includes(invoice.status)) throw new WorkflowHttpError('Voor een geannuleerde of ongeldig gemaakte factuur kan geen e-factuur worden gemaakt.', 409);
@@ -219,17 +225,27 @@ serve(async (req) => {
       await assertInvoiceUblPossible(organizationId, invoice, { client, company, vatKinds });
       const pdf = await invoicePdfForEInvoice(organizationId, invoice, { client, company });
       const ubl = await createInvoiceUblAttachment(organizationId, invoice, { client, company, vatKinds, pdf });
-      return json(req, { ok: true, ubl });
+      // Eerlijk zeggen wat dit bestand is: het is nu gemaakt. Is de factuur al
+      // weg, dan staan hier de klant- en bedrijfsgegevens van vandaag in.
+      if (invoice.sent_at || invoice.status !== 'draft') {
+        ubl.warnings.push(await hadUnstoredEInvoice(organizationId, invoiceId)
+          ? 'Dit is niet het bestand dat je klant kreeg. Deze e-factuur is verstuurd voordat ResoFly het bestand zelf bewaarde; dit bestand is nu opnieuw opgebouwd, met de klant- en bedrijfsgegevens van vandaag.'
+          : 'Deze factuur is niet als e-factuur verstuurd. Dit bestand is nu gemaakt, met de klant- en bedrijfsgegevens van vandaag. De PDF erin is wel de PDF die je klant kreeg.');
+      }
+      return json(req, { ok: true, ubl: { ...ubl, stored: false } });
     }
     if (action === 'downloadCreditNoteUbl') {
       const creditNoteId = String(body.creditNoteId || '');
       if (!isUuid(creditNoteId)) throw new WorkflowHttpError('Ongeldige creditfactuur.', 400);
       const creditNote = await loadCreditNote(organizationId, creditNoteId);
       if (!creditNote) throw new WorkflowHttpError('Creditfactuur niet gevonden.', 404);
+      // De e-creditnota die de klant kreeg, ook als hij later is ingetrokken.
+      const sentCredit = await loadSentEInvoice(organizationId, { invoiceId: String(creditNote.invoice_id), creditNoteId });
+      if (sentCredit) return json(req, { ok: true, ubl: sentCredit });
       if (creditNote.status === 'void') throw new WorkflowHttpError('Voor een ingetrokken creditfactuur kan geen e-creditnota worden gemaakt.', 409);
       const invoice = await loadInvoice(organizationId, String(creditNote.invoice_id));
       const ubl = await createCreditNoteUblAttachment(organizationId, creditNote, invoice, { pdf: await creditNotePdfForEInvoice(creditNote) });
-      return json(req, { ok: true, ubl });
+      return json(req, { ok: true, ubl: { ...ubl, stored: false } });
     }
 
     // E-factuur via Mollie: de status bij Mollie ophalen (Peppol-aflevering,
@@ -473,6 +489,21 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
     attachmentStorageKey: storedPdf.key ?? undefined,
   });
   if (ublAttachment) await markDeliveryAsEInvoice(prepared.deliveryId, organizationId, userId, ublAttachment);
+  // Het bestand zelf bewaren vóór de mail weggaat, net als de PDF: lukt dat
+  // niet, dan gaat er niets weg. Anders had de klant een e-factuur die wij niet
+  // meer kunnen laten zien.
+  let sentEInvoiceId: string | null = null;
+  if (ublAttachment) {
+    try {
+      sentEInvoiceId = await storeSentEInvoice({
+        organizationId, invoiceId, creditNoteId: null, deliveryId: prepared.deliveryId, docType: 'invoice',
+        documentNumber: invoice.number, recipientEmail, userId, ubl: ublAttachment,
+      });
+    } catch (storeError) {
+      await failInvoiceEmailSend(prepared.deliveryId, organizationId, userId, `E-factuur kon niet worden bewaard: ${describeError(storeError)}`);
+      throw new WorkflowHttpError('De e-factuur kon niet worden bewaard; er is niets verstuurd. Probeer het opnieuw.', 502);
+    }
+  }
 
   const senderIdentity = await resolveSenderIdentity(supabaseAdmin, organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO);
   // Met het logo van de organisatie bovenaan (ingesloten, zie _shared/emailBrand.ts),
@@ -528,6 +559,7 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
   }
 
   const finalized = await completeInvoiceEmailSend(prepared.deliveryId, organizationId, userId, providerEmailId);
+  if (sentEInvoiceId) await markSentEInvoiceSent(sentEInvoiceId);
   if (ublAttachment) await recordEInvoiceSent({ organizationId, invoiceId, userId, deliveryId: prepared.deliveryId, recipientEmail, ubl: ublAttachment });
   return {
     delivery: finalized.delivery, version: finalized.version, publicUrl, providerEmailId, recipientEmail, deliveryChannel,
@@ -2331,6 +2363,17 @@ async function deliverCreditNoteEmail(input: { organizationId: string; userId: s
       client: input.client, company: input.company, endpointEmail: recipientEmail, pdf: { fileName, base64 },
     })
     : null;
+  // De e-creditnota bewaren zoals hij weggaat (zie storeSentEInvoice). Lukt dat
+  // niet, dan gaat de mail niet weg; de knop 'Mail' kan het opnieuw proberen.
+  const sentEInvoiceId = creditUbl
+    ? await storeSentEInvoice({
+      organizationId: input.organizationId, invoiceId: input.invoice.id, creditNoteId: String(input.creditNote.id), deliveryId: null,
+      docType: 'credit_note', documentNumber: creditNoteNumber, recipientEmail, userId: input.userId, ubl: creditUbl,
+    }).catch((storeError) => {
+      console.error('E-creditnota bewaren mislukt', describeError(storeError));
+      throw new WorkflowHttpError('De e-creditnota kon niet worden bewaard; er is niets verstuurd. Probeer het opnieuw.', 502);
+    })
+    : null;
   const recipientName = input.recipientName?.trim() || input.client.contact_name || input.client.name || null;
   const content = await loadEmailTemplateContent(input.organizationId, 'creditNote.sent');
 
@@ -2389,6 +2432,7 @@ async function deliverCreditNoteEmail(input: { organizationId: string; userId: s
     throw new WorkflowHttpError(`Resend kon de creditfactuur niet versturen: ${message}`, 502);
   }
   const providerEmailId = String(payload.id || payload.email_id || '').trim();
+  if (sentEInvoiceId) await markSentEInvoiceSent(sentEInvoiceId);
 
   // Event + audit (best-effort: een log-fout mag de geslaagde verzending niet ongedaan maken).
   // Een Supabase-query heeft geen .catch(): een fout komt terug als { error }.
@@ -3243,6 +3287,140 @@ async function markDeliveryAsEInvoice(deliveryId: string, organizationId: string
     await failInvoiceEmailSend(deliveryId, organizationId, userId, `E-factuur kon niet worden vastgelegd: ${error.message}`);
     throw new WorkflowHttpError('De e-factuur kon niet worden vastgelegd; er is niets verstuurd. Probeer het opnieuw.', 500);
   }
+}
+
+/**
+ * Bewaart de e-factuur of e-creditnota precies zoals hij de deur uitgaat: het
+ * bestand in R2 (map e-invoices, die de media-worker niet wist of overschrijft)
+ * of, zonder R2, in de rij zelf; de rij in sent_e_invoices. Zelfde tweedeling
+ * als de PDF-snapshot. De rij ligt daarna vast (trigger); alleen het moment van
+ * versturen komt er nog bij (markSentEInvoiceSent).
+ */
+async function storeSentEInvoice(input: {
+  organizationId: string; invoiceId: string; creditNoteId: string | null; deliveryId: string | null;
+  docType: 'invoice' | 'credit_note'; documentNumber: string; recipientEmail: string; userId: string | null; ubl: UblAttachment;
+}): Promise<string> {
+  const storageConfigured = Boolean(INVOICE_PDF_STORAGE_WORKER_URL && INVOICE_PDF_STORAGE_SECRET);
+  let storageKey: string | null = null;
+  if (storageConfigured) {
+    const safeName = `${sanitizeFileName(input.ubl.fileName.replace(/\.xml$/i, ''))}.xml`;
+    storageKey = `${input.organizationId}/e-invoices/${input.invoiceId}/${crypto.randomUUID()}-${safeName}`;
+    const response = await fetch(`${INVOICE_PDF_STORAGE_WORKER_URL}/internal/invoice-snapshot`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${INVOICE_PDF_STORAGE_SECRET}`,
+        'Content-Type': input.ubl.mimeType,
+        'X-Storage-Key': storageKey,
+        'X-Organization-Id': input.organizationId,
+        'X-SHA256': input.ubl.sha256,
+        'X-Size-Bytes': String(input.ubl.sizeBytes),
+      },
+      body: base64ToBytes(input.ubl.base64),
+    });
+    if (!response.ok) {
+      const message = await response.text().catch(() => response.statusText);
+      throw new Error(`opslag gaf ${response.status}: ${message || response.statusText}`);
+    }
+  }
+  const { data, error } = await supabaseAdmin.from('sent_e_invoices').insert({
+    organization_id: input.organizationId,
+    invoice_id: input.invoiceId,
+    credit_note_id: input.creditNoteId,
+    delivery_id: input.deliveryId,
+    doc_type: input.docType,
+    document_number: input.documentNumber,
+    recipient_email: input.recipientEmail,
+    file_name: input.ubl.fileName,
+    mime_type: input.ubl.mimeType,
+    size_bytes: input.ubl.sizeBytes,
+    sha256: input.ubl.sha256,
+    storage_provider: storageKey ? 'r2' : 'database',
+    storage_key: storageKey,
+    data_base64: storageKey ? null : input.ubl.base64,
+    created_by: input.userId,
+  }).select('id').single();
+  if (error || !data) throw new Error(error?.message || 'geen rij terug');
+  return String((data as { id: string }).id);
+}
+
+/** De mail is weg: zet het moment erbij. Best-effort, want de mail is al de deur uit. */
+async function markSentEInvoiceSent(id: string): Promise<void> {
+  const { error } = await supabaseAdmin.from('sent_e_invoices').update({ sent_at: new Date().toISOString() }).eq('id', id);
+  if (error) console.warn('sent_e_invoices: verzendmoment vastleggen mislukte', error.message);
+}
+
+/**
+ * De e-factuur (of e-creditnota) zoals hij het laatst verstuurd is, byte voor
+ * byte. Null als er geen bewaard is. Een rij zonder verzendmoment telt alleen
+ * als zijn verzending toch geslaagd is (het vastleggen van het moment is
+ * best-effort); een mislukte verzending is nooit bij de klant geweest.
+ */
+async function loadSentEInvoice(organizationId: string, ref: { invoiceId: string; creditNoteId: string | null }): Promise<(UblAttachment & { stored: true; sentAt: string | null; recipientEmail: string }) | null> {
+  let query = supabaseAdmin
+    .from('sent_e_invoices')
+    .select('id,file_name,mime_type,size_bytes,sha256,storage_provider,storage_key,data_base64,sent_at,created_at,recipient_email,delivery:invoice_email_deliveries(status)')
+    .eq('organization_id', organizationId)
+    .eq('invoice_id', ref.invoiceId)
+    .order('created_at', { ascending: false })
+    .limit(20);
+  query = ref.creditNoteId ? query.eq('credit_note_id', ref.creditNoteId) : query.eq('doc_type', 'invoice');
+  const { data, error } = await query;
+  if (error) throw new WorkflowHttpError(`De bewaarde e-factuur kon niet worden opgezocht: ${error.message}`, 500);
+  type Row = {
+    file_name: string; mime_type: string; size_bytes: number; sha256: string; storage_provider: string; storage_key: string | null;
+    data_base64: string | null; sent_at: string | null; created_at: string; recipient_email: string;
+    delivery: { status?: string | null } | Array<{ status?: string | null }> | null;
+  };
+  const row = ((data ?? []) as unknown as Row[]).find((candidate) => {
+    if (candidate.sent_at) return true;
+    const delivery = Array.isArray(candidate.delivery) ? candidate.delivery[0] : candidate.delivery;
+    return Boolean(delivery?.status) && !['queued', 'failed'].includes(String(delivery?.status));
+  });
+  if (!row) return null;
+
+  let base64 = String(row.data_base64 || '').trim();
+  if (!base64 && row.storage_provider === 'r2' && row.storage_key) {
+    if (!INVOICE_PDF_STORAGE_WORKER_URL || !INVOICE_PDF_STORAGE_SECRET) {
+      throw new WorkflowHttpError('De e-factuur staat in private storage, maar de storage-koppeling ontbreekt in de Edge Function secrets.', 500);
+    }
+    const response = await fetch(
+      `${INVOICE_PDF_STORAGE_WORKER_URL}/internal/invoice-snapshot/${encodeURIComponent(row.storage_key)}`,
+      { headers: { Authorization: `Bearer ${INVOICE_PDF_STORAGE_SECRET}`, 'X-Organization-Id': organizationId } },
+    );
+    if (!response.ok) throw new WorkflowHttpError('De bewaarde e-factuur kon niet uit private storage worden opgehaald. Probeer het later opnieuw.', 502);
+    base64 = bytesToBase64(new Uint8Array(await response.arrayBuffer()));
+  }
+  if (!base64) throw new WorkflowHttpError('De bewaarde e-factuur is niet beschikbaar.', 404);
+  // Liever een fout dan een ander bestand: dit is het bewijs van wat er verstuurd is.
+  if ((await sha256HexBytes(base64ToBytes(base64))) !== row.sha256) {
+    throw new WorkflowHttpError('De bewaarde e-factuur komt niet overeen met wat er is vastgelegd bij het versturen. Neem contact op met support.', 500);
+  }
+  return {
+    fileName: row.file_name,
+    mimeType: 'application/xml',
+    base64,
+    sizeBytes: row.size_bytes,
+    sha256: row.sha256,
+    warnings: [],
+    pdfEmbedded: true,
+    stored: true,
+    sentAt: row.sent_at ?? row.created_at,
+    recipientEmail: row.recipient_email,
+  };
+}
+
+/** Is deze factuur ooit als e-factuur per mail verstuurd, vóór we het bestand bewaarden? */
+async function hadUnstoredEInvoice(organizationId: string, invoiceId: string): Promise<boolean> {
+  const { data } = await supabaseAdmin
+    .from('invoice_email_deliveries')
+    .select('id')
+    .eq('organization_id', organizationId)
+    .eq('invoice_id', invoiceId)
+    .eq('delivery_channel', 'e_invoice_email')
+    .not('e_invoice_sha256', 'is', null)
+    .not('status', 'in', '(queued,failed)')
+    .limit(1);
+  return Array.isArray(data) && data.length > 0;
 }
 
 /** Tijdlijn: de e-factuur is weg. Best-effort — de verzending zelf is al vastgelegd. */
@@ -4683,6 +4861,7 @@ function formatEuro(value: number): string { return new Intl.NumberFormat('nl-NL
 function sanitizeFileName(value: string): string { return value.replace(/[^a-z0-9_-]+/gi, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'factuur'; }
 function sanitizeTagValue(value: unknown): string { return String(value ?? '').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 256) || 'invoice'; }
 function sanitizeIdempotencyKey(value: string): string { return value.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 256) || crypto.randomUUID(); }
+function base64ToBytes(base64: string): Uint8Array<ArrayBuffer> { const binary = atob(base64); const bytes = new Uint8Array(binary.length); for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i); return bytes; }
 function bytesToBase64(bytes: Uint8Array): string { let binary = ''; const chunkSize = 0x8000; for (let i = 0; i < bytes.length; i += chunkSize) binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize)); return btoa(binary); }
 async function sha256HexBytes(bytes: Uint8Array): Promise<string> { const digest = await crypto.subtle.digest('SHA-256', bytes); return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join(''); }
 async function sha256Hex(value: string): Promise<string> { const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)); return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join(''); }
