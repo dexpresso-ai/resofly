@@ -1,7 +1,7 @@
 -- Voorcontrole voor 20261122200000_rls_een_keer_per_query, alleen lezen.
 -- Draai op staging VOOR de uitrol (Management API, read_only: true).
--- Verwacht (zo op de verse keten tot en met 20261120100000):
---   kandidaten 287 | lijst_md5 fac23e359f619261dc3511a026d749ac | nullable leeg |
+-- Verwacht (zo op de verse keten tot en met 20261122110000):
+--   kandidaten 289 | lijst_md5 3326c82b3dbb7a31f0126cbe3ae65789 | nullable leeg |
 --   poort_attachments_oud true | rest 'ai_decisions.ai_decisions read' |
 --   al_aanwezig 0 | versie 17.11
 -- Wijkt iets af, dan weigert de migratie op staging (en verandert er niets).

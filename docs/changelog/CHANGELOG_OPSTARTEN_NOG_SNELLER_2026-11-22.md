@@ -67,8 +67,8 @@ app (niet de dev-server), een nagebootste telefoon (CPU 4× trager, Fast 4G:
 
 ### De database (`20261122200000_rls_een_keer_per_query.sql`)
 
-De leesrechten één keer per vraag in plaats van per rij, voor 287
-leespolicies op 159 tabellen. Zie
+De leesrechten één keer per vraag in plaats van per rij, voor 289
+leespolicies op 160 tabellen. Zie
 [CHANGELOG_RLS_EEN_KEER_PER_QUERY_2026-11-22.md](CHANGELOG_RLS_EEN_KEER_PER_QUERY_2026-11-22.md).
 
 ### De bundel
@@ -140,7 +140,7 @@ _(wordt aangevuld)_
   volgorde van de regels is bewust; splitsen vraagt de hele mobiele test.
 - **`ai_decisions read`** rekent nog per rij (de module komt uit een kolom).
   Dat kan met dezelfde sleutellijst als de bijlagen.
-- **De controle vooraf op staging** (`scripts/rls-een-keer-per-query-voorcontrole.sql`: verwachte 287
+- **De controle vooraf op staging** (`scripts/rls-een-keer-per-query-voorcontrole.sql`: verwachte 289
   policies, geen afwijkingen) kon vanuit de cloudsessie niet draaien: de
   Management API was niet bereikbaar. De migratie controleert dat zelf en
   stopt zonder iets te veranderen als staging afwijkt. De uitrol faalt dan

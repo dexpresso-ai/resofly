@@ -26,7 +26,7 @@ per pagina van 1000.
   policy als `organization_id = any ((select public.my_organization_ids())::uuid[])`
   worden ze een InitPlan, net als het boekhouder-hek. De planner gebruikt ze
   ook als indexvoorwaarde.
-- **287 leespolicies op 159 tabellen herschreven**, plus de leespoort op
+- **289 leespolicies op 160 tabellen herschreven**, plus de leespoort op
   `attachments`. Alleen `for select`, alleen de letterlijke aanroepen op de
   eigen `organization_id`. Schrijfpolicies, `for all`-policies en triggers zijn
   niet aangeraakt: schrijven raakt één rij per keer.
