@@ -8,7 +8,7 @@ import { formatISODate } from '../lib/dates';
 import { HOUR_CRITERION_MINUTES, projectHourCriterion } from '../lib/hourCriterion';
 import { memberName } from '../lib/members';
 import {
-  IB_CORRECTION_LABELS, IB_RULES, buildIncomeTaxOverview, formatRate, incomeTaxRulesFor, type IncomeTaxInputs,
+  IB_CORRECTION_LABELS, buildIncomeTaxOverview, formatRate, incomeTaxRulesFor, type IncomeTaxInputs,
 } from '../lib/inkomstenbelasting';
 import {
   listFiscalYears, listPartnershipPartners, loadIncomeTaxInputs, loadOwnersEquityOverview, loadPartnershipPartnerHours,
@@ -496,7 +496,9 @@ function IncomeTaxSection({ data, organizationId, overview, onOpenIncomeTax }: {
   }
   if (!loaded) return <div className="bk-report-loading"><Skeleton lines={4} /></div>;
   const person = ib?.persons[0] ?? null;
-  const rules = ib ? IB_RULES[ib.rulesYear] ?? null : null;
+  // De regels waarmee de raming rekende (voor een jaar na de laatste tabel
+  // met de zelfstandigenaftrek van dat jaar), niet de kale tabel van rulesYear.
+  const rules = ib ? incomeTaxRulesFor(ib.year)?.rules ?? null : null;
   if (!ib || !person || !rules) {
     return (
       <div className="bk-report">
