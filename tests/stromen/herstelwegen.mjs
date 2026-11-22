@@ -487,7 +487,10 @@ async function activumEnBeginbalans() {
 
   await stap('een boekjaar met een tikfout in de datum kan weer weg, een boekjaar met boekingen niet', async () => {
     const jaren = await boekjaren(b);
-    const fout = gelukt(await rpc('open_fiscal_year', { p_organization_id: b.orgId, p_period_start: '2027-01-01', p_period_end: '2027-06-30', p_label: '2027' }, b.eigenaar.token), 'boekjaar 2027 met een verkeerde einddatum');
+    // Volgend jaar, gerekend vanaf vandaag. Er stond 2027: vanaf 1 januari
+    // 2027 heeft de inrichting dat boekjaar al geopend en overlapt dit.
+    const volgend = Number(new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Amsterdam' }).format(new Date()).slice(0, 4)) + 1;
+    const fout = gelukt(await rpc('open_fiscal_year', { p_organization_id: b.orgId, p_period_start: `${volgend}-01-01`, p_period_end: `${volgend}-06-30`, p_label: String(volgend) }, b.eigenaar.token), `boekjaar ${volgend} met een verkeerde einddatum`);
     const id = (Array.isArray(fout) ? fout[0] : fout).id;
     gelukt(await rpc('delete_open_fiscal_year', { p_organization_id: b.orgId, p_fiscal_year_id: id }, b.eigenaar.token), 'verwijderen');
     gelijk((await boekjaren(b)).length, jaren.length, 'het boekjaar is weg');
