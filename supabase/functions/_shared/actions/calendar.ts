@@ -1,6 +1,6 @@
 import {
   ActionError, assertFieldWritable, bool, id, isoDate, joinShort, optChoice, optId, optIsoDate, optNum, optStr,
-  orgQuery, row, str,
+  orgQuery, orgRowsAll, row, str,
   type ActionCtx, type ActionDef,
 } from './types.ts';
 import { isJitsiMeetingUrl, jitsiMeetingUrl } from '../jitsi.ts';
@@ -1821,17 +1821,18 @@ export const CALENDAR_ACTIONS: ActionDef[] = [
       const year = Math.round(optNum(input, 'year') ?? Number(ctx.today.slice(0, 4)));
       if (year < 2000 || year > 2100) throw new ActionError('Geef een jaartal tussen 2000 en 2100.');
       const userId = optId(input, 'user_id') ?? ctx.userId;
-      const { data, error } = await orgQuery(ctx, 'time_entries', 'minutes, entry_type, indirect_category')
+      const data = await orgRowsAll<Record<string, unknown>>(() => orgQuery(ctx, 'time_entries', 'id, minutes, entry_type, indirect_category, entry_date')
         .eq('user_id', userId)
         .gte('entry_date', `${year}-01-01`).lte('entry_date', `${year}-12-31`)
-        .limit(20000);
-      if (error) throw new ActionError(`Uren ophalen mislukt: ${error.message}`);
+        .order('entry_date', { ascending: true }).order('id', { ascending: true }), 'Uren');
 
       let direct = 0;
       let indirect = 0;
+      let firstEntryDate: string | null = null;
       const perCategory: Record<string, number> = {};
-      for (const entry of (data ?? []) as Array<Record<string, unknown>>) {
+      for (const entry of data) {
         const minutes = Number(entry.minutes) || 0;
+        if (minutes > 0 && entry.entry_date && (!firstEntryDate || String(entry.entry_date) < firstEntryDate)) firstEntryDate = String(entry.entry_date);
         if (entry.entry_type === 'indirect') {
           indirect += minutes;
           const category = entry.indirect_category ? String(entry.indirect_category) : 'other';
@@ -1843,17 +1844,27 @@ export const CALENDAR_ACTIONS: ActionDef[] = [
       const total = direct + indirect;
       const target = 1225 * 60;
 
-      // Prognose alleen voor het lopende jaar: het tempo tot nu toe doortrekken.
+      // Prognose alleen voor het lopende jaar, met dezelfde regel als het scherm
+      // (`projectHourCriterion` in src/lib/hourCriterion.ts): het tempo telt
+      // vanaf de eerste geregistreerde dag, niet vanaf 1 januari. Met 1 januari
+      // kwam een starter per 1 juli met 1.030 uur op "1.153 uur, niet op koers",
+      // terwijl het scherm en de IB-raming terecht ruim 1.300 uur zeiden.
       const currentYear = Number(ctx.today.slice(0, 4));
       let projectedHours: number | null = null;
       let neededPerWeekHours: number | null = null;
       if (year === currentYear) {
-        const yearStart = Date.UTC(year, 0, 1);
-        const daysInYear = Math.round((Date.UTC(year + 1, 0, 1) - yearStart) / 86400000);
-        const [, month, day] = ctx.today.split('-').map(Number);
-        const dayOfYear = Math.max(1, Math.round((Date.UTC(year, month - 1, day) - yearStart) / 86400000) + 1);
-        projectedHours = Math.round((total * (daysInYear / dayOfYear)) / 60);
-        const weeksLeft = Math.max(1, (daysInYear - dayOfYear) / 7);
+        const dayNumber = (iso: string) => Math.floor(Date.parse(`${iso}T00:00:00Z`) / 86400000);
+        const yearEnd = dayNumber(`${year}-12-31`);
+        const today = Math.min(dayNumber(ctx.today), yearEnd);
+        const daysRemaining = Math.max(0, yearEnd - today);
+        let projectedMinutes = total;
+        if (firstEntryDate && total > 0) {
+          const start = Math.max(dayNumber(firstEntryDate), dayNumber(`${year}-01-01`));
+          const elapsedDays = Math.max(1, today - start + 1);
+          projectedMinutes = Math.round(total + (total / elapsedDays) * daysRemaining);
+        }
+        projectedHours = Math.round(projectedMinutes / 60);
+        const weeksLeft = Math.max(1, daysRemaining / 7);
         neededPerWeekHours = Math.round((Math.max(0, target - total) / weeksLeft) / 60 * 10) / 10;
       }
 

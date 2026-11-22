@@ -23,6 +23,9 @@ export interface GerrieInvoiceProposal {
   type: 'invoice';
   client_id: UUID;
   client_name: string;
+  /** Het project waar de uren van komen; ontbreekt bij een voorstel van vóór 22 november. */
+  project_id?: UUID | null;
+  project_name?: string | null;
   lines: GerrieProposalLine[];
   notes: string | null;
   due_date: string | null;

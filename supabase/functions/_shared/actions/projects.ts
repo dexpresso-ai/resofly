@@ -1,6 +1,6 @@
 import {
   ActionError, assertFieldWritable, bool, euroCents, id, ids, isoDate, joinShort, optChoice, optId,
-  optIsoDate, optNum, optStr, orgQuery, row, str,
+  optIsoDate, optNum, optStr, orgQuery, orgRowsAll, row, str,
   type ActionCtx, type ActionDef,
 } from './types.ts';
 
@@ -945,7 +945,12 @@ export const PROJECTS_ACTIONS: ActionDef[] = [
       const [taskRes, invoiceRes, timeRes] = await Promise.all([
         orgQuery(ctx, 'tasks', 'id, title, status, end_date, planned_date, planned_end_date').eq('project_id', projectId).limit(1000),
         seeMoney ? orgQuery(ctx, 'invoices', 'id, number, status, lines').eq('project_id', projectId).limit(500) : none,
-        seeHours ? orgQuery(ctx, 'time_entries', 'minutes, billable, hourly_rate_cents').eq('project_id', projectId).limit(2000) : none,
+        // Alle uren, in pagina's: met één vraag kwamen er hooguit duizend terug
+        // (max_rows) en was het project bij een langlopende klus "goedkoper".
+        seeHours
+          ? orgRowsAll(() => orgQuery(ctx, 'time_entries', 'id, minutes, billable, hourly_rate_cents').eq('project_id', projectId).order('id', { ascending: true }), 'Uren')
+            .then((data) => ({ data, error: null as { message: string } | null }))
+          : none,
       ]);
       if (taskRes.error) throw new ActionError(`Taken ophalen mislukt: ${taskRes.error.message}`);
       if (invoiceRes.error) throw new ActionError(`Facturen ophalen mislukt: ${invoiceRes.error.message}`);

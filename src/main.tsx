@@ -662,7 +662,7 @@ function editModeForProposal(p: GerrieProposal, data: AppData): ProposalEditTarg
   switch (p.type) {
     case 'invoice':
       return { page: 'invoices', edit: { kind: 'invoice', item: undefined, defaults: {
-        client_id: p.client_id, notes: p.notes ?? undefined, due_date: p.due_date ?? undefined,
+        client_id: p.client_id, project_id: p.project_id ?? undefined, notes: p.notes ?? undefined, due_date: p.due_date ?? undefined,
         lines: proposalLines(p.lines),
       } } };
     case 'quote':
