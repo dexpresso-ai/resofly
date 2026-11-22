@@ -13,13 +13,13 @@ database. Deze controle keek naar wat daar niet bij zat:
 - wat de boekhouder en de Belastingdienst krijgen;
 - van uren naar factuur, met Gerrie en MCP.
 
-> **Status:** veertien migraties (`20261122090000` t/m `20261122142000`),
+> **Status:** elf migraties (`20261122090000` t/m `20261122142000`),
 > aanpassingen in de schermen van Uren, Projecten, Klanten, Facturen,
 > Offertes, Inkoop, Bank, Grootboek, Omzetbelasting, Eigen vermogen,
 > Inkomstenbelasting, Boekjaren en het dashboard, in Gerrie, MCP en de API,
 > in `bank-sync`, `invoice-workflow` en de media-worker, en vier nieuwe
-> stromenscenario's (`urenfactureren`, `bewaarplicht`, `boekhouder`, en
-> stappen in de bestaande). Uitrol: zie onderaan.
+> stromenscenario's (`urenfactureren`, `factuurregels`, `bewaarplicht`,
+> `boekhouder`) plus stappen in de bestaande. Uitrol: zie onderaan.
 
 ## Werkwijze
 
@@ -94,7 +94,16 @@ Ernst: **hoog** (stil foute cijfers of een doodlopende weg), **midden**,
 | 11 | laag | "12,95" werd 1295 in een Engelstalige browser. | De bedragvelden lezen een komma. |
 | 12 | laag | De factuurpagina van de klant toonde "PDF-snapshot … sent_to_client" en een grijze "Betaal nu" zonder Mollie; de offertemail noemde de geldigheid van de link als verloopdatum; vaktaal ("via Resend", "server-side", "Mollie records"). | Gewone woorden, geen knop zonder betaallink, geen "Geldig tot" zonder verloopdatum. |
 
-<!-- REGELS-OFFERTE-FACTUUR -->
+### Wat de deur uit gaat (migratie `20261122120000_factuurregels`)
+
+| # | Ernst | Wat er misging | Nu |
+|---|---|---|---|
+| 13 | midden | **"Verzonden" in het statusveld (of via Gerrie `invoice.set_status`) sloeg de controles van het versturen over**: een ICP-factuur aan een Belgische klant zonder btw-nummer werd geboekt en stond in de ICP-opgaaf zonder nummer, zonder vastgelegde pdf, en zonder de vraag bij een afgesloten tijdvak. | De database weigert dat een concept rechtstreeks op verzonden, te laat of betaald gaat (trigger `invoices_issue_via_server`); het statusveld biedt het bij een concept niet meer aan. Wie zelf mailt of print, kiest **"Uitgeven zonder mail"**: dezelfde controles als versturen, de pdf wordt vastgelegd, en dan boekt en vergrendelt hij. Uitzondering: een factuur van vóór de startdatum (overstap), die niet geboekt wordt. |
+| 14 | midden | **0% zonder reden aan een klant in het buitenland** ging zonder vermelding en zonder controle op het btw-nummer de deur uit, in rubriek 1e in plaats van 3b, en niet in de ICP-opgaaf. | Bij 0% kies je een reden. Versturen en uitgeven weigeren 0% zonder code, NUL aan een klant in een ander EU-land, export aan een klant in de EU en ICP aan een klant in Nederland of buiten de EU, met een zin die zegt wat je moet kiezen. Het land komt uit het klantveld, anders uit het btw-nummer. Gerrie moet bij 0% een code meegeven. |
+| 15 | midden | **Een factuur uit een offerte had altijd 14 dagen**, terwijl op dezelfde pdf "binnen 30 dagen" stond. | De betaaltermijn uit de bedrijfsgegevens (`payment_term_days`, dezelfde regel als in de app). |
+| 16 | laag | **Korting op het totaal bij twee btw-tarieven** gaf € 1,20 te weinig btw. | Het formulier vraagt of de korting voor het hele bedrag geldt, met de knop "Verdeel over de tarieven" (naar rato, op de cent). Pdf, e-factuur, boeking en aangifte rekenen daardoor ongewijzigd. |
+| 17 | midden | Een voorschot- of termijnfactuur bij een offerte kon niet. | Niet gebouwd (zie Bewust open). De bevestiging bij "Maak factuur van offerte" legt de omweg uit. |
+
 
 ### Bank (migraties `20261122100000_bank_inlezen` en `20261122130000_bank_herstel_verkeerd_ingelezen`)
 
@@ -157,6 +166,7 @@ Ernst: **hoog** (stil foute cijfers of een doodlopende weg), **midden**,
 | Punt | Waarom nog niet |
 |---|---|
 | Terugkerende facturen | Een verstuurde factuur ligt vast; zie fix 3. |
+| Een voorschot- of termijnfactuur bij een offerte | Raakt de unieke index (één factuur per offerte), de omzetfunctie, de btw bij vooruitbetaling (verschuldigd bij ontvangst) en wat "gefactureerd" bij een offerte betekent. Nu: het concept aanpassen tot het eerste deel, de rest als nieuwe facturen bij hetzelfde project. |
 | Bij een deelcreditnota kiezen of uren vrijkomen | Nu blijven ze gefactureerd: een deelcreditnota is een prijscorrectie. |
 | Een waarschuwing bij het kopiëren van een factuur met uren | De kopie kan dezelfde uren nog eens factureren als je de regels laat staan. |
 | IB-tabel 2027 en de rente per 1 januari 2027 | Nog niet vastgesteld; zie fix 40 en 41. |

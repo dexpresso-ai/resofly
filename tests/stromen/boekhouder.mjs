@@ -24,7 +24,7 @@ export default async function boekhouder() {
     const w0 = await maakEenmanszaak('boekh');
     const t = (w0.t = {});
     t.klant = await klant(w0, 'Bureau Noord BV', 'business');
-    t.factuur = await verstuurdeFactuur(w0, t.klant, '2025-03-10', [{ description: 'Fotoshoot', quantity: 1, unit_price: 1000, vat_rate: 21 }]);
+    t.factuur = await verstuurdeFactuur(w0, t.klant, '2025-03-10', [{ description: 'Fotoshoot', quantity: 1, unit_price: 1000, vat: 21 }]);
     t.lev = await leverancier(w0, 'Cameraland');
     t.activa = await rekening(w0, '0100');
     t.cameraFactuur = await inkoopfactuur(w0, t.lev, '2025-04-01', [{ description: 'Camera', amount_cents: 200000, vat_code: 'HOOG', vat_rate: 21, account_id: t.activa.id }]);

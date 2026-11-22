@@ -96,7 +96,7 @@ async function bewijsstukken() {
 
   await stap('een bijlage van een verstuurde factuur ligt ook vast; een bijzaak (wie hem open heeft) mag nog', async () => {
     const k = await klant(w, 'Bureau Noord', 'business');
-    const factuur = await verstuurdeFactuur(w, k, '2026-10-08', [{ description: 'Fotoshoot', quantity: 1, unit_price: 200, vat_rate: 21 }]);
+    const factuur = await verstuurdeFactuur(w, k, '2026-10-08', [{ description: 'Fotoshoot', quantity: 1, unit_price: 200, vat: 21 }]);
     const att = gelukt(await bijlage(w, 'invoice', factuur.id, 'urenstaat.pdf'), 'bijlage bij de verstuurde factuur')[0];
     geweigerd(await rest(`attachments?id=eq.${att.id}`, { method: 'DELETE', token: w.eigenaar.token }), 'DELETE bij een verstuurde factuur');
     geweigerd(await rest(`attachments?id=eq.${att.id}`, { method: 'PATCH', token: w.eigenaar.token, body: { name: 'anders.pdf' } }), 'hernoemen bij een verstuurde factuur');
@@ -117,7 +117,7 @@ async function eFactuur() {
     const t = (w0.t = {});
     t.gemeente = await klant(w0, 'Gemeente Voorbeeld', 'business');
     sql(`update public.clients set e_invoicing_enabled = true, e_invoice_email = 'facturen@gemeente.test', kvk_number = '12345678' where id = ${q(t.gemeente.id)}`);
-    t.factuur = await verstuurdeFactuur(w0, { ...t.gemeente, email: 'facturen@gemeente.test' }, '2026-10-08', [{ description: 'Reportage', quantity: 1, unit_price: 750, vat_rate: 21 }]);
+    t.factuur = await verstuurdeFactuur(w0, { ...t.gemeente, email: 'facturen@gemeente.test' }, '2026-10-08', [{ description: 'Reportage', quantity: 1, unit_price: 750, vat: 21 }]);
     return w0;
   });
   if (!w) return;
@@ -179,7 +179,7 @@ async function eFactuur() {
     sql(`update public.clients set e_invoicing_enabled = true, e_invoice_email = 'facturen@provincie.test', kvk_number = '23456789' where id = ${q(k.id)}`);
     const concept = gelukt(await rest('invoices?select=*', { method: 'POST', token: w.eigenaar.token, prefer: 'return=representation', body: {
       organization_id: w.orgId, created_by: w.eigenaar.id, client_id: k.id, project_id: null, number: `F2026-${randomUUID().slice(0, 6)}`, date: '2026-10-09', due_date: '2026-10-23', status: 'draft', notes: null,
-      lines: [{ id: randomUUID(), description: 'Advies', quantity: 1, unit_price: 100, vat_rate: 21 }],
+      lines: [{ id: randomUUID(), description: 'Advies', quantity: 1, unit_price: 100, vat: 21 }],
     } }), 'concept')[0];
     // De eerste opslag (de PDF) lukt, de tweede (de e-factuur) niet.
     const echt = globalThis.fetch;
@@ -203,7 +203,7 @@ async function eFactuur() {
   await stap('een gewone factuur (nooit als e-factuur verstuurd) wordt nog live opgebouwd, en het scherm zegt dat erbij', async () => {
     const k = await klant(w, 'Bureau Zuid', 'business');
     sql(`update public.clients set kvk_number = '34567890' where id = ${q(k.id)}`);
-    const f = await verstuurdeFactuur(w, k, '2026-10-10', [{ description: 'Fotoshoot', quantity: 1, unit_price: 200, vat_rate: 21 }]);
+    const f = await verstuurdeFactuur(w, k, '2026-10-10', [{ description: 'Fotoshoot', quantity: 1, unit_price: 200, vat: 21 }]);
     const res = gelukt(await wf(w, 'downloadInvoiceUbl', { invoiceId: f.id }), 'e-factuur van een gewone factuur');
     gelijk(res.ubl.stored, false, 'niet het bewaarde bestand');
     verwacht(res.ubl.warnings.some((x) => /niet als e-factuur verstuurd/.test(x)), `aandachtspunten: ${res.ubl.warnings.join(' | ')}`);
