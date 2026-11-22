@@ -230,7 +230,9 @@ Op **Vennoten** staat bovenaan de verdeling van het boekjaar ("vastgelegd voor d
     vooraf (`splitWithPrior`, ook bij verlies en een restcent), de
     urenprognose tegenover `projectHourCriterion`, het geboekte bedrag van een
     afgesloten jaar, de kaarten van Gerrie en de auditfile;
-  - `npm run test:mobile -- --theme=both`: MOBIEL;
+  - `npm run test:mobile -- --theme=both`: 842 pagina's in licht en donker,
+    0 problemen, met zes nieuwe pagina's voor de verdeling, Vennoten en
+    Privé ontvangen;
   - `test:loading`, `test:inrichten` en `test:terugknop` (15/15): geslaagd.
 - **Deno-check** van de 37 bestanden uit de CI-lijst: schoon. Dat ging met
   een importmap naar npm, omdat esm.sh hier dicht staat.
@@ -267,4 +269,30 @@ Op **Vennoten** staat bovenaan de verdeling van het boekjaar ("vastgelegd voor d
 
 ## Uitrol
 
-UITROL
+Twee migraties, in deze volgorde: `20261122100000_vof_verdeling_per_boekjaar`
+en `20261122110000_vof_bank_inkoop_prive`. Ze zijn veilig om opnieuw te
+draaien.
+
+Wat ze met bestaande gegevens doen:
+
+- **Rechtsvorm per boekjaar:** elk boekjaar krijgt de rechtsvorm van nu. Een
+  afgesloten jaar waarvan de winst naar de vennoten ging, wordt "vof" als de
+  organisatie nu geen vof, maatschap of cv meer is. Er verandert geen boeking.
+- **De verdeling van afgesloten jaren:** die komt uit het afsluitboekstuk.
+  - Het bedrag per vennoot is wat er geboekt is.
+  - Het percentage is dat van nu als dat precies dezelfde bedragen geeft,
+    anders teruggerekend uit de bedragen.
+  - Er verandert geen boeking; het overzicht van die jaren toont nu wat er
+    geboekt is.
+- **`share_changed_at`:** komt uit het auditlog, of anders uit het moment van
+  vastleggen. Een vof met een vorig jaar dat nog open staat, en waarvan de
+  vennoten sindsdien zijn gewijzigd, legt bij het afsluiten eerst de
+  verdeling van dat jaar vast. Zo is het bedoeld: daarvoor ging de winst stil
+  naar de vennoten van nu.
+- **Leveranciers:** wie een privé- of kapitaalrekening als standaardrekening
+  had, verliest de standaard-btw-code daarbij. Wat er al geboekt is, blijft
+  staan.
+- **Verder niets:** de functies werken voor nieuwe afsluitingen, overzichten
+  en ramingen.
+
+Ook de edge functions gaan mee: de handelingen van Gerrie, MCP en de API.
