@@ -296,3 +296,28 @@ Wat ze met bestaande gegevens doen:
   en ramingen.
 
 Ook de edge functions gaan mee: de handelingen van Gerrie, MCP en de API.
+
+**Staging: uitgerold op 22 november 2026** (merge `be64894`):
+
+- *Deploy Supabase (staging)* run 252:
+  - beide migraties zijn toegepast ("Push database migrations" in 6
+    seconden; de CLI breekt af bij een fout in een migratie);
+  - alle 40 edge functions zijn uitgerold, met de handelingen van Gerrie, MCP
+    en de API;
+  - de rooktest is geslaagd (Postgres 17.11), ook "boekhouder-hek: elke
+    organisatietabel is afgeschermd" (de nieuwe tabel valt eronder) en
+    "anon heeft geen rechten in public".
+- *Frontend checks* run 274: alles groen.
+  - De keten vanaf nul op een lege database, elk migratiebestand toegepast,
+    en de databasetests.
+  - `deno check` op de edge functions (met esm.sh: dat kon hier niet).
+  - Typecheck, de unit tests, en de mobiele lay-outtest in licht en donker.
+  - Laden per module, de inrichtingsstappen en de terugknop.
+- Cloudflare Pages bouwt de app bij de push naar `staging`; dat is van hieruit
+  niet te zien.
+
+De staging-database zelf is niet ingezien: Supabase is in deze sessie niet als
+koppeling verbonden. De controle is de uitrol, de rooktest, en dezelfde
+migraties op een lege en een gevulde lokale database.
+
+Voor productie: dezelfde twee migraties, in volgorde.
