@@ -56,6 +56,7 @@ import {
   createTimeEntry,
   updateTimeEntry,
   disableOrganizationMember,
+  setAccountantBooking,
   createSavedReport,
   insertRow,
   inviteOrganizationMember,
@@ -1903,6 +1904,12 @@ function App() {
     if (!activeMembership || activeMembership.role !== 'owner') throw new Error('Alleen owners kunnen teamleden uitschakelen.');
     assertNotPeerOwner(memberId, 'uitschakelen');
     await disableOrganizationMember(memberId, activeOrganizationId);
+    await loadWorkspace();
+  }
+
+  async function changeAccountantBooking(memberId: string, enabled: boolean) {
+    if (!ensureCanAdmin()) throw new Error('Alleen owners en admins bepalen of de boekhouder mag boeken.');
+    await setAccountantBooking(memberId, enabled);
     await loadWorkspace();
   }
 
@@ -4361,7 +4368,7 @@ function App() {
     },
   };
 
-  const pageReadOnly = !(orgCanWrite && permissions.canWritePage(page));
+  const pageReadOnly = !((orgCanWrite && permissions.canWritePage(page)) || permissions.canBookPage(page));
   // Baken: de gouden knop "+ Nieuw" rechtsboven, zoals "Nieuwe taak" in Value
   // Backlog. Alleen wat dit teamlid mag maken: de module moet open staan en
   // schrijfbaar zijn, net als bij de knop op de pagina zelf. De rechten gaan per
@@ -4658,7 +4665,12 @@ function App() {
     // wijzig-knoppen in de pagina actief zijn. Schaduwt bewust de organisatie-
     // brede canWrite hierboven, zodat elke pagina automatisch het juiste niveau
     // meekrijgt zonder dat elke prop apart aangepast hoeft te worden.
-    const canWrite = orgCanWrite && permissions.canWritePage(page);
+    // De boekhouder die mag boeken is geen schrijver (orgCanWrite), maar mag op
+    // de boekhoudpagina's wel corrigeren en afsluiten. Alleen daar; de pagina's
+    // zelf laten weg wat hij niet mag (rekeningschema, activum aanmaken).
+    const canBook = permissions.canBookPage(page);
+    const canManage = orgCanWrite && permissions.canWritePage(page);
+    const canWrite = canManage || canBook;
     // Contracten horen bij de financiële module, ook als je ze vanaf een project
     // bekijkt. De projectpagina leunt dus niet op canWrite hierboven (dat is
     // 'projects'), maar op het niveau van 'finance'.
@@ -4709,9 +4721,9 @@ function App() {
       draft={view.pendingDraft?.kind === 'purchase_invoice' ? purchaseInvoiceSeedFrom(view.pendingDraft.payload) : null} onDraftConsumed={() => setPendingDraft(null)}
       inboxActivity={purchaseInbox.activity}/>;
     if (page === 'declarations') return <DeclarationsPage organizationId={activeOrg.id} canWrite={canWrite}/>;
-    if (page === 'ledger') return <LedgerPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} canWriteClients={orgCanWrite && permissions.canWrite('clients')}/>;
+    if (page === 'ledger') return <LedgerPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canManageChart={canManage} onChanged={refresh} canWriteClients={orgCanWrite && permissions.canWrite('clients')}/>;
     if (page === 'bank') return <BankPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;
-    if (page === 'assets') return <AssetsPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;
+    if (page === 'assets') return <AssetsPage data={data} organizationId={activeOrg.id} canWrite={canManage} canDepreciate={canBook} onChanged={refresh}/>;
     if (page === 'prepaid') return <PrepaidPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;
     if (page === 'pnl') return <ProfitLossPage data={data} organizationId={activeOrg.id} onChanged={refresh}/>;
     // De prognose laadt zijn eigen cijfers (forecast_history); refreshRound laat
@@ -4723,7 +4735,7 @@ function App() {
     if (page === 'owners') return <OwnersPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} ownerUserId={organizationContext.teamMembers.find(member => member.role === 'owner')?.user_id ?? null} canReadHours={permissions.canRead('time')} teamMembers={workMembers} currentUserId={currentUserId}/>;
     if (page === 'income-tax') return <IncomeTaxPage data={data} organizationId={activeOrg.id} canWrite={canWrite}/>;
     if (page === 'shareholders') return <ShareholdersPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;
-    if (page === 'fiscal-years') return <FiscalYearsPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;
+    if (page === 'fiscal-years') return <FiscalYearsPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin || canBook} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;
     if (page === 'annual-accounts') return <AnnualAccountsPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;
     if (page === 'weekplanner') return <WeekPlanner data={data} organizationId={activeOrg.id} canWrite={canWrite} teamMembers={workMembers} currentUserId={currentUserId} onPlanTask={updateTaskPlanning} onPlanTaskTime={planTaskAtTime} onSetTaskPeriod={updateTaskPeriod} onQuickAddTask={quickAddTask} onCarryOver={carryOverTasks} onAssignTask={assignTaskToMember} onAddNote={addPlannerNote} onToggleNote={togglePlannerNote} onRemoveNote={removePlannerNote} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onSetTaskStatus={setTaskStatus} onSetTaskEstimate={setTaskEstimate} onOpenProject={(id) => { setProjectId(id); setClientId(null); setPage('project'); }} onOpenCalendar={(dateKey) => { setCalendarJump(dateKey); setPage('calendar'); }} onSaveCapacity={savePlannerCapacity} onStopTimer={stopTimerForTask} onOpenTicket={(ticketId) => { const ticket = data.tickets.find(t => t.id === ticketId); if (ticket) { setEdit({ kind: 'ticket', item: ticket }); markTicketRead(ticket.id).then(refreshTicketUnread).catch(() => {}); } }} onLinkTaskToEvent={linkTaskToEvent} onUnlinkTaskEvent={unlinkTaskEvent} onReserveTime={reserveTimeForTask}/>;
     if (page === 'calendar') return <CalendarPage mode="agenda" initialDate={calendarJump} key={calendarJump ?? 'today'} initialDraft={calendarDraft} onDraftConsumed={() => setCalendarDraft(null)} onMoveTask={(task, dayKey, startMin, endMin) => planTaskAtTime(task.id, dayKey, startMin, Math.max(15, endMin - startMin))} organizationId={activeOrg.id} currentUserId={currentUserId} data={data} canWrite={canWrite} onChanged={refresh} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onNewNoteForEvent={openNoteForCalendarEvent} onNewDocumentForEvent={openDocumentForCalendarEvent} onSetEventLink={setCalendarEventLink} onEditNote={(note) => setEdit({kind:'note', item: note})} onLinkExistingNoteToEvent={linkExistingNoteToCalendarEvent} onUnlinkNoteFromEvent={unlinkNoteFromCalendarEvent}/>;
@@ -4752,7 +4764,7 @@ function App() {
       // (er lichtte niets op), en sloeg de terugknop het onderdeel over. De
       // `key` blijft gelijk: die zet het logboek op nul, en dat hoort alleen
       // bij navigeren via het menu.
-      return <Settings settings={data.companySettings} data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} organizationContext={organizationContext} currentUserId={currentUserId} push={push} settingsNav={settingsNav} calendarSettings={calendarSettings} onCreateOrganization={createNewOrganization} onSwitchOrganization={switchOrganization} onInviteMember={inviteMember} onAcceptInvitation={acceptInvitation} onUpdateMemberRole={changeMemberRole} onSetMemberModuleAccess={changeMemberModuleAccess} onDisableMember={disableMember} onRevokeInvitation={revokeInvitation} onSave={saveCompanySettings} permissions={permissions} onOpenAuditTarget={openAuditTarget} onSetAiConsent={changeAiConsent} onTabChange={tab => setSettingsNav(prev => ({ tab, key: prev?.key ?? 0 }))}/>;
+      return <Settings settings={data.companySettings} data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} organizationContext={organizationContext} currentUserId={currentUserId} push={push} settingsNav={settingsNav} calendarSettings={calendarSettings} onCreateOrganization={createNewOrganization} onSwitchOrganization={switchOrganization} onInviteMember={inviteMember} onAcceptInvitation={acceptInvitation} onUpdateMemberRole={changeMemberRole} onSetMemberModuleAccess={changeMemberModuleAccess} onDisableMember={disableMember} onSetAccountantBooking={changeAccountantBooking} onRevokeInvitation={revokeInvitation} onSave={saveCompanySettings} permissions={permissions} onOpenAuditTarget={openAuditTarget} onSetAiConsent={changeAiConsent} onTabChange={tab => setSettingsNav(prev => ({ tab, key: prev?.key ?? 0 }))}/>;
     }
     return <div className="empty"><div className="e-big">Geen project geselecteerd</div></div>;
   }

@@ -1425,7 +1425,15 @@ function ledgerFiscalYearBounds(startMonth: number, year: number): { start: stri
  * canWriteClients: de import van een auditfile kan ook klanten toevoegen, en
  * dat hoort bij de module Klanten, niet bij Financiën (CLAUDE.md, regel 3).
  */
-export function LedgerPage({ data, organizationId, canWrite, onChanged, canWriteClients = false }: PageProps & { canWriteClients?: boolean }) {
+export function LedgerPage({ data, organizationId, canWrite, onChanged, canWriteClients = false, canManageChart = canWrite }: PageProps & {
+  canWriteClients?: boolean;
+  /**
+   * Mag het rekeningschema worden beheerd? Standaard wie mag schrijven. De
+   * boekhouder die mag boeken niet: hij boekt en corrigeert, het schema is van
+   * de ondernemer (de database weigert het ook).
+   */
+  canManageChart?: boolean;
+}) {
   const [tab, setTab] = useState<'journal' | 'accounts' | 'trial' | 'vat' | 'opening'>('journal');
   const fiscalStartMonth = data.companySettings?.fiscal_year_start_month ?? 1;
 
@@ -1451,7 +1459,7 @@ export function LedgerPage({ data, organizationId, canWrite, onChanged, canWrite
   const xafPeriod = xafPeriods.find(p => p.key === xafKey) ?? xafPeriods[0];
 
   if (data.ledgerAccounts.length === 0) {
-    return <div className="bk-page"><SetupBanner organizationId={organizationId} canWrite={canWrite} onChanged={onChanged} /></div>;
+    return <div className="bk-page"><SetupBanner organizationId={organizationId} canWrite={canManageChart} onChanged={onChanged} /></div>;
   }
 
   function exportXaf() {
@@ -1478,7 +1486,7 @@ export function LedgerPage({ data, organizationId, canWrite, onChanged, canWrite
         <button className={tab === 'opening' ? 'is-active' : ''} onClick={() => setTab('opening')}><Scale size={15} /> Beginbalans</button>
       </div>
       {tab === 'journal' && <JournalView data={data} organizationId={organizationId} canWrite={canWrite} onChanged={onChanged} />}
-      {tab === 'accounts' && <AccountsView data={data} organizationId={organizationId} canWrite={canWrite} onChanged={onChanged} />}
+      {tab === 'accounts' && <AccountsView data={data} organizationId={organizationId} canWrite={canManageChart} onChanged={onChanged} />}
       {tab === 'trial' && <TrialBalanceView data={data} organizationId={organizationId} canWrite={canWrite} onChanged={onChanged} />}
       {tab === 'vat' && <VatCodesView vatCodes={data.vatCodes} />}
       {tab === 'opening' && <OpeningBalanceView data={data} organizationId={organizationId} canWrite={canWrite} onChanged={onChanged} canWriteClients={canWriteClients} />}

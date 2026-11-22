@@ -10,7 +10,7 @@ import { vatFilingDeadline } from '../lib/vatPeriods';
 import { downloadCsv } from '../lib/csv';
 import {
   closeVatPeriod, computeIcpDeclaration, computeVatReturn, computeVatSupplementDelta, createVatSupplement,
-  listVatSupplementEntries, reportProfitAndLoss, setUpBookkeeping, updateRow,
+  listVatSupplementEntries, reportProfitAndLoss, setUpBookkeeping, setVatReturnStatus,
 } from '../lib/repository';
 
 const euroCents = (cents: number | null | undefined) => euro((cents ?? 0) / 100);
@@ -219,7 +219,11 @@ export function VatReturnsPage({ data, organizationId, canWrite, onChanged }: { 
   async function setStatus(target: VatReturn, status: VatReturn['status']) {
     if (!canWrite) return;
     setBusy(true); setError(null);
-    try { await updateRow<VatReturn>('vat_returns', target.id, { status }, organizationId); onChanged(); }
+    try {
+      if (status !== 'filed' && status !== 'paid') throw new Error('Deze statuswijziging van de btw-aangifte is niet toegestaan.');
+      await setVatReturnStatus(organizationId, target.id, status);
+      onChanged();
+    }
     catch (e) { setError(e instanceof Error ? e.message : 'Status bijwerken mislukt'); }
     finally { setBusy(false); }
   }

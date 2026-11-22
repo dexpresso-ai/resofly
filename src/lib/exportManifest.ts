@@ -105,7 +105,12 @@ export const EXPORT_FORMAT_VERSION = 1;
 // herstellen) vervangen functies en triggers; geen tabellen of kolommen.
 // 20261120100000 (briefpapier los) zet alleen de functie company_settings_core
 // erbij; geen tabellen of kolommen. Het briefpapier gaat gewoon mee in de export.
-export const EXPORT_SCHEMA_VERSION = '20261120100000';
+// 20261122130000 (bank herstellen) zet excluded_at/_by/_reason op
+// bank_transactions en 20261122133000 accountant_can_book op
+// organization_members; die gaan met hun tabel mee. 20261122132000 zet de
+// tabel sent_e_invoices erbij, met het bestand (storage_key) in de export.
+// 20261122131000 vervangt alleen functies en triggers.
+export const EXPORT_SCHEMA_VERSION = '20261122133000';
 
 export type TableKind =
   | 'export'

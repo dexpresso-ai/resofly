@@ -48,6 +48,12 @@ export function isWriterRole(role: unknown): boolean {
  * - owner/admin: altijd volledig — zij stellen de rechten juist in;
  * - boekhouder (gast): Financiën alleen lezen, de rest dicht. Vast; wat er in
  *   module_access staat, telt dan niet;
+ *   Ook met "mag boeken" (organization_members.accountant_can_book, migratie
+ *   20261122133000) blijft dit lezen. Boeken kan de boekhouder alleen met zijn
+ *   eigen sessie via de functies in public.accountant_booking_context; een edge
+ *   function draait op de service-role en zou die lijst overslaan. Daarom
+ *   opent die stand hier bewust niets: Gerrie, de agents, MCP en de API boeken
+ *   nooit namens de boekhouder;
  * - viewer: nooit meer dan lezen;
  * - member: wat er is ingesteld, en een ontbrekende sleutel = volledig;
  * - een rol die deze regel niet kent: niets.

@@ -650,6 +650,17 @@ export async function setMemberModuleAccess(memberId: UUID, moduleAccess: Module
 }
 
 /**
+ * "Mag boeken" voor de boekhouder aan- of uitzetten (eigenaar of beheerder).
+ * Aan: de boekhouder mag corrigeren en afsluiten (memoriaal, btw-aangifte,
+ * boekjaar, aangifte IB). Facturen, inkoop, bank, klanten en team blijven dicht.
+ */
+export async function setAccountantBooking(memberId: UUID, enabled: boolean): Promise<OrganizationMember> {
+  const { data, error } = await supabase.rpc('set_accountant_booking', { p_member_id: memberId, p_enabled: enabled });
+  if (error) throw error;
+  return (Array.isArray(data) ? data[0] : data) as OrganizationMember;
+}
+
+/**
  * De debiteuren zoals ze op de financiële stukken staan — voor wie Financiën
  * mag lezen maar Klanten niet, zoals de boekhouder. Zonder deze lijst hebben
  * facturen geen naam en de XAF-auditfile geen debiteuren. Alleen de velden van
@@ -2858,6 +2869,20 @@ export async function undoBankStatement(organizationId: UUID, statementId: UUID)
   if (error) throw bookkeepingError(error);
   const row = (data ?? {}) as { removed?: number; kept_excluded?: number };
   return { removed: Number(row.removed ?? 0), keptExcluded: Number(row.kept_excluded ?? 0) };
+}
+
+/**
+ * Een afgesloten btw-aangifte op ingediend of betaald zetten. Een functie en
+ * geen PATCH op de tabel: de boekhouder die mag boeken schrijft nergens
+ * rechtstreeks, en zo loopt het voor iedereen langs dezelfde weg.
+ */
+export async function setVatReturnStatus(organizationId: UUID, vatReturnId: UUID, status: 'filed' | 'paid'): Promise<void> {
+  const { error } = await supabase.rpc('set_vat_return_status', {
+    p_organization_id: organizationId,
+    p_vat_return_id: vatReturnId,
+    p_status: status,
+  });
+  if (error) throw bookkeepingError(error);
 }
 
 /** Een bankregel samenvoegen met de handmatige mutatie die hij bevestigt. */

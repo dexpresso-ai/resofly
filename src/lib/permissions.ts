@@ -147,7 +147,19 @@ export function parseModuleAccess(raw: unknown): ModuleAccess {
 export interface MembershipLike {
   role: OrganizationRole;
   module_access?: unknown;
+  accountant_can_book?: boolean | null;
 }
+
+/**
+ * Pagina's waar een boekhouder met "mag boeken" kan wijzigen. Spiegel van de
+ * lijst in public.accountant_booking_context (migratie 20261122133000): de
+ * database staat hem alleen de functies toe die bij deze pagina's horen
+ * (memoriaal, beginbalans, vooruitbetaald, afschrijven, btw-aangifte,
+ * boekjaren, aangifte inkomstenbelasting). De vaste regel per module blijft
+ * "Financiën lezen"; alles daarbuiten (facturen, inkoop, bank, klanten, team)
+ * is en blijft dicht.
+ */
+export const BOOKING_PAGES: readonly string[] = ['ledger', 'prepaid', 'assets', 'vat-returns', 'fiscal-years', 'income-tax'];
 
 export interface Permissions {
   /** Effectief niveau voor één module. */
@@ -158,6 +170,12 @@ export interface Permissions {
   canOpenPage: (page: string) => boolean;
   /** Mag er op deze pagina gewijzigd worden? */
   canWritePage: (page: string) => boolean;
+  /**
+   * Is dit de boekhouder met "mag boeken", op een pagina waar hij mag boeken?
+   * Dan mag hij daar corrigeren en afsluiten, maar niet wat de pagina verder
+   * kan (een rekening of activum aanmaken): dat blijft bij canWritePage.
+   */
+  canBookPage: (page: string) => boolean;
   /** Is dit lid ergens beperkt? (bepaalt of we het uitlegzinnetje tonen) */
   isRestricted: boolean;
   /**
@@ -271,6 +289,7 @@ export function buildPermissions(membership: MembershipLike | null | undefined, 
       const module = PAGE_MODULE[page];
       return module ? canWrite(module) : true;
     },
+    canBookPage: (page: string) => role === 'accountant' && Boolean(membership?.accountant_can_book) && BOOKING_PAGES.includes(page),
     // Over de rechten die iemand kreeg, niet over zijn eigen keuze voor Gerrie.
     isRestricted: Boolean(role) && role !== 'owner' && role !== 'admin'
       && MODULE_KEYS.some(key => moduleLevel(key) !== 'write'),

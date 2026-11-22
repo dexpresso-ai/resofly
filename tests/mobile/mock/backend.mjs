@@ -358,6 +358,13 @@ function bankHerstelRows() {
   };
 }
 
+/** `accountant: true` (2026-11-22): er is een boekhouder, en die mag boeken. */
+const ACCOUNTANT_MEMBER = {
+  id: 'acc00000-0000-4000-8000-000000000001', organization_id: seed.ids.ORG, user_id: 'acc00000-0000-4000-8000-0000000000u1', role: 'accountant',
+  status: 'active', invited_by: seed.ids.USER, joined_at: '2026-10-01T09:00:00Z', created_at: '2026-10-01T09:00:00Z', updated_at: '2026-10-01T09:00:00Z',
+  email: 'boekhouder@administratiekantoor-voorbeeld.nl', module_access: {}, accountant_can_book: true,
+};
+
 function prepaidRows() {
   const expense = LEDGER_ACCOUNTS.find(a => a.code === '4500').id;
   const bank = LEDGER_ACCOUNTS.find(a => a.code === '1100').id;
@@ -1041,6 +1048,8 @@ export async function installMock(context, options = {}) {
         : options.ledger && table === 'ledger_accounts' ? (options.prepaid ? [...LEDGER_ACCOUNTS, PREPAID_ACCOUNT] : LEDGER_ACCOUNTS)
         : prepaid && table in prepaid ? prepaid[table]
         : bankHerstel && table in bankHerstel ? bankHerstel[table]
+        : options.accountant && table === 'organization_members' && !(url.searchParams.get('select') ?? '').includes('organizations(')
+          ? [...restRows(table, url, setup), ACCOUNTANT_MEMBER]
         : gallery && table in gallery ? gallery[table].filter(r => [...url.searchParams.entries()].every(([k, v]) => !(k in r) || matchFilter(r[k], v)))
         : restRows(table, url, setup);
       const accept = req.headers()['accept'] ?? '';

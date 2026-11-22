@@ -9,7 +9,8 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildPermissions, firstAllowedPage, isAccountantRole, isWriterRole, MODULE_KEYS, PAGE_MODULE } from './permissions.ts';
+import { readFileSync } from 'node:fs';
+import { BOOKING_PAGES, buildPermissions, firstAllowedPage, isAccountantRole, isWriterRole, MODULE_KEYS, PAGE_MODULE } from './permissions.ts';
 
 const accountant = buildPermissions({ role: 'accountant', module_access: { clients: 'write', finance: 'write' } });
 
@@ -64,4 +65,37 @@ test('rolhulpjes', () => {
   assert.equal(isWriterRole('accountant'), false);
   assert.equal(isWriterRole('member'), true);
   assert.equal(isWriterRole(null), false);
+});
+
+test('de boekhouder die mag boeken: alleen op de boekhoudpagina\'s, en de vaste regel blijft lezen', () => {
+  // 20261122133000: "mag boeken" opent geen module. De database staat alleen
+  // een lijst functies toe; de app toont de knoppen alleen op hun pagina's.
+  const kijkt = buildPermissions({ role: 'accountant', accountant_can_book: false });
+  const boekt = buildPermissions({ role: 'accountant', accountant_can_book: true });
+  for (const page of BOOKING_PAGES) {
+    assert.equal(kijkt.canBookPage(page), false, page);
+    assert.equal(boekt.canBookPage(page), true, page);
+    assert.equal(boekt.canWritePage(page), false, `${page}: geen volledig schrijfrecht`);
+    assert.equal(PAGE_MODULE[page], 'finance', `${page} hoort bij Financiën`);
+  }
+  for (const page of ['invoices', 'quotes', 'contracts', 'purchase-invoices', 'suppliers', 'bank', 'clients', 'settings', 'dashboard']) {
+    assert.equal(boekt.canBookPage(page), false, page);
+  }
+  assert.equal(boekt.level('finance'), 'read');
+  assert.equal(boekt.canWrite('finance'), false);
+  // Het vlaggetje doet niets bij een andere rol.
+  assert.equal(buildPermissions({ role: 'viewer', accountant_can_book: true }).canBookPage('ledger'), false);
+  assert.equal(buildPermissions({ role: 'member', accountant_can_book: true }).canBookPage('ledger'), false);
+});
+
+test('de pagina\'s van de boekhouder passen bij de lijst in de database', () => {
+  // Elke pagina heeft minstens één functie in accountant_booking_context; staat
+  // die er niet meer, dan toont de app knoppen die de database weigert.
+  const sql = readFileSync(new URL('../../supabase/migrations/20261122133000_boekhouder_mag_boeken.sql', import.meta.url), 'utf8');
+  const perPage: Record<string, string> = {
+    ledger: 'post_journal_entry', prepaid: 'post_prepaid_releases', assets: 'post_asset_depreciation',
+    'vat-returns': 'finalize_vat_return', 'fiscal-years': 'close_fiscal_year', 'income-tax': 'save_income_tax_profile',
+  };
+  assert.deepEqual([...BOOKING_PAGES].sort(), Object.keys(perPage).sort());
+  for (const [page, fn] of Object.entries(perPage)) assert.ok(sql.includes(fn), `${page}: ${fn} staat niet in de lijst`);
 });

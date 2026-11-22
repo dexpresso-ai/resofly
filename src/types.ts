@@ -100,6 +100,11 @@ export interface OrganizationMember {
   /** Rechtenniveau per module (none/read/write). Ontbrekende sleutel = volledig.
    *  Zie src/lib/permissions.ts; genegeerd voor owners en admins. */
   module_access?: Record<string, string> | null;
+  /**
+   * Alleen bij de boekhouder: mag hij boeken en afsluiten (vanaf 20261122133000)?
+   * Zie BOOKING_PAGES in src/lib/permissions.ts voor wat dat opent.
+   */
+  accountant_can_book?: boolean | null;
 }
 
 export interface AuditLog {

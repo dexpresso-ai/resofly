@@ -17,7 +17,14 @@ const assetStatusLabel: Record<FixedAsset['status'], string> = {
   active: 'Actief', fully_depreciated: 'Volledig afgeschreven', disposed: 'Afgestoten',
 };
 
-type PageProps = { data: AppData; organizationId: string; canWrite: boolean; onChanged: () => void };
+type PageProps = {
+  data: AppData; organizationId: string; canWrite: boolean; onChanged: () => void;
+  /**
+   * De boekhouder die mag boeken: hij mag het schema maken en afschrijvingen
+   * boeken, maar geen activum aanmaken, wijzigen of desinvesteren.
+   */
+  canDepreciate?: boolean;
+};
 
 function SetupBanner({ organizationId, canWrite, onChanged }: { organizationId: string; canWrite: boolean; onChanged: () => void }) {
   const [busy, setBusy] = useState(false);
@@ -65,7 +72,7 @@ function assetBookValue(asset: FixedAsset, deps: AssetDepreciation[]): { posted:
   return { posted, bookValue: asset.status === 'disposed' ? 0 : asset.acquisition_cost_cents - posted };
 }
 
-export function AssetsPage({ data, organizationId, canWrite, onChanged }: PageProps) {
+export function AssetsPage({ data, organizationId, canWrite, onChanged, canDepreciate = false }: PageProps) {
   const [edit, setEdit] = useState<FixedAsset | 'new' | null>(null);
   const depsByAsset = useMemo(() => {
     const map = new Map<string, AssetDepreciation[]>();
@@ -117,7 +124,7 @@ export function AssetsPage({ data, organizationId, canWrite, onChanged }: PagePr
               );
             })}</tbody>
           </table></div>}
-      {edit && <AssetForm data={data} organizationId={organizationId} canWrite={canWrite}
+      {edit && <AssetForm data={data} organizationId={organizationId} canWrite={canWrite} canDepreciate={canWrite || canDepreciate}
         asset={edit === 'new' ? null : edit} onClose={() => setEdit(null)} onChanged={onChanged} />}
     </div>
   );
@@ -128,8 +135,8 @@ function endOfCurrentMonth(): string {
   return formatISODate(new Date(now.getFullYear(), now.getMonth() + 1, 0));
 }
 
-function AssetForm({ data, organizationId, canWrite, asset, onClose, onChanged }: {
-  data: AppData; organizationId: string; canWrite: boolean; asset: FixedAsset | null;
+function AssetForm({ data, organizationId, canWrite, canDepreciate, asset, onClose, onChanged }: {
+  data: AppData; organizationId: string; canWrite: boolean; canDepreciate: boolean; asset: FixedAsset | null;
   onClose: () => void; onChanged: () => void;
 }) {
   const accountId = (code: string) => data.ledgerAccounts.find(a => a.code === code)?.id ?? '';
@@ -483,8 +490,8 @@ function AssetForm({ data, organizationId, canWrite, asset, onClose, onChanged }
           <div className="bk-schedule-head">
             <h4><Layers size={15} /> Afschrijvingsschema</h4>
             <div className="bk-schedule-actions">
-              {canWrite && !isDisposed && <Button onClick={generate} disabled={busy}>{schedule.length ? 'Herbereken schema' : 'Genereer schema'}</Button>}
-              {canWrite && !isDisposed && schedule.length > 0 && <span className="bk-post-inline">
+              {canDepreciate && !isDisposed && <Button onClick={generate} disabled={busy}>{schedule.length ? 'Herbereken schema' : 'Genereer schema'}</Button>}
+              {canDepreciate && !isDisposed && schedule.length > 0 && <span className="bk-post-inline">
                 {/* Niet verder dan het einde van dit jaar: "t/m 2062" (een tikfout) boekte in één keer alle termijnen. */}
                 <Input type="date" value={throughDate} max={`${today.slice(0, 4)}-12-31`} onChange={e => setThroughDate(e.target.value)} />
                 <Button variant="primary" onClick={post} disabled={busy || dueCount === 0}><CalendarClock size={14} /> Boek t/m ({dueCount})</Button>

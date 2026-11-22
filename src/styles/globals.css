@@ -249,6 +249,8 @@ html,body,#root{height:100%}body{background:var(--bg);color:var(--text);font-fam
 .accountant-scope ul{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:3px;font-size:12px;line-height:1.45;color:var(--text)}
 .accountant-scope>div:last-child ul{color:var(--muted2)}
 .team-row .accountant-actions{flex-direction:row;flex-wrap:wrap;gap:8px}
+.accountant-booking{align-items:flex-start;margin-top:10px}
+.accountant-booking>span{display:flex;flex-direction:column;gap:3px;min-width:0}
 .accountant-invite{grid-template-columns:minmax(0,1fr) auto}
 .accountant-invite .btn{white-space:nowrap}
 @media(max-width:900px){.accountant-scope{grid-template-columns:1fr}.accountant-invite{grid-template-columns:1fr}}

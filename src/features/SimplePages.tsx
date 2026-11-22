@@ -1597,6 +1597,7 @@ function AccountantAccessCard({
   onInvite,
   onRevokeInvitation,
   onDisableMember,
+  onSetBooking,
 }: {
   organizationContext: OrganizationContext;
   canAdmin: boolean;
@@ -1605,9 +1606,11 @@ function AccountantAccessCard({
   onInvite: (email: string) => Promise<{ emailSent: boolean; emailError?: string }>;
   onRevokeInvitation: (invitationId: string) => Promise<void>;
   onDisableMember: (memberId: string) => Promise<void>;
+  /** "Mag boeken" aan of uit (eigenaar of beheerder). */
+  onSetBooking: (memberId: string, enabled: boolean) => Promise<void>;
 }) {
   const [email, setEmail] = useState('');
-  const [busy, setBusy] = useState<'invite' | 'resend' | 'revoke' | 'disable' | null>(null);
+  const [busy, setBusy] = useState<'invite' | 'resend' | 'revoke' | 'disable' | 'booking' | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -1656,11 +1659,22 @@ function AccountantAccessCard({
     return 'Toegang ingetrokken. Je kunt nu een andere boekhouder uitnodigen.';
   });
 
+  // Standaard kijkt de boekhouder alleen mee. Wie zijn aangifte door de
+  // boekhouder laat doen, wil dat die de correcties zelf kan boeken: anders
+  // moest hij elke boeking dicteren, of een betaalde licentie krijgen.
+  const canBook = Boolean(accountant?.accountant_can_book);
+  const toggleBooking = () => accountant && run('booking', async () => {
+    const next = !canBook;
+    if (next && !confirm(`${accountant.email ?? 'Je boekhouder'} laten boeken? Je boekhouder mag dan memoriaalboekingen maken en tegenboeken, afschrijvingen en vooruitbetaalde kosten boeken, de btw-aangifte en het boekjaar afsluiten en heropenen, en de gegevens voor je aangifte inkomstenbelasting invullen. Facturen, inkoop, bank, klanten en instellingen blijven van jou. Je kunt dit altijd weer uitzetten.`)) return null;
+    await onSetBooking(accountant.id, next);
+    return next ? 'Je boekhouder mag nu boeken en afsluiten.' : 'Je boekhouder kan weer alleen meekijken.';
+  });
+
   return <section className="settings-card organization-card accountant-card">
     <div className="settings-card-head">
       <div>
         <h3>Boekhouder-toegang</h3>
-        <p className="settings-help">Geef je boekhouder of accountant een eigen login om mee te kijken in de financiën van <strong>{organizationName}</strong>. Het is een gastaccount: het kost geen gebruikerslicentie, en je boekhouder kan alleen <strong>inzien</strong> — niets wijzigen, boeken of versturen.</p>
+        <p className="settings-help">Geef je boekhouder of accountant een eigen login om mee te kijken in de financiën van <strong>{organizationName}</strong>. Het is een gastaccount: het kost geen gebruikerslicentie. Je boekhouder kan alleen <strong>inzien</strong>, tenzij je hieronder aanzet dat hij ook mag boeken. Versturen, facturen maken of je instellingen wijzigen kan je boekhouder nooit.</p>
       </div>
     </div>
 
@@ -1690,6 +1704,16 @@ function AccountantAccessCard({
         </Button>
       </div>
       {!canOwner && <p className="settings-help">Alleen een owner kan de toegang van een actieve boekhouder intrekken.</p>}
+      <label className="bk-setting-check accountant-booking">
+        <input type="checkbox" checked={canBook} onChange={toggleBooking} disabled={!canAdmin || busy !== null} />
+        <span>
+          <strong>Mag boeken en afsluiten</strong>
+          <small className="settings-help">
+            Aan: je boekhouder maakt zelf de correcties voor je aangifte (memoriaal, afschrijvingen, vooruitbetaalde kosten), sluit de btw-aangifte en het boekjaar af
+            en vult de gegevens voor de inkomstenbelasting in. Uit: alleen meekijken. Facturen, inkoopfacturen, de bank, klanten en instellingen blijven altijd van jou.
+          </small>
+        </span>
+      </label>
     </div> : invitation ? <div className="team-list">
       <strong>Uitgenodigd</strong>
       <div className="team-row">
@@ -1769,6 +1793,7 @@ export function Settings({
   onUpdateMemberRole,
   onSetMemberModuleAccess,
   onDisableMember,
+  onSetAccountantBooking,
   onRevokeInvitation,
   onSave,
   permissions = FULL_PERMISSIONS,
@@ -1798,6 +1823,7 @@ export function Settings({
   onUpdateMemberRole: (memberId: string, role: OrganizationRole) => Promise<void>;
   onSetMemberModuleAccess: (memberId: string, moduleAccess: ModuleAccess) => Promise<void>;
   onDisableMember: (memberId: string) => Promise<void>;
+  onSetAccountantBooking: (memberId: string, enabled: boolean) => Promise<void>;
   onRevokeInvitation: (invitationId: string) => Promise<void>;
   onSave: (settings: CompanySettingsInput) => Promise<void>;
   /** Modulerechten van wie kijkt: het logboek biedt alleen de soorten aan die hij mag lezen. */
@@ -2954,6 +2980,7 @@ export function Settings({
         onInvite={(email) => onInviteMember(email, 'accountant', {})}
         onRevokeInvitation={onRevokeInvitation}
         onDisableMember={onDisableMember}
+        onSetBooking={onSetAccountantBooking}
       />
     </div>}
 

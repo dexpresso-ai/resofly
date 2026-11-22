@@ -233,6 +233,12 @@ const PAGES = {
   // Instellingen → Boekhouder: de kaart met wat de gast wel en niet ziet staat
   // op de telefoon onder elkaar.
   'settings-boekhouder': settingsPage('boekhouder'),
+  // 2026-11-22: met een actieve boekhouder, en de schakelaar "mag boeken en
+  // afsluiten" met zijn uitleg onder de rij met de boekhouder.
+  'settings-boekhouder-boekt': settingsPage('boekhouder', {
+    mock: { accountant: true },
+    mustShow: [{ selector: '.accountant-booking input[type="checkbox"]:checked', label: 'de schakelaar "mag boeken", aan' }],
+  }),
   // Instellingen → Apps (2026-11-12): ResoFly zelf en de drie losse apps, elk
   // met Openen en Link. Op de telefoon onder elkaar, zonder dat de knoppen eraf vallen.
   'settings-apps': settingsPage('apps'),
