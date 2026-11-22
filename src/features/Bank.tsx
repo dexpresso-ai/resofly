@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, Banknote, Check, Landmark, Link2, PenSquare, Plus, RefreshCw, RotateCcw, Search, Sparkles, Trash2, Upload, X } from 'lucide-react';
+import { AlertTriangle, Ban, Banknote, Check, Landmark, Link2, PenSquare, Plus, RefreshCw, RotateCcw, Search, Sparkles, Trash2, Upload, X } from 'lucide-react';
 import type {
   AppData, BankAccount, BankAllocationCandidates, BankAllocationKind, BankInstitution, BankOpenDocument, BankPsuType,
-  BankReconciliation, BankRequisition, BankRule, BankTransaction, LedgerAccount,
+  BankReconciliation, BankRequisition, BankRule, BankStatement, BankTransaction, LedgerAccount,
 } from '../types';
 import { Modal } from '../components/Modal';
 import { Button, Input, Select, Textarea } from '../components/Ui';
@@ -15,7 +15,8 @@ import {
   bookBankTransaction, createBankRequisition, createManualBankTransaction, deleteDuplicateBankTransaction, deleteManualBankTransaction, deleteRow,
   fetchBankAllocationCandidates, finalizeBankRequisition, importBankTransactions, insertRow, listBankInstitutions,
   matchBankTransactionsInRounds, mergeBankTransactions, PossibleDuplicateBankTransactionError, selectBankReconciliation,
-  setBankTransactionStatus, syncBankAccount, unbookBankTransaction, unmergeBankTransaction, updateManualBankTransaction, updateRow,
+  setBankTransactionExcluded, setBankTransactionStatus, syncBankAccount, undoBankStatement, unbookBankTransaction, unmergeBankTransaction,
+  updateManualBankTransaction, updateRow,
 } from '../lib/repository';
 import { parseDutchAmountCents } from '../lib/money';
 import { describeMatchProgress, describeMatchResult } from '../lib/bankMatch';
@@ -251,6 +252,20 @@ function BankTxRow({ txn, data, organizationId, canWrite, accountName, candidate
     if (!confirm('Deze mutatie verwijderen omdat hij dubbel is ingelezen? De andere mutatie met dezelfde datum en hetzelfde bedrag blijft staan. Doe dit alleen als het om dezelfde betaling gaat: twee echte betalingen staan allebei op je afschrift.')) return;
     void run(() => deleteDuplicateBankTransaction(organizationId, txn.id), 'Verwijderen mislukt');
   };
+  // Een regel die niet bij deze rekening hoort: de spaarrekening in hetzelfde
+  // bestand, of een afschrift dat op de verkeerde rekening is ingelezen. Negeren
+  // was de enige weg en hield de aansluiting voorgoed scheef. Niet bij een
+  // mutatie van de bankkoppeling: die staat echt op deze rekening.
+  const excluded = Boolean(txn.excluded_at);
+  const fromLink = (() => {
+    const format = data.bankStatements.find(s => s.id === txn.statement_id)?.format;
+    return format === 'enablebanking' || format === 'gocardless';
+  })();
+  const canExclude = canWrite && !manual && !excluded && !fromLink;
+  const exclude = () => {
+    if (!confirm('Hoort deze mutatie niet bij deze bankrekening? Bijvoorbeeld een regel van je spaarrekening, of een afschrift van een andere rekening. Hij blijft bij Genegeerd staan, maar telt niet meer mee in de aansluiting. Je kunt dit terugzetten. Staat hij wel echt op het afschrift van deze rekening, kies dan Negeren of boek hem.')) return;
+    void run(() => setBankTransactionExcluded(organizationId, txn.id, true), 'Mislukt');
+  };
   const unmerge = () => {
     if (!confirm('Losmaken? De bankregel komt dan apart in "Af te letteren" te staan. Is de handmatige mutatie al geboekt, boek de bankregel dan niet nog eens.')) return;
     void run(() => unmergeBankTransaction(organizationId, txn.id), 'Losmaken mislukt');
@@ -269,6 +284,7 @@ function BankTxRow({ txn, data, organizationId, canWrite, accountName, candidate
             {txn.counterparty_name || txn.description || 'Transactie'}
             {manual && <span className="bank-tag bank-tag-manual">handmatig</span>}
             {manual && partner && <span className="bank-tag">bevestigd door bank</span>}
+            {excluded && <span className="bank-tag bank-tag-manual">niet van deze rekening</span>}
             {txn.status === 'booked' && txn.auto_booked && <span className="bank-tag bank-tag-auto" title="Door ResoFly geboekt omdat het zeker was">automatisch</span>}
           </strong>
           <small className="bk-muted">
@@ -324,6 +340,7 @@ function BankTxRow({ txn, data, organizationId, canWrite, accountName, candidate
           {manual && canWrite && <Button onClick={() => onEditManual(txn)} disabled={busy}><PenSquare size={14} /> Bewerken</Button>}
           {manual && canWrite && !everBooked && <Button onClick={remove} disabled={busy} title="Verwijderen"><Trash2 size={14} /> Verwijderen</Button>}
           {twin && canWrite && <Button onClick={removeDuplicate} disabled={busy} title="Dezelfde betaling staat er twee keer: deze verwijderen"><Trash2 size={14} /> Dubbele verwijderen</Button>}
+          {canExclude && <Button onClick={exclude} disabled={busy} title="Deze regel hoort bij een andere rekening: niet meetellen in de aansluiting"><Ban size={14} /> Niet van deze rekening</Button>}
           <Button onClick={() => void run(() => setBankTransactionStatus(organizationId, txn.id, 'ignored'), 'Mislukt')}
             disabled={!canWrite || busy || (manual && Boolean(partner))}
             title={manual && partner ? 'Bevestigd door de bank: maak eerst los' : 'Negeren'}><X size={14} /> Negeren</Button>
@@ -339,8 +356,14 @@ function BankTxRow({ txn, data, organizationId, canWrite, accountName, candidate
       )}
       {txn.status === 'ignored' && (
         <div className="bank-tx-actions">
-          <span className="bk-muted">Genegeerd</span>
+          <span className="bk-muted">
+            {excluded
+              ? `Niet van deze rekening: telt niet mee in de aansluiting${txn.excluded_reason && txn.excluded_reason !== 'Hoort niet bij deze rekening' ? ` (${txn.excluded_reason})` : ''}`
+              : 'Genegeerd'}
+          </span>
           <span className="bk-spacer" />
+          {canExclude && <Button onClick={exclude} disabled={busy} title="Deze regel hoort bij een andere rekening: niet meetellen in de aansluiting"><Ban size={14} /> Niet van deze rekening</Button>}
+          {excluded && canWrite && <Button onClick={() => void run(() => setBankTransactionExcluded(organizationId, txn.id, false), 'Mislukt')} disabled={busy} title="De mutatie staat toch op het afschrift van deze rekening">Telt toch mee</Button>}
           {manual && canWrite && !everBooked && <Button onClick={remove} disabled={busy}><Trash2 size={14} /> Verwijderen</Button>}
           {twin && canWrite && <Button onClick={removeDuplicate} disabled={busy} title="Dezelfde betaling staat er twee keer: deze verwijderen"><Trash2 size={14} /> Dubbele verwijderen</Button>}
           {canWrite && <Button onClick={() => void run(() => setBankTransactionStatus(organizationId, txn.id, 'unmatched'), 'Mislukt')} disabled={busy}>Weer openen</Button>}
@@ -753,6 +776,9 @@ function ReconciliationPanel({ rec }: { rec: BankReconciliation }) {
         {rec.ignored_count > 0 && (
           <div><dt>Genegeerd ({rec.ignored_count})</dt><dd>{euroCents(rec.ignored_sum_cents)}</dd></div>
         )}
+        {(rec.excluded_count ?? 0) > 0 && (
+          <div title="Mutaties die je op 'niet van deze rekening' hebt gezet. Ze staan bij Genegeerd en tellen hier niet mee."><dt>Niet van deze rekening ({rec.excluded_count}), telt niet mee</dt><dd>{euroCents(rec.excluded_sum_cents ?? 0)}</dd></div>
+        )}
         {(rec.timing_count ?? 0) > 0 && (
           <div><dt>Datumverschil handmatig/bank ({rec.timing_count})</dt><dd>{euroCents(rec.timing_sum_cents ?? 0)}</dd></div>
         )}
@@ -760,7 +786,11 @@ function ReconciliationPanel({ rec }: { rec: BankReconciliation }) {
       {!ok && (
         <ul className="bank-recon-hints">
           {rec.ignored_count > 0 && (
-            <li>Genegeerde transacties staan wél op het afschrift en tellen dus mee in de aansluiting. Heb je een dubbele regel genegeerd, dan blijft het verschil zichtbaar tot de dubbele rij echt weg is: open hem bij Genegeerd en kies "Dubbele verwijderen".</li>
+            <li>
+              Genegeerde transacties staan wél op het afschrift en tellen dus mee in de aansluiting. Staat er een regel tussen die hier niet hoort, open hem dan bij Genegeerd:
+              een dubbel ingelezen regel haal je weg met "Dubbele verwijderen", een regel van een andere rekening (je spaarrekening, een verkeerd bestand) zet je op "Niet van deze rekening".
+              Is een heel afschrift op de verkeerde rekening ingelezen, draai het dan hieronder terug bij "Ingelezen afschriften".
+            </li>
           )}
           {(rec.manual_unconfirmed_count ?? 0) > 0 && (
             <li>
@@ -779,9 +809,10 @@ function ReconciliationPanel({ rec }: { rec: BankReconciliation }) {
             <li>
               {rec.statement_issues.length} afschrift(en) kloppen intern niet (beginsaldo + regels ≠ eindsaldo):{' '}
               {rec.statement_issues.map(s => `${s.file_name || 'afschrift'} (${euroCents(s.difference_cents)})`).join(', ')}.
-              {/* Niet "er ontbreken regels": staat er een betaling dubbel (een
-                  afschrift na de koppeling), dan is het precies andersom. */}
-              {' '}Er ontbreekt een regel, of er staat er een dubbel. {DUPLICATE_HINT}
+              {/* Niet alleen "er ontbreken regels": staat er een betaling dubbel (een
+                  afschrift na de koppeling), dan is het precies andersom. En een
+                  regel die niet van deze rekening is, zet je apart. */}
+              {' '}Er ontbreekt een regel, er staat er een dubbel, of er staat een regel tussen die niet van deze rekening is: zet die bij de mutatie op "Niet van deze rekening". {DUPLICATE_HINT}
             </li>
           )}
           {rec.has_opening_balance && rec.duplicate_suspects === 0 && rec.statement_issues.length === 0 && rec.ignored_count === 0 && !rec.manual_unconfirmed_count && (
@@ -790,6 +821,59 @@ function ReconciliationPanel({ rec }: { rec: BankReconciliation }) {
         </ul>
       )}
     </div>
+  );
+}
+
+/**
+ * De ingelezen afschriften van een rekening, met de weg terug. Tot nu toe was
+ * een afschrift na het inlezen onzichtbaar: een bestand van de verkeerde
+ * rekening (je privérekening op de zakelijke) kreeg je er niet meer af, en het
+ * eindsaldo ervan bleef de peildatum van de aansluiting.
+ */
+function StatementList({ account, data, organizationId, canWrite, onChanged }: PageProps & { account: BankAccount }) {
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [message, setMessage] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  // Alleen bestanden. Wat de bankkoppeling ophaalt, is van deze rekening en
+  // heeft geen bestand om terug te draaien.
+  const statements = data.bankStatements.filter(s => s.bank_account_id === account.id && s.format !== 'enablebanking' && s.format !== 'gocardless');
+  if (statements.length === 0) return null;
+
+  const period = (s: BankStatement) => s.period_start && s.period_end
+    ? (s.period_start === s.period_end ? dateNL(s.period_start) : `${dateNL(s.period_start)} t/m ${dateNL(s.period_end)}`)
+    : 'periode onbekend';
+
+  async function undo(s: BankStatement) {
+    const rows = data.bankTransactions.filter(t => t.statement_id === s.id);
+    const name = s.file_name || 'dit afschrift';
+    if (!confirm(`${name} terugdraaien? Doe dit als het bestand niet van deze rekening is of verkeerd is ingelezen. De ${rows.length} mutatie(s) die uit dit bestand kwamen gaan weg, en het eindsaldo ervan telt niet meer in de aansluiting. Mutaties die je al geboekt hebt, draai je eerst terug. Opnieuw inlezen op de goede rekening kan daarna gewoon.`)) return;
+    setBusyId(s.id); setMessage(null);
+    try {
+      const res = await undoBankStatement(organizationId, s.id);
+      setMessage({ kind: 'ok', text: `${name} is teruggedraaid: ${res.removed} mutatie(s) weggehaald${res.keptExcluded > 0 ? `, ${res.keptExcluded} bewaard als "niet van deze rekening" omdat er ooit een boeking op stond` : ''}.` });
+      onChanged();
+    } catch (e) { setMessage({ kind: 'err', text: e instanceof Error ? e.message : 'Terugdraaien mislukt' }); }
+    finally { setBusyId(null); }
+  }
+
+  return (
+    <details className="bank-statements">
+      <summary>Ingelezen afschriften ({statements.length})</summary>
+      {message && <div className={message.kind === 'ok' ? 'bk-note' : 'error'}>{message.text}</div>}
+      <ul>
+        {statements.map(s => (
+          <li key={s.id}>
+            <span className="bank-statement-name">
+              <strong>{s.file_name || 'Afschrift'}</strong>
+              <small className="bk-muted">
+                {period(s)} · ingelezen {dateNL(s.imported_at.slice(0, 10))}
+                {s.closing_balance_cents !== null ? ` · eindsaldo ${euroCents(s.closing_balance_cents)}` : ''}
+              </small>
+            </span>
+            {canWrite && <Button onClick={() => void undo(s)} disabled={busyId !== null}><RotateCcw size={13} /> {busyId === s.id ? 'Bezig…' : 'Terugdraaien'}</Button>}
+          </li>
+        ))}
+      </ul>
+    </details>
   );
 }
 
@@ -960,6 +1044,7 @@ function AccountsTab({ data, organizationId, canWrite, onChanged }: PageProps) {
                     const rec = recon.find(r => r.bank_account_id === a.id);
                     return rec ? <ReconciliationPanel rec={rec} /> : null;
                   })()}
+                  <StatementList account={a} data={data} organizationId={organizationId} canWrite={canWrite} onChanged={onChanged} />
                   <div className="bank-account-meta">
                     <span className="bk-muted">
                       {count} transacties · {linked ? lastSync(a) : lastImport(a)}

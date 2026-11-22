@@ -1,5 +1,6 @@
 import type { ParsedBankStatement, ParsedBankTransaction } from '../../types';
 import { amountToCents, normalizeDate } from './dedup.ts';
+import { parseHeaderlessBankFile } from './headerless.ts';
 
 /** Splitst één CSV-regel met respect voor quotes. */
 function splitLine(line: string, delim: string): string[] {
@@ -135,6 +136,12 @@ function headerRoles(headers: string[]) {
  * eindsaldo, waarmee de saldo-aansluiting kan controleren of het bestand compleet is.
  */
 export function parseCsv(raw: string, fileName: string): ParsedBankStatement {
+  // Een export zonder kopregel (ABN AMRO-TXT, ASN/SNS/RegioBank, Triodos) heeft
+  // geen kolomnamen om op te zoeken: die leest headerless.ts, of weigert hem
+  // met uitleg. Met een kopregel komt hier null terug en gaat het gewoon verder.
+  const headerless = parseHeaderlessBankFile(raw, fileName);
+  if (headerless) return headerless;
+
   const lines = raw.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n').filter(l => l.trim().length > 0);
   if (lines.length < 2) throw new Error('Het CSV-bestand bevat geen transacties.');
 

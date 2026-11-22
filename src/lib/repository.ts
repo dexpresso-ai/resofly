@@ -652,6 +652,17 @@ export async function setMemberModuleAccess(memberId: UUID, moduleAccess: Module
 }
 
 /**
+ * "Mag boeken" voor de boekhouder aan- of uitzetten (eigenaar of beheerder).
+ * Aan: de boekhouder mag corrigeren en afsluiten (memoriaal, btw-aangifte,
+ * boekjaar, aangifte IB). Facturen, inkoop, bank, klanten en team blijven dicht.
+ */
+export async function setAccountantBooking(memberId: UUID, enabled: boolean): Promise<OrganizationMember> {
+  const { data, error } = await supabase.rpc('set_accountant_booking', { p_member_id: memberId, p_enabled: enabled });
+  if (error) throw error;
+  return (Array.isArray(data) ? data[0] : data) as OrganizationMember;
+}
+
+/**
  * De debiteuren zoals ze op de financiële stukken staan — voor wie Financiën
  * mag lezen maar Klanten niet, zoals de boekhouder. Zonder deze lijst hebben
  * facturen geen naam en de XAF-auditfile geen debiteuren. Alleen de velden van
@@ -2946,6 +2957,53 @@ export async function deleteDuplicateBankTransaction(organizationId: UUID, trans
   const { error } = await supabase.rpc('delete_duplicate_bank_transaction', {
     p_organization_id: organizationId,
     p_transaction_id: transactionId,
+  });
+  if (error) throw bookkeepingError(error);
+}
+
+/**
+ * Een bankregel die niet bij deze rekening hoort (een regel van de
+ * spaarrekening in hetzelfde bestand, een verkeerd afschrift). Hij blijft bij
+ * Genegeerd staan, maar telt niet meer mee in de aansluiting. Negeren alleen
+ * hielp niet: een genegeerde mutatie staat op het afschrift en telt dus mee.
+ * Met `excluded = false` zet je hem terug.
+ */
+export async function setBankTransactionExcluded(organizationId: UUID, transactionId: UUID, excluded: boolean, reason?: string): Promise<void> {
+  const { error } = await supabase.rpc('set_bank_transaction_excluded', {
+    p_organization_id: organizationId,
+    p_transaction_id: transactionId,
+    p_excluded: excluded,
+    p_reason: reason ?? null,
+  });
+  if (error) throw bookkeepingError(error);
+}
+
+/**
+ * Een ingelezen afschrift terugdraaien (verkeerde rekening, verkeerd bestand).
+ * De database weigert zolang er een mutatie uit dat afschrift geboekt of
+ * samengevoegd is. Nooit geboekte regels gaan weg; een regel die ooit geboekt
+ * was blijft staan als "niet van deze rekening", bij zijn boekstukken.
+ */
+export async function undoBankStatement(organizationId: UUID, statementId: UUID): Promise<{ removed: number; keptExcluded: number }> {
+  const { data, error } = await supabase.rpc('undo_bank_statement', {
+    p_organization_id: organizationId,
+    p_statement_id: statementId,
+  });
+  if (error) throw bookkeepingError(error);
+  const row = (data ?? {}) as { removed?: number; kept_excluded?: number };
+  return { removed: Number(row.removed ?? 0), keptExcluded: Number(row.kept_excluded ?? 0) };
+}
+
+/**
+ * Een afgesloten btw-aangifte op ingediend of betaald zetten. Een functie en
+ * geen PATCH op de tabel: de boekhouder die mag boeken schrijft nergens
+ * rechtstreeks, en zo loopt het voor iedereen langs dezelfde weg.
+ */
+export async function setVatReturnStatus(organizationId: UUID, vatReturnId: UUID, status: 'filed' | 'paid'): Promise<void> {
+  const { error } = await supabase.rpc('set_vat_return_status', {
+    p_organization_id: organizationId,
+    p_vat_return_id: vatReturnId,
+    p_status: status,
   });
   if (error) throw bookkeepingError(error);
 }
@@ -6802,9 +6860,26 @@ export async function loadAttachmentRef(id: UUID, organizationId: UUID): Promise
  * Ligt een bijlage vast omdat het document waar hij aan hangt geen concept meer
  * is? Dezelfde regel als het scherm (geen Verwijderen-knop bij een verstuurde
  * offerte of factuur, of een geboekte inkoopfactuur), nu gelezen vlak voor het
- * uitvoeren. De database bewaakt bijlagen zelf niet. Null = vrij.
+ * uitvoeren. De database weigert het sinds 20261122131000 zelf ook (trigger
+ * attachments_evidence_guard) en de media-worker vraagt het na; deze controle
+ * blijft, omdat ze vóór het wissen van het bestand een nette melding geeft.
+ * Null = vrij.
  */
 export async function attachmentLockReason(entityType: string, entityId: UUID, organizationId: UUID): Promise<string | null> {
+  if (entityType === 'fixed_asset') {
+    const { data, error } = await supabase.from('fixed_assets').select('acquisition_journal_entry_id').eq('id', entityId).eq('organization_id', organizationId).maybeSingle();
+    if (error) throw error;
+    // Ook een geboekte afschrijving legt het vast, net als in de database. Alleen
+    // naar de aanschaf kijken gaf bij een activum met alleen afschrijvingen de
+    // rauwe databasefout in plaats van deze melding.
+    const { count, error: depError } = await supabase.from('asset_depreciations').select('id', { count: 'exact', head: true })
+      .eq('organization_id', organizationId).eq('asset_id', entityId).not('journal_entry_id', 'is', null);
+    if (depError) throw depError;
+    if ((data as { acquisition_journal_entry_id?: string | null } | null)?.acquisition_journal_entry_id || Number(count ?? 0) > 0) {
+      return 'Dit bestand is het bewijsstuk van een activum waarop geboekt is; het ligt vast (bewaarplicht).';
+    }
+    return null;
+  }
   const table = entityType === 'quote' ? 'quotes' : entityType === 'invoice' ? 'invoices' : entityType === 'purchase_invoice' ? 'purchase_invoices' : null;
   if (!table) return null;
   const columns = table === 'purchase_invoices' ? 'status' : table === 'invoices' ? 'status, sent_at, journal_entry_id' : 'status, sent_at';

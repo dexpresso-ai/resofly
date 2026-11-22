@@ -336,6 +336,59 @@ function bankGapRows() {
   };
 }
 
+/**
+ * `bankHerstel: true` (2026-11-22): een rekening met een ingelezen afschrift,
+ * een open mutatie en een regel die op "niet van deze rekening" staat. Zo
+ * meet de test de knop daarvoor, het label, de regel in de aansluiting en de
+ * lijst met afschriften (terugdraaien).
+ */
+function bankHerstelRows() {
+  const stamp = { organization_id: seed.ids.ORG, created_at: '2026-11-03T09:00:00Z', updated_at: '2026-11-03T09:00:00Z' };
+  const account = {
+    id: 'ba0c0000-0000-4000-8000-000000000001', ...stamp, name: 'Zakelijke rekening', iban: 'NL91ABNA0417164300', currency: 'EUR',
+    ledger_account_id: LEDGER_ACCOUNTS.find(a => a.code === '1100').id, source: 'import', provider: null, external_account_id: null,
+    bank_requisition_id: null, last_synced_at: null, last_imported_at: '2026-11-03T09:00:00Z', is_active: true,
+  };
+  const statement = {
+    id: 'ba0c0000-0000-4000-8000-0000000000a1', organization_id: seed.ids.ORG, created_by: seed.ids.USER, bank_account_id: account.id,
+    format: 'camt053', file_name: 'betaal-en-spaarrekening-november.xml', file_hash: null, period_start: '2026-11-01', period_end: '2026-11-03',
+    opening_balance_cents: 100000, closing_balance_cents: 221000, transaction_count: 2, imported_at: '2026-11-03T09:00:00Z', created_at: '2026-11-03T09:00:00Z',
+  };
+  const tx = (id, values) => ({
+    id, ...stamp, bank_account_id: account.id, statement_id: statement.id, dedup_key: id, value_date: null, currency: 'EUR',
+    counterparty_iban: null, structured_reference: null, end_to_end_id: null, bank_tx_id: null, suggested_account_id: null,
+    suggested_vat_code: null, matched_rule_id: null, match_confidence: null, matched_invoice_id: null, matched_purchase_invoice_id: null,
+    journal_entry_id: null, booked_at: null, booked_by: null, notes: null, is_manual: false, excluded_at: null, excluded_by: null, excluded_reason: null,
+    ...values,
+  });
+  return {
+    bank_accounts: [account],
+    bank_statements: [statement],
+    bank_transactions: [
+      tx('ba0c0000-0000-4000-8000-0000000000b1', { booking_date: '2026-11-02', amount_cents: 121000, counterparty_name: 'Bakkerij De Korenaar', description: 'Factuur F2026-0012', status: 'unmatched' }),
+      tx('ba0c0000-0000-4000-8000-0000000000b2', {
+        booking_date: '2026-11-03', amount_cents: 500000, counterparty_name: 'Eigen spaarrekening', description: 'Overboeking naar spaarrekening met een lange omschrijving',
+        status: 'ignored', excluded_at: '2026-11-03T10:00:00Z', excluded_by: seed.ids.USER, excluded_reason: 'Hoort niet bij deze rekening',
+      }),
+    ],
+    reconciliation: [{
+      bank_account_id: account.id, name: account.name, iban: account.iban, source: 'import', ledger_code: '1100', ledger_name: 'Bank',
+      shares_ledger_account: false, as_of: '2026-11-03', statement_id: statement.id, statement_closing_cents: 221000, ledger_balance_cents: 100000,
+      has_opening_balance: true, unbooked_count: 1, unbooked_sum_cents: 121000, ignored_count: 0, ignored_sum_cents: 0,
+      excluded_count: 1, excluded_sum_cents: 500000, booked_count: 0, manual_count: 0, timing_count: 0, timing_sum_cents: 0,
+      manual_unconfirmed_count: 0, manual_unconfirmed_sum_cents: 0, expected_cents: 221000, difference_cents: 0,
+      duplicate_suspects: 0, statement_issues: [],
+    }],
+  };
+}
+
+/** `accountant: true` (2026-11-22): er is een boekhouder, en die mag boeken. */
+const ACCOUNTANT_MEMBER = {
+  id: 'acc00000-0000-4000-8000-000000000001', organization_id: seed.ids.ORG, user_id: 'acc00000-0000-4000-8000-0000000000u1', role: 'accountant',
+  status: 'active', invited_by: seed.ids.USER, joined_at: '2026-10-01T09:00:00Z', created_at: '2026-10-01T09:00:00Z', updated_at: '2026-10-01T09:00:00Z',
+  email: 'boekhouder@administratiekantoor-voorbeeld.nl', module_access: {}, accountant_can_book: true,
+};
+
 function prepaidRows() {
   const expense = LEDGER_ACCOUNTS.find(a => a.code === '4500').id;
   const bank = LEDGER_ACCOUNTS.find(a => a.code === '1100').id;
@@ -989,6 +1042,7 @@ export async function installMock(context, options = {}) {
       if (options.gallery && fn === 'organization_storage_status') {
         return reply(route, [{ used_bytes: 540 * 1024 ** 2, attachments_bytes: 0, documents_bytes: 0, recordings_bytes: 0, gallery_bytes: 540 * 1024 ** 2, limit_bytes: 50 * 1024 ** 3, plan_storage_gb: 50, storage_addons: 0, storage_addon_gb: null }]);
       }
+      if (options.bankHerstel && fn === 'report_bank_reconciliation') return reply(route, bankHerstelRows().reconciliation);
       if (options.vof) {
         const vof = vofRpc(fn, rpcBody);
         if (vof !== undefined) return reply(route, vof);
@@ -1020,6 +1074,7 @@ export async function installMock(context, options = {}) {
       // De albums wél gefilterd (gallery_id=eq.…): het venster "verwijderen?"
       // telt de bestanden van één album, en kreeg anders die van allemaal.
       const gallery = options.gallery ? galleryRows() : null;
+      const bankHerstel = options.bankHerstel ? bankHerstelRows() : null;
       // `aiOff: true`: de gebruiker heeft Gerrie nog niet aangezet (2026-11-12);
       // de pagina Gerrie toont dan het scherm om hem aan te zetten.
       // `aiDeclined: true`: hij koos zelf voor geen AI (2026-11-15); Gerrie is
@@ -1035,6 +1090,9 @@ export async function installMock(context, options = {}) {
         : options.ledger && table === 'ledger_accounts' ? (options.prepaid ? [...LEDGER_ACCOUNTS, PREPAID_ACCOUNT] : LEDGER_ACCOUNTS)
         : prepaid && table in prepaid ? prepaid[table]
         : bankGap && table in bankGap ? bankGap[table]
+        : bankHerstel && table in bankHerstel ? bankHerstel[table]
+        : options.accountant && table === 'organization_members' && !(url.searchParams.get('select') ?? '').includes('organizations(')
+          ? [...restRows(table, url, setup), ACCOUNTANT_MEMBER]
         : gallery && table in gallery ? gallery[table].filter(r => [...url.searchParams.entries()].every(([k, v]) => !(k in r) || matchFilter(r[k], v)))
         : restRows(table, url, setup);
       const accept = req.headers()['accept'] ?? '';

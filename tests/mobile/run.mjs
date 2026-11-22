@@ -240,6 +240,12 @@ const PAGES = {
   // Instellingen → Boekhouder: de kaart met wat de gast wel en niet ziet staat
   // op de telefoon onder elkaar.
   'settings-boekhouder': settingsPage('boekhouder'),
+  // 2026-11-22: met een actieve boekhouder, en de schakelaar "mag boeken en
+  // afsluiten" met zijn uitleg onder de rij met de boekhouder.
+  'settings-boekhouder-boekt': settingsPage('boekhouder', {
+    mock: { accountant: true },
+    mustShow: [{ selector: '.accountant-booking input[type="checkbox"]:checked', label: 'de schakelaar "mag boeken", aan' }],
+  }),
   // Instellingen → Apps (2026-11-12): ResoFly zelf en de drie losse apps, elk
   // met Openen en Link. Op de telefoon onder elkaar, zonder dat de knoppen eraf vallen.
   'settings-apps': settingsPage('apps'),
@@ -337,6 +343,21 @@ const PAGES = {
   // Vooruitbetaald; de pagina "ledger" hierboven toont zonder rekeningschema
   // alleen de knop om dat aan te maken.
   'ledger-journaal': { page: 'ledger', mock: { ledger: true } },
+  // 2026-11-22: een verkeerd ingelezen regel of afschrift herstellen. De knop
+  // "Niet van deze rekening" bij een open mutatie, en bij de rekening de lijst
+  // met ingelezen afschriften (terugdraaien) onder de aansluiting.
+  'bank-herstel': {
+    page: 'bank', mock: { ledger: true, bankHerstel: true },
+    mustShow: [{ selector: 'button[title^="Deze regel hoort bij een andere rekening"]', label: 'de knop "Niet van deze rekening"' }],
+  },
+  'bank-afschriften': {
+    page: 'bank', mock: { ledger: true, bankHerstel: true },
+    prepare: ['.bk-tabs button:has-text("Rekeningen")', '.bank-statements > summary'],
+    mustShow: [
+      { selector: '.bank-statements[open] li button', label: 'een afschrift met Terugdraaien' },
+      { selector: '.bank-recon-rows div[title*="niet van deze rekening"]', label: 'de regel "niet van deze rekening" in de aansluiting' },
+    ],
+  },
   'prepaid-venster': { page: 'prepaid', mock: { ledger: true, prepaid: true }, prepare: '.bk-row' },
   'prepaid-nieuw': {
     page: 'prepaid', mock: { ledger: true, prepaid: true },

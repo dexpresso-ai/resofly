@@ -114,6 +114,11 @@ export const EXPORT_FORMAT_VERSION = 1;
 // 20261122110000 (uren factureren) zet time_entry_invoices erbij: welke
 // urenregistratie op welke verkoopfactuur staat. Dat hoort bij de administratie
 // van de klant en gaat mee.
+// 20261122130000 (bank herstellen) zet excluded_at/_by/_reason op
+// bank_transactions en 20261122133000 accountant_can_book op
+// organization_members; die gaan met hun tabel mee. 20261122132000 zet de
+// tabel sent_e_invoices erbij, met het bestand (storage_key) in de export.
+// 20261122131000 vervangt alleen functies en triggers.
 // 20261122140000 (Nederlandse datum) vervangt vijf functies; geen tabellen of kolommen.
 // 20261122141000 (boekjaar opent vanzelf) zet een functie en een trigger op
 // journal_entries; geen tabellen of kolommen.
@@ -306,6 +311,9 @@ export const EXPORT_MANIFEST: Readonly<Record<string, TableRule>> = {
   invoice_version_items: { kind: 'export' },
   invoice_workflow_events: { kind: 'export' },
   invoice_email_deliveries: { kind: 'export' },
+  // De e-facturen en e-creditnota's zoals ze verstuurd zijn (20261122132000).
+  // Tot dan zat er geen enkele e-factuur in de export, alleen de pdf's.
+  sent_e_invoices: { kind: 'export', files: ['storage_key'] },
   invoice_email_events: { kind: 'export' },
   invoice_payment_records: { kind: 'export' },
   invoice_public_links: { kind: 'export', omit: TOKEN_HASH_OMIT },
@@ -551,6 +559,7 @@ const FILE_FOLDERS: Readonly<Record<string, string>> = {
   'quote-pdfs': 'offertes-pdf',
   invoice: 'facturen',
   'invoice-pdfs': 'facturen-pdf',
+  'e-invoices': 'e-facturen',
   contract: 'contracten',
   'contract-pdfs': 'contracten-pdf',
   annual_account: 'jaarrekeningen',
