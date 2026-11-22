@@ -114,6 +114,8 @@ export const EXPORT_FORMAT_VERSION = 1;
 // 20261122110000 (uren factureren) zet time_entry_invoices erbij: welke
 // urenregistratie op welke verkoopfactuur staat. Dat hoort bij de administratie
 // van de klant en gaat mee.
+// 20261122120000 (factuurregels) zet functies en een trigger op invoices erbij
+// en vervangt convert_accepted_quote_to_invoice; geen tabellen of kolommen.
 // 20261122130000 (bank herstellen) zet excluded_at/_by/_reason op
 // bank_transactions en 20261122133000 accountant_can_book op
 // organization_members; die gaan met hun tabel mee. 20261122132000 zet de

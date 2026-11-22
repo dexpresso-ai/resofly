@@ -15,6 +15,7 @@ import { clientWantsEInvoice, defaultInvoiceRecipient, embeddedPdf, invoiceDeliv
 import { loadMollieInvoicingAllowed, SEND_METHOD_EMAIL_NO_PAYMENT_LINK } from '../_shared/invoiceSendMethod.ts';
 import { invoiceVatGroups, splitRefundOverVatGroups, type VatGroup } from '../_shared/creditNoteSplit.ts';
 import { invoiceVatNotes } from '../_shared/invoiceVatNotes.ts';
+import { zeroVatIssues, zeroVatRefusal } from '../_shared/invoiceZeroVat.ts';
 import { loadVatCodeInfo } from '../_shared/vatCodeInfo.ts';
 import { loadDocumentDesign, renderCreditNotePdf, renderDunningLetterPdf, renderSalesDocumentPdf } from '../_shared/documentPdf.ts';
 import {
@@ -284,6 +285,8 @@ serve(async (req) => {
       case 'previewInvoiceCredit': return json(req, { ok: true, ...(await previewInvoiceCredit(organizationId, invoiceId)) });
       // Weten vóór je verstuurt: op welke datum komt deze factuur in de boeken (leest alleen).
       case 'previewInvoiceSend': return json(req, { ok: true, ...(await previewInvoiceSend(organizationId, invoiceId)) });
+      // Uitgeven zonder mail (zelf mailen of printen): dezelfde controles, de pdf vastgelegd.
+      case 'issueInvoiceWithoutEmail': return json(req, { ok: true, ...(await issueInvoiceWithoutEmail(user.id, organizationId, invoiceId)) });
       case 'issueRefundCreditNote': return json(req, { ok: true, ...(await issueRefundCreditNote(user.id, organizationId, role, body)) });
       case 'sendCreditNoteEmail': return json(req, { ok: true, ...(await sendCreditNoteEmail(user.id, organizationId, body)) });
       case 'markMockInvoicePaymentPaid': return json(req, { ok: true, payment: await markMockInvoicePaymentPaid(organizationId, String(body.providerPaymentId || '')) });
@@ -338,16 +341,7 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
   // staan: een verkoopfactuur letter je alleen af met geld dat binnenkomt, en
   // "op betaald zetten" liet de openstaande posten scheef. Alleen een concept:
   // wat al de deur uit is, mag nog opnieuw gemaild worden.
-  if (invoice.status === 'draft') {
-    const draftTotalCents = calculateTotals(invoice.lines).totalCents;
-    if (draftTotalCents < 0) {
-      throw new WorkflowHttpError(`Factuur ${invoice.number} komt uit op een negatief bedrag (${formatEuro(draftTotalCents / 100)}). Geld terug aan de klant factureer je niet met een negatieve factuur: die kun je daarna niet afletteren. Open de factuur waar dit over gaat en kies "Crediteren" (daar kun je ook een deel van het bedrag crediteren); is die factuur al betaald, kies dan "Terugbetaling".`, 422);
-    }
-    // Het btw-tarief hoort bij de btw-code (de database weigert het uitgeven
-    // ook, enforce_invoice_lines_numeric). Hier al, vóór er een mail ontstaat:
-    // de status gaat pas ná het mailen op verstuurd.
-    await assertLineVatMatchesCode(organizationId, invoice);
-  }
+  if (invoice.status === 'draft') await assertDraftLinesIssuable(organizationId, invoice);
   // Komt de boeking niet op de factuurdatum (afgesloten tijdvak, toekomst), of
   // komt de factuur helemaal niet in de boeken (vóór de startdatum)? Vóór het
   // versturen bepaald, want daarna is hij geboekt. Het antwoord draagt de
@@ -366,13 +360,11 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
     loadMollieInvoicingAllowed(supabaseAdmin, organizationId),
   ]);
 
-  // KOR: een factuur rekent dan geen btw (de database weigert het uitgeven;
-  // enforce_invoice_kor_no_vat). Hier al controleren, vóór er een betaallink,
-  // Mollie-factuur of mail ontstaat: anders ging de mail de deur uit en liep pas
-  // het afronden vast.
-  if (company?.kor_enabled && (Array.isArray(invoice.lines) ? invoice.lines : []).some((line) => Number(line.vat || 0) !== 0)) {
-    throw new WorkflowHttpError('Je gebruikt de kleineondernemersregeling (KOR): een factuur rekent dan geen btw. Zet de btw van elke regel op 0% (code KOR) en verstuur opnieuw.', 422);
-  }
+  // Vóór er een betaallink, Mollie-factuur of mail ontstaat.
+  assertKorAllowsInvoice(company, invoice);
+  // 0% met een reden die past bij het land van de klant; alleen bij uitgeven
+  // (een verstuurde factuur opnieuw mailen verandert er niets meer aan).
+  if (invoice.status === 'draft') await assertZeroVatExplained(organizationId, invoice, client, company);
 
   // E-facturatie staat per klant aan of uit. Aan: de e-factuur (UBL met de PDF
   // erin) is verplicht en gaat naar het e-factuuradres van de klant. Uit: de
@@ -648,6 +640,114 @@ async function invoiceBookingNotice(organizationId: string, invoice: InvoiceRow)
     };
   }
   return null;
+}
+
+// ------------------------------------------------------------
+// Wat er vóór het uitgeven moet kloppen
+// ------------------------------------------------------------
+// Versturen per mail, via Mollie en uitgeven zonder mail lopen allemaal langs
+// deze controles. Tot 22 november 2026 stonden ze alleen in de verzendroute,
+// en kon een concept via het statusveld of Gerrie toch worden uitgegeven: een
+// ICP-factuur zonder btw-nummer van de klant kwam zo in de ICP-opgaaf met een
+// leeg nummer. Nu geeft alleen deze server een concept uit
+// (enforce_invoice_issue_via_server).
+
+/** Geen negatief totaal, en het btw-tarief past bij de code. Alleen voor een concept. */
+async function assertDraftLinesIssuable(organizationId: string, invoice: InvoiceRow): Promise<void> {
+  const draftTotalCents = calculateTotals(invoice.lines).totalCents;
+  if (draftTotalCents < 0) {
+    throw new WorkflowHttpError(`Factuur ${invoice.number} komt uit op een negatief bedrag (${formatEuro(draftTotalCents / 100)}). Geld terug aan de klant factureer je niet met een negatieve factuur: die kun je daarna niet afletteren. Open de factuur waar dit over gaat en kies "Crediteren" (daar kun je ook een deel van het bedrag crediteren); is die factuur al betaald, kies dan "Terugbetaling".`, 422);
+  }
+  // Het btw-tarief hoort bij de btw-code (de database weigert het uitgeven
+  // ook, enforce_invoice_lines_numeric). Hier al, vóór er een mail ontstaat:
+  // de status gaat pas ná het mailen op verstuurd.
+  await assertLineVatMatchesCode(organizationId, invoice);
+}
+
+// KOR: een factuur rekent dan geen btw (de database weigert het uitgeven;
+// enforce_invoice_kor_no_vat). Hier al controleren, vóór er een betaallink,
+// Mollie-factuur of mail ontstaat: anders ging de mail de deur uit en liep pas
+// het afronden vast.
+function assertKorAllowsInvoice(company: CompanySettingsRow | null, invoice: InvoiceRow): void {
+  if (company?.kor_enabled && (Array.isArray(invoice.lines) ? invoice.lines : []).some((line) => Number(line.vat || 0) !== 0)) {
+    throw new WorkflowHttpError('Je gebruikt de kleineondernemersregeling (KOR): een factuur rekent dan geen btw. Zet de btw van elke regel op 0% (code KOR) en verstuur opnieuw.', 422);
+  }
+}
+
+/**
+ * 0% btw: staat erbij waarom, en past dat bij het land van de klant? Zie
+ * _shared/invoiceZeroVat.ts. Een regel met 0% zonder code ging de deur uit
+ * zonder vermelding en zonder controle op het btw-nummer, in rubriek 1e in
+ * plaats van 3b en buiten de ICP-opgaaf (bevinding 11, 22 november 2026).
+ */
+async function assertZeroVatExplained(organizationId: string, invoice: InvoiceRow, client: ClientRow, company: CompanySettingsRow | null): Promise<void> {
+  // Zelf laden, met een fout als het niet lukt: loadVatCodeInfo geeft dan een
+  // lege lijst, en daarmee zou elke 0%-regel "zonder reden" lijken (of, zonder
+  // codes, niets gecontroleerd worden).
+  const { data, error } = await supabaseAdmin.from('vat_codes').select('code,kind,sales_box').eq('organization_id', organizationId);
+  if (error) throwSupabaseError('btw-codes laden', error);
+  const codes = Object.fromEntries(((data ?? []) as Array<{ code: string; kind: string; sales_box: string | null }>)
+    .map((row) => [String(row.code), { kind: String(row.kind), salesBox: row.sales_box ?? null }]));
+  const refusal = zeroVatRefusal(zeroVatIssues(invoice.lines, codes, client, { korEnabled: Boolean(company?.kor_enabled) }));
+  if (refusal) throw new WorkflowHttpError(refusal, 422);
+}
+
+/**
+ * Uitgeven zonder mail: voor wie de pdf zelf mailt, print of in een portaal
+ * zet. Tot 22 november 2026 ging dat met "Verzonden" in het statusveld; dan
+ * werd er niets gecontroleerd en geen pdf bewaard. Nu dezelfde controles als
+ * versturen, de pdf wordt gemaakt en vastgelegd als de verzonden versie, en
+ * de factuur wordt geboekt en vergrendeld. Het antwoord bevat de pdf, zodat
+ * het scherm hem meteen kan downloaden.
+ */
+async function issueInvoiceWithoutEmail(userId: string, organizationId: string, invoiceId: string) {
+  if (!isUuid(invoiceId)) throw new WorkflowHttpError('Ongeldige factuur.', 400);
+  const invoice = await loadInvoice(organizationId, invoiceId);
+  if (invoice.status !== 'draft') throw new WorkflowHttpError(`Factuur ${invoice.number} is al uitgegeven. Download de verzonden pdf bij de factuur.`, 409);
+  if (!invoice.client_id) throw new WorkflowHttpError('Deze factuur heeft geen klant gekoppeld.', 422);
+  if (!invoiceHasContent(invoice.lines)) {
+    throw new WorkflowHttpError(`Factuur ${invoice.number} heeft nog geen regels. Zet erin wat je factureert voordat je hem uitgeeft.`, 422);
+  }
+  await assertDraftLinesIssuable(organizationId, invoice);
+  const bookingNotice = await invoiceBookingNotice(organizationId, invoice);
+  const [client, project, quote, company] = await Promise.all([
+    loadClient(organizationId, invoice.client_id),
+    invoice.project_id ? loadProject(organizationId, invoice.project_id) : Promise.resolve(null),
+    invoice.quote_id ? loadQuote(organizationId, invoice.quote_id) : Promise.resolve(null),
+    loadCompanySettings(organizationId),
+  ]);
+  assertKorAllowsInvoice(company, invoice);
+  await assertZeroVatExplained(organizationId, invoice, client, company);
+  // Al bij Mollie in de maak of uitgegeven: dan heeft de klant hem (straks) al.
+  const atMollie = activeMollieDelivery(await loadMollieDeliveries(organizationId, invoice.id));
+  if (atMollie) throw new WorkflowHttpError('Deze factuur is al via Mollie uitgegeven, of dat loopt nog. Klik bij de factuur op "Ververs bij Mollie" om de stand op te halen.', 409);
+
+  // Zonder publieke link: er gaat geen mail, dus ook geen link om te openen.
+  // De controle op het btw-nummer bij ICP en verlegd zit in de pdf zelf.
+  const pdf = await createInvoicePdfAttachment({ invoice, client, project, quote, company, publicUrl: '' });
+  validateInvoicePdfAttachment(pdf);
+  const stored = await storeInvoicePdfSnapshot(organizationId, invoiceId, pdf);
+  const { data, error } = await supabaseAdmin.rpc('issue_invoice_without_email', {
+    p_invoice_id: invoiceId,
+    p_organization_id: organizationId,
+    p_actor_user_id: userId,
+    p_pdf_file_name: pdf.fileName,
+    p_pdf_mime_type: pdf.mimeType,
+    p_pdf_size_bytes: pdf.sizeBytes,
+    p_pdf_sha256: pdf.sha256,
+    p_pdf_data_base64: stored.shouldStoreBase64InDatabase ? pdf.base64 : null,
+    p_pdf_storage_provider: stored.provider,
+    p_pdf_storage_key: stored.key,
+  });
+  if (error) throwRpcError('issue_invoice_without_email', error);
+  const result = (data ?? {}) as { invoice?: Record<string, unknown>; version?: Record<string, unknown> };
+  return {
+    invoice: result.invoice ?? null,
+    version: result.version ?? null,
+    // null: de factuur is gewoon op zijn factuurdatum geboekt.
+    bookingNotice,
+    pdf: { fileName: pdf.fileName, mimeType: pdf.mimeType, base64: pdf.base64, sizeBytes: pdf.sizeBytes, sha256: pdf.sha256 },
+  };
 }
 
 async function previewInvoiceSend(organizationId: string, invoiceId: string): Promise<{ bookingNotice: BookingNotice | null }> {

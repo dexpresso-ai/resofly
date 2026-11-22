@@ -38,6 +38,23 @@ export async function previewInvoiceSend(organizationId: UUID, invoiceId: UUID):
   return (data.bookingNotice ?? null) as InvoiceBookingNotice | null;
 }
 
+/**
+ * Uitgeven zonder mail: voor wie de pdf zelf mailt, print of in een portaal
+ * zet. De server controleert hetzelfde als bij versturen (btw-nummer bij ICP of
+ * verlegd, 0% met een reden, KOR), maakt de pdf en legt hem vast als de
+ * verzonden versie. Daarna is de factuur geboekt en ligt hij vast. Tot 22
+ * november 2026 ging dit met "Verzonden" in het statusveld, zonder controles
+ * en zonder pdf.
+ */
+export async function issueInvoiceWithoutEmail(organizationId: UUID, invoiceId: UUID): Promise<{ bookingNotice: InvoiceBookingNotice | null }> {
+  const { data, error } = await supabase.functions.invoke('invoice-workflow', {
+    body: { action: 'issueInvoiceWithoutEmail', organizationId, invoiceId },
+  });
+  if (error) await throwFunctionError(error, 'De factuur kon niet worden uitgegeven.');
+  if (!data?.ok) throw new Error(data?.error || 'De factuur kon niet worden uitgegeven.');
+  return { bookingNotice: (data.bookingNotice ?? null) as InvoiceBookingNotice | null };
+}
+
 /** Wat er op een factuur te crediteren valt, zoals het grootboek het ziet. */
 export type InvoiceCreditState = {
   number: string;
