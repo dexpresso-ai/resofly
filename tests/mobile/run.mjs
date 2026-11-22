@@ -119,6 +119,17 @@ const PAGES = {
   // werklijst met het afwijzen van een declaratie open; en Declaraties als
   // teamlid zonder Financiën, leeg en na het indienen.
   'purchase-invoices': { page: 'purchase-invoices', mock: { ledger: true } },
+  // Factuurregels (2026-11-22): een concept met "Uitgeven zonder mail" naast
+  // versturen, en het formulier met de vraag de korting over de tarieven te
+  // verdelen.
+  'factuur-concept': {
+    page: 'invoices', prepare: 'tr:has-text("2026-042")', contained: '.invoice-detail-modal',
+    mustShow: [{ selector: '.invoice-actions [data-action="issue-without-email"]', text: 'Uitgeven zonder mail', label: 'de knop Uitgeven zonder mail' }],
+  },
+  'factuur-korting': {
+    page: 'invoices', prepare: ['tr:has-text("2026-042")', '.invoice-actions button:has-text("Bewerken")'],
+    mustShow: [{ selector: '.finance-line-checks button', text: 'Verdeel over de tarieven', label: 'de knop Verdeel over de tarieven' }],
+  },
   'bon-lezen': {
     page: 'purchase-invoices', mock: { ledger: true, receiptReading: true }, prepare: { upload: CAMERA }, contained: '.rcp-modal',
     mustShow: [{ selector: '.rcp-working .rcp-paper', label: 'de bon op de scanner' }, { selector: '.rcp-working .aire-steps', label: 'de stappen van Gerrie' }],

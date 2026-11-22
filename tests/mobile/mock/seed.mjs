@@ -132,7 +132,9 @@ export const invoices = [
   ['2026-039', 1, 'paid', -30, 0, [line('Website oplevering', 1, 5200)]],
   ['2026-038', 2, 'paid', -50, -20, [line('Advies', 6, 85)]],
   ['2026-037', 3, 'paid', -70, -40, [line('Content augustus', 1, 650)]],
-  ['2026-042', 4, 'draft', 0, 30, [line('Onboarding', 1, 350)]],
+  // Een concept met twee tarieven en een korting op één tarief: het formulier
+  // vraagt dan de korting te verdelen (factuurregels, 2026-11-22).
+  ['2026-042', 4, 'draft', 0, 30, [line('Onboarding', 1, 350), { ...line('Werkboek', 1, 100), vat: 9 }, line('Korting nieuwe klant', 1, -45)]],
 ].map(([number, pi, status, d, due, lines]) => {
   const subtotal = lines.reduce((s, l) => s + l.quantity * l.unit_price, 0);
   return { id: uid('i'), ...base(), client_id: projects[pi].client_id, project_id: projects[pi].id, quote_id: null, number, date: dkey(day(d)), due_date: dkey(day(due)), lines, status, notes: null, sent_at: status === 'draft' ? null : iso(day(d)), paid_at: status === 'paid' ? iso(day(due)) : null, subtotal_amount: subtotal, vat_amount: Math.round(subtotal * 0.21 * 100) / 100, total_amount: Math.round(subtotal * 1.21 * 100) / 100, currency: 'EUR', reminder_level: 0, reminders_paused: false };
