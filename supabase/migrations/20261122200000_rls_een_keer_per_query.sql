@@ -184,7 +184,7 @@ begin
   execute format('drop policy if exists %I on public.%I', 'module gate update', p_table);
   execute format('drop policy if exists %I on public.%I', 'module gate delete', p_table);
 
-  -- Eén keer per query (20261122100000). Tot dan can_read_module per rij.
+  -- Eén keer per query (20261122200000). Tot dan can_read_module per rij.
   execute format(
     'create policy %I on public.%I as restrictive for select to authenticated using (organization_id = any ((select public.my_module_organization_ids(%L))::uuid[]))',
     'module gate select', p_table, p_module);
@@ -222,7 +222,9 @@ revoke all on function public.apply_module_gate(text, text, text) from public, a
 --      oude tekst: die moet letterlijk gelijk zijn. Zo is bewezen dat er
 --      verder niets is veranderd.
 -- Vooraf: precies deze lijst (gemaakt op een verse database met de keten tot
--- en met 20261120100000), en op elke tabel organization_id NOT NULL. Bij een
+-- en met 20261122110000; fiscal_year_partner_shares kwam erbij met
+-- 20261122100000_vof_verdeling_per_boekjaar), en op elke tabel
+-- organization_id NOT NULL. Bij een
 -- tweede keer draaien is er niets meer te vervangen en doet de stap niets.
 
 do $$
@@ -329,6 +331,7 @@ begin
     ('file_transfer_recipients', array['file_transfer_recipients read', 'module gate select']),
     ('file_transfers', array['file_transfers client gate', 'file_transfers read', 'module gate select']),
     ('finance_provider_jobs', array['module gate select']),
+    ('fiscal_year_partner_shares', array['fiscal year partner shares read', 'module gate select']),
     ('fiscal_year_size_inputs', array['fiscal_year_size_inputs read', 'module gate select']),
     ('fiscal_years', array['fiscal_years read', 'module gate select']),
     ('fixed_assets', array['fixed_assets read', 'module gate select']),

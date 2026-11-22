@@ -690,9 +690,10 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
       for (const [key, max] of textFields) {
         if (input[key] !== undefined) patch[key] = optStr(input, key, max);
       }
+      let newAccount: AccountRow | null = null;
       if (input.default_expense_account_id !== undefined) {
         const accountId = optId(input, 'default_expense_account_id');
-        if (accountId) await loadAccount(ctx, accountId);
+        if (accountId) newAccount = await loadAccount(ctx, accountId);
         patch.default_expense_account_id = accountId;
       }
       if (input.default_vat_code !== undefined) {
@@ -704,6 +705,21 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
       if (status) patch.status = status;
       if (patch.name === null) throw new ActionError('De naam van een leverancier mag niet leeg zijn.');
       if (Object.keys(patch).length === 0) throw new ActionError('Geef minstens één veld dat moet veranderen.');
+
+      // Een privérekening als standaard mag, maar zonder btw-code: de inbox en
+      // het scherm nemen die combinatie over in elke nieuwe factuurregel. Met
+      // 0552 en 21% als standaard boekte de inbox voorbelasting op privé. De
+      // database weigert het ook (20261122110000); hier vooraf, met een zin die
+      // het model kan volgen. Ook als alleen één van de twee verandert: de
+      // andere staat er al.
+      if ('default_expense_account_id' in patch || 'default_vat_code' in patch) {
+        const accountId = ('default_expense_account_id' in patch ? patch.default_expense_account_id : supplier.default_expense_account_id) as string | null;
+        const vatCode = ('default_vat_code' in patch ? patch.default_vat_code : supplier.default_vat_code) as string | null;
+        const account = accountId && vatCode ? newAccount ?? await loadAccount(ctx, accountId) : null;
+        if (account?.type === 'equity') {
+          throw new ActionError(`${accountLabel(account)} is privé of kapitaal (eigen vermogen), en daarop zit geen btw. Een leverancier met deze standaardrekening krijgt geen standaard-btw-code: geef "default_vat_code": null mee${'default_vat_code' in patch ? ' in plaats van een code' : ' (nu staat er ' + vatCode + ')'}.`);
+        }
+      }
 
       // Het IBAN en het e-mailadres van een leverancier bepalen waar geld heen
       // gaat, en de factuur-inbox vergelijkt er het IBAN op een nieuwe factuur
@@ -808,12 +824,20 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
         for (const line of raw.slice(0, 100)) {
           const code = await loadVatCode(ctx, str(line, 'vat_code', 40));
           const accountId = optId(line, 'account_id');
-          if (accountId) await loadAccount(ctx, accountId);
+          const account = accountId ? await loadAccount(ctx, accountId) : null;
+          const description = str(line, 'description', 300);
+          // Geen btw op privé of kapitaal: "Privédeel Bram", € 50 op 0552 met
+          // 21%, werd anders € 10,50 voorbelasting in rubriek 5b. De database
+          // weigert het bij opslaan en boeken (20261122110000); hier vooraf, met
+          // dezelfde zin, zodat er geen kaart komt die toch niet kan.
+          if (account?.type === 'equity' && Number(code.rate) !== 0) {
+            throw new ActionError(`Inkoopregel "${description.slice(0, 80)}": op ${account.code} · ${account.name} (eigen vermogen) hoort geen btw. Op een privé-uitgave trek je geen voorbelasting af: zet het bedrag inclusief btw op deze regel, met een btw-code van 0% (zie vat_code.list).`);
+          }
           const amount = cents(line, 'amount_eur');
           subtotal += amount;
           lines.push({
             id: crypto.randomUUID(),
-            description: str(line, 'description', 300),
+            description,
             amount_cents: amount,
             vat_code: code.code,
             vat_rate: code.rate,
@@ -886,6 +910,7 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
       'Alleen bij een eenmanszaak, vof, maatschap of cv: een GEBOEKTE inkoopfactuur die de ondernemer of een vennoot met eigen geld betaalde (eigen pas, voorgeschoten). ' +
       'Wat openstaat gaat van 1600 Crediteuren naar de privé-stortingen: 0560, of bij een vof de privé-stortingen van die vennoot (056n). De factuur staat daarna op betaald; de btw blijft aftrekbaar. ' +
       'Bij een vof, maatschap of cv met vennoten is `partner_id` verplicht (de vennoten staan in `owners.equity_overview`). Betaald via de zakelijke bank? Dan is dit niet de handeling: koppel de banktransactie. ' +
+      'Ook voor een geboekte creditnota die de leverancier op de eigen rekening van de ondernemer of een vennoot terugstortte ("privé ontvangen"): dat komt op de privé-opnamen (0550, of 055n van de vennoot). ' +
       'Terugdraaien: de boeking tegenboeken in het journaal.',
     keywords: ['privé betaald', 'voorgeschoten', 'eigen geld', 'eigen pas', 'vennoot betaalde', 'inkoopfactuur betaald', 'privé-storting'],
     input: {
@@ -902,28 +927,60 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
         ctx, 'purchase_invoices', invoiceId, 'internal_number, supplier_invoice_number, supplier_id, date, status, payment_status, total_cents, journal_entry_id', 'Inkoopfactuur');
       if (invoice.status !== 'booked' || !invoice.journal_entry_id) throw new ActionError('Boek de inkoopfactuur eerst (purchase_invoice.book); daarna kun je hem als privé betaald vastleggen.');
       if (invoice.payment_status === 'paid') throw new ActionError('Deze inkoopfactuur is al betaald.');
+      // Wat er werkelijk openstaat, niet het factuurtotaal: na een deelbetaling
+      // via de bank zei de kaart "factuur € 1.210" terwijl er € 710 openstond.
+      const open = Number(await rpc<number>(ctx, 'purchase_invoice_open_payable_cents', { p_purchase_invoice_id: invoiceId }, 'Openstaand bedrag ophalen') ?? 0);
+      if (open === 0) throw new ActionError('Op deze inkoopfactuur staat niets meer open.');
+      const refund = open < 0;
       const settings = await orgQuery(ctx, 'company_settings', 'legal_form').maybeSingle();
       const legalForm = String((settings.data as { legal_form?: string } | null)?.legal_form ?? 'eenmanszaak');
       if (!['eenmanszaak', 'vof', 'maatschap', 'cv'].includes(legalForm)) {
         throw new ActionError('Privé betalen kan alleen bij een eenmanszaak, vof, maatschap of cv. Bij een BV boek je een betaling door de dga op zijn rekening-courant.');
       }
-      let who = 'de ondernemer (0560 Privé-stortingen)';
+      let who = refund ? 'de ondernemer (0550 Privé-opnamen)' : 'de ondernemer (0560 Privé-stortingen)';
       if (partnerId) {
-        const partner = await row<{ name: string }>(ctx, 'partnership_partners', partnerId, 'name', 'Vennoot');
-        who = `${partner.name} (privé-stortingen van de vennoot)`;
+        const partner = await row<{ name: string; is_active: boolean }>(ctx, 'partnership_partners', partnerId, 'name, is_active', 'Vennoot');
+        who = `${partner.name} (privé-${refund ? 'opnamen' : 'stortingen'} van de vennoot${partner.is_active ? '' : ', uitgetreden'})`;
       } else if (['vof', 'maatschap', 'cv'].includes(legalForm)) {
         const { data: partners } = await orgQuery(ctx, 'partnership_partners', 'id').eq('is_active', true);
-        if ((partners ?? []).length > 0) throw new ActionError('Kies de vennoot die de factuur betaalde: geef partner_id mee (zie owners.equity_overview).');
+        if ((partners ?? []).length > 0) throw new ActionError(`Kies de vennoot die de factuur ${refund ? 'terugbetaald kreeg' : 'betaalde'}: geef partner_id mee (zie owners.equity_overview).`);
+      }
+      // Valt de datum in een afgesloten boekjaar, dan weigerde de database
+      // pas bij goedkeuren. Zonder gekozen datum: de eerste dag daarna, zoals
+      // de bank en de tegenboekingen doorschuiven (20261119180000).
+      let when = date ?? invoice.date;
+      let shifted = false;
+      if (!date) {
+        // Door tot na álle afgesloten jaren op rij: is het jaar erna ook dicht,
+        // dan weigerde de database anders alsnog pas bij goedkeuren.
+        const { data: closed } = await orgQuery(ctx, 'closed_periods', 'period_start, period_end').eq('period_type', 'year');
+        const years = (closed ?? []) as Array<{ period_start: string; period_end: string }>;
+        for (let guard = 0; guard < 50; guard++) {
+          const hit = years.find((y) => y.period_start <= when && when <= y.period_end);
+          if (!hit) break;
+          const next = new Date(`${hit.period_end}T00:00:00Z`);
+          next.setUTCDate(next.getUTCDate() + 1);
+          when = next.toISOString().slice(0, 10);
+          shifted = true;
+        }
       }
       const supplier = invoice.supplier_id
         ? await row<{ name: string }>(ctx, 'suppliers', invoice.supplier_id, 'name', 'Leverancier')
         : null;
       const number = invoice.internal_number ?? invoice.supplier_invoice_number;
       return {
-        title: `Inkoopfactuur ${number ?? ''} als privé betaald vastleggen`.replace('  ', ' '),
-        sub: joinShort([supplier?.name, `wat openstaat (factuur ${euroCents(invoice.total_cents)}) betaald door ${who}`, `op ${date ?? invoice.date}`], 220),
+        title: refund
+          ? `Creditnota ${number ?? ''} als privé ontvangen vastleggen`.replace('  ', ' ')
+          : `Inkoopfactuur ${number ?? ''} als privé betaald vastleggen`.replace('  ', ' '),
+        sub: joinShort([
+          supplier?.name,
+          refund
+            ? `${euroCents(-open)} terugontvangen door ${who}`
+            : `${euroCents(open)} openstaand${open !== invoice.total_cents ? ` (factuur ${euroCents(invoice.total_cents)})` : ''} betaald door ${who}`,
+          `op ${when}${shifted ? ' (de factuurdatum valt in een afgesloten boekjaar)' : ''}`,
+        ], 260),
         kind: 'money',
-        payload: { purchase_invoice_id: invoiceId, partner_id: partnerId, date: date ?? invoice.date, number, who },
+        payload: { purchase_invoice_id: invoiceId, partner_id: partnerId, date: when, number, who, refund },
       };
     },
   },
@@ -2277,7 +2334,7 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
     module: 'finance',
     kind: 'write',
     description:
-      'Opent een boekjaar met een begin- en einddatum. Dit mag ook voordat het vorige boekjaar is afgesloten. Een gebroken boekjaar (niet januari–december) kan alleen bij een BV, NV of coöperatie; bij een eenmanszaak, vof, maatschap of cv valt een boekjaar in één kalenderjaar; volg de boekjaar-startmaand uit de boekhoudinstellingen. ' +
+      'Opent een boekjaar met een begin- en einddatum. Dit mag ook voordat het vorige boekjaar is afgesloten. Een gebroken boekjaar (niet januari–december) kan alleen bij een BV, NV of coöperatie (bij een eenmanszaak, vof, maatschap of cv ondersteunt ResoFly het niet: daar valt een boekjaar in één kalenderjaar); volg de boekjaar-startmaand uit de boekhoudinstellingen. ' +
       'Bekijk de bestaande jaren eerst met `list_fiscal_years`.',
     keywords: ['boekjaar openen', 'nieuw boekjaar', 'jaar', 'gebroken boekjaar', 'periode'],
     input: {
@@ -2295,7 +2352,7 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
       if (start.slice(0, 4) !== end.slice(0, 4)) {
         const { data: settings } = await orgQuery(ctx, 'company_settings', 'legal_form').maybeSingle();
         if (['eenmanszaak', 'vof', 'maatschap', 'cv'].includes(String((settings as { legal_form?: string } | null)?.legal_form ?? 'eenmanszaak'))) {
-          throw new ActionError('Bij een eenmanszaak, vof, maatschap of cv is het boekjaar het kalenderjaar: het begint en eindigt in hetzelfde jaar. Een gebroken boekjaar kan alleen bij een BV, NV of coöperatie.');
+          throw new ActionError('Bij een eenmanszaak, vof, maatschap of cv valt een boekjaar in ResoFly in één kalenderjaar: het begint en eindigt in hetzelfde jaar. Een gebroken boekjaar ondersteunt ResoFly bij deze rechtsvormen niet; een korter eerste of laatste boekjaar kan wel.');
         }
       }
       const { data: overlapping } = await orgQuery(ctx, 'fiscal_years', 'label, period_start, period_end').limit(100);
@@ -2329,8 +2386,8 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
     required: ['fiscal_year_id'],
     async plan(ctx, input) {
       const fiscalYearId = id(input, 'fiscal_year_id');
-      const fiscalYear = await row<{ label: string; period_start: string; period_end: string; status: string }>(
-        ctx, 'fiscal_years', fiscalYearId, 'label, period_start, period_end, status', 'Boekjaar');
+      const fiscalYear = await row<{ label: string; period_start: string; period_end: string; status: string; legal_form: string | null }>(
+        ctx, 'fiscal_years', fiscalYearId, 'label, period_start, period_end, status, legal_form', 'Boekjaar');
       if (fiscalYear.status !== 'open') throw new ActionError(`Boekjaar ${fiscalYear.label} staat al op "${fiscalYear.status}".`);
 
       const rows = await rpc<Array<{ id: string; computed_result_cents: number }>>(ctx, 'list_fiscal_years', {}, 'Boekjaren ophalen');
@@ -2338,45 +2395,142 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
       const settings = await orgQuery(ctx, 'company_settings', 'year_result_account_code, legal_form').maybeSingle();
       const settingsRow = settings.data as { year_result_account_code?: string; legal_form?: string } | null;
       const resultCode = settingsRow?.year_result_account_code ?? '0510';
-      const legalForm = String(settingsRow?.legal_form ?? 'eenmanszaak');
-
-      // Waar het resultaat heen gaat, zoals close_fiscal_year het doet: bij een
-      // vof, maatschap of cv met actieve vennoten naar rato naar hun
-      // kapitaalrekeningen; bij een eenmanszaak gaat ook het privé naar 0500.
-      // Het privé van elke vennoot gaat altijd naar zijn eigen kapitaal, ook als
-      // er geen actieve vennoot meer is of de rechtsvorm eenmanszaak werd
-      // (20261118130000). Telt de verdeling niet op tot 100%, dan weigert de
-      // afsluiting — dat hoort vóór de kaart te blijken, niet erna.
-      const { data: partners, error: partnersError } = await orgQuery(ctx, 'partnership_partners', 'name, profit_share_basis_points, is_active');
-      if (partnersError) throw new ActionError(`Vennoten ophalen mislukt: ${partnersError.message}`);
-      const allPartners = (partners ?? []) as Array<{ name: string; profit_share_basis_points: number; is_active?: boolean }>;
-      const list = allPartners.filter((p) => p.is_active !== false);
-      const distributes = ['vof', 'maatschap', 'cv'].includes(legalForm) && list.length > 0;
-      let destination = `naar ${resultCode}`;
-      if (distributes) {
-        const total = list.reduce((sum, p) => sum + Number(p.profit_share_basis_points || 0), 0);
-        if (total !== 10000) {
-          throw new ActionError(`De winstverdeling van de vennoten telt op tot ${(total / 100).toLocaleString('nl-NL')}% in plaats van 100%. Pas de winstaandelen aan (Vennoten) voordat je het boekjaar afsluit.`);
-        }
-        destination = `naar de kapitaalrekeningen van ${list.length} vennoten (${list.map((p) => `${p.name} ${(p.profit_share_basis_points / 100).toLocaleString('nl-NL')}%`).join(', ')}); hun privé naar hun eigen kapitaal`;
-      } else if (['eenmanszaak', 'vof', 'maatschap', 'cv'].includes(legalForm)) {
-        // Het algemene privé (0550/0560) gaat bij elke IB-onderneming naar 0500,
-        // niet alleen bij een eenmanszaak. Een vof zonder actieve vennoot
-        // verdeelt niets: dat hoort op de kaart te staan.
-        const undivided = legalForm === 'eenmanszaak' ? '' : ' (geen actieve vennoot: niet verdeeld)';
-        destination = `naar ${resultCode}${undivided}; privé (0550/0560) naar 0500 Eigen vermogen`;
+      const currentForm = String(settingsRow?.legal_form ?? 'eenmanszaak');
+      // De rechtsvorm van dít boekjaar (20261122100000): wie per 1 januari van
+      // vof naar eenmanszaak ging, sluit het jaar ervoor nog af als vof.
+      const legalForm = String(fiscalYear.legal_form ?? currentForm);
+      const ibForms = ['eenmanszaak', 'vof', 'maatschap', 'cv'];
+      const notes: string[] = [];
+      if (legalForm !== currentForm && ibForms.includes(legalForm)) {
+        notes.push(`${fiscalYear.label} sluit af als ${legalForm}, de rechtsvorm in dat jaar; nu is het een ${currentForm}`);
       }
-      if (!distributes && allPartners.length > 0) destination += '; het privé van de vennoten naar hun eigen kapitaal';
+
+      // Waar het resultaat heen gaat, zoals close_fiscal_year het doet. Bij een
+      // vof, maatschap of cv naar de vennoten volgens de verdeling van DIT
+      // boekjaar (20261122100000), met de bedragen erbij. Hier stonden de
+      // actieve vennoten van nu met hun percentage: een vennoot die vóór het
+      // afsluiten uittrad, stond er niet op, en de kaart zei het niet.
+      let destination = `naar ${resultCode}`;
+      let distributes = false;
+      if (ibForms.includes(legalForm)) {
+        const overview = await rpc<{
+          isPartnership: boolean; shareTotalBasisPoints: number | null; splitFixed: boolean;
+          splitChangedAfterYearEnd: string[]; generalPrivateCents: number; partnersDefined: boolean;
+          owners: Array<{ name: string; inSplit?: boolean; shareBasisPoints: number; priorShareCents?: number; resultShareCents: number }>;
+        }>(ctx, 'owners_equity_overview', { p_fiscal_year_id: fiscalYearId }, 'Verdeling ophalen');
+        distributes = overview.isPartnership;
+        if (distributes) {
+          if ((overview.splitChangedAfterYearEnd ?? []).length > 0) {
+            throw new ActionError(`De vennoten of hun winstverdeling zijn na het einde van ${fiscalYear.label} gewijzigd (${overview.splitChangedAfterYearEnd.join(', ')}). Leg eerst vast welke verdeling in ${fiscalYear.label} gold (fiscal_year.set_partner_shares, of Boekjaren → Afsluiten → Verdeling); daarna kan het jaar dicht.`);
+          }
+          if (overview.shareTotalBasisPoints !== 10000) {
+            throw new ActionError(`De winstverdeling voor ${fiscalYear.label} telt op tot ${((overview.shareTotalBasisPoints ?? 0) / 100).toLocaleString('nl-NL')}% in plaats van 100%. Leg de verdeling van dit boekjaar vast (fiscal_year.set_partner_shares) voordat je afsluit.`);
+          }
+          const inSplit = overview.owners.filter((o) => o.inSplit !== false && (o.shareBasisPoints > 0 || (o.priorShareCents ?? 0) !== 0 || o.resultShareCents !== 0));
+          destination = `naar de vennoten (${inSplit.map((o) => `${o.name} ${euroCents(o.resultShareCents)}${(o.priorShareCents ?? 0) !== 0 ? `, waarvan ${euroCents(o.priorShareCents ?? 0)} vooraf` : ''}`).join('; ')}); hun privé naar hun eigen kapitaal`;
+          notes.push(overview.splitFixed ? `de verdeling van ${fiscalYear.label} is vastgelegd` : `de verdeling is die van de vennoten nu; klopt die niet voor ${fiscalYear.label}, leg hem dan eerst vast`);
+        } else {
+          // Het algemene privé (0550/0560) gaat bij elke IB-onderneming naar 0500,
+          // niet alleen bij een eenmanszaak. Een vof zonder actieve vennoot
+          // verdeelt niets: dat hoort op de kaart te staan.
+          const undivided = legalForm === 'eenmanszaak' ? '' : ' (geen vennoten in de verdeling: niet verdeeld)';
+          destination = `naar ${resultCode}${undivided}; privé (0550/0560) naar 0500 Eigen vermogen`;
+          if (overview.partnersDefined) destination += '; het privé van de vennoten naar hun eigen kapitaal';
+        }
+        // Privé zonder vennoot (0550/0560) komt bij een vof op 0500 en bij
+        // geen enkele vennoot op de aangifte. De kaart zweeg erover.
+        if (distributes && overview.generalPrivateCents !== 0) {
+          notes.push(`let op: ${euroCents(Math.abs(overview.generalPrivateCents))} op 0550/0560 (privé, geen vennoot) gaat naar 0500 en staat bij geen enkele vennoot; boek het eerst om naar de privérekening van de vennoot`);
+        }
+      }
 
       return {
         title: `Boekjaar ${fiscalYear.label} definitief afsluiten`,
         sub: joinShort([
           `${fiscalYear.period_start} t/m ${fiscalYear.period_end}`,
           `resultaat ${euroCents(computed)} (${computed >= 0 ? 'winst' : 'verlies'}) ${destination}`,
-        ], 260),
+          ...notes,
+        ], 520),
         warning: `Na het afsluiten kun je in ${fiscalYear.label} niets meer boeken. Alleen een eigenaar of beheerder kan het jaar nog heropenen.`,
         kind: 'money',
         payload: { fiscal_year_id: fiscalYearId, label: fiscalYear.label, result_cents: computed },
+      };
+    },
+  },
+
+  {
+    id: 'fiscal_year.set_partner_shares',
+    label: 'Verdeling over de vennoten van een boekjaar vastleggen',
+    module: 'finance',
+    kind: 'write',
+    risk: 'high',
+    description:
+      'Legt vast hoe het resultaat van één boekjaar over de vennoten van een vof, maatschap of cv gaat: per vennoot een percentage (samen precies 100) en eventueel een bedrag vooraf (arbeidsbeloning of rente over het kapitaal; dat is winstverdeling, geen kosten). Het restant (resultaat min alle bedragen vooraf) gaat naar rato. ' +
+      'Ook uitgetreden vennoten kunnen erin: wie in dat jaar vennoot was, krijgt zijn deel, ook als hij inmiddels weg is. Een vennoot die pas later toetrad, laat je eruit. ' +
+      'Alleen voor een open boekjaar. Een lege lijst zet het terug op de actieve vennoten van nu. De jaarafsluiting, Vennoten en de raming inkomstenbelasting rekenen daarna met deze verdeling. Vennoten en hun id staan in owners.equity_overview.',
+    keywords: ['winstverdeling', 'verdeling vennoten', 'arbeidsbeloning', 'arbeidsvergoeding', 'rente over kapitaal', 'uittreden', 'toetreden', 'vof', 'maatschap', 'cv'],
+    input: {
+      fiscal_year_id: { type: 'string', description: 'Id van het boekjaar (uit list_fiscal_years).' },
+      shares: {
+        type: 'array',
+        description: 'De vennoten van dit boekjaar. Leeg: terug naar de actieve vennoten van nu.',
+        items: {
+          type: 'object',
+          properties: {
+            partner_id: { type: 'string', description: 'Id van de vennoot (uit owners.equity_overview).' },
+            percentage: { type: 'number', description: 'Winstaandeel in procent van het restant, bijvoorbeeld 60 of 33.33.' },
+            prior_eur: { type: 'number', description: 'Bedrag vooraf in euro (arbeidsbeloning of rente over het kapitaal). Optioneel.' },
+          },
+          required: ['partner_id', 'percentage'],
+        },
+      },
+    },
+    required: ['fiscal_year_id', 'shares'],
+    async plan(ctx, input) {
+      const fiscalYearId = id(input, 'fiscal_year_id');
+      const fiscalYear = await row<{ label: string; status: string }>(ctx, 'fiscal_years', fiscalYearId, 'label, status', 'Boekjaar');
+      if (fiscalYear.status !== 'open') {
+        throw new ActionError(`Boekjaar ${fiscalYear.label} is afgesloten, met de verdeling die toen gold. Moet die anders, heropen het jaar dan eerst (fiscal_year.reopen).`);
+      }
+      const raw = input.shares;
+      if (!Array.isArray(raw)) throw new ActionError('Geef de verdeling als lijst van vennoten (shares).');
+      if (raw.length > 9) throw new ActionError('Een verdeling heeft hooguit negen vennoten.');
+
+      const { data: partnerRows, error } = await orgQuery(ctx, 'partnership_partners', 'id, name, partner_number, is_active');
+      if (error) throw new ActionError(`Vennoten ophalen mislukt: ${error.message}`);
+      const partners = (partnerRows ?? []) as Array<{ id: string; name: string; partner_number: number; is_active: boolean }>;
+
+      const shares: Array<{ partner_id: string; share_basis_points: number; prior_share_cents: number }> = [];
+      const described: string[] = [];
+      for (const item of raw) {
+        const line = (item ?? {}) as Record<string, unknown>;
+        const partnerId = id(line, 'partner_id');
+        // Alleen een vennoot van deze organisatie (harde regel 1): het id komt van het model.
+        const partner = partners.find((p) => p.id === partnerId);
+        if (!partner) throw new ActionError('Die vennoot bestaat niet in deze administratie. Zoek de vennoten op met owners.equity_overview.');
+        if (shares.some((s) => s.partner_id === partnerId)) throw new ActionError(`${partner.name} staat twee keer in de verdeling.`);
+        const percentage = num(line, 'percentage');
+        const basisPoints = Math.round(percentage * 100);
+        if (!Number.isFinite(basisPoints) || basisPoints < 0 || basisPoints > 10000) throw new ActionError(`Het percentage van ${partner.name} ligt tussen 0 en 100.`);
+        const prior = optNum(line, 'prior_eur');
+        const priorCents = prior === null ? 0 : Math.round(prior * 100);
+        shares.push({ partner_id: partnerId, share_basis_points: basisPoints, prior_share_cents: priorCents });
+        described.push(`${partner.name} ${(basisPoints / 100).toLocaleString('nl-NL')}%${priorCents !== 0 ? ` (eerst ${euroCents(priorCents)})` : ''}${partner.is_active ? '' : ', uitgetreden'}`);
+      }
+      const total = shares.reduce((sum, s) => sum + s.share_basis_points, 0);
+      if (shares.length > 0 && total !== 10000) {
+        throw new ActionError(`De verdeling telt op tot ${(total / 100).toLocaleString('nl-NL')}% in plaats van 100%.`);
+      }
+
+      return {
+        title: shares.length > 0
+          ? `Verdeling van ${fiscalYear.label} vastleggen`
+          : `Verdeling van ${fiscalYear.label} terug naar de vennoten van nu`,
+        sub: joinShort(shares.length > 0
+          ? [described.join('; '), 'het restant na de bedragen vooraf gaat naar rato']
+          : ['de jaarafsluiting rekent dan met de actieve vennoten en hun percentage van nu'], 400),
+        kind: 'money',
+        payload: { fiscal_year_id: fiscalYearId, label: fiscalYear.label, shares },
       };
     },
   },

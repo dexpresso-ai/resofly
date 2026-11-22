@@ -1,12 +1,12 @@
 -- ============================================================
--- Databasetest: de leesrechten één keer per query (20261122100000)
+-- Databasetest: de leesrechten één keer per query (20261122200000)
 --
 -- Draait op een database met alle migraties (supabase db start), in één
 -- transactie die altijd wordt teruggedraaid:
 --
 --   npm run test:database
 --
--- Waarom: 20261122100000 schreef 287 leespolicies om van een aanroep per rij
+-- Waarom: 20261122200000 schreef 289 leespolicies om van een aanroep per rij
 -- (can_read_org, can_read_module: elk een eigen query op organization_members)
 -- naar een lijst die één keer per query wordt opgehaald (een InitPlan). Op
 -- staging kostte de oude vorm zo'n 90 µs per rij. Dat mag alleen sneller
@@ -434,8 +434,8 @@ begin
   end loop;
   perform set_config('search_path', v_pad, true);
   raise notice 'ok: % leespolicies teruggezet naar de oude vorm', v_n;
-  if v_n <> 288 then
-    raise exception 'MISLUKT: % leespolicies teruggezet, verwacht 288 (287 en de poort op attachments)', v_n;
+  if v_n <> 290 then
+    raise exception 'MISLUKT: % leespolicies teruggezet, verwacht 290 (289 en de poort op attachments)', v_n;
   end if;
 end $$;
 

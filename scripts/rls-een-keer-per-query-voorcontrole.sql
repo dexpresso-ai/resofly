@@ -1,4 +1,4 @@
--- Voorcontrole voor 20261122100000_rls_een_keer_per_query, alleen lezen.
+-- Voorcontrole voor 20261122200000_rls_een_keer_per_query, alleen lezen.
 -- Draai op staging VOOR de uitrol (Management API, read_only: true).
 -- Verwacht (zo op de verse keten tot en met 20261120100000):
 --   kandidaten 287 | lijst_md5 fac23e359f619261dc3511a026d749ac | nullable leeg |

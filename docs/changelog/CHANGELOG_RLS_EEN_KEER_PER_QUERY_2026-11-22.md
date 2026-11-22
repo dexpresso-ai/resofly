@@ -4,7 +4,7 @@ Vervolg op [CHANGELOG_OPSTARTEN_SNELLER_2026-11-19.md](CHANGELOG_OPSTARTEN_SNELL
 Daar kreeg één telling (de banktransacties op het dashboard) een eigen functie
 om de RLS per rij te ontlopen. Nu zit het in de policies zelf, voor elke tabel.
 
-Migratie: `supabase/migrations/20261122100000_rls_een_keer_per_query.sql`.
+Migratie: `supabase/migrations/20261122200000_rls_een_keer_per_query.sql`.
 Test: `tests/database/rls_een_keer_per_query.sql`.
 
 ## Wat er was

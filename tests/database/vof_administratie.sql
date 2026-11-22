@@ -90,7 +90,7 @@ select (public.open_fiscal_year(:'org', '2026-01-01', '2026-12-31')).id as fy202
 -- Een vof heeft geen gebroken boekjaar: dat past niet op de aangifte van de
 -- vennoten. Een eerste boekjaar vanaf juli kan wel (in één kalenderjaar).
 select pg_temp.weigert(format('select public.open_fiscal_year(%L, %L, %L)', :'org', '2027-07-01', '2028-06-30'),
-  'het boekjaar het kalenderjaar', 'boekjaar: een gebroken boekjaar wordt geweigerd');
+  'valt een boekjaar in ResoFly in één kalenderjaar', 'boekjaar: een gebroken boekjaar wordt geweigerd');
 
 select id as rek_bank from public.ledger_accounts where organization_id = :'org' and code = '1100' \gset
 select id as rek_omzet from public.ledger_accounts where organization_id = :'org' and code = '8000' \gset

@@ -105,9 +105,16 @@ export const EXPORT_FORMAT_VERSION = 1;
 // herstellen) vervangen functies en triggers; geen tabellen of kolommen.
 // 20261120100000 (briefpapier los) zet alleen de functie company_settings_core
 // erbij; geen tabellen of kolommen. Het briefpapier gaat gewoon mee in de export.
-// 20261122100000 (RLS één keer per query) zet functies erbij en herschrijft
+// 20261122100000 (vof: de verdeling per boekjaar) zet fiscal_year_partner_shares
+// erbij, legal_form op fiscal_years en share_changed_at op partnership_partners.
+// Alles gaat mee: hoe de winst van een jaar over de vennoten ging (met wat er
+// geboekt is) en de rechtsvorm van dat jaar horen bij de administratie; zonder
+// komt een afgesloten jaar in een andere omgeving op andere winstaandelen uit.
+// 20261122110000 (vof: bank en inkoop privé) vervangt functies; geen tabellen
+// of kolommen.
+// 20261122200000 (RLS één keer per query) zet functies erbij en herschrijft
 // leespolicies; geen tabellen of kolommen.
-export const EXPORT_SCHEMA_VERSION = '20261122100000';
+export const EXPORT_SCHEMA_VERSION = '20261122200000';
 
 export type TableKind =
   | 'export'
@@ -356,6 +363,7 @@ export const EXPORT_MANIFEST: Readonly<Record<string, TableRule>> = {
   share_transactions: { kind: 'export' },
   share_encumbrances: { kind: 'export' },
   partnership_partners: { kind: 'export' },
+  fiscal_year_partner_shares: { kind: 'export' },
   income_tax_profiles: { kind: 'export' },
   income_tax_corrections: { kind: 'export' },
   income_tax_kia_exclusions: { kind: 'export' },

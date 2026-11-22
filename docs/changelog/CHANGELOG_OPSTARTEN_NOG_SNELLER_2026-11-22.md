@@ -65,7 +65,7 @@ app (niet de dev-server), een nagebootste telefoon (CPU 4× trager, Fast 4G:
   de tabbalk en het lezen van `scrollTop` voor de schaduw onder de
   bovenregel gebeuren in het volgende frame.
 
-### De database (`20261122100000_rls_een_keer_per_query.sql`)
+### De database (`20261122200000_rls_een_keer_per_query.sql`)
 
 De leesrechten één keer per vraag in plaats van per rij, voor 287
 leespolicies op 159 tabellen. Zie

@@ -3,7 +3,7 @@ import {
   closeFiscalYear, closeVatPeriod, createManualBankTransaction, createOpeningBalance, createVatSupplement,
   deleteManualBankTransaction, endPrepaidExpense, ensureDefaultLedgerAccounts, generateDepreciationSchedule, insertRow, matchBankTransactionsInRounds,
   mergeBankTransactions, openFiscalYear, payPurchaseInvoicePrivately, postAssetDepreciation, postManualJournalEntry, postPrepaidReleases, reopenFiscalYear,
-  reverseJournalEntry, savePrepaidExpense, setBankTransactionStatus, syncBankAccount, unbookBankTransaction, unmergeBankTransaction,
+  reverseJournalEntry, savePrepaidExpense, setBankTransactionStatus, setFiscalYearPartnerShares, syncBankAccount, unbookBankTransaction, unmergeBankTransaction,
   updateManualBankTransaction, updateRow, type BankAllocationInput,
 } from '../repository';
 import { purchaseTotals } from '../purchaseInvoiceNumbers';
@@ -140,6 +140,9 @@ export const BOOKKEEPING_EXECUTORS: Record<string, ActionExecutor> = {
       ctx.organizationId, text(payload, 'purchase_invoice_id'), optText(payload, 'partner_id'), text(payload, 'date'),
     );
     const number = optText(payload, 'number');
+    if (flag(payload, 'refund')) {
+      return `Creditnota ${number ?? ''} vastgelegd als privé ontvangen door ${optText(payload, 'who') ?? 'de ondernemer'} (${entry.entry_number ?? 'boekstuk'})`.replace('  ', ' ');
+    }
     return `Inkoopfactuur ${number ?? ''} vastgelegd als privé betaald door ${optText(payload, 'who') ?? 'de ondernemer'} (${entry.entry_number ?? 'boekstuk'})`.replace('  ', ' ');
   },
 
@@ -355,6 +358,22 @@ export const BOOKKEEPING_EXECUTORS: Record<string, ActionExecutor> = {
   'fiscal_year.close': async (payload, ctx) => {
     const year = await closeFiscalYear(ctx.organizationId, text(payload, 'fiscal_year_id'));
     return `Boekjaar ${year.label} afgesloten — resultaat ${euroCents(year.result_cents ?? 0)} geboekt naar ${year.result_account_code ?? 'de resultaatrekening'}`;
+  },
+
+  // De verdeling van één boekjaar (20261122100000), met dezelfde aanroep als
+  // het afsluitvenster bij Boekjaren.
+  'fiscal_year.set_partner_shares': async (payload, ctx) => {
+    const raw = Array.isArray(payload.shares) ? payload.shares as Array<Record<string, unknown>> : [];
+    const shares = raw.map((s) => ({
+      partner_id: String(s.partner_id),
+      share_basis_points: Math.trunc(Number(s.share_basis_points)),
+      prior_share_cents: Math.trunc(Number(s.prior_share_cents ?? 0)),
+    }));
+    await setFiscalYearPartnerShares(ctx.organizationId, text(payload, 'fiscal_year_id'), shares);
+    const label = optText(payload, 'label') ?? 'het boekjaar';
+    return shares.length > 0
+      ? `Verdeling van ${label} vastgelegd over ${shares.length} ${shares.length === 1 ? 'vennoot' : 'vennoten'}`
+      : `Verdeling van ${label} teruggezet: de jaarafsluiting rekent weer met de vennoten van nu`;
   },
 
   'fiscal_year.reopen': async (payload, ctx) => {

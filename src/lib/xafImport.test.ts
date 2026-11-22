@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import type { AppData } from '../types';
 import { buildXaf } from './xaf.ts';
 import {
-  balancesAt, decimalToCents, decodeXafBytes, mappingWarnings, openingLines, parseXaf, planRelations, proposeAccount, type TargetAccount,
+  balancesAt, decimalToCents, decodeXafBytes, mappingWarnings, openingLines, parseXaf, planRelations, proposeAccount, splitResultOverPartners,
+  type TargetAccount,
 } from './xafImport.ts';
 
 /**
@@ -274,8 +275,189 @@ test('vof: kapitaal en privé van een vennoot gaan naar zijn eigen rekening', ()
   assert.equal(propose('0620', 'Privé-opnamen Anna'), 'a0551');
   assert.equal(propose('0630', 'Prive stortingen Bram'), 'a0562');
   assert.equal(propose('0640', 'Kapitaal Anna Jansen'), 'a0501', 'dezelfde naam');
-  assert.equal(propose('0650', 'Kapitaal Jansen'), 'a0500', 'twee vennoten heten Jansen: geen vennoot raden, het algemene kapitaal');
+  // Tot november 2026 viel dit terug op 0500, met een voorstel; de changelog
+  // van 18 november (punt 11) beloofde er juist geen.
+  assert.equal(propose('0650', 'Kapitaal Jansen'), null, 'twee vennoten heten Jansen: geen vennoot raden, en ook geen 0500');
   assert.equal(propose('0660', 'Kapitaal'), 'a0500', 'zonder naam: het algemene kapitaal');
+});
+
+// De vennoten van de reviewer: Anna Jansen en Jan van Dam. Lisa van Leeuwen
+// staat nog niet in ResoFly.
+const vofAnnaJan: TargetAccount[] = [
+  ...resofly,
+  { id: 'a0550', code: '0550', name: 'Privé-opnamen (geen vennoot)', type: 'equity', subtype: 'private_withdrawals' },
+  { id: 'a0560', code: '0560', name: 'Privé-stortingen (geen vennoot)', type: 'equity', subtype: 'private_contributions' },
+  { id: 'a0501', code: '0501', name: 'Kapitaal Anna Jansen', type: 'equity', subtype: 'partner_capital' },
+  { id: 'a0502', code: '0502', name: 'Kapitaal Jan van Dam', type: 'equity', subtype: 'partner_capital' },
+  { id: 'a0551', code: '0551', name: 'Privé-opnamen Anna Jansen', type: 'equity', subtype: 'partner_withdrawals' },
+  { id: 'a0552', code: '0552', name: 'Privé-opnamen Jan van Dam', type: 'equity', subtype: 'partner_withdrawals' },
+  { id: 'a0561', code: '0561', name: 'Privé-stortingen Anna Jansen', type: 'equity', subtype: 'partner_contributions' },
+  { id: 'a0562', code: '0562', name: 'Privé-stortingen Jan van Dam', type: 'equity', subtype: 'partner_contributions' },
+];
+
+// Tot november 2026 telde "van" als naam: het kapitaal van L. van Leeuwen
+// (€ 4.000) werd 0502 Kapitaal Jan van Dam, en Jan stond op € 10.000.
+test('vof: "van" is geen naam, Van Leeuwen wordt geen Van Dam', () => {
+  const propose = (code: string, name: string) => proposeAccount({ code, name }, vofAnnaJan);
+  for (const [code, name] of [['0610', 'Kapitaal vennoot L. van Leeuwen'], ['0620', 'Privé-opnamen L. van Leeuwen'], ['0630', 'Prive stortingen van Leeuwen']] as const) {
+    const p = propose(code, name);
+    assert.equal(p.targetId, null, `${name}: geen voorstel`);
+    assert.match(p.reason ?? '', /noemt een vennoot die niet in ResoFly staat/, `${name}: het scherm zegt waarom`);
+  }
+  // Van Dam zelf wordt wel herkend, met of zonder voorletter of "vennoot".
+  assert.deepEqual(propose('0640', 'Kapitaal vennoot Van Dam'), { targetId: 'a0502', reason: 'Vennoot' });
+  assert.equal(propose('0641', 'Kapitaal J. van Dam').targetId, 'a0502');
+  assert.equal(propose('0642', 'Privé-opnamen v/d Dam').targetId, 'a0552', '"v/d" is een tussenvoegsel, geen voorletter');
+  assert.equal(propose('0643', 'Privé-stortingen Jan').targetId, 'a0562', 'alleen een voornaam mag, als er verder niets staat');
+  // Een andere voorletter of voornaam bij dezelfde achternaam is iemand anders.
+  assert.equal(propose('0644', 'Kapitaal A. van Dam').targetId, null);
+  assert.equal(propose('0645', 'Kapitaal Lisa van Dam').targetId, null);
+  assert.match(propose('0645', 'Kapitaal Lisa van Dam').reason ?? '', /niet in ResoFly/);
+  // Zonder vennoten in ResoFly: het algemene kapitaal, zoals altijd.
+  assert.equal(proposeAccount({ code: '0610', name: 'Kapitaal vennoot L. van Leeuwen' }, resofly).targetId, 'a0500');
+});
+
+// Anna en Piet Jansen: "Kapitaal Jansen" ging naar 0500 en "Privé-opnamen
+// Jansen" naar 0550 (geen vennoot), steeds mét voorstel.
+test('vof: twee vennoten met dezelfde achternaam krijgen geen voorstel', () => {
+  const tweeJansen: TargetAccount[] = [
+    ...resofly,
+    { id: 'a0550', code: '0550', name: 'Privé-opnamen (geen vennoot)', type: 'equity', subtype: 'private_withdrawals' },
+    { id: 'a0501', code: '0501', name: 'Kapitaal Anna Jansen', type: 'equity', subtype: 'partner_capital' },
+    { id: 'a0502', code: '0502', name: 'Kapitaal Piet Jansen', type: 'equity', subtype: 'partner_capital' },
+    { id: 'a0551', code: '0551', name: 'Privé-opnamen Anna Jansen', type: 'equity', subtype: 'partner_withdrawals' },
+    // Piet heeft (nog) geen opnamenrekening: toch twijfel, want hij is wel een Jansen.
+  ];
+  const propose = (code: string, name: string) => proposeAccount({ code, name }, tweeJansen);
+  for (const [code, name] of [['0600', 'Kapitaal vennoot Jansen'], ['0550', 'Privé-opnamen Jansen']] as const) {
+    const p = propose(code, name);
+    assert.equal(p.targetId, null, `${name}: geen 0500 of 0550`);
+    assert.match(p.reason ?? '', /past bij twee vennoten \(Anna Jansen en Piet Jansen\)/);
+  }
+  // Een voorletter of voornaam beslist.
+  assert.equal(propose('0601', 'Kapitaal A. Jansen').targetId, 'a0501');
+  assert.equal(propose('0602', 'Kapitaal Piet Jansen').targetId, 'a0502');
+  assert.equal(propose('0603', 'Privé-opnamen A.J. Jansen').targetId, 'a0551');
+  // Een Jansen die er niet is.
+  assert.match(propose('0604', 'Kapitaal L. Jansen').reason ?? '', /niet in ResoFly/);
+  // Wel een Jansen, maar zonder rekening voor dit soort: zeg dat.
+  const piet = propose('0605', 'Privé-opnamen Piet Jansen');
+  assert.equal(piet.targetId, null);
+  assert.match(piet.reason ?? '', /Piet Jansen heeft in ResoFly geen rekening voor privé-opnamen/);
+});
+
+// "Cum. afschr. inventaris", "Afschrijving inventaris" en "Afschrijvingen
+// inventaris" kwamen alle drie op 0100 Vaste activa.
+test('cumulatieve afschrijving gaat naar 0150, ook afgekort, en niet naar het activum', () => {
+  const propose = (code: string, name: string) => proposeAccount({ code, name }, resofly);
+  for (const name of ['Cum. afschr. inventaris', 'Afschrijving inventaris', 'Afschrijvingen inventaris', 'Cumulatieve afschrijving inventaris', 'Afschr. cum. bedrijfsauto']) {
+    assert.deepEqual(propose('0110', name), { targetId: 'a0150', reason: 'Cumulatieve afschrijving' }, name);
+  }
+  assert.equal(propose('0100', 'Inventaris').targetId, 'a0100', 'het activum zelf blijft 0100');
+  // Zonder rekening voor cumulatieve afschrijving: geen voorstel, ook niet op nummer.
+  const zonder = resofly.filter(t => t.subtype !== 'accumulated_depreciation');
+  const p = proposeAccount({ code: '0100', name: 'Cum. afschr. inventaris' }, zonder);
+  assert.equal(p.targetId, null);
+  assert.match(p.reason ?? '', /geen rekening voor cumulatieve afschrijving/);
+  // Een eigen rekening met dat nummer en "afschrijving" in de naam mag wel.
+  const eigen: TargetAccount[] = [...zonder, { id: 'a0110', code: '0110', name: 'Afschrijving inventaris', type: 'asset', subtype: null }];
+  assert.equal(proposeAccount({ code: '0110', name: 'Cum. afschr. inventaris' }, eigen).targetId, 'a0110');
+});
+
+// "Rekening-courant vennoot Van Dam" met oud nummer 0560 werd 0560
+// Privé-stortingen (geen vennoot), en ging bij de jaarafsluiting naar 0500.
+test('een rekening-courant met een vennoot wordt geen privé, ook niet op nummer', () => {
+  const propose = (code: string, name: string) => proposeAccount({ code, name }, vofAnnaJan);
+  for (const [code, name] of [['0560', 'Rekening-courant vennoot Van Dam'], ['0550', 'R/C Jansen'], ['0552', 'Rekening courant Jan van Dam'], ['0500', 'RC vennoten']] as const) {
+    const p = propose(code, name);
+    assert.equal(p.targetId, null, `${code} ${name}`);
+    assert.match(p.reason ?? '', /schuld of vordering, geen privé/);
+  }
+  // Noemt de naam een vennoot, dan ook niet op nummer naar 0550 of 0560 (geen vennoot).
+  assert.match(propose('0550', 'Privé Jansen').reason ?? '', /noemt een vennoot.*0550 Privé-opnamen \(geen vennoot\) is van geen enkele vennoot/);
+  // Gewoon privé blijft gewoon privé.
+  assert.equal(propose('0560', 'Privé-stortingen').targetId, 'a0560');
+  assert.equal(propose('0550', 'Privé-opnamen').targetId, 'a0550');
+});
+
+test('een waarschuwing als meer rekeningen samenkomen op 0500 of op de rekening van één vennoot', () => {
+  const balances = [
+    { code: '0600', name: 'Kapitaal vennoot J. van Dam', type: 'B' as const, cents: -600_000 },
+    { code: '0610', name: 'Kapitaal vennoot L. van Leeuwen', type: 'B' as const, cents: -400_000 },
+    { code: '0620', name: 'Kapitaal vennoot A. Jansen', type: 'B' as const, cents: -500_000 },
+    { code: '0630', name: 'Privé-opnamen A. Jansen', type: 'B' as const, cents: 20_000 },
+  ];
+  // Ieder op zijn eigen rekening: niets te melden.
+  assert.deepEqual(mappingWarnings(balances, { '0600': 'a0502', '0620': 'a0501', '0630': 'a0551', '0610': 'a0500' }, vofAnnaJan), []);
+  // Van Leeuwen bij Van Dam: gemeld, met de namen.
+  const bijJan = mappingWarnings(balances, { '0600': 'a0502', '0610': 'a0502', '0620': 'a0501', '0630': 'a0551' }, vofAnnaJan);
+  assert.equal(bijJan.length, 1);
+  assert.match(bijJan[0], /2 rekeningen uit de auditfile komen samen op 0502 Kapitaal Jan van Dam: 0600 Kapitaal vennoot J\. van Dam, 0610 Kapitaal vennoot L\. van Leeuwen\. Ze worden één saldo, van één vennoot/);
+  // Twee kapitalen op 0500: ook gemeld, op geen enkele vennoot.
+  const op0500 = mappingWarnings(balances, { '0600': 'a0500', '0610': 'a0500', '0620': 'a0501', '0630': 'a0551' }, vofAnnaJan);
+  assert.equal(op0500.length, 1);
+  assert.match(op0500[0], /komen samen op 0500 Eigen vermogen: .*op geen enkele vennoot/);
+  // Privé-opnamen bij elkaar op 055n tellen ook.
+  assert.equal(mappingWarnings(balances, { '0600': 'a0502', '0610': 'a0551', '0620': 'a0501', '0630': 'a0551' }, vofAnnaJan).length, 1);
+});
+
+// Een vof stapt per 1-7-2025 over. De winst van januari t/m juni (€ 12.000)
+// kwam als sluitpost op 0500 en werd nooit over de vennoten verdeeld.
+test('vof: de winst tot de overstap komt per vennoot op zijn kapitaal, tot op de cent', () => {
+  const vofXaf = `<?xml version="1.0" encoding="UTF-8"?>
+<auditfile xmlns="http://www.auditfiles.nl/XAF/3.2"><header><fiscalYear>2025</fiscalYear><startDate>2025-01-01</startDate><endDate>2025-12-31</endDate></header>
+<company><companyName>Jansen &amp; Van Dam vof</companyName><generalLedger>
+<ledgerAccount><accID>1000</accID><accDesc>Bank</accDesc><accTp>B</accTp></ledgerAccount>
+<ledgerAccount><accID>0600</accID><accDesc>Kapitaal Anna Jansen</accDesc><accTp>B</accTp></ledgerAccount>
+<ledgerAccount><accID>0610</accID><accDesc>Kapitaal Jan van Dam</accDesc><accTp>B</accTp></ledgerAccount>
+<ledgerAccount><accID>8000</accID><accDesc>Omzet</accDesc><accTp>P</accTp></ledgerAccount>
+</generalLedger><openingBalance><opBalDate>2025-01-01</opBalDate>
+<obLine><nr>1</nr><accID>1000</accID><amnt>10000</amnt><amntTp>D</amntTp></obLine>
+<obLine><nr>2</nr><accID>0600</accID><amnt>6000</amnt><amntTp>C</amntTp></obLine>
+<obLine><nr>3</nr><accID>0610</accID><amnt>4000</amnt><amntTp>C</amntTp></obLine>
+</openingBalance><transactions><journal><jrnID>VK</jrnID>
+<transaction><nr>1</nr><trDt>2025-03-01</trDt><trLine><accID>1000</accID><amnt>12000</amnt><amntTp>D</amntTp></trLine><trLine><accID>8000</accID><amnt>12000</amnt><amntTp>C</amntTp></trLine></transaction>
+<transaction><nr>2</nr><trDt>2025-08-01</trDt><trLine><accID>1000</accID><amnt>5000</amnt><amntTp>D</amntTp></trLine><trLine><accID>8000</accID><amnt>5000</amnt><amntTp>C</amntTp></trLine></transaction>
+</journal></transactions></company></auditfile>`;
+  const balances = balancesAt(parseXaf(vofXaf), '2025-07-01');
+  assert.equal(balances.resultCents, -1_200_000, '€ 12.000 winst tot de overstap');
+  const partners = [
+    { capitalAccountId: 'a0502', name: 'Jan van Dam', partnerNumber: 2, basisPoints: 4000 },
+    { capitalAccountId: 'a0501', name: 'Anna Jansen', partnerNumber: 1, basisPoints: 6000 },
+  ];
+  const split = splitResultOverPartners(balances.resultCents, partners);
+  assert.deepEqual(split, { kind: 'split', lines: [
+    { account_id: 'a0501', cents: -720_000, name: 'Anna Jansen', basisPoints: 6000 },
+    { account_id: 'a0502', cents: -480_000, name: 'Jan van Dam', basisPoints: 4000 },
+  ] });
+  const mapping = Object.fromEntries(balances.balance.map(b => [b.code, proposeAccount(b, vofAnnaJan).targetId]));
+  const lines = openingLines(balances.balance, mapping, split.kind === 'split' ? split.lines : []);
+  assert.deepEqual([...lines].sort((a, b) => a.account_id.localeCompare(b.account_id)), [
+    { account_id: 'a0501', cents: -1_320_000 }, { account_id: 'a0502', cents: -880_000 }, { account_id: 'a1100', cents: 2_200_000 },
+  ]);
+  assert.equal(lines.reduce((sum, l) => sum + l.cents, 0), 0, 'de beginbalans sluit: geen sluitpost op 0500');
+
+  // Dezelfde afronding als de jaarafsluiting (vennoten_jaarafsluiting.sql): € 1.000,01 wordt € 600,01 en € 400,00.
+  assert.deepEqual(splitResultOverPartners(-100_001, partners), { kind: 'split', lines: [
+    { account_id: 'a0501', cents: -60_001, name: 'Anna Jansen', basisPoints: 6000 },
+    { account_id: 'a0502', cents: -40_000, name: 'Jan van Dam', basisPoints: 4000 },
+  ] });
+  // Verlies is debet; drie gelijke delen sluiten ook.
+  const derden = [
+    { capitalAccountId: 'x', name: 'X', partnerNumber: 1, basisPoints: 3333 },
+    { capitalAccountId: 'y', name: 'Y', partnerNumber: 2, basisPoints: 3333 },
+    { capitalAccountId: 'z', name: 'Z', partnerNumber: 3, basisPoints: 3334 },
+  ];
+  const verlies = splitResultOverPartners(30_001, derden);
+  assert.equal(verlies.kind, 'split');
+  if (verlies.kind === 'split') {
+    assert.ok(verlies.lines.every(l => l.cents > 0), 'verlies staat debet');
+    assert.equal(verlies.lines.reduce((sum, l) => sum + l.cents, 0), 30_001);
+  }
+  // Geen vennoten, of een verdeling die niet op 100% uitkomt: niets verdelen.
+  assert.deepEqual(splitResultOverPartners(-1_200_000, []), { kind: 'no_partners' });
+  assert.deepEqual(splitResultOverPartners(-1_200_000, partners.slice(0, 1)), { kind: 'shares_not_100', totalBasisPoints: 4000 });
+  assert.deepEqual(splitResultOverPartners(0, partners), { kind: 'split', lines: [] });
 });
 
 test('regels voor de beginbalans: per rekening opgeteld, en niets zonder koppeling', () => {

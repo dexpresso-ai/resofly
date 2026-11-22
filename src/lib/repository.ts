@@ -93,6 +93,7 @@ import type {
   ClosedPeriod,
   FiscalYear,
   FiscalYearListRow,
+  FiscalYearPartnerShare,
   Supplier,
   PurchaseInvoice,
   FixedAsset,
@@ -3117,6 +3118,60 @@ export async function savePartnershipPartner(
 }
 
 /**
+ * Haalt een vennoot weg die er nooit had moeten zijn, met zijn rekeningen. De
+ * database weigert dat zodra er iets op zijn rekeningen is geboekt of hij een
+ * winstaandeel had in een afgesloten jaar: zet hem dan op uitgetreden. De
+ * melding komt ongewijzigd mee, want die zegt wat je dan doet.
+ */
+export async function deletePartnershipPartner(organizationId: string, partnerId: string): Promise<void> {
+  const { error } = await supabase.rpc('delete_partnership_partner', {
+    p_organization_id: organizationId,
+    p_partner_id: partnerId,
+  });
+  if (error) throw bookkeepingError(error);
+}
+
+/**
+ * Legt de verdeling van één open boekjaar vast: per vennoot een percentage en
+ * een voorafgaand bedrag (arbeidsbeloning, rente over het kapitaal). Samen
+ * precies 10000 basispunten; uitgetreden vennoten mogen erin. Een lege lijst
+ * haalt de vastgelegde verdeling weg: dan geldt weer die van de actieve
+ * vennoten. Geeft de vastgelegde regels terug.
+ */
+export async function setFiscalYearPartnerShares(
+  organizationId: string,
+  fiscalYearId: string,
+  shares: Array<{ partner_id: string; share_basis_points: number; prior_share_cents: number }>,
+): Promise<FiscalYearPartnerShare[]> {
+  const { data, error } = await supabase.rpc('set_fiscal_year_partner_shares', {
+    p_organization_id: organizationId,
+    p_fiscal_year_id: fiscalYearId,
+    p_shares: shares,
+  });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data : []) as FiscalYearPartnerShare[];
+}
+
+/**
+ * De rechtsvorm van één open boekjaar. Wisselt de rechtsvorm bij Instellingen,
+ * dan volgt een vorig jaar dat nog open staat niet vanzelf; was de oude
+ * instelling fout, dan zet je dat jaar hiermee om.
+ */
+export async function setFiscalYearLegalForm(
+  organizationId: string,
+  fiscalYearId: string,
+  legalForm: 'eenmanszaak' | 'vof' | 'maatschap' | 'cv',
+): Promise<FiscalYear> {
+  const { data, error } = await supabase.rpc('set_fiscal_year_legal_form', {
+    p_organization_id: organizationId,
+    p_fiscal_year_id: fiscalYearId,
+    p_legal_form: legalForm,
+  });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data[0] : data) as FiscalYear;
+}
+
+/**
  * Koppelt een vennoot aan het teamlid dat hij is (of los, met `null`). Dan tellen
  * de uren van dat teamlid voor het urencriterium van de vennoot.
  */
@@ -3166,6 +3221,38 @@ export async function payPurchaseInvoicePrivately(
   });
   if (error) throw bookkeepingError(error);
   return (Array.isArray(data) ? data[0] : data) as JournalEntry;
+}
+
+/**
+ * Wie welke inkoopfactuur privé betaalde of privé ontving, uit de boekstukken
+ * van pay_purchase_invoice_privately ("Privé betaald door Anna: INK-…").
+ * Tegengeboekte betalingen tellen niet. Alleen het label, voor in de lijst.
+ */
+export async function listPurchasePrivatePayments(
+  organizationId: UUID, purchaseInvoiceIds: UUID[],
+): Promise<Array<{ purchaseInvoiceId: UUID; label: string }>> {
+  if (purchaseInvoiceIds.length === 0) return [];
+  // Privé betalen is zeldzaam: alle zulke boekstukken van de organisatie (de
+  // nieuwste duizend), in plaats van een lijst met honderden id's in de URL.
+  const wanted = new Set(purchaseInvoiceIds);
+  const { data, error } = await supabase
+    .from('journal_entries').select('source_id, description, date, reversed_by_entry_id')
+    .eq('organization_id', organizationId)
+    .eq('source_type', 'purchase_private_payment')
+    .eq('status', 'posted')
+    .order('date', { ascending: false })
+    .limit(1000);
+  if (error) throw bookkeepingError(error);
+  const out = new Map<UUID, string>();
+  for (const row of (data ?? []) as Array<{ source_id: UUID | null; description: string | null; reversed_by_entry_id: UUID | null }>) {
+    if (!row.source_id || !wanted.has(row.source_id) || row.reversed_by_entry_id || out.has(row.source_id)) continue;
+    // De omschrijving maakt de database zelf: "Privé betaald door <wie>: <nummer>".
+    const m = /^Privé (betaald|ontvangen) door (.+?): /.exec(row.description ?? '');
+    if (!m) continue;
+    const who = m[2] === 'de ondernemer' ? '' : ` door ${m[2]}`;
+    out.set(row.source_id, `privé ${m[1]}${who}`);
+  }
+  return [...out].map(([purchaseInvoiceId, label]) => ({ purchaseInvoiceId, label }));
 }
 
 /** De kapitaalvergelijking van één boekjaar: begin, resultaat, stortingen, opnamen, eind. */
