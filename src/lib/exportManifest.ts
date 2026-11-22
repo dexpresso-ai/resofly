@@ -105,7 +105,11 @@ export const EXPORT_FORMAT_VERSION = 1;
 // herstellen) vervangen functies en triggers; geen tabellen of kolommen.
 // 20261120100000 (briefpapier los) zet alleen de functie company_settings_core
 // erbij; geen tabellen of kolommen. Het briefpapier gaat gewoon mee in de export.
-export const EXPORT_SCHEMA_VERSION = '20261120100000';
+// 20261122100000 (bank inlezen) zet sync_gap_from en sync_gap_to op
+// bank_accounts: een periode die de bankkoppeling niet meer kon ophalen. Ze
+// gaan mee (bank_accounts is 'export'); geen geheim. Verder vervangt hij de
+// functie bank_purchase_match.
+export const EXPORT_SCHEMA_VERSION = '20261122100000';
 
 export type TableKind =
   | 'export'

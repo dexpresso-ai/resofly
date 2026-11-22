@@ -2,8 +2,8 @@ import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { assertModuleAccess } from '../_shared/edgeAuth.ts';
 import {
-  bankReturnError, choosePsuType, consentExpired, consentValidUntil, ebErrorCode, isBookedTransaction,
-  mapAspsp, mapEbTransaction, needsReconsent, psuTypesOf, syncDateFrom, type PsuType,
+  accountErrorText, bankReturnError, choosePsuType, consentExpired, consentValidUntil, describeSyncGap, ebErrorCode,
+  isBookedTransaction, mapAspsp, mapEbTransaction, needsReconsent, psuTypesOf, syncDateFrom, syncGap, type PsuType,
 } from '../_shared/bankSync.ts';
 import { publicActionError } from '../_shared/publicError.ts';
 
@@ -347,10 +347,14 @@ async function finalizeRequisition(userId: string, body: Record<string, unknown>
   // Koppelen gelukt maar ophalen niet? Dan moet de gebruiker dat zien, niet
   // "0 transacties opgehaald" alsof er niets was.
   const failed = synced.results.filter((r) => r.error);
-  return { status: 'linked', linked, imported, syncErrors: failed.length, syncError: failed[0]?.error ?? null };
+  // Kon de bank een deel van de periode niet meer leveren (zie syncGap), dan
+  // hoort de zzp'er dat hier, niet pas als de bank niet aansluit.
+  const notice = synced.results.find((r) => r.notice)?.notice ?? null;
+  return { status: 'linked', linked, imported, syncErrors: failed.length, syncError: failed[0]?.error ?? null, syncNotice: notice };
 }
 
-type SyncResult = { bankAccountId: string; inserted: number; skipped: number; error?: string };
+/** `notice`: de sync is gelukt, maar er is iets om te weten (een periode die de bank niet meer leverde). */
+type SyncResult = { bankAccountId: string; inserted: number; skipped: number; error?: string; notice?: string };
 type RequisitionState = { id: string; status: string; expires_at: string | null; organization_id: string; accounts: unknown };
 
 async function syncAccounts(organizationId: string, filter: { bankAccountId?: string | null; requisitionId?: string | null } = {}) {
@@ -418,7 +422,8 @@ async function syncOneAccount(acc: any, requisition: RequisitionState | null): P
   const dateFrom = syncDateFrom(acc.last_synced_at, Date.now());
   try {
     const fetched = await fetchTransactions(acc.external_account_id, dateFrom);
-    const txns = fetched.transactions.filter(isBookedTransaction).map(mapEbTransaction)
+    const booked = fetched.transactions.filter(isBookedTransaction).map((t) => mapEbTransaction(t, acc.iban));
+    const txns = booked
       .filter((t) => t.booking_date && t.amount_cents !== 0 && (!fetched.longest || t.booking_date >= dateFrom));
     const dates = txns.map((t) => t.booking_date as string).sort();
     const statement = {
@@ -442,14 +447,34 @@ async function syncOneAccount(acc: any, requisition: RequisitionState | null): P
       return { result: { bankAccountId: acc.id, inserted, skipped, error }, reconsent: false };
     }
     await markSynced(acc.id);
+    const gap = syncGap(dateFrom, acc.last_synced_at, fetched.longest, booked.map((t) => t.booking_date), new Date().toISOString().slice(0, 10));
+    if (gap) {
+      await markSyncGap(acc, gap);
+      return { result: { bankAccountId: acc.id, inserted, skipped, notice: describeSyncGap(gap) }, reconsent: false };
+    }
     return { result: { bankAccountId: acc.id, inserted, skipped }, reconsent: false };
   } catch (e) {
-    const reconsent = needsReconsent((e as any)?.ebStatus, (e as any)?.ebCode ?? null);
+    const status = (e as any)?.ebStatus;
+    const reconsent = needsReconsent(status, (e as any)?.ebCode ?? null);
     if (reconsent && acc.bank_requisition_id) {
       await supabaseAdmin.from('bank_requisitions').update({ status: 'expired' }).eq('id', acc.bank_requisition_id);
     }
-    return fail(describeError(e), reconsent);
+    return fail(reconsent ? describeError(e) : accountErrorText(status, describeError(e)), reconsent);
   }
+}
+
+/**
+ * Een periode die de bank niet meer leverde, vastgelegd op de rekening: de
+ * Bankpagina toont hem tot je hem wegklikt of een afschrift over die periode
+ * inleest. Een eerder gat dat nog openstaat, wordt samengevoegd. Zonder
+ * migratie 20261122100000 bestaan de kolommen nog niet; dan alleen de melding
+ * in het resultaat.
+ */
+async function markSyncGap(acc: any, gap: { from: string; to: string }): Promise<void> {
+  const from = acc.sync_gap_from && acc.sync_gap_from < gap.from ? acc.sync_gap_from : gap.from;
+  const to = acc.sync_gap_to && acc.sync_gap_to > gap.to ? acc.sync_gap_to : gap.to;
+  const { error } = await supabaseAdmin.from('bank_accounts').update({ sync_gap_from: from, sync_gap_to: to }).eq('id', acc.id);
+  if (error) console.warn('bank-sync: gat niet vastgelegd', acc.id, error.message);
 }
 
 /**

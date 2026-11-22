@@ -319,6 +319,13 @@ const PAGES = {
   // boeken", een lopende post met zijn schema, en het formulier voor een
   // nieuwe vooruitbetaling met het voorbeeld van de verdeling.
   prepaid: { page: 'prepaid', mock: { ledger: true, prepaid: true } },
+  // Bank → Rekeningen & koppeling (2026-11-22): een gekoppelde rekening met
+  // een periode die de koppeling niet meer kon ophalen. Eerder viel zo'n gat
+  // stil weg; nu staat het bij de rekening, met "Gezien".
+  'bank-rekeningen': {
+    page: 'bank', mock: { ledger: true, bankGap: true }, prepare: 'button:has-text("Rekeningen & koppeling")',
+    mustShow: [{ selector: '.bank-reconsent', text: 'kon de bank via de koppeling geen', label: 'de melding over de periode die de koppeling niet ophaalde' }],
+  },
   // Het journaal in het Grootboek heeft naast Memoriaalboeking nu ook de knop
   // Vooruitbetaald; de pagina "ledger" hierboven toont zonder rekeningschema
   // alleen de knop om dat aan te maken.

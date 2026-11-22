@@ -83,17 +83,40 @@ export function isBookedTransaction(tx: any): boolean {
   return status === '' || status === 'BOOK';
 }
 
-/** Enable Banking-transactie → regel voor import_bank_transactions. */
-export function mapEbTransaction(tx: any) {
+const compactIban = (value: unknown) => String(value ?? '').replace(/\s+/g, '').toUpperCase();
+
+/**
+ * Enable Banking-transactie → regel voor import_bank_transactions.
+ *
+ * `ownIban` is het IBAN van de rekening zelf. Bij een bijschrijving is de
+ * debtor de tegenpartij, bij een afschrijving de creditor. Een storno van een
+ * incasso draait dat om: daarin is de debtor de zzp'er zelf. In het CAMT-
+ * afschrift stond er dan "je eigen naam en IBAN" als tegenpartij, wat op een
+ * privéstorting leek terwijl KPN kosten met btw terugboekte. Wijst de gekozen
+ * kant naar de eigen rekening (of meldt de bank een storno), dan nemen we de
+ * andere kant.
+ */
+export function mapEbTransaction(tx: any, ownIban?: string | null) {
   const magnitude = Math.abs(Math.round((parseFloat(tx?.transaction_amount?.amount ?? '0') || 0) * 100));
   const indicator = String(tx?.credit_debit_indicator || '').toUpperCase();
   const cents = indicator === 'DBIT' ? -magnitude : magnitude;
   const id = tx?.entry_reference || tx?.transaction_id || null;
   const bookingDate = (tx?.booking_date || tx?.value_date || '').slice(0, 10) || null;
   const valueDate = (tx?.value_date || '').slice(0, 10) || null;
-  const incoming = cents > 0;
-  const counterpartyName = (incoming ? tx?.debtor?.name : tx?.creditor?.name) || null;
-  const counterpartyIban = (incoming ? tx?.debtor_account?.iban : tx?.creditor_account?.iban) || null;
+  const reversal = tx?.reversal_indicator === true || String(tx?.reversal_indicator ?? '').toLowerCase() === 'true';
+  const side = (debtor: boolean) => ({
+    name: (debtor ? tx?.debtor?.name : tx?.creditor?.name) || null,
+    iban: (debtor ? tx?.debtor_account?.iban : tx?.creditor_account?.iban) || null,
+  });
+  const debtorSide = reversal ? cents < 0 : cents > 0;
+  let party = side(debtorSide);
+  const own = compactIban(ownIban);
+  if (own && compactIban(party.iban) === own) {
+    const other = side(!debtorSide);
+    if (other.name || other.iban) party = other;
+  }
+  const counterpartyName = party.name;
+  const counterpartyIban = party.iban;
   const remittance = Array.isArray(tx?.remittance_information)
     ? tx.remittance_information.filter(Boolean).join(' ').trim()
     : (tx?.remittance_information || '');
@@ -153,10 +176,70 @@ export function ebErrorCode(payload: unknown): string | null {
 }
 
 /**
- * Moet de klant opnieuw toestemming geven? Bij 401/403 van Enable Banking, of
+ * Moet de klant opnieuw toestemming geven? Bij een 401 van Enable Banking, of
  * een foutcode over een verlopen, gesloten of ingetrokken sessie.
+ *
+ * Een 403 telde eerder ook als verlopen toestemming. Maar de bank geeft 403
+ * ook voor één rekening die ze niet (meer) vrijgeeft (Berlin Group:
+ * RESOURCE_UNKNOWN). Eén spaarrekening zette zo de hele koppeling op
+ * "verlopen": de betaalrekening kreeg "koppel de bank opnieuw", en de
+ * nachtelijke sync sloeg beide rekeningen over. Een 403 of 404 zonder
+ * sessiecode is nu een fout van die ene rekening (accountErrorText).
  */
 export function needsReconsent(httpStatus: number | undefined, code: string | null): boolean {
-  if (httpStatus === 401 || httpStatus === 403) return true;
-  return !!code && /(EXPIRED|CLOSED|REVOKED)/.test(code);
+  if (httpStatus === 401) return true;
+  if (!code || /ACCOUNT/.test(code)) return false;
+  return /(EXPIRED|CLOSED|REVOKED)/.test(code);
+}
+
+/**
+ * De fouttekst bij één rekening. Bij een 403 of 404 zegt de bank dat ze deze
+ * rekening niet (meer) vrijgeeft: opgeheven, of bij het koppelen niet
+ * aangevinkt. Dan helpt "probeer later opnieuw" niet.
+ */
+export function accountErrorText(httpStatus: number | undefined, detail: string): string {
+  if (httpStatus === 403 || httpStatus === 404) {
+    return `De bank geeft deze rekening niet (meer) vrij (${detail}). Is de rekening opgeheven, zet hem dan op inactief. Wil je hem blijven volgen, koppel de bank dan opnieuw en kies deze rekening.`;
+  }
+  return detail;
+}
+
+/** Een periode die de koppeling niet kon ophalen (ISO-datums, beide dagen erbij). */
+export interface SyncGap { from: string; to: string }
+
+/**
+ * Welk deel van de gevraagde periode de bank niet meer leverde.
+ *
+ * Na een lange onderbreking (verlopen toestemming, maanden later opnieuw
+ * koppelen) vraagt de sync vanaf de vorige sync. Veel banken geven na een
+ * nieuwe toestemming maar zo'n 90 dagen terug en antwoorden dan
+ * WRONG_TRANSACTIONS_PERIOD; de sync vraagt opnieuw met "longest". Wat er
+ * tussen de gevraagde datum en de eerste ontvangen mutatie zat, viel eerder
+ * stil weg: de sync telde als geslaagd, zonder melding.
+ *
+ * Alleen na "longest", alleen voor een rekening die al eens gesynct was (wat
+ * vóór de eerste sync ligt, is geen gat maar de tijd van vóór de koppeling),
+ * en alleen als de eerste ontvangen mutatie ná de vorige sync ligt: binnen de
+ * week overlap is er niets gemist. Het gat begint bij de gevraagde datum (de
+ * overlap telt mee: een bank boekt soms met terugwerkende kracht). Kwam er
+ * niets, dan loopt het tot vandaag: wat de bank wel had kunnen leveren, weten
+ * we dan niet.
+ */
+export function syncGap(
+  dateFrom: string, lastSyncedAt: string | null | undefined, usedLongest: boolean,
+  receivedDates: Array<string | null | undefined>, todayIso: string,
+): SyncGap | null {
+  const last = lastSyncedAt ? String(lastSyncedAt).slice(0, 10) : '';
+  if (!usedLongest || !/^\d{4}-\d{2}-\d{2}$/.test(last)) return null;
+  const earliest = receivedDates.filter((d): d is string => !!d).map((d) => d.slice(0, 10)).sort()[0] ?? null;
+  if (earliest && earliest <= last) return null;
+  const to = earliest ? new Date(Date.parse(`${earliest}T00:00:00Z`) - DAY_MS).toISOString().slice(0, 10) : todayIso;
+  return to >= dateFrom ? { from: dateFrom, to } : null;
+}
+
+const dateNl = (iso: string) => `${Number(iso.slice(8, 10))}-${Number(iso.slice(5, 7))}-${iso.slice(0, 4)}`;
+
+/** De melding bij een gat, voor het resultaat van "Koppelen" en "Synchroniseren". */
+export function describeSyncGap(gap: SyncGap): string {
+  return `Van ${dateNl(gap.from)} t/m ${dateNl(gap.to)} gaf de bank via de koppeling geen transacties meer: de bank geeft na een nieuwe toestemming maar een beperkte periode terug. Lees met "Afschrift inlezen" een afschrift over die periode in, dan ontbreekt er niets.`;
 }

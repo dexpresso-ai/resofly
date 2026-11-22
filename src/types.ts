@@ -3120,6 +3120,12 @@ export interface BankAccount extends OrgScopedRow {
    * 20261118190000; ontbreekt daarvóór). Uit = alleen voorstellen.
    */
   auto_book_purchase_invoices?: boolean;
+  /**
+   * Een periode die de bankkoppeling niet meer kon ophalen (migratie
+   * 20261122100000; ontbreekt daarvóór). Leeg = geen gat bekend.
+   */
+  sync_gap_from?: string | null;
+  sync_gap_to?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -3322,6 +3328,21 @@ export interface ParsedBankTransaction {
   structured_reference: string | null;
   end_to_end_id: string | null;
   bank_tx_id: string | null;
+  /**
+   * De eigen rekening van deze regel, zoals het bestand hem noemt (CSV-kolom
+   * "Rekening"/"IBAN/BBAN", MT940 :25:, CAMT Stmt/Acct). Alleen voor de
+   * controle vóór het inlezen (bankImport/account.ts); de server leest hem niet.
+   */
+  account?: string | null;
+}
+
+/** Begin- en eindsaldo van één eigen rekening in een bestand met meer rekeningen. */
+export interface ParsedBankAccountSection {
+  account: string;
+  period_start: string | null;
+  period_end: string | null;
+  opening_balance_cents: number | null;
+  closing_balance_cents: number | null;
 }
 
 export interface ParsedBankStatement {
@@ -3335,6 +3356,12 @@ export interface ParsedBankStatement {
   /** Waarschuwingen van de parser (overgeslagen regels, niet-herkende kolommen). Getoond na de import. */
   warnings: string[];
   transactions: ParsedBankTransaction[];
+  /**
+   * Per eigen rekening in het bestand (MT940 en CAMT): periode en saldi. Zo
+   * kan het scherm bij een bestand met twee rekeningen het saldo van de
+   * gekozen rekening nemen in plaats van dat van het eerste afschrift.
+   */
+  accounts?: ParsedBankAccountSection[];
 }
 
 /** Eén regel uit report_bank_reconciliation: sluit de bank aan op het grootboek. */
