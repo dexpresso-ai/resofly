@@ -20,7 +20,7 @@ app (niet de dev-server), een nagebootste telefoon (CPU 4× trager, Fast 4G:
 
 | Lek | Gemeten |
 | --- | --- |
-| De gegevens vertrokken pas na de eerste render (in een effect) | eerste verzoek ~0,8 s nadat de JavaScript binnen was |
+| De gegevens vertrokken pas na de eerste render (in een effect) | eerste verzoek ~0,8 s nadat de JavaScript binnen was (evalueren, render, effecten, sessie) |
 | De organisatie in twee rondes na elkaar | 150–250 ms per start |
 | Tabellen van meer dan 1000 rijen pagina voor pagina | 3.000 taken: vier rondgangen achter elkaar |
 | De RLS per rij op elke tabel (zie [CHANGELOG_RLS_EEN_KEER_PER_QUERY_2026-11-22.md](CHANGELOG_RLS_EEN_KEER_PER_QUERY_2026-11-22.md)) | 3.000 taken lezen: 142 ms, per pagina opnieuw |
@@ -39,7 +39,9 @@ app (niet de dev-server), een nagebootste telefoon (CPU 4× trager, Fast 4G:
   beginpagina al terwijl React de app nog opbouwt. `runWorkspaceRound` neemt
   die ronde over als het dezelfde gebruiker en dezelfde (onthouden)
   organisatie is; anders vervalt hij. Zonder sessie, op een publieke pagina,
-  in het portaal of op een klantadres gebeurt er niets.
+  in het portaal of op een klantadres gebeurt er niets. De gemeten winst
+  hiervan is klein: het evalueren van de bundel zelf blijkt de meeste tijd
+  vóór het eerste verzoek te kosten (zie Gemeten en Nog open).
 - **De organisatie in één ronde.** `loadOrganizationContext` vraagt team,
   uitnodigingen, logboek, licenties, statussen en het akkoord voor Gerrie
   vooruit op voor de onthouden organisatie, tegelijk met het lidmaatschap.
@@ -111,9 +113,64 @@ leespolicies op 160 tabellen. Zie
   met `focus-existing` in de drie manifesten), in plaats van een tweede
   venster dat de hele app opnieuw opbouwt.
 
+## Gemeten
+
+De gebouwde app van staging van 22 november 's ochtends (`500fc90`) naast
+die van nu, op dezelfde machine. Chromium met een nagebootste telefoon:
+CPU 4× trager, Fast 4G (9 Mbit/s, 165 ms per verzoek). De nagebootste backend
+rekent geen databasetijd; de winst van de RLS (hieronder) komt in het echt
+erbovenop.
+
+**Tot de beginpagina met gegevens in beeld staat** (mediaan van 5 runs;
+koud = lege cache, warm = tweede start):
+
+| | koud vóór | koud nu | warm vóór | warm nu |
+| --- | --- | --- | --- | --- |
+| werkruimte `/` (dashboard) | 2,27 s | **1,92 s** | 1,57 s | **1,33 s** |
+| ResoFly Agenda | 3,00 s | **1,85 s** | 1,94 s | **1,16 s** |
+| ResoFly Financiën | 2,92 s | **1,69 s** | 1,94 s | **1,11 s** |
+| ResoFly Communicatie | 2,91 s | **1,84 s** | 1,84 s | **1,11 s** |
+
+In de losse apps start het bestand van de beginpagina nu op 0,44 s (warm),
+tegen 1,8 s eerst, en zijn groepen gaan tegelijk met de kern.
+
+**Met realistische aantallen** (3.000 taken, bijlagen en toewijzingen, 120 ms
+per verzoek, CPU 4×, mediaan van 3; de nagebootste backend geeft het totaal
+zoals PostgREST bij `count=exact`): de werkruimte staat er op **1,77 s**
+tegen 2,23 s, met 64 verzoeken in plaats van 68. Pagina 2 en 3 van de taken
+gaan tegelijk.
+
+**In de database** (lokaal, de hele keten, 3.000 taken, als lid,
+`EXPLAIN ANALYZE`): alle taken lezen **1,5 ms** tegen 142 ms; alle bijlagen
+2,6 ms tegen ~150 ms. Op staging was de RLS per rij nog trager (~90 µs per
+rij tegen ~31 µs lokaal).
+
+Wat niet verschoof: het eerste verzoek vertrekt warm nog steeds op ~0,65 s.
+De tijd daarvóór zit vooral in het evalueren van de bundel, niet in de
+eerste render. Koud vertrekt het iets eerder (1,34 → 1,24 s), omdat de bundel
+kleiner is.
+
 ## Getest
 
-_(wordt aangevuld)_
+- `npm run typecheck`: schoon.
+- `npm test`: 2.125 geslaagd (na de merge met staging), 0 mislukt.
+- `npx supabase db start`: de hele keten vanaf nul (296 migraties,
+  Postgres 17.11.0.018), "289 leespolicies herschreven op 160 tabellen".
+- `npm run test:database`: alle vijf geslaagd, met de nieuwe
+  `rls_een_keer_per_query.sql` (12 rollen × 9 tabellen: dezelfde rijen als
+  met de oude functies).
+- `npm run test:loading`: alle controles geslaagd. Elke pagina haalt precies
+  zijn groepen op, ook als ze vooruit kwamen.
+- `npm run test:inrichten`: alle controles geslaagd.
+- `npm run test:terugknop`: 15/15. Eén run vóór de merge had één mislukking
+  ("en omhoog"), terwijl er tegelijk zware metingen liepen; drie runs daarna
+  15/15.
+- `npm run test:mobile -- --theme=both`: MOBIEL
+- `node scripts/check-csp-hash.mjs`: de hash staat in beide CSP-regels.
+- Het laadscherm uit de HTML naast dat van React (JavaScript geblokkeerd
+  tegen Supabase dat niet antwoordt), licht en donker: alleen de stand van
+  de spinner verschilt. Niet zichtbaar op `/quote/…`, `/portal` en
+  `/?chat=1`.
 
 ## Nog open
 
@@ -133,6 +190,12 @@ _(wordt aangevuld)_
   bijlagen ooit, en inkoopfacturen met `extraction_meta`. Die horen in
   eigen groepen (`dataGroups.ts`, regel 5). Daar zijn veel pagina's bij
   betrokken, dus het is een eigen klus.
+- **Het eerste verzoek eerder.** Warm gaat het eerste verzoek naar Supabase
+  op ~0,65 s, en de tijd daarvóór is vooral het evalueren van de bundel. Een
+  klein startscript dat het lidmaatschap en de kern al opvraagt voordat de
+  bundel draait, zou dat deel overlappen. Dat vraagt een tweede weg naar de
+  database naast `repository.ts`, met dezelfde regels (regel 1); een eigen
+  klus.
 - **De hoofdbundel verder:** de bewerkvensters in `main.tsx` (236 KB) en de
   teamchat (127 KB) kunnen los. Geschatte winst op een telefoon: 50–100 ms
   warm.
