@@ -15,7 +15,7 @@ import { PageIcon } from '../components/PageIcon';
 import { dateNL, euro, uid } from '../lib/format';
 import {
   bookPurchaseInvoice, createOpeningBalance, deleteRow, ensureDefaultLedgerAccounts, fetchPurchaseInvoicePaymentStatus, insertRow,
-  listPartnershipPartners, loadBankLedgerAccountIds, loadInboundAlias, loadPurchaseInvoiceInbox, loadPurchaseInvoiceRemovalFacts,
+  listPartnershipPartners, loadBankLedgerAccountIds, loadInboundAlias, loadPurchaseInvoiceInbox, loadPurchaseInvoiceRemovalFacts, loadXafReferences,
   openingBalancePlugAccount, payPurchaseInvoicePrivately,
   postManualJournalEntry, reportAccountLedger, reportTrialBalance, reverseJournalEntry, updateRow, setUpBookkeeping
 } from '../lib/repository';
@@ -1505,9 +1505,12 @@ export function LedgerPage({ data, organizationId, canWrite, onChanged, canWrite
     return <div className="bk-page"><SetupBanner organizationId={organizationId} canWrite={canManageChart} onChanged={onChanged} /></div>;
   }
 
-  function exportXaf() {
+  async function exportXaf() {
     if (!xafPeriod) return;
-    downloadXaf({ data, fiscalYearLabel: xafPeriod.label, startDate: xafPeriod.start, endDate: xafPeriod.end });
+    // Het factuurnummer van creditnota's en bankboekingen (invRef) staat niet
+    // in wat Grootboek laadt; loadXafReferences haalt alleen die nummers op.
+    const references = await loadXafReferences(organizationId).catch(() => undefined);
+    downloadXaf({ data, fiscalYearLabel: xafPeriod.label, startDate: xafPeriod.start, endDate: xafPeriod.end, references });
   }
 
   return (
@@ -1518,7 +1521,7 @@ export function LedgerPage({ data, organizationId, canWrite, onChanged, canWrite
           <Select inline value={xafPeriod?.key ?? ''} onChange={e => setXafKey(e.target.value)}>
             {xafPeriods.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
           </Select>
-          <Button onClick={exportXaf} title="XML Auditfile Financieel 3.2 — voor je accountant of de Belastingdienst"><FileDown size={14} /> Auditfile (XAF)</Button>
+          <Button onClick={() => void exportXaf()} title="XML Auditfile Financieel 3.2 — voor je accountant of de Belastingdienst"><FileDown size={14} /> Auditfile (XAF)</Button>
         </div>
       </div>
       <div className="bk-tabs">

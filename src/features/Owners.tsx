@@ -1,11 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, Pencil, Plus, Save, X } from 'lucide-react';
+import { AlertTriangle, Download, Pencil, Plus, Save, X } from 'lucide-react';
 import type { AppData, FiscalYearListRow, OrganizationMember, OwnersEquityOverview, PartnershipPartner, PartnershipPartnerHours, UUID } from '../types';
 import { Button, Input, Select, Skeleton } from '../components/Ui';
 import { PageIcon } from '../components/PageIcon';
 import { euro, formatMinutes, minutesToHours } from '../lib/format';
 import { formatISODate } from '../lib/dates';
 import { missingFiscalYear } from '../lib/jaarwissel';
+import { downloadCsv } from '../lib/csv';
+import {
+  EQUITY_CSV_HEADER, INCOME_TAX_SUMMARY_CSV_HEADER, equityCsvRows, incomeTaxSummaryCsvRows, type IncomeTaxSummaryLine,
+} from '../lib/financeCsv';
 import { HOUR_CRITERION_MINUTES, projectHourCriterion } from '../lib/hourCriterion';
 import { memberName } from '../lib/members';
 import {
@@ -383,6 +387,10 @@ export function OwnersPage({ data, organizationId, canWrite, onChanged, canReadH
             <span className={`status-pill ${overview.fiscalYear.status === 'closed' ? 'bk-je-posted' : 'bk-status-draft'}`}>
               {overview.fiscalYear.status === 'closed' ? 'Afgesloten' : 'Voorlopig'}
             </span>
+            {/* Voor de boekhouder: hij nam de kapitaalvergelijking over van het scherm. */}
+            <Button onClick={() => downloadCsv(`kapitaalvergelijking-${overview.fiscalYear.label.replace(/[^0-9A-Za-z-]+/g, '-')}.csv`, EQUITY_CSV_HEADER, equityCsvRows(overview))}>
+              <Download size={14} /> CSV
+            </Button>
           </div>
 
           <div className="bk-table-wrap"><table className="bk-table">
@@ -543,6 +551,19 @@ function IncomeTaxSection({ data, organizationId, overview, onOpenIncomeTax }: {
     : !meets ? '(urencriterium niet gehaald)'
     : profile.aowStatus === 'heel_jaar' ? '(de helft, AOW-leeftijd)'
     : e.zelfstandigenaftrekUnusedCents > 0 ? '(niet hoger dan de winst)' : '';
+  // Dezelfde regels als de tabel hieronder, om te bewaren of door te sturen.
+  const csvLines: IncomeTaxSummaryLine[] = [
+    { label: 'Winst volgens je boekhouding', cents: e.profitShareCents },
+    ...person.corrections.map(c => ({ label: c.label, cents: Math.abs(c.amountCents), sign: (c.amountCents < 0 ? '−' : '+') as IncomeTaxSummaryLine['sign'] })),
+    ...(e.kiaCents > 0 ? [{ label: 'Investeringsaftrek (KIA)', cents: e.kiaCents, sign: '−' as const }] : []),
+    { label: 'Winst uit onderneming', cents: e.profitCents, sign: '=' },
+    { label: `Zelfstandigenaftrek ${zaHint}`.trim(), cents: e.zelfstandigenaftrekCents, sign: '−' },
+    ...(profile.starter || e.startersaftrekCents > 0 ? [{ label: 'Startersaftrek', cents: e.startersaftrekCents, sign: '−' as const }] : []),
+    ...(e.otherEntrepreneurDeductionCents > 0 ? [{ label: 'Overige ondernemersaftrek', cents: e.otherEntrepreneurDeductionCents, sign: '−' as const }] : []),
+    { label: `Mkb-winstvrijstelling (${formatRate(rules.mkbExemptionRate)})`, cents: Math.abs(e.mkbExemptionCents), sign: e.mkbExemptionCents < 0 ? '+' : '−' },
+    { label: 'Belastbare winst uit onderneming', cents: e.taxableProfitCents, sign: '=' },
+  ];
+  const exportCsv = () => downloadCsv(`aangifte-ib-${year}.csv`, INCOME_TAX_SUMMARY_CSV_HEADER, incomeTaxSummaryCsvRows(csvLines));
 
   return (
     <div className="bk-report">
@@ -552,6 +573,7 @@ function IncomeTaxSection({ data, organizationId, overview, onOpenIncomeTax }: {
           <div><span>Urencriterium {year}</span>{/* De uren alleen als het urencriterium ze volgt: "200 / 1.225 uur" in het groen naast een zelf gekozen ja las als een fout. */}
             <strong className={meets ? 'bk-pos' : ''}>{person.hoursFromTimeTracking && hours !== null ? `${hours} / 1.225 uur` : meets === null ? '—' : meets ? 'Ja, zelf gekozen' : 'Nee, zelf gekozen'}</strong></div>
         </div>
+        <Button onClick={exportCsv}><Download size={14} /> CSV</Button>
         {where}
       </div>
 

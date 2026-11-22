@@ -50,6 +50,7 @@ export interface UblParty {
    * Elektronisch adres als er geen Peppol-ID (KVK, OIN, btw-nummer) af te leiden
    * is: dan wordt dit het EndpointID met schemeID EM. Bij een klant met
    * e-facturatie is dat het e-factuuradres, want daar gaat de e-factuur heen.
+   * Peppol keurt EM af (zie deriveElectronicAddress); EN 16931 en NLCIUS niet.
    */
   endpointEmail?: string | null;
 }
@@ -113,6 +114,12 @@ export interface UblDocumentInput {
   buyer: UblParty;
   /** Consument-koper: KVK/btw-eisen worden dan niet als gebrek gemeld. */
   buyerIsConsumer?: boolean;
+  /**
+   * BT-72 — de leverdatum. Een intracommunautaire levering (categorie K) moet
+   * een leverdatum of factuurperiode hebben (BR-IC-11). ResoFly kent nog geen
+   * eigen leverdatum; zonder deze waarde geldt de factuurdatum, net als op de pdf.
+   */
+  deliveryDate?: string | null;
   lines: UblLine[];
   /** Ingesloten bijlagen — in de praktijk de factuur-PDF zelf. */
   attachments?: UblEmbeddedDocument[];
@@ -171,6 +178,9 @@ export function normalizeCountryCode(raw: string | null | undefined): string | n
   return COUNTRY_NAME_TO_ISO[value.toLowerCase()] ?? null;
 }
 
+/** De lidstaten van de EU (ISO 3166-1). Buiten deze lijst is een levering met 0% export (G). */
+const EU_COUNTRIES = new Set(['AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FI', 'FR', 'DE', 'GR', 'HU', 'IE', 'IT', 'LV', 'LT', 'LU', 'MT', 'NL', 'PL', 'PT', 'RO', 'SK', 'SI', 'ES', 'SE']);
+
 // ── Identifier-normalisatie ────────────────────────────────────────────────────
 
 const normalizeVat = (raw: string | null | undefined): string => String(raw ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -188,21 +198,47 @@ function isBelgianEnterpriseNumber(party: Pick<UblParty, 'country'>, kvk: string
 }
 
 /**
- * Peppol-ID (BT-34/BT-49) afleiden: KVK (0106) of OIN (0190, 20 cijfers) heeft
- * voorrang; dan het NL-btw-nummer (9944). Voor een Belgische partij het
- * ondernemingsnummer (0208) — het schema waarmee Belgische bedrijven sinds de
- * B2B-plicht van 2026 op Peppol staan — uit het KVK-veld of het BE-btw-nummer.
- * Is er niets af te leiden, dan null.
+ * Het EAS-schema (Peppol-codelijst "Electronic Address Scheme") voor een
+ * btw-nummer, op het landvoorvoegsel. Alleen schema's die Peppol BIS 3.0.22
+ * kent (PEPPOL-EN16931-CL008); de waarde is het btw-nummer mét voorvoegsel,
+ * zoals bij 9944 voor Nederland. Italië heeft 0211 (partita IVA). Landen
+ * zonder btw-schema in die lijst (Finland, Zweden, Denemarken) ontbreken: daar
+ * is een ander nummer nodig dat ResoFly niet vastlegt.
+ */
+const VAT_EAS: Record<string, string> = {
+  HU: '9910', AT: '9914', ES: '9920', BG: '9926', CH: '9927', CY: '9928', CZ: '9929', DE: '9930', EE: '9931',
+  GB: '9932', EL: '9933', HR: '9934', IE: '9935', LI: '9936', LT: '9937', LU: '9938', LV: '9939', MT: '9943',
+  NL: '9944', PL: '9945', PT: '9946', RO: '9947', SI: '9949', SK: '9950', FR: '9957', IT: '0211',
+};
+
+/**
+ * Peppol-ID (BT-34/BT-49) afleiden. Voor een Nederlandse partij (of een zonder
+ * land) heeft KVK (0106) of OIN (0190, 20 cijfers) voorrang. Voor een Belgische
+ * partij het ondernemingsnummer (0208) — het schema waarmee Belgische bedrijven
+ * sinds de B2B-plicht van 2026 op Peppol staan — uit het KVK-veld of het
+ * BE-btw-nummer. Daarna het btw-nummer met het schema van zijn land (9944 NL,
+ * 9930 DE, …). Is er niets af te leiden, dan null.
+ *
+ * Tot november 2026 kende dit alleen NL en BE: een Duitse klant met btw-nummer
+ * kreeg het e-mailadres als elektronisch adres (EM), en dat keurt Peppol af.
+ * Een KVK-veld bij een buitenlandse partij is geen KVK-nummer (een
+ * Handelsregister-nummer, een Brits company number): daar gaf 0106 een
+ * Nederlands adres dat niet bestaat.
  */
 export function derivePeppolEndpoint(party: Pick<UblParty, 'kvkNumber' | 'vatNumber' | 'country'>): { schemeId: string; value: string } | null {
   const kvk = normalizeKvk(party.kvkNumber);
   if (isBelgianEnterpriseNumber(party, kvk)) return { schemeId: '0208', value: kvk };
-  if (kvk.length === 20) return { schemeId: '0190', value: kvk };
-  if (kvk.length >= 8) return { schemeId: '0106', value: kvk };
+  const country = normalizeCountryCode(party.country);
+  const dutch = country === null || country === 'NL';
+  if (dutch && kvk.length === 20) return { schemeId: '0190', value: kvk };
+  if (dutch && kvk.length >= 8) return { schemeId: '0106', value: kvk };
   const vat = normalizeVat(party.vatNumber);
   if (vat.startsWith('NL') && vat.length >= 12) return { schemeId: '9944', value: vat };
   const belgian = /^BE(\d{9,10})$/.exec(vat);
   if (belgian) return { schemeId: '0208', value: belgian[1].padStart(10, '0') };
+  const prefix = vat.slice(0, 2);
+  const scheme = /^[A-Z]{2}[0-9A-Z]{2,}$/.test(vat) ? VAT_EAS[prefix] : undefined;
+  if (scheme) return { schemeId: scheme, value: vat };
   return null;
 }
 
@@ -211,6 +247,14 @@ export function derivePeppolEndpoint(party: Pick<UblParty, 'kvkNumber' | 'vatNum
  * waarop de e-factuur binnenkomt (schemeID EM). Zonder allebei geen endpoint —
  * dat levert een waarschuwing op, geen fout, want een download heeft hem niet
  * nodig.
+ *
+ * Waarom EM blijft als er geen Peppol-ID is (een particulier, een koper buiten
+ * de EU, een EU-land zonder btw-schema): Peppol BIS 3.0.22 keurt EM af
+ * (PEPPOL-EN16931-CL008), maar het adres weglaten keurt het net zo hard af
+ * (PEPPOL-EN16931-R010: de koper moet een elektronisch adres hebben). Via
+ * Peppol kan zo'n factuur dus hoe dan ook niet. Per e-mail kan hij wel, en dan
+ * toetst de ontvanger tegen EN 16931 of NLCIUS: die kennen EM wel, en zo staat
+ * erin waar de factuur binnenkwam. validateUblInput waarschuwt ervoor.
  */
 function deriveElectronicAddress(party: UblParty): { schemeId: string; value: string } | null {
   const peppol = derivePeppolEndpoint(party);
@@ -334,6 +378,23 @@ export function computeUblTotals(lines: UblLine[]): {
   return { lineNetCents, groups, netCents, taxCents, grossCents: netCents + taxCents };
 }
 
+/**
+ * De regels zoals ze in de e-factuur komen. Een regel met 0% (Z) aan een koper
+ * buiten de EU is export: categorie G, met "Export buiten de EU" als reden.
+ *
+ * De btw-code EXPORT heeft in ResoFly kind 'zero', net als NUL, en werd dus
+ * altijd Z: de ontvanger las een exportfactuur als binnenlands nultarief,
+ * zonder vrijstellingsreden. Het land van de koper beslist, niet de code:
+ * binnen de EU blijft 0% gewoon Z.
+ */
+export function effectiveLines(input: Pick<UblDocumentInput, 'lines' | 'buyer'>): UblLine[] {
+  const buyerCountry = normalizeCountryCode(input.buyer.country);
+  const outsideEu = buyerCountry !== null && !EU_COUNTRIES.has(buyerCountry);
+  return input.lines.map((line) => (outsideEu && line.category === 'Z'
+    ? { ...line, category: 'G' as const, vatRate: 0, exemptionReason: line.exemptionReason || EXEMPTION_REASONS.G! }
+    : line));
+}
+
 // ── Validatie ──────────────────────────────────────────────────────────────────
 
 /**
@@ -341,9 +402,10 @@ export function computeUblTotals(lines: UblLine[]): {
  * blokkeren de generatie (de gebruiker moet eerst gegevens aanvullen);
  * warnings gaan mee in het resultaat maar houden niets tegen.
  */
-export function validateUblInput(input: UblDocumentInput): UblValidationResult {
+export function validateUblInput(raw: UblDocumentInput): UblValidationResult {
   const errors: string[] = [];
   const warnings: string[] = [];
+  const input = { ...raw, lines: effectiveLines(raw) };
   const isCredit = input.docType === 'creditNote';
 
   if (!String(input.number || '').trim()) errors.push('Het factuurnummer ontbreekt.');
@@ -406,7 +468,7 @@ export function validateUblInput(input: UblDocumentInput): UblValidationResult {
     warnings.push('De NL-klant heeft geen KVK-nummer — voor verzending via Peppol is dat verplicht (NL-R-005); voor download/e-mail kan de e-factuur wel gemaakt worden.');
   }
   if (!input.buyerIsConsumer && !derivePeppolEndpoint(buyer)) {
-    warnings.push('Voor deze klant is geen Peppol-ID (KVK-, OIN- of btw-nummer) af te leiden — nodig zodra je via Peppol wilt versturen.');
+    warnings.push('Voor deze klant is geen Peppol-ID (KVK-, OIN- of btw-nummer) af te leiden — nodig zodra je via Peppol wilt versturen. Per e-mail komt de e-factuur wel aan, met het e-mailadres als elektronisch adres; een pakket dat op de Peppol-regels toetst, keurt dat af.');
   }
 
   // Verlegd/ICP: zonder koper-btw-nummer is de verleggingsfactuur ongeldig.
@@ -495,7 +557,8 @@ function renderParty(role: 'AccountingSupplierParty' | 'AccountingCustomerParty'
  * Bouwt de UBL 2.1 XML. Roep eerst validateUblInput() aan: deze functie gaat
  * ervan uit dat blokkerende gebreken al zijn afgevangen en vult zelf niets aan.
  */
-export function buildUblXml(input: UblDocumentInput): string {
+export function buildUblXml(raw: UblDocumentInput): string {
+  const input = { ...raw, lines: effectiveLines(raw) };
   const isCredit = input.docType === 'creditNote';
   const currency = String(input.currency || 'EUR').toUpperCase();
   const totals = computeUblTotals(input.lines);
@@ -510,10 +573,19 @@ export function buildUblXml(input: UblDocumentInput): string {
   const linesXml = input.lines.map((line, index) => {
     const rate = line.category === 'S' ? (Number(line.vatRate) || 0) : 0;
     const name = String(line.description || '').trim() || `Regel ${index + 1}`;
+    // BR-27: de prijs (BT-146) mag niet negatief zijn. Een kortingsregel
+    // ("Korting vaste klant 1 × −€ 50") is in ResoFly juist een negatieve prijs,
+    // en maakte zo de hele e-factuur ongeldig. Dan draaien hoeveelheid en prijs
+    // allebei om (−1 × € 50): het regelbedrag blijft gelijk.
+    const rawPrice = Number(line.unitPrice) || 0;
+    const rawQuantity = Number(line.quantity) || 0;
+    const flip = rawPrice < 0;
+    const price = flip ? -rawPrice : rawPrice;
+    const quantity = flip ? -rawQuantity : rawQuantity;
     return [
       `<${lineTag}>`,
       el('cbc:ID', String(index + 1)),
-      `<${quantityTag} unitCode="C62">${formatQuantity(Number(line.quantity) || 0)}</${quantityTag}>`,
+      `<${quantityTag} unitCode="C62">${formatQuantity(quantity)}</${quantityTag}>`,
       amountEl('cbc:LineExtensionAmount', totals.lineNetCents[index], currency),
       '<cac:Item>',
       el('cbc:Name', name.slice(0, 100)),
@@ -523,7 +595,7 @@ export function buildUblXml(input: UblDocumentInput): string {
       '<cac:TaxScheme><cbc:ID>VAT</cbc:ID></cac:TaxScheme>',
       '</cac:ClassifiedTaxCategory>',
       '</cac:Item>',
-      `<cac:Price>${el('cbc:PriceAmount', formatUnitPrice(Number(line.unitPrice) || 0), ` currencyID="${escapeXml(currency)}"`)}</cac:Price>`,
+      `<cac:Price>${el('cbc:PriceAmount', formatUnitPrice(price), ` currencyID="${escapeXml(currency)}"`)}</cac:Price>`,
       `</${lineTag}>`,
     ].filter(Boolean).join('');
   }).join('');
@@ -559,6 +631,15 @@ export function buildUblXml(input: UblDocumentInput): string {
     '</cac:AdditionalDocumentReference>',
   ].filter(Boolean).join('')).join('');
 
+  // BR-IC-11/12: een intracommunautaire levering (K) moet een leverdatum (of
+  // factuurperiode) en het land van levering hebben. Zonder dit blok was elke
+  // ICP-e-factuur ongeldig (fatal in EN 16931, dus ook in Peppol en NLCIUS),
+  // juist voor de EU-klant die e-facturen bij binnenkomst valideert. Het land
+  // is dat van de koper: daar gaat de dienst of de levering heen.
+  const delivery = input.lines.some((line) => line.category === 'K')
+    ? `<cac:Delivery>${el('cbc:ActualDeliveryDate', input.deliveryDate || input.issueDate)}<cac:DeliveryLocation><cac:Address><cac:Country>${el('cbc:IdentificationCode', buyerCountry)}</cac:Country></cac:Address></cac:DeliveryLocation></cac:Delivery>`
+    : '';
+
   // Betaalwijze alleen op facturen: NL-R-007 geldt "als de betaling van koper
   // naar verkoper loopt" — bij een creditnota is dat andersom.
   const paymentMeans = !isCredit && iban
@@ -583,6 +664,8 @@ export function buildUblXml(input: UblDocumentInput): string {
     additionalDocuments,
     renderParty('AccountingSupplierParty', input.seller, 'NL'),
     renderParty('AccountingCustomerParty', input.buyer, buyerCountry),
+    // UBL 2.1: Delivery komt na de partijen en vóór PaymentMeans, in Invoice en CreditNote.
+    delivery,
     paymentMeans,
     paymentTerms,
     `<cac:TaxTotal>${amountEl('cbc:TaxAmount', totals.taxCents, currency)}${taxSubtotals}</cac:TaxTotal>`,

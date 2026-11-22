@@ -9,6 +9,7 @@ import { formatISODate } from '../lib/dates';
 import { vatFilingDeadline } from '../lib/vatPeriods';
 import { vatOpening } from '../lib/jaarwissel';
 import { downloadCsv } from '../lib/csv';
+import { VAT_RETURN_CSV_HEADER, vatReturnCsvRows } from '../lib/financeCsv';
 import {
   closeVatPeriod, computeIcpDeclaration, computeVatReturn, computeVatSupplementDelta, createVatSupplement,
   listVatSupplementEntries, reportProfitAndLoss, setUpBookkeeping, setVatReturnStatus,
@@ -324,6 +325,9 @@ export function VatReturnsPage({ data, organizationId, canWrite, onChanged }: { 
               <div><span>Saldo {period.label}</span><strong className={saldoAfgerond > 0 ? 'bk-neg' : 'bk-pos'}>{euroCents(Math.abs(saldoAfgerond))}</strong></div>
               <div className={saldoAfgerond > 0 ? 'bk-balance-bad' : 'bk-balance-ok'}>{saldoAfgerond > 0 ? 'Te betalen' : saldoAfgerond < 0 ? 'Terug te ontvangen' : 'Nihil'}</div>
             </div>
+            {/* De rubrieken van dit tijdvak om te bewaren of door te sturen; tot
+                november 2026 kon dat alleen als schermafdruk. */}
+            <Button onClick={() => downloadCsv(`btw-aangifte-${period.label.replace(/\s/g, '-')}.csv`, VAT_RETURN_CSV_HEADER, vatReturnCsvRows(r, BOX_ROWS))}><Download size={14} /> CSV</Button>
             {!finalized && !overlapsClosed && !periodRunning && !otherFrequency && canWrite && <Button variant="primary" onClick={() => setShowClose(true)} disabled={busy}><Landmark size={14} /> Periode afsluiten</Button>}
             {!finalized && overlapsClosed && <span className="bk-muted">Deze periode valt binnen een al afgesloten aangifteperiode.</span>}
             {finalized && existing!.status === 'finalized' && canWrite && <Button onClick={() => setStatus(existing!, 'filed')} disabled={busy}><CheckCircle2 size={14} /> Markeer als ingediend</Button>}

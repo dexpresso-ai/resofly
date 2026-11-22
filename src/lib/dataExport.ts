@@ -24,7 +24,7 @@ import {
   cleanRow, EXPORT_FORMAT_VERSION, EXPORT_SCHEMA_VERSION, exportTables, fileKeysOf, skippedTables,
   TABLE_KIND_LABEL, zipPathForKey, type ExportTable, type TableKind,
 } from './exportManifest.ts';
-import { buildXaf } from './xaf.ts';
+import { buildXaf, type XafReferences } from './xaf.ts';
 import { ZipBuilder } from './zipWriter.ts';
 
 export type ExportRow = Record<string, unknown>;
@@ -103,6 +103,20 @@ export class ExportAbortedError extends Error {
 const XAF_TABLES: ReadonlySet<string> = new Set([
   'company_settings', 'ledger_accounts', 'vat_codes', 'journal_entries', 'journal_lines', 'clients', 'suppliers', 'fiscal_years',
 ]);
+
+/**
+ * Voor het factuurnummer per boekstukregel (invRef). Alleen de kolommen die de
+ * auditfile gebruikt blijven bewaard: een factuur draagt zijn regels en meer
+ * mee. Mislukt zo'n tabel, dan komt de auditfile er wel, zonder die nummers.
+ */
+const XAF_REFERENCE_COLUMNS: Readonly<Record<string, readonly string[]>> = {
+  invoices: ['id', 'number'],
+  purchase_invoices: ['id', 'supplier_invoice_number', 'internal_number'],
+  credit_notes: ['id', 'number'],
+  bank_transaction_allocations: ['journal_entry_id', 'position', 'kind', 'invoice_id', 'credit_note_id', 'purchase_invoice_id', 'client_id', 'supplier_id', 'amount_cents'],
+};
+const pickColumns = (row: ExportRow, columns: readonly string[]): ExportRow =>
+  Object.fromEntries(columns.map(column => [column, row[column] ?? null]));
 
 function checkAbort(signal?: AbortSignal): void {
   if (signal?.aborted) throw new ExportAbortedError();
@@ -216,7 +230,8 @@ export async function buildDataExport(options: ExportOptions): Promise<ExportRes
     // ziet een `let` die daar verandert anders als nog steeds leeg.
     const state = { rows: 0, columns: null as string[] | null };
     const csvChunks: string[] = [];
-    const keep: ExportRow[] | null = XAF_TABLES.has(table.table) ? [] : null;
+    const keepColumns = XAF_REFERENCE_COLUMNS[table.table];
+    const keep: ExportRow[] | null = XAF_TABLES.has(table.table) || keepColumns ? [] : null;
     const tableFiles: string[] = [];
     try {
       await zip.addStream(`data/${table.table}.jsonl`, async write => {
@@ -225,7 +240,7 @@ export async function buildDataExport(options: ExportOptions): Promise<ExportRes
           await write(cleaned.map(row => `${JSON.stringify(row)}\n`).join(''));
           state.rows += cleaned.length;
           for (const row of page) tableFiles.push(...fileKeysOf(table, row));
-          if (keep) keep.push(...cleaned);
+          if (keep) keep.push(...(keepColumns ? cleaned.map(row => pickColumns(row, keepColumns)) : cleaned));
           if (table.list) {
             const columns = state.columns ?? Object.keys(cleaned[0] ?? {});
             state.columns = columns;
@@ -304,13 +319,19 @@ export async function buildDataExport(options: ExportOptions): Promise<ExportRes
       journalLines: kept.get('journal_lines') ?? [],
       clients: kept.get('clients') ?? [],
       suppliers: kept.get('suppliers') ?? [],
+      invoices: kept.get('invoices') ?? [],
+      purchaseInvoices: kept.get('purchase_invoices') ?? [],
     } as unknown as AppData;
+    const references: XafReferences = {
+      creditNoteNumbers: new Map((kept.get('credit_notes') ?? []).map(row => [String(row.id), String(row.number ?? '')])),
+      paymentAllocations: (kept.get('bank_transaction_allocations') ?? []) as unknown as XafReferences['paymentAllocations'],
+    };
     for (const [index, period] of periods.entries()) {
       checkAbort(signal);
       onProgress?.({ phase: 'boekhouding', done: index, total: periods.length, label: period.label });
       const path = `boekhouding/auditfile-${period.label.replace(/[^0-9A-Za-z-]+/g, '-')}.xaf`;
       if (zip.has(path)) continue;
-      await zip.add(path, buildXaf({ data: xafData, fiscalYearLabel: period.label, startDate: period.start, endDate: period.end }), { compress: true });
+      await zip.add(path, buildXaf({ data: xafData, fiscalYearLabel: period.label, startDate: period.start, endDate: period.end, references }), { compress: true });
       auditReport.push({ boekjaar: period.label, bestand: path, van: period.start, tot: period.end });
       summary.auditfiles.push(path);
     }
