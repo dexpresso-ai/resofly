@@ -146,7 +146,15 @@ Ernst: **onherstelbaar** (de vennoten komen er zelf niet meer uit), **hoog**
 
 ### Schermen
 
-SCHERMEN
+| # | Ernst | Wat er misging | Nu |
+|---|---|---|---|
+| 21 | midden | **Het afsluitvenster liet de verdeling niet zien.** Het noemde geen bedrag per vennoot, en een verdeling van 90% bleek pas na "Definitief afsluiten". "Te bestemmen resultaat" is de taal van een BV. | Het venster toont de verdeling van dat jaar: per vennoot het aandeel, het bedrag vooraf en wat op het kapitaal komt. Met **Verdeling aanpassen** (ook voor uitgetreden vennoten) en **Terug naar de vennoten van nu**. Het noemt wie er na het jaareinde veranderde, de rechtsvorm van dat jaar (met een knop om het jaar om te zetten), en privé zonder vennoot. Afsluiten staat uit tot de verdeling klopt. "Te verdelen resultaat" bij een vof. Het onderdeel staat in `src/features/PartnerSplit.tsx` en is gedeeld met Vennoten. |
+| 22 | midden | **Een wissel van rechtsvorm ging zonder vraag**, ook met vennoten met kapitaal. | Bij een wissel tussen eenmanszaak en vof vraagt Instellingen per open jaar dat al gelopen is: "Geldt dit al voor 2026?" en "Gold dit ook al voor 2025?". |
+| 23 | midden | **De boekhouder zag bij elke vennoot "Teamlid (niet meer in de organisatie)"**: hij mag de ledenlijst niet lezen. | "Gekoppeld aan een teamlid". |
+| 24 | laag | **Privé betaald bij een vof zonder vennoten** toonde de tekst van een eenmanszaak. Een privé betaalde factuur zei nergens door wie. | Een verwijzing naar Vennoten. In de lijst staat "privé betaald door …" of "privé ontvangen door …". |
+| 25 | laag | **Op de telefoon** stonden het potlood en de status bij Vennoten en de knop Privé betaald buiten beeld, en de tip boven de inkooplijst viel uiteen in kolommen. De uren van een net gekoppelde vennoot verschenen pas na herladen. Verder stonden er teksten als "nog 325u", "Het verschil van € 0,00 wordt … gezet", "Het urencriterium volgt je uren" op de kaart van een andere vennoot, en een verwijzing naar een tabblad dat niet bestaat. | Rechtgezet. |
+
+Op **Vennoten** staat bovenaan de verdeling van het boekjaar ("vastgelegd voor dit jaar", "vastgelegd bij het afsluiten" of "die van de vennoten nu"), met Verdeling aanpassen. Per vennoot staat er "waarvan vooraf", en de winst van een vorig jaar dat nog open staat heeft een eigen regel. Een vennoot zonder boekingen kun je verwijderen. Het advies over een arbeidsbeloning wijst naar het bedrag vooraf, en de melding over een start in de loop van het jaar staat er nu ook bij een vof.
 
 ## Gerrie, API en MCP
 
@@ -193,7 +201,51 @@ SCHERMEN
 
 ## Verificatie
 
-VERIFICATIE
+- **De nieuwe scenario's falen met de oude functies.** Op een database zonder
+  de twee nieuwe migraties:
+  - `vof`: 33 stappen, 24 fout, op de cijfers zelf ("verwacht € 6.000 /
+    € 4.000, kreeg € 5.000 / € 3.000");
+  - `vof-bank-inkoop`: 15 stappen, 10 fout.
+
+  Met de migraties: 33/0 en 15/0.
+- **De keten vanaf nul** (`supabase db reset`, Postgres 17.11.0.018): alle
+  295 migraties zijn toegepast, en beide nieuwe draaien een tweede keer zonder
+  fout. `accountant_fence_gaps()` is leeg, en geen security-definer-functie in
+  `public` is uit te voeren door anon.
+- **De volledige stromentest** op die verse database: STROMEN.
+- **Databasetests** (`npm run test:database`): alle vier geslaagd.
+  `vennoten_jaarafsluiting.sql` toetst nu het nieuwe gedrag:
+  - opnieuw afsluiten gebruikt de vastgelegde verdeling, ook na uittreden;
+  - een vorig jaar blijft een vof na de overstap naar een eenmanszaak;
+  - zonder vennoot in de verdeling blijven de vennoten in beeld.
+- **Lokaal:**
+  - `npm run typecheck`: schoon;
+  - `npm test`: 2125/2125. Nieuw zijn onder meer de verdeling met een bedrag
+    vooraf (`splitWithPrior`, ook bij verlies en een restcent), de
+    urenprognose tegenover `projectHourCriterion`, het geboekte bedrag van een
+    afgesloten jaar, de kaarten van Gerrie en de auditfile;
+  - `npm run test:mobile -- --theme=both`: MOBIEL;
+  - `test:loading`, `test:inrichten` en `test:terugknop` (15/15): geslaagd.
+- **Deno-check** van de 37 bestanden uit de CI-lijst: schoon. Dat ging met
+  een importmap naar npm, omdat esm.sh hier dicht staat.
+- **In Chromium** tegen de lokale stack, op desktop en 390 × 844, zonder
+  JavaScript-fouten:
+  - het afsluitvenster met een wijziging na het jaareinde, de verdeling
+    aanpassen (Anna 50% met € 12.000 vooraf, Bram uitgetreden 50%:
+    € 41.100 / € 29.100) en afsluiten;
+  - de rechtsvorm per jaar, en Privé ontvangen;
+  - Vennoten van 2025 en 2026, en wat een lezer en de boekhouder zien.
+- **Een onafhankelijke review van de verdeling per boekjaar** vond zes
+  punten, die zijn verwerkt:
+  - de backfill van `share_changed_at`;
+  - iedereen uitgetreden;
+  - een latere wijziging na de overstap;
+  - € 0 resultaat met een bedrag vooraf;
+  - een wissel van rechtsvorm met een vastgelegde verdeling;
+  - het geboekte bedrag in de raming.
+
+  1.500 willekeurige verdelingen gaven in SQL en TypeScript dezelfde centen,
+  en de som klopte steeds.
 
 ## Bewust open
 

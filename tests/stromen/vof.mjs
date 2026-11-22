@@ -49,12 +49,20 @@ async function vof(naam, vennoten, { sinds = '2025-01-01T09:00:00+01' } = {}) {
   // De trigger laat share_changed_at alleen meelopen met een echte wijziging
   // (een directe update zou het slot ontwijken); hier zetten we hem even uit.
   if (sinds) {
-    sql(`begin;
-         alter table public.partnership_partners disable trigger partnership_partners_track_share_change;
-         update public.partnership_partners set created_at = ${q(sinds)}, share_changed_at = ${q(sinds)}
-           where organization_id = ${q(w.orgId)};
-         alter table public.partnership_partners enable trigger partnership_partners_track_share_change;
-         commit;`);
+    // Zonder de trigger (een database van vóór 20261122100000) alleen created_at:
+    // zo faalt dit scenario daar op de cijfers, niet op de opzet.
+    sql(`do $$
+         declare v_trigger boolean := exists (select 1 from pg_trigger where tgname = 'partnership_partners_track_share_change');
+                 v_column boolean := exists (select 1 from information_schema.columns
+                   where table_schema = 'public' and table_name = 'partnership_partners' and column_name = 'share_changed_at');
+         begin
+           if v_trigger then execute 'alter table public.partnership_partners disable trigger partnership_partners_track_share_change'; end if;
+           update public.partnership_partners set created_at = ${q(sinds)} where organization_id = ${q(w.orgId)};
+           if v_column then
+             execute format('update public.partnership_partners set share_changed_at = %L where organization_id = %L', ${q(sinds)}, ${q(w.orgId)});
+           end if;
+           if v_trigger then execute 'alter table public.partnership_partners enable trigger partnership_partners_track_share_change'; end if;
+         end $$;`);
   }
   // Genoeg licenties voor een extra teamlid, zoals de billing-koppeling (wereld.mjs).
   sql(`begin; set local brandcore.license_sync = 'true';
@@ -63,8 +71,9 @@ async function vof(naam, vennoten, { sinds = '2025-01-01T09:00:00+01' } = {}) {
 }
 
 function jaar(w, label) {
-  return sqlRij(`select id, label, status, legal_form, result_account_code from public.fiscal_years
-    where organization_id = ${q(w.orgId)} and label = ${q(label)}`);
+  // Via to_jsonb: ook op een database van vóór de kolom legal_form.
+  return sqlRij(`select f.id, f.label, f.status, to_jsonb(f) ->> 'legal_form' as legal_form, f.result_account_code
+    from public.fiscal_years f where f.organization_id = ${q(w.orgId)} and f.label = ${q(label)}`);
 }
 
 /** Omzet of kosten met een memoriaal (de KOR: zonder btw). */
