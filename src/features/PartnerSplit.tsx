@@ -148,22 +148,25 @@ export function YearSplitPanel({ organizationId, overview, partners, canWrite, e
           : <div className="bk-table-wrap"><table className="bk-table bk-split-table">
               <thead><tr>
                 <th>Vennoot</th><th className="bk-num">Aandeel</th>
-                <th className="bk-num" title="Arbeidsbeloning of rente over het kapitaal, vóór de verdeling naar rato">Vooraf</th>
+                <th className="bk-num bk-split-col-prior" title="Arbeidsbeloning of rente over het kapitaal, vóór de verdeling naar rato">Vooraf</th>
                 <th className="bk-num">Naar kapitaal</th>
               </tr></thead>
               <tbody>{inSplit.map(o => (
                 <tr key={o.partnerId ?? o.name}>
                   <td><strong>{o.name}</strong>{!o.isActive && <span className="bk-muted"> · uitgetreden</span>}</td>
                   <td className="bk-num">{pct(o.shareBasisPoints)}</td>
-                  <td className="bk-num">{o.priorShareCents ? euroCents(o.priorShareCents) : '—'}</td>
-                  <td className={`bk-num ${o.resultShareCents < 0 ? 'bk-neg' : ''}`}><strong>{euroCents(o.resultShareCents)}</strong></td>
+                  <td className="bk-num bk-split-col-prior">{o.priorShareCents ? euroCents(o.priorShareCents) : '—'}</td>
+                  <td className={`bk-num ${o.resultShareCents < 0 ? 'bk-neg' : ''}`}><strong>{euroCents(o.resultShareCents)}</strong>
+                    {/* Op de telefoon past de kolom Vooraf er niet naast: dan hier. */}
+                    {o.priorShareCents ? <div className="bk-muted bk-split-sub bk-split-prior-inline">waarvan vooraf {euroCents(o.priorShareCents)}</div> : null}
+                  </td>
                 </tr>
               ))}</tbody>
               {inSplit.length > 1 && (
-                <tfoot><tr className="bk-report-result">
+                <tfoot><tr className="bk-split-total-row">
                   <td>Samen</td>
                   <td className={`bk-num ${total !== 10000 ? 'bk-neg' : ''}`}>{pct(total)}</td>
-                  <td className="bk-num">{priorTotal ? euroCents(priorTotal) : '—'}</td>
+                  <td className="bk-num bk-split-col-prior">{priorTotal ? euroCents(priorTotal) : '—'}</td>
                   <td className="bk-num">{euroCents(shareSum)}</td>
                 </tr></tfoot>
               )}

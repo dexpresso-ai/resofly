@@ -19,7 +19,7 @@ import { YearSplitPanel, changedAfterYearEnd, legalFormWord, parsePercent, pct, 
 
 const euroCents = (cents: number | null | undefined) => euro((cents ?? 0) / 100);
 /** Hele uren, naar boven afgerond: "nog 325 u", net als de "900 u" ernaast. */
-const wholeHours = (minutes: number) => `${Math.ceil(Math.max(0, minutes) / 60).toLocaleString('nl-NL')} u`;
+const wholeHours = (minutes: number) => `${Math.ceil(Math.max(0, minutes) / 60).toLocaleString('nl-NL')}\u00a0u`;
 const MONTHS = ['januari', 'februari', 'maart', 'april', 'mei', 'juni', 'juli', 'augustus', 'september', 'oktober', 'november', 'december'];
 
 /** De rekening uit Instellingen → Boekhouding, zoals de jaarafsluiting hem gebruikt. */
@@ -37,7 +37,7 @@ function hoursCell(partner: PartnershipPartner, row: PartnershipPartnerHours | u
   if (!partner.user_id) return { text: '—', tone: 'bk-muted' };
   if (!row) return { text: '—', tone: 'bk-muted' };
   const total = row.direct_minutes + row.indirect_minutes;
-  const hours = `${Math.floor(minutesToHours(total)).toLocaleString('nl-NL')} u`;
+  const hours = `${Math.floor(minutesToHours(total)).toLocaleString('nl-NL')}\u00a0u`;
   if (total >= HOUR_CRITERION_MINUTES) return { text: `${hours} · gehaald`, tone: 'bk-pos' };
   const currentYear = Number(today.slice(0, 4));
   if (year > currentYear) return { text: hours, tone: '' };

@@ -825,6 +825,20 @@ test('vof: een uitgetreden vennoot die in de verdeling van dat jaar staat, krijg
   assert.ok(!overview.warnings.some(w => /nog niet vastgelegd/.test(w)));
 });
 
+test('vof: een afgesloten jaar neemt het geboekte bedrag over, niet een herberekening', () => {
+  // € 1,01 op 60/40 geboekt als € 0,61 en € 0,40; het teruggerekende
+  // percentage (60,40%) gaf herrekend andere centen.
+  const closed = buildIncomeTaxOverview(inputs({
+    year: 2025, legalForm: 'vof', isPartnershipForm: true, resultCents: 101, splitFixed: true, fiscalYearClosed: true,
+    overlappingFiscalYears: [{ id: 'fy', label: '2025', periodStart: '2025-01-01', periodEnd: '2025-12-31', status: 'closed' }],
+    partners: [
+      { id: 'a', name: 'Anna', partnerNumber: 1, kind: 'beherend', isActive: true, shareBasisPoints: 6040, bookedShareCents: 61 },
+      { id: 'b', name: 'Bram', partnerNumber: 2, kind: 'beherend', isActive: true, shareBasisPoints: 3960, bookedShareCents: 40 },
+    ],
+  }), { basis: 'geboekt', today: TODAY });
+  assert.deepEqual(closed?.persons.map(p => p.estimate.profitShareCents), [61, 40]);
+});
+
 test('vof: een voorbij jaar zonder vastgelegde verdeling zegt dat het met de vennoten van nu rekent', () => {
   const overview = buildIncomeTaxOverview(inputs({
     year: 2025, legalForm: 'vof', isPartnershipForm: true, resultCents: E(8_000), splitFixed: false,

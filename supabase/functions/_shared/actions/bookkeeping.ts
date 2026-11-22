@@ -951,11 +951,14 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
       let when = date ?? invoice.date;
       let shifted = false;
       if (!date) {
-        const { data: closed } = await orgQuery(ctx, 'closed_periods', 'period_end')
-          .eq('period_type', 'year').lte('period_start', when).gte('period_end', when);
-        const end = ((closed ?? []) as Array<{ period_end: string }>)[0]?.period_end;
-        if (end) {
-          const next = new Date(`${end}T00:00:00Z`);
+        // Door tot na álle afgesloten jaren op rij: is het jaar erna ook dicht,
+        // dan weigerde de database anders alsnog pas bij goedkeuren.
+        const { data: closed } = await orgQuery(ctx, 'closed_periods', 'period_start, period_end').eq('period_type', 'year');
+        const years = (closed ?? []) as Array<{ period_start: string; period_end: string }>;
+        for (let guard = 0; guard < 50; guard++) {
+          const hit = years.find((y) => y.period_start <= when && when <= y.period_end);
+          if (!hit) break;
+          const next = new Date(`${hit.period_end}T00:00:00Z`);
           next.setUTCDate(next.getUTCDate() + 1);
           when = next.toISOString().slice(0, 10);
           shifted = true;

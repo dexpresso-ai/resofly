@@ -91,12 +91,19 @@ set search_path = public
 as $$
 begin
   if new.legal_form is distinct from old.legal_form then
+    -- Een jaar waarvoor de verdeling over de vennoten al is vastgelegd, gaat
+    -- niet stil mee naar een rechtsvorm zonder vennoten: wie in december
+    -- "per 1 januari" overstapt, sloot het lopende jaar anders af als
+    -- eenmanszaak. Dat jaar zet je zelf om (set_fiscal_year_legal_form).
     update public.fiscal_years fy
     set legal_form = new.legal_form
     where fy.organization_id = new.organization_id
       and fy.status = 'open'
       and fy.period_end >= (now() at time zone 'Europe/Amsterdam')::date
-      and fy.legal_form is distinct from new.legal_form;
+      and fy.legal_form is distinct from new.legal_form
+      and not (new.legal_form not in ('vof', 'maatschap', 'cv')
+               and exists (select 1 from public.fiscal_year_partner_shares s
+                           where s.organization_id = fy.organization_id and s.fiscal_year_id = fy.id));
   end if;
   return new;
 end;
@@ -166,10 +173,11 @@ end;
 $$;
 revoke all on function public.partnership_partners_track_share_change() from public, anon, authenticated;
 
+-- Eerst de bestaande vennoten (hieronder), dan de trigger: hij zet een
+-- update zonder echte wijziging terug op de oude waarde, en die was hier nog
+-- leeg. Zo deed de backfill eerst niets, en sloot een vorig jaar met een
+-- vennoot die al was uitgetreden toch zonder weigering af.
 drop trigger if exists partnership_partners_track_share_change on public.partnership_partners;
-create trigger partnership_partners_track_share_change
-  before insert or update on public.partnership_partners
-  for each row execute function public.partnership_partners_track_share_change();
 
 -- Bestaande vennoten: de laatste wijziging van percentage, actief of soort
 -- uit het auditlog, anders het moment van vastleggen. Zonder auditregel per
@@ -187,6 +195,10 @@ set share_changed_at = coalesce((
   ), pp.created_at)
 where pp.share_changed_at is null;
 alter table public.partnership_partners enable trigger partnership_partners_audit;
+
+create trigger partnership_partners_track_share_change
+  before insert or update on public.partnership_partners
+  for each row execute function public.partnership_partners_track_share_change();
 
 -- ── 3. De verdeling per boekjaar ────────────────────────────────────────
 
@@ -290,6 +302,19 @@ with booked as (
     and coalesce(fy.result_cents, 0) <> 0
     and (jl.description like 'Winstaandeel %' or jl.description like 'Verliesaandeel %')
   group by fy.organization_id, fy.id, pp.id, pp.kind, fy.result_cents
+), now_matches as (
+  -- Geven de percentages van nu precies dezelfde bedragen (dezelfde
+  -- vennoten, dezelfde centen), dan waren dat de percentages. Bij een klein
+  -- resultaat is het percentage uit het bedrag niet terug te rekenen: € 1,01
+  -- op 60/40 (€ 0,61 en € 0,40) gaf 60,40/39,60.
+  select b.fiscal_year_id
+  from booked b
+  group by b.fiscal_year_id, b.organization_id, b.result_cents
+  having count(*) = (
+      select count(*) from public.partnership_result_shares(b.organization_id, b.result_cents) x where x.share_cents <> 0)
+    and bool_and(exists (
+      select 1 from public.partnership_result_shares(b.organization_id, b.result_cents) x
+      where x.partner_id = b.partner_id and x.share_cents = b.share_cents))
 ), raw as (
   select b.*,
          round(b.share_cents * 10000.0 / b.result_cents)::int as bp_raw,
@@ -297,7 +322,10 @@ with booked as (
   from booked b
 ), fixed as (
   select r.*,
-         r.bp_raw + case when r.rn = 1 then 10000 - sum(r.bp_raw) over (partition by r.fiscal_year_id) else 0 end as bp
+         case when r.fiscal_year_id in (select m.fiscal_year_id from now_matches m)
+              then (select pp.profit_share_basis_points from public.partnership_partners pp where pp.id = r.partner_id)
+              else r.bp_raw + case when r.rn = 1 then 10000 - sum(r.bp_raw) over (partition by r.fiscal_year_id) else 0 end
+         end as bp
   from raw r
 )
 insert into public.fiscal_year_partner_shares
@@ -382,6 +410,51 @@ as $$
 $$;
 revoke all on function public.fiscal_year_result_shares(uuid, uuid, bigint) from public, anon, authenticated;
 grant execute on function public.fiscal_year_result_shares(uuid, uuid, bigint) to service_role;
+
+-- Welke vennoten zijn gewijzigd sinds de verdeling van dit boekjaar gold,
+-- terwijl er voor dit jaar nog niets is vastgelegd. Dan weet ResoFly niet
+-- welke verdeling gold, en weigert de jaarafsluiting.
+--   - Bestonden er vennoten vóór het einde van het jaar: wie daarna is
+--     toegevoegd, uittrad of een ander percentage of soort kreeg.
+--   - Zijn ze allemaal pas daarna vastgelegd (je stapte over uit een ander
+--     pakket): wie op een latere dag dan de eerste is toegevoegd of
+--     gewijzigd. Alles op die eerste dag is het inrichten.
+-- Ook als er daardoor niemand meer in de verdeling zit (iedereen
+-- uitgetreden): dat sloot eerst stil af naar 0510.
+create or replace function public.fiscal_year_partner_changes(p_organization_id uuid, p_fiscal_year_id uuid)
+returns text[]
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  with fy as (
+    select f.period_end, f.status from public.fiscal_years f
+    where f.id = p_fiscal_year_id and f.organization_id = p_organization_id
+  ), p as (
+    select pp.name, pp.partner_number,
+           (pp.created_at at time zone 'Europe/Amsterdam')::date as made,
+           (coalesce(pp.share_changed_at, pp.created_at) at time zone 'Europe/Amsterdam')::date as changed
+    from public.partnership_partners pp
+    where pp.organization_id = p_organization_id
+  ), k as (
+    select (select fy.period_end from fy) as period_end,
+           min(p.made) as first_made,
+           coalesce(bool_or(p.made <= (select fy.period_end from fy)), false) as existed
+    from p
+  )
+  select coalesce(array_agg(p.name order by p.partner_number), '{}'::text[])
+  from p cross join k
+  where (select fy.status from fy) = 'open'
+    and not exists (
+      select 1 from public.fiscal_year_partner_shares s
+      where s.organization_id = p_organization_id and s.fiscal_year_id = p_fiscal_year_id)
+    and case when k.existed
+             then p.made > k.period_end or p.changed > k.period_end
+             else p.made > k.first_made or p.changed > k.first_made end;
+$$;
+revoke all on function public.fiscal_year_partner_changes(uuid, uuid) from public, anon, authenticated;
+grant execute on function public.fiscal_year_partner_changes(uuid, uuid) to service_role;
 
 -- ── 5. De verdeling en de rechtsvorm van een boekjaar vastleggen ────────
 
@@ -893,33 +966,21 @@ begin
     and v_year_form in ('vof', 'maatschap', 'cv')
     and exists (select 1 from public.fiscal_year_partner_split(p_organization_id, p_fiscal_year_id));
 
-  if v_partnership then
-    -- TOEGEVOEGD (20261122100000): zijn de vennoten of hun verdeling ná het
-    -- einde van dit boekjaar gewijzigd, en ligt er voor dit jaar nog niets
-    -- vast, dan weet ResoFly niet welke verdeling gold. Afsluiten met die van
-    -- nu gaf de winst aan de verkeerde vennoot, en de melding stuurde naar
-    -- "pas de verdeling aan bij Vennoten": precies de verkeerde weg.
-    -- Werden alle vennoten pas na het einde van het jaar vastgelegd (je bent
-    -- net overgestapt), dan is dat geen wijziging: het venster toont de
-    -- verdeling en je past hem daar aan als die anders was.
-    if not exists (
-         select 1 from public.fiscal_year_partner_shares fps
-         where fps.organization_id = p_organization_id and fps.fiscal_year_id = p_fiscal_year_id)
-       and exists (
-         select 1 from public.partnership_partners pp
-         where pp.organization_id = p_organization_id
-           and (pp.created_at at time zone 'Europe/Amsterdam')::date <= v_fy.period_end) then
-      select string_agg(pp.name, ', ' order by pp.partner_number) into v_changed
-      from public.partnership_partners pp
-      where pp.organization_id = p_organization_id
-        and ((pp.created_at at time zone 'Europe/Amsterdam')::date > v_fy.period_end
-             or (coalesce(pp.share_changed_at, pp.created_at) at time zone 'Europe/Amsterdam')::date > v_fy.period_end);
-      if v_changed is not null then
-        raise exception 'De vennoten of hun winstverdeling zijn na % gewijzigd (%). Welke verdeling gold in boekjaar %? Leg die eerst vast: Boekjaren → Afsluiten → Verdeling. De verdeling van nu kan voor dit jaar niet kloppen.',
-          to_char(v_fy.period_end, 'DD-MM-YYYY'), v_changed, v_fy.label using errcode = '23514';
-      end if;
+  -- TOEGEVOEGD (20261122100000): zijn de vennoten of hun verdeling ná het
+  -- einde van dit boekjaar gewijzigd, en ligt er voor dit jaar nog niets
+  -- vast, dan weet ResoFly niet welke verdeling gold. Afsluiten met die van
+  -- nu gaf de winst aan de verkeerde vennoot, en de melding stuurde naar
+  -- "pas de verdeling aan bij Vennoten": precies de verkeerde weg. Zie
+  -- fiscal_year_partner_changes; ook als daardoor niemand meer meedoet.
+  if v_regime = 'ib' and v_year_form in ('vof', 'maatschap', 'cv') then
+    v_changed := array_to_string(public.fiscal_year_partner_changes(p_organization_id, p_fiscal_year_id), ', ');
+    if coalesce(v_changed, '') <> '' then
+      raise exception 'De vennoten of hun winstverdeling zijn na % gewijzigd (%). Welke verdeling gold in boekjaar %? Leg die eerst vast: Boekjaren → Afsluiten → Verdeling. De verdeling van nu kan voor dit jaar niet kloppen.',
+        to_char(v_fy.period_end, 'DD-MM-YYYY'), v_changed, v_fy.label using errcode = '23514';
     end if;
+  end if;
 
+  if v_partnership then
     select coalesce(sum(sp.share_basis_points), 0)::int into v_share_total
     from public.fiscal_year_partner_split(p_organization_id, p_fiscal_year_id) sp;
     if v_share_total <> 10000 then
@@ -927,23 +988,24 @@ begin
         v_fy.label, replace(rtrim(to_char(v_share_total / 100.0, 'FM990.99'), '.'), '.', ',') using errcode = '23514';
     end if;
 
-    if v_result_cents <> 0 then
-      -- GEWIJZIGD (20261122100000): de verdeling van dit boekjaar, met eerst
-      -- ieders voorafgaande bedrag (arbeidsbeloning, rente) en daarna naar rato.
-      for s in select * from public.fiscal_year_result_shares(p_organization_id, p_fiscal_year_id, v_result_cents) loop
-        if s.share_cents > 0 then
-          v_lines := v_lines || jsonb_build_array(jsonb_build_object(
-            'account_id', s.capital_account_id,
-            'description', 'Winstaandeel ' || s.name || ' boekjaar ' || v_fy.label,
-            'debit_cents', 0, 'credit_cents', s.share_cents));
-        elsif s.share_cents < 0 then
-          v_lines := v_lines || jsonb_build_array(jsonb_build_object(
-            'account_id', s.capital_account_id,
-            'description', 'Verliesaandeel ' || s.name || ' boekjaar ' || v_fy.label,
-            'debit_cents', -s.share_cents, 'credit_cents', 0));
-        end if;
-      end loop;
-    end if;
+    -- GEWIJZIGD (20261122100000): de verdeling van dit boekjaar, met eerst
+    -- ieders voorafgaande bedrag (arbeidsbeloning, rente) en daarna naar rato.
+    -- Ook bij een resultaat van € 0: met een bedrag vooraf verschuift er dan
+    -- toch iets tussen de vennoten. Eerst stond dat wel in de vastgelegde
+    -- verdeling, maar niet in het grootboek.
+    for s in select * from public.fiscal_year_result_shares(p_organization_id, p_fiscal_year_id, v_result_cents) loop
+      if s.share_cents > 0 then
+        v_lines := v_lines || jsonb_build_array(jsonb_build_object(
+          'account_id', s.capital_account_id,
+          'description', 'Winstaandeel ' || s.name || ' boekjaar ' || v_fy.label,
+          'debit_cents', 0, 'credit_cents', s.share_cents));
+      elsif s.share_cents < 0 then
+        v_lines := v_lines || jsonb_build_array(jsonb_build_object(
+          'account_id', s.capital_account_id,
+          'description', 'Verliesaandeel ' || s.name || ' boekjaar ' || v_fy.label,
+          'debit_cents', -s.share_cents, 'credit_cents', 0));
+      end if;
+    end loop;
   elsif v_result_cents <> 0 then
     v_result_account := public.bookkeeping_account_id(p_organization_id, v_result_code);
     if v_result_cents > 0 then
@@ -1181,18 +1243,9 @@ begin
     from public.fiscal_year_partner_split(p_organization_id, p_fiscal_year_id) sp;
 
     -- TOEGEVOEGD (20261122100000): wie er na het einde van dit jaar bij kwam,
-    -- uittrad of een ander percentage kreeg, terwijl er al vennoten waren. Het
+    -- uittrad of een ander percentage kreeg (fiscal_year_partner_changes). Het
     -- afsluitvenster vraagt dan eerst de verdeling van dit jaar.
-    if v_fy.status <> 'closed' and not v_split_fixed and exists (
-         select 1 from public.partnership_partners pp
-         where pp.organization_id = p_organization_id
-           and (pp.created_at at time zone 'Europe/Amsterdam')::date <= v_fy.period_end) then
-      select coalesce(jsonb_agg(pp.name order by pp.partner_number), '[]'::jsonb) into v_changed
-      from public.partnership_partners pp
-      where pp.organization_id = p_organization_id
-        and ((pp.created_at at time zone 'Europe/Amsterdam')::date > v_fy.period_end
-             or (coalesce(pp.share_changed_at, pp.created_at) at time zone 'Europe/Amsterdam')::date > v_fy.period_end);
-    end if;
+    v_changed := to_jsonb(public.fiscal_year_partner_changes(p_organization_id, p_fiscal_year_id));
 
     -- GEWIJZIGD (20261122100000): het winstaandeel volgens de verdeling van
     -- dit boekjaar; bij een afgesloten jaar wat er toen is geboekt. Hier
@@ -1426,10 +1479,6 @@ begin
      and not (public.can_read_org(p_organization_id) and public.can_read_module(p_organization_id, 'finance')) then
     raise exception 'Geen leesrechten voor deze organisatie.' using errcode = '42501';
   end if;
-  if public.org_fiscal_regime(p_organization_id) <> 'ib' then
-    raise exception 'De raming van de inkomstenbelasting hoort bij een eenmanszaak, vof, maatschap of cv: daar is de winst van de ondernemer of de vennoten zelf.'
-      using errcode = '23514';
-  end if;
   if p_year is null or p_year < 2000 or p_year > 2100 then
     raise exception 'Kies een kalenderjaar tussen 2000 en 2100.' using errcode = '22023';
   end if;
@@ -1448,6 +1497,12 @@ begin
   order by fy.period_end desc
   limit 1;
   v_legal := coalesce(v_fy.legal_form, public.org_legal_form(p_organization_id));
+  -- GEWIJZIGD (20261122100000): de rechtsvorm van dat jaar. Na de overstap van
+  -- een vof naar een BV bleef de raming van het laatste vof-jaar anders dicht.
+  if v_legal not in ('eenmanszaak', 'vof', 'maatschap', 'cv') then
+    raise exception 'De raming van de inkomstenbelasting hoort bij een eenmanszaak, vof, maatschap of cv: daar is de winst van de ondernemer of de vennoten zelf.'
+      using errcode = '23514';
+  end if;
   v_partnership_form := v_legal in ('vof', 'maatschap', 'cv');
 
   select coalesce(sum(jl.credit_cents - jl.debit_cents), 0)::bigint
@@ -1570,7 +1625,10 @@ begin
                'isActive', sp.partner_id is not null,
                'currentlyActive', pp.is_active,
                'shareBasisPoints', coalesce(sp.share_basis_points, pp.profit_share_basis_points),
-               'priorShareCents', coalesce(sp.prior_share_cents, 0)
+               'priorShareCents', coalesce(sp.prior_share_cents, 0),
+               -- Bij een afgesloten jaar: wat er is geboekt. De raming neemt
+               -- dat over in plaats van opnieuw te rekenen.
+               'bookedShareCents', case when v_fy.status = 'closed' then sp.booked_share_cents end
              ) order by pp.partner_number)
       from public.partnership_partners pp
       left join (

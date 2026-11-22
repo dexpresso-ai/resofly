@@ -775,7 +775,7 @@ export interface IncomeTaxInputs {
    * `priorShareCents`: zijn bedrag vóór de verdeling naar rato (arbeidsbeloning,
    * rente over het kapitaal).
    */
-  partners: Array<{ id: string; name: string; partnerNumber: number; kind: 'beherend' | 'commanditair'; isActive: boolean; shareBasisPoints: number; currentlyActive?: boolean; priorShareCents?: number }>;
+  partners: Array<{ id: string; name: string; partnerNumber: number; kind: 'beherend' | 'commanditair'; isActive: boolean; shareBasisPoints: number; currentlyActive?: boolean; priorShareCents?: number; bookedShareCents?: number | null }>;
   /** Het boekjaar in dit kalenderjaar, en of de verdeling daarvoor is vastgelegd. */
   fiscalYearId?: string | null;
   fiscalYearClosed?: boolean;
@@ -995,7 +995,7 @@ export function buildIncomeTaxOverview(inputs: IncomeTaxInputs, options: { basis
     // Zijn er wel vennoten, maar doet er in dit jaar niemand mee (allemaal
     // uitgetreden), dan klopte "nog geen vennoten vastgelegd" niet.
     warnings.push(inputs.partners.length > 0
-      ? `In ${inputs.year} doet geen vennoot mee in de verdeling (ze zijn uitgetreden). Deze raming rekent alsof één persoon de hele winst heeft; leg de verdeling van het boekjaar vast bij Boekjaren → Afsluiten.`
+      ? `In ${inputs.year} doet geen vennoot mee in de verdeling. Deze raming rekent alsof één persoon de hele winst heeft; leg de verdeling van het boekjaar vast bij Boekjaren → Afsluiten.`
       : 'Er zijn nog geen vennoten vastgelegd. Deze raming rekent alsof één persoon de hele winst heeft; leg de vennoten en hun winstaandeel vast bij Vennoten.');
   }
   const shareTotal = active.reduce((sum, p) => sum + p.shareBasisPoints, 0);
@@ -1016,9 +1016,16 @@ export function buildIncomeTaxOverview(inputs: IncomeTaxInputs, options: { basis
   // Het winstaandeel met eerst ieders voorafgaande bedrag (arbeidsbeloning,
   // rente over het kapitaal), zoals de jaarafsluiting het boekt. KIA en
   // correcties gaan wel gewoon naar rato.
+  // Bij een afgesloten jaar op basis "geboekt": wat de jaarafsluiting per
+  // vennoot boekte, niet opnieuw gerekend. Bij een oud jaar met een klein
+  // resultaat is het percentage niet altijd terug te rekenen uit de boeking.
+  const booked = basis === 'geboekt' && inputs.fiscalYearClosed && active.length > 0
+    && active.every(p => typeof p.bookedShareCents === 'number')
+    ? new Map(active.map(p => [p.id, Math.trunc(p.bookedShareCents as number)]))
+    : null;
   const profitShares = (people.length === 1 && people[0].partnerId === null)
     ? split(usedResultCents)
-    : splitWithPrior(usedResultCents, people.map((p, i) => ({ ...shares[i], priorCents: p.priorCents })));
+    : booked ?? splitWithPrior(usedResultCents, people.map((p, i) => ({ ...shares[i], priorCents: p.priorCents })));
   const kiaShares = split(kiaCents);
   // Eten, drinken en representatie op 4600: het niet-aftrekbare deel telt
   // ResoFly zelf mee, voor de hele onderneming (bij een vof naar winstaandeel).

@@ -3211,6 +3211,8 @@ body::before{
 .bk-table.bk-split-table{min-width:0;font-size:.84rem}
 .bk-split-table td,.bk-split-table th{padding:8px 10px}
 .bk-split-table td:first-child{overflow-wrap:anywhere}
+.bk-split-total-row td{font-weight:700;border-top:1px solid var(--border)}
+.bk-split-prior-inline{display:none}
 .bk-split-edit{display:flex;flex-direction:column;gap:8px}
 .bk-split-row{display:grid;grid-template-columns:minmax(0,1.3fr) 92px minmax(0,1.2fr) minmax(0,1fr) 34px;gap:8px;align-items:center}
 .bk-split-row-head{font-size:.68rem;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--muted,rgba(var(--ink-rgb),.55))}
@@ -3221,6 +3223,12 @@ body::before{
 .bk-split-foot{display:flex;align-items:center;justify-content:space-between;gap:8px 12px;flex-wrap:wrap}
 .bk-split-total{font-size:.84rem;font-weight:600;font-variant-numeric:tabular-nums}
 .bk-split-actions{flex-wrap:wrap}
+/* Instellingen: een andere rechtsvorm, met per open jaar een vinkje. */
+.legal-change{display:flex;flex-direction:column;gap:10px;font-size:.9rem}
+.legal-change p{margin:0}
+.legal-change-year{align-items:flex-start}
+.legal-change-year input{margin-top:2px;flex-shrink:0}
+.legal-change-year small{display:block;margin-top:2px}
 .bk-fy-form{display:flex;flex-direction:column;gap:8px;align-items:flex-start}
 .bk-fy-form p{margin:0}
 @media(max-width:640px){
@@ -3234,6 +3242,8 @@ body::before{
   .bk-split-amount-label{display:inline;font-weight:400;color:var(--muted2)}
   .bk-split-row .bk-icon-btn{grid-column:3;grid-row:2;align-self:end}
   .bk-split-table td,.bk-split-table th{padding:8px 7px}
+  .bk-split-table .bk-split-col-prior{display:none}
+  .bk-split-prior-inline{display:block}
 }
 
 /* Een knop met alleen een icoon (aanpassen, verwijderen). Het potlood van
@@ -3249,8 +3259,12 @@ body::before{
      staan in het Grootboek), teamlid en status staan onder de naam. */
   .bk-table.bk-partners-table{min-width:0}
   .bk-partners-table .bk-col-wide{display:none}
-  .bk-partners-table td:first-child{overflow-wrap:anywhere}
-  .bk-partners-table th,.bk-partners-table td{padding:9px 8px}
+  .bk-partners-table td:first-child{overflow-wrap:anywhere;width:44%}
+  .bk-partners-table th,.bk-partners-table td{padding:9px 7px}
+  .bk-partners-table th{font-size:10.5px;letter-spacing:.05em}
+  /* Aanpassen en verwijderen onder elkaar: naast elkaar drukten ze de
+     prullenbak rechts uit beeld. */
+  .bk-partners-table .bk-partner-actions{flex-direction:column;align-items:flex-end}
 }
 
 /* ── Eigen verzenddomein (instellingen → e-mail) ─────────────────────── */

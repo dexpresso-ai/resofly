@@ -33,8 +33,11 @@ import { buildIncomeTaxOverview } from '../../src/lib/inkomstenbelasting.ts';
 
 const VANDAAG = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Amsterdam' }).format(new Date());
 
-/** Een vof met vennoten die er al in 2025 waren (created_at in 2025, zoals in het echt). */
-async function vof(naam, vennoten) {
+/**
+ * Een vof met vennoten die er al in 2025 waren (created_at in 2025, zoals in
+ * het echt). Met `sinds` een andere dag van vastleggen; `null` laat vandaag.
+ */
+async function vof(naam, vennoten, { sinds = '2025-01-01T09:00:00+01' } = {}) {
   const w = await maakEenmanszaak(naam, { rechtsvorm: 'vof', resultaatrekening: '0510', start: '2025-01-01', kor: true });
   w.vennoten = {};
   for (const [wie, bp] of vennoten) {
@@ -45,12 +48,14 @@ async function vof(naam, vennoten) {
   // De vennoten bestonden al in 2025; in deze test leggen we ze vandaag vast.
   // De trigger laat share_changed_at alleen meelopen met een echte wijziging
   // (een directe update zou het slot ontwijken); hier zetten we hem even uit.
-  sql(`begin;
-       alter table public.partnership_partners disable trigger partnership_partners_track_share_change;
-       update public.partnership_partners set created_at = '2025-01-01T09:00:00+01', share_changed_at = '2025-01-01T09:00:00+01'
-         where organization_id = ${q(w.orgId)};
-       alter table public.partnership_partners enable trigger partnership_partners_track_share_change;
-       commit;`);
+  if (sinds) {
+    sql(`begin;
+         alter table public.partnership_partners disable trigger partnership_partners_track_share_change;
+         update public.partnership_partners set created_at = ${q(sinds)}, share_changed_at = ${q(sinds)}
+           where organization_id = ${q(w.orgId)};
+         alter table public.partnership_partners enable trigger partnership_partners_track_share_change;
+         commit;`);
+  }
   // Genoeg licenties voor een extra teamlid, zoals de billing-koppeling (wereld.mjs).
   sql(`begin; set local brandcore.license_sync = 'true';
        update public.organizations set licensed_seats = 10 where id = ${q(w.orgId)}; commit;`);
@@ -388,6 +393,51 @@ async function verwijderen() {
   });
 }
 
+// ── 8. De randen van de weigering, en een resultaat van € 0 ──────────────
+
+async function randen() {
+  groep('Vof — iedereen uitgetreden, een latere wijziging na de overstap, en € 0 resultaat met een bedrag vooraf');
+
+  await stap('de vof stopt per 31-12-2025 en Anna en Bram treden allebei uit: 2025 sluit niet stil af naar 0510', async () => {
+    const w = await vof('vofstop', [['Anna', 5000], ['Bram', 5000]]);
+    await winst(w, '2025-06-01', 1000000);
+    for (const wie of ['Anna', 'Bram']) {
+      gelukt(await rpc('save_partnership_partner', { p_organization_id: w.orgId, p_partner_id: w.vennoten[wie].id, p_name: wie, p_profit_share_basis_points: 5000, p_kind: 'beherend', p_is_active: false }, w.eigenaar.token), `${wie} uit`);
+    }
+    const res = await afsluiten(w, '2025');
+    geweigerd(res, 'afsluiten zonder één actieve vennoot');
+    verwacht(/\(Anna, Bram\)/.test(res.tekst), `melding: ${res.tekst}`);
+    gelukt(await verdeling(w, '2025', [['Anna', 5000], ['Bram', 5000]]), 'verdeling 2025');
+    gelukt(await afsluiten(w, '2025'), 'afsluiten');
+    gelijk([kapitaal(w, '0501'), kapitaal(w, '0502'), kapitaal(w, '0510')], [500000, 500000, 0], '€ 5.000 / € 5.000 / € 0');
+  });
+
+  await stap('overgestapt in januari 2026 (alles op één dag vastgelegd), in maart treedt Bram uit: 2025 weigert alsnog', async () => {
+    const w = await vof('vofoverstapdag', [['Anna', 5000], ['Bram', 5000]], { sinds: '2026-01-15T10:00:00+01' });
+    await winst(w, '2025-06-01', 1000000);
+    gelukt(await rpc('save_partnership_partner', { p_organization_id: w.orgId, p_partner_id: w.vennoten.Bram.id, p_name: 'Bram', p_profit_share_basis_points: 5000, p_kind: 'beherend', p_is_active: false }, w.eigenaar.token), 'Bram uit');
+    const res = await afsluiten(w, '2025');
+    geweigerd(res, 'een latere wijziging na het inrichten');
+    verwacht(/\(Bram\)/.test(res.tekst), `melding: ${res.tekst}`);
+  });
+
+  await stap('vandaag overgestapt en ingericht: 2025 sluit gewoon af met de vennoten van nu', async () => {
+    const w = await vof('vofvandaag', [['Anna', 6000], ['Bram', 4000]], { sinds: null });
+    await winst(w, '2025-06-01', 1000000);
+    gelukt(await afsluiten(w, '2025'), 'afsluiten');
+    gelijk([kapitaal(w, '0501'), kapitaal(w, '0502')], [600000, 400000], '€ 6.000 / € 4.000');
+  });
+
+  await stap('resultaat € 0 met € 10.000 vooraf voor Anna: het verschuift ook in het grootboek', async () => {
+    const w = await vof('vofnul', [['Anna', 5000], ['Bram', 5000]]);
+    gelukt(await verdeling(w, '2025', [['Anna', 5000, 1000000], ['Bram', 5000]]), 'verdeling');
+    gelukt(await afsluiten(w, '2025'), 'afsluiten');
+    gelijk([kapitaal(w, '0501'), kapitaal(w, '0502')], [500000, -500000], 'Anna +€ 5.000, Bram −€ 5.000');
+    const ov = await overzicht(w, '2025');
+    gelijk([vennoot(ov, 'Anna').endCents, vennoot(ov, 'Bram').endCents], [500000, -500000], 'de kapitaalvergelijking sluit op het grootboek');
+  });
+}
+
 export default async function vofScenario() {
   await uittreden();
   await toetredenEnPercentages();
@@ -396,4 +446,5 @@ export default async function vofScenario() {
   await vorigJaarOpen();
   await priveOntvangen();
   await verwijderen();
+  await randen();
 }

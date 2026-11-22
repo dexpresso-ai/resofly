@@ -293,8 +293,13 @@ test('privé betaald via Gerrie: alleen bij IB, en bij een vof met vennoten de v
   const rest = await pay.plan!(ctx({ purchase_invoices: [invoice], company_settings: [{ legal_form: 'vof' }], partnership_partners: [bram] }, open(7100)), { purchase_invoice_id: ID, partner_id: ID });
   assert.match(rest.sub, /€\s71,00 openstaand \(factuur €\s121,00\) betaald door Bram/);
   // De factuurdatum in een afgesloten boekjaar: de eerste dag daarna.
-  const dicht = await pay.plan!(ctx({ purchase_invoices: [invoice], company_settings: [{ legal_form: 'vof' }], partnership_partners: [bram], closed_periods: [{ period_end: '2025-12-31' }] }, open(12100)), { purchase_invoice_id: ID, partner_id: ID });
+  const dicht = await pay.plan!(ctx({ purchase_invoices: [invoice], company_settings: [{ legal_form: 'vof' }], partnership_partners: [bram], closed_periods: [{ period_start: '2025-01-01', period_end: '2025-12-31' }] }, open(12100)), { purchase_invoice_id: ID, partner_id: ID });
   assert.equal(dicht.payload.date, '2026-01-01');
+  // Twee afgesloten jaren op rij: door tot na het tweede.
+  const tweeDicht = await pay.plan!(ctx({ purchase_invoices: [invoice], company_settings: [{ legal_form: 'vof' }], partnership_partners: [bram], closed_periods: [
+    { period_start: '2025-01-01', period_end: '2025-12-31' }, { period_start: '2026-01-01', period_end: '2026-12-31' },
+  ] }, open(12100)), { purchase_invoice_id: ID, partner_id: ID });
+  assert.equal(tweeDicht.payload.date, '2027-01-01');
   assert.match(dicht.sub, /valt in een afgesloten boekjaar/);
   // Een creditnota die op de rekening van Bram terugkwam: privé ontvangen.
   const credit = await pay.plan!(ctx({ purchase_invoices: [{ ...invoice, total_cents: -12100 }], company_settings: [{ legal_form: 'vof' }], partnership_partners: [bram] }, open(-12100)), { purchase_invoice_id: ID, partner_id: ID });
