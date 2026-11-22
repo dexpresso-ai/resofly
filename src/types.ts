@@ -3088,7 +3088,8 @@ export interface VatReturn {
 // Bankfeed: bankrekeningen, transacties en regels (automatisch journaliseren).
 // ---------------------------------------------------------------------------
 export type BankAccountSource = 'import' | 'gocardless' | 'enablebanking';
-export type BankStatementFormat = 'camt053' | 'mt940' | 'csv' | 'gocardless';
+// 'enablebanking' ontbrak hier terwijl de database het al toestond (bank-sync schrijft het).
+export type BankStatementFormat = 'camt053' | 'mt940' | 'csv' | 'gocardless' | 'enablebanking';
 /**
  * 'merged': een bankregel die een handmatig ingevoerde mutatie bevestigt. Hij
  * verwijst met merged_into_id naar die mutatie, en die draagt de boeking; los
@@ -3203,6 +3204,13 @@ export interface BankTransaction {
   updated_at: string;
   /** Met de hand ingevoerd in plaats van van de bank. Optioneel: vóór migratie 20261107110000 bestond het niet. */
   is_manual?: boolean;
+  /**
+   * Niet van deze rekening (vanaf 20261122130000): de mutatie blijft bij
+   * Genegeerd staan, maar telt niet mee in de aansluiting.
+   */
+  excluded_at?: string | null;
+  excluded_by?: UUID | null;
+  excluded_reason?: string | null;
   created_by?: UUID | null;
   /** Bij een bankregel met status 'merged': de handmatige mutatie die hij bevestigt. */
   merged_into_id?: UUID | null;
@@ -3357,6 +3365,9 @@ export interface BankReconciliation {
   unbooked_sum_cents: number;
   ignored_count: number;
   ignored_sum_cents: number;
+  /** Mutaties die niet van deze rekening zijn; ze tellen nergens in mee (vanaf 20261122130000). */
+  excluded_count?: number;
+  excluded_sum_cents?: number;
   booked_count: number;
   expected_cents: number;
   /** Afschriftsaldo − (grootboekstand + nog niet geboekt). 0 = sluitend; null = geen afschriftsaldo bekend. */

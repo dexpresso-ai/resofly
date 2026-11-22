@@ -2827,6 +2827,39 @@ export async function deleteDuplicateBankTransaction(organizationId: UUID, trans
   if (error) throw bookkeepingError(error);
 }
 
+/**
+ * Een bankregel die niet bij deze rekening hoort (een regel van de
+ * spaarrekening in hetzelfde bestand, een verkeerd afschrift). Hij blijft bij
+ * Genegeerd staan, maar telt niet meer mee in de aansluiting. Negeren alleen
+ * hielp niet: een genegeerde mutatie staat op het afschrift en telt dus mee.
+ * Met `excluded = false` zet je hem terug.
+ */
+export async function setBankTransactionExcluded(organizationId: UUID, transactionId: UUID, excluded: boolean, reason?: string): Promise<void> {
+  const { error } = await supabase.rpc('set_bank_transaction_excluded', {
+    p_organization_id: organizationId,
+    p_transaction_id: transactionId,
+    p_excluded: excluded,
+    p_reason: reason ?? null,
+  });
+  if (error) throw bookkeepingError(error);
+}
+
+/**
+ * Een ingelezen afschrift terugdraaien (verkeerde rekening, verkeerd bestand).
+ * De database weigert zolang er een mutatie uit dat afschrift geboekt of
+ * samengevoegd is. Nooit geboekte regels gaan weg; een regel die ooit geboekt
+ * was blijft staan als "niet van deze rekening", bij zijn boekstukken.
+ */
+export async function undoBankStatement(organizationId: UUID, statementId: UUID): Promise<{ removed: number; keptExcluded: number }> {
+  const { data, error } = await supabase.rpc('undo_bank_statement', {
+    p_organization_id: organizationId,
+    p_statement_id: statementId,
+  });
+  if (error) throw bookkeepingError(error);
+  const row = (data ?? {}) as { removed?: number; kept_excluded?: number };
+  return { removed: Number(row.removed ?? 0), keptExcluded: Number(row.kept_excluded ?? 0) };
+}
+
 /** Een bankregel samenvoegen met de handmatige mutatie die hij bevestigt. */
 export async function mergeBankTransactions(organizationId: UUID, bankTransactionId: UUID, manualTransactionId: UUID): Promise<BankTransaction> {
   const { data, error } = await supabase.rpc('merge_bank_transactions', {

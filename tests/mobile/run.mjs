@@ -323,6 +323,21 @@ const PAGES = {
   // Vooruitbetaald; de pagina "ledger" hierboven toont zonder rekeningschema
   // alleen de knop om dat aan te maken.
   'ledger-journaal': { page: 'ledger', mock: { ledger: true } },
+  // 2026-11-22: een verkeerd ingelezen regel of afschrift herstellen. De knop
+  // "Niet van deze rekening" bij een open mutatie, en bij de rekening de lijst
+  // met ingelezen afschriften (terugdraaien) onder de aansluiting.
+  'bank-herstel': {
+    page: 'bank', mock: { ledger: true, bankHerstel: true },
+    mustShow: [{ selector: 'button[title^="Deze regel hoort bij een andere rekening"]', label: 'de knop "Niet van deze rekening"' }],
+  },
+  'bank-afschriften': {
+    page: 'bank', mock: { ledger: true, bankHerstel: true },
+    prepare: ['.bk-tabs button:has-text("Rekeningen")', '.bank-statements > summary'],
+    mustShow: [
+      { selector: '.bank-statements[open] li button', label: 'een afschrift met Terugdraaien' },
+      { selector: '.bank-recon-rows div[title*="niet van deze rekening"]', label: 'de regel "niet van deze rekening" in de aansluiting' },
+    ],
+  },
   'prepaid-venster': { page: 'prepaid', mock: { ledger: true, prepaid: true }, prepare: '.bk-row' },
   'prepaid-nieuw': {
     page: 'prepaid', mock: { ledger: true, prepaid: true },
