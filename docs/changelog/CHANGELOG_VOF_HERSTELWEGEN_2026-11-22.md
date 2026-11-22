@@ -212,7 +212,13 @@ Op **Vennoten** staat bovenaan de verdeling van het boekjaar ("vastgelegd voor d
   295 migraties zijn toegepast, en beide nieuwe draaien een tweede keer zonder
   fout. `accountant_fence_gaps()` is leeg, en geen security-definer-functie in
   `public` is uit te voeren door anon.
-- **De volledige stromentest** op die verse database: STROMEN.
+- **De volledige stromentest** op die verse database: 1354 stappen, 2 fout.
+  Beide fouten zaten in `bonnen`. De eerste was een bon insturen, waarop de
+  lokale gateway "An invalid response was received from the upstream server"
+  gaf; de tweede was het gevolg daarvan. Het scenario apart opnieuw: 32
+  stappen, 0 fout. In een eerdere volledige run (1354 stappen) ging op
+  dezelfde manier één keer een API-sleutel aanmaken mis in
+  `inkomstenbelasting`; los daarna 9/0. Geen van beide raakt deze wijziging.
 - **Databasetests** (`npm run test:database`): alle vier geslaagd.
   `vennoten_jaarafsluiting.sql` toetst nu het nieuwe gedrag:
   - opnieuw afsluiten gebruikt de vastgelegde verdeling, ook na uittreden;
