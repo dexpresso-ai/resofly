@@ -163,9 +163,12 @@ kleiner is.
   zijn groepen op, ook als ze vooruit kwamen.
 - `npm run test:inrichten`: alle controles geslaagd.
 - `npm run test:terugknop`: 15/15. Eén run vóór de merge had één mislukking
-  ("en omhoog"), terwijl er tegelijk zware metingen liepen; drie runs daarna
-  15/15.
-- `npm run test:mobile -- --theme=both`: MOBIEL
+  ("en omhoog"), terwijl er tegelijk zware metingen liepen; de drie runs
+  daarna, ook na de merge, 15/15.
+- `npm run test:mobile -- --theme=both`: 842 pagina's gemeten (na de merge
+  met staging), 4 met een probleem: het dashboard en de werkruimte-app op de
+  telefoon, met het eerste item op 287 px (max 280), licht en donker. Precies
+  dezelfde 4 als vóór deze wijziging; dat bestond al (zie 19 november).
 - `node scripts/check-csp-hash.mjs`: de hash staat in beide CSP-regels.
 - Het laadscherm uit de HTML naast dat van React (JavaScript geblokkeerd
   tegen Supabase dat niet antwoordt), licht en donker: alleen de stand van
