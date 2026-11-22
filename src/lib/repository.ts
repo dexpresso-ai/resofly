@@ -125,6 +125,8 @@ import type {
   CalendarEventLinkInput,
   TimeEntry,
   TimeEntryType,
+  TimeInvoiceGrouping,
+  TimeInvoicePreview,
   IndirectHoursCategory,
   Organization,
   OrganizationStorageStatus,
@@ -1882,10 +1884,101 @@ export async function deleteCalendarEventLink(linkId: UUID, organizationId: UUID
 const TIME_TRACKING_MIGRATION_HINT =
   'Voer de migratie 20260629000000_time_tracking.sql uit in Supabase om de urenregistratie te activeren.';
 
+const TIME_INVOICING_MIGRATION_HINT =
+  'Voer de migratie 20261122110000_uren_factureren.sql uit in Supabase om uren te kunnen factureren.';
+
+/**
+ * De uren, met per uur de factuur waar het op staat (`invoice_id`).
+ *
+ * Twee losse vragen in plaats van één met een ingebedde tabel: staat de app
+ * eerder op Cloudflare dan de migratie, dan faalt een ingebedde select en
+ * waren álle uren weg. Nu ontbreekt alleen "gefactureerd".
+ */
 export async function selectTimeEntries(organizationId: UUID): Promise<TimeEntry[]> {
-  return selectOptional<TimeEntry>('time_entries', organizationId, {
-    orderBy: 'entry_date', ascending: false, hint: TIME_TRACKING_MIGRATION_HINT,
+  const [entries, links] = await Promise.all([
+    selectOptional<TimeEntry>('time_entries', organizationId, {
+      orderBy: 'entry_date', ascending: false, hint: TIME_TRACKING_MIGRATION_HINT,
+    }),
+    selectOptional<{ time_entry_id: UUID; invoice_id: UUID }>('time_entry_invoices', organizationId, {
+      orderBy: 'time_entry_id', ascending: true, hint: TIME_INVOICING_MIGRATION_HINT, columns: 'time_entry_id, invoice_id', idColumn: 'time_entry_id',
+    }),
+  ]);
+  if (links.length === 0) return entries;
+  const invoiceByEntry = new Map(links.map(link => [link.time_entry_id, link.invoice_id]));
+  return entries.map(entry => (invoiceByEntry.has(entry.id) ? { ...entry, invoice_id: invoiceByEntry.get(entry.id) } : entry));
+}
+
+/** Eén uur op een factuur, voor de urenspecificatie. */
+export interface InvoiceHourRow { entry_date: string; description: string | null; minutes: number; hourly_rate_cents: number }
+
+/**
+ * De uren die op een factuur staan, oudste eerst. Minuten en tarief komen uit
+ * de koppeling: dat is wat er gefactureerd is. Hooguit 1000 rijen (de grens
+ * van PostgREST); een factuur met meer registraties bestaat in de praktijk niet.
+ */
+export async function selectInvoiceHours(organizationId: UUID, invoiceId: UUID): Promise<InvoiceHourRow[]> {
+  const { data, error } = await supabase
+    .from('time_entry_invoices')
+    .select('minutes, hourly_rate_cents, time_entries(entry_date, description)')
+    .eq('organization_id', organizationId)
+    .eq('invoice_id', invoiceId)
+    .limit(1000);
+  if (error) throw error;
+  type Row = { minutes: number; hourly_rate_cents: number; time_entries: { entry_date: string; description: string | null } | Array<{ entry_date: string; description: string | null }> | null };
+  return ((data ?? []) as unknown as Row[])
+    .map(row => {
+      const entry = Array.isArray(row.time_entries) ? row.time_entries[0] : row.time_entries;
+      return { entry_date: entry?.entry_date ?? '', description: entry?.description ?? null, minutes: row.minutes, hourly_rate_cents: row.hourly_rate_cents };
+    })
+    .sort((a, b) => a.entry_date.localeCompare(b.entry_date));
+}
+
+export interface TimeInvoiceParams {
+  clientId: UUID | null;
+  projectId: UUID | null;
+  from: string | null;
+  to: string | null;
+  grouping: TimeInvoiceGrouping;
+  roundingMinutes: number;
+}
+
+function timeInvoiceArgs(organizationId: UUID, params: TimeInvoiceParams) {
+  return {
+    p_organization_id: organizationId,
+    p_client_id: params.clientId,
+    p_project_id: params.projectId,
+    p_from: params.from,
+    p_to: params.to,
+    p_grouping: params.grouping,
+    p_rounding_minutes: params.roundingMinutes,
+  };
+}
+
+/** Wat er voor een klant of project nog te factureren is, als factuurregels. */
+export async function previewTimeInvoice(organizationId: UUID, params: TimeInvoiceParams): Promise<TimeInvoicePreview> {
+  const { data, error } = await supabase.rpc('time_invoice_preview', timeInvoiceArgs(organizationId, params));
+  if (error) throw error;
+  return data as TimeInvoicePreview;
+}
+
+/**
+ * Maakt het concept en legt de uren eraan vast, in één transactie in de
+ * database. `expected` is wat het voorbeeld (of de goedkeurkaart van Gerrie)
+ * liet zien, in minuten en in centen: zijn de uren of het tarief intussen
+ * veranderd, dan weigert de database.
+ */
+export async function createInvoiceFromTimeEntries(
+  organizationId: UUID,
+  params: TimeInvoiceParams,
+  expected: { minutes: number | null; subtotalCents: number | null },
+): Promise<Invoice> {
+  const { data, error } = await supabase.rpc('create_invoice_from_time_entries', {
+    ...timeInvoiceArgs(organizationId, params),
+    p_expected_minutes: expected.minutes,
+    p_expected_subtotal_cents: expected.subtotalCents,
   });
+  if (error) throw error;
+  return data as Invoice;
 }
 
 const DUNNING_MIGRATION_HINT =
@@ -2302,7 +2395,7 @@ const CLIENT_FIELD_DEFINITIONS_MIGRATION_HINT =
 async function selectOptional<T>(
   table: string,
   organizationId: UUID,
-  opts: { orderBy: string; ascending: boolean; hint: string; eq?: Record<string, string>; columns?: string; thenBy?: string },
+  opts: { orderBy: string; ascending: boolean; hint: string; eq?: Record<string, string>; columns?: string; thenBy?: string; idColumn?: string },
 ): Promise<T[]> {
   try {
     return await fetchAllPages<T>(() => {
@@ -2313,7 +2406,7 @@ async function selectOptional<T>(
       for (const [column, value] of Object.entries(opts.eq ?? {})) query = query.eq(column, value);
       query = query.order(opts.orderBy, { ascending: opts.ascending });
       if (opts.thenBy) query = query.order(opts.thenBy, { ascending: true });
-      return query.order('id', { ascending: true });
+      return query.order(opts.idColumn ?? 'id', { ascending: true });
     });
   } catch (error) {
     const err = error as { message?: string; details?: string };

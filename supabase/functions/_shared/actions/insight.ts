@@ -608,7 +608,7 @@ export const INSIGHT_ACTIONS: ActionDef[] = [
       'Geeft per factuur en per inkoopfactuur wat er op de peildatum nog openstaat: geboekt − betaald − gecrediteerd, gerekend uit het GROOTBOEK (rekening 1300 debiteuren en 1600 crediteuren). ' +
       'Dit is de harde openstaande-postenlijst: alleen wat werkelijk geboekt is telt mee, dus hij kan afwijken van de factuurstatussen. ' +
       '`gl_balance_cents` is het grootboeksaldo en `unmatched_cents` de beweging die niet aan een factuur is toe te rekenen (beginbalans, vrije boekingen) — is dat niet nul, dan sluit de lijst niet aan op het grootboek en is dat het eerste om uit te zoeken.',
-    keywords: ['openstaand', 'openstaande posten', 'debiteuren', 'crediteuren', 'ouderdom', 'nog te ontvangen', 'nog te betalen', 'saldo', 'aansluiting', '1300', '1600'],
+    keywords: ['openstaand', 'openstaande posten', 'openstaande facturen', 'debiteuren', 'crediteuren', 'ouderdom', 'nog te ontvangen', 'nog te betalen', 'saldo', 'aansluiting', '1300', '1600'],
     input: {
       as_of: { type: 'string', description: 'Peildatum JJJJ-MM-DD. Standaard vandaag.' },
       side: { type: 'string', enum: ['receivables', 'payables', 'both'], description: 'receivables = debiteuren, payables = crediteuren. Standaard both.' },

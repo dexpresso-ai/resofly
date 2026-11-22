@@ -1,6 +1,6 @@
 import {
   approveQuoteInternal, bookAllUnbookedSalesInvoices, bookBankTransaction, cancelInvoiceDunningNotice,
-  createInvoiceRefund, postCreditNoteToLedger, postSalesInvoiceToLedger, proposeInvoiceDunningNotice,
+  createInvoiceFromTimeEntries, createInvoiceRefund, postCreditNoteToLedger, postSalesInvoiceToLedger, proposeInvoiceDunningNotice,
   rejectQuoteInternal, resetEmailTemplate, saveInvoiceDunningSettings, saveInvoiceReminderSettings,
   reminderPaymentLinkWanted, sendCreditNoteEmail, sendInvoiceDunningNotice, sendInvoiceReminderEmail, setInvoiceRemindersPaused,
   setInvoiceStatusFromCard, submitQuoteForInternalApproval, updateRow, upsertCompanySettings, upsertEmailTemplate,
@@ -44,6 +44,29 @@ function companySettingsWithPatch(ctx: ActionRunCtx, patch: Record<string, unkno
 }
 
 export const FINANCE_EXECUTORS: Record<string, ActionExecutor> = {
+  // ── Uren factureren ──────────────────────────────────────────────────────
+  // Dezelfde database-functie als de knop "Uren factureren", met de rechten
+  // van wie goedkeurt. `expected_minutes` en `expected_subtotal_cents` zijn
+  // wat er op de kaart stond: wijkt het af, dan weigert de database.
+  'invoice.from_time_entries': async (payload, ctx) => {
+    const grouping = optText(payload, 'grouping') === 'entry' ? 'entry' : 'project';
+    const rounding = Number(payload.rounding_minutes);
+    const expectedMinutes = Number(payload.expected_minutes);
+    const expectedCents = Number(payload.expected_subtotal_cents);
+    const invoice = await createInvoiceFromTimeEntries(ctx.organizationId, {
+      clientId: text(payload, 'client_id'),
+      projectId: optText(payload, 'project_id'),
+      from: optText(payload, 'from'),
+      to: optText(payload, 'to'),
+      grouping,
+      roundingMinutes: Number.isFinite(rounding) ? rounding : 0,
+    }, {
+      minutes: payload.expected_minutes != null && Number.isFinite(expectedMinutes) ? expectedMinutes : null,
+      subtotalCents: payload.expected_subtotal_cents != null && Number.isFinite(expectedCents) ? expectedCents : null,
+    });
+    return `Conceptfactuur ${invoice.number} gemaakt van de uren; kijk hem na bij Facturen en verstuur hem daar`;
+  },
+
   // ── Offerte: de interne goedkeuringsronde ────────────────────────────────
   'quote.submit_internal_approval': async (payload, ctx) => {
     const quote = await submitQuoteForInternalApproval(ctx.organizationId, text(payload, 'quote_id'));

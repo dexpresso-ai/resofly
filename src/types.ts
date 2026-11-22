@@ -985,8 +985,41 @@ export interface TimeEntry extends OrgScopedRow {
   entry_type: TimeEntryType;
   indirect_category: IndirectHoursCategory | null;
   hourly_rate_cents: number | null;
+  /** De verkoopfactuur (concept of definitief) waar dit uur op staat; leeg =
+   *  nog te factureren. Komt uit time_entry_invoices, niet uit de rij zelf.
+   *  Gefactureerde uren liggen in de database vast. */
+  invoice_id?: UUID | null;
   created_at: string;
   updated_at: string;
+}
+
+/** Hoe uren op een factuur komen: samengevoegd per project en tarief, of één regel per registratie. */
+export type TimeInvoiceGrouping = 'project' | 'entry';
+
+/** Eén factuurregel uit het voorbeeld van "Uren factureren". */
+export interface TimeInvoicePreviewLine extends FinanceLine {
+  minutes: number;
+  entry_count: number;
+  project_id?: UUID | null;
+}
+
+/** Wat time_invoice_preview teruggeeft: de regels zoals ze op het concept komen. */
+export interface TimeInvoicePreview {
+  client_id: UUID;
+  project_id: UUID | null;
+  from: string | null;
+  to: string | null;
+  grouping: TimeInvoiceGrouping;
+  rounding_minutes: number;
+  entry_count: number;
+  minutes: number;
+  billed_minutes: number;
+  subtotal_cents: number;
+  first_date: string | null;
+  last_date: string | null;
+  lines: TimeInvoicePreviewLine[];
+  /** Declarabele uren zonder uurtarief: die komen niet op de factuur. */
+  without_rate: { entry_count: number; minutes: number };
 }
 
 export interface NoteCalendarLink extends OrgScopedRow {

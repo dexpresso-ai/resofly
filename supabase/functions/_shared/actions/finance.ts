@@ -1,5 +1,5 @@
 import {
-  ActionError, bool, choice, euro, euroCents, id, joinShort, num, optChoice, optId, optNum,
+  ActionError, bool, choice, euro, euroCents, id, joinShort, num, optChoice, optId, optIsoDate, optNum,
   optStr, orgQuery, row, str,
   type ActionCtx, type ActionDef,
 } from './types.ts';
@@ -171,6 +171,68 @@ async function bookkeepingStartDate(ctx: ActionCtx): Promise<string | null> {
   const value = (data as { bookkeeping_start_date?: string | null } | null)?.bookkeeping_start_date;
   return value ? String(value).slice(0, 10) : null;
 }
+
+// ── Uren factureren ─────────────────────────────────────────────────────────
+// Eén berekening voor het scherm, Gerrie en de factuur zelf: de database-functie
+// `time_invoice_preview` (migratie 20261122110000). Gerrie telde eerder zelf uren
+// op uit `list_time_entries`; die lijst was afgekapt op 25 registraties, en zo
+// kwam er € 2.337,50 op een voorstel waar € 10.285 hoorde.
+
+const TIME_GROUPINGS = ['project', 'entry'] as const;
+const TIME_ROUNDINGS = [0, 6, 15, 30, 60];
+
+interface TimeInvoiceLine { description: string; quantity: number; unit_price: number; vat: number; vat_code?: string | null; minutes: number; entry_count: number; project_id?: string | null }
+interface TimeInvoicePreview {
+  client_id: string; project_id: string | null; from: string | null; to: string | null;
+  grouping: string; rounding_minutes: number; entry_count: number; minutes: number; billed_minutes: number;
+  subtotal_cents: number; first_date: string | null; last_date: string | null;
+  lines: TimeInvoiceLine[]; without_rate: { entry_count: number; minutes: number };
+}
+
+/** "121 uur" of "27,5 uur": uren met hooguit twee decimalen, met een komma. */
+function hoursText(minutes: number): string {
+  const hours = Math.round((minutes / 60) * 100) / 100;
+  return `${String(hours).replace('.', ',')} uur`;
+}
+
+/** De invoer die het voorbeeld en het voorstel delen. */
+function timeInvoiceInput(input: Record<string, unknown>) {
+  const clientId = optId(input, 'client_id');
+  const projectId = optId(input, 'project_id');
+  if (!clientId && !projectId) throw new ActionError('Geef een klant (client_id) of een project (project_id).');
+  const from = optIsoDate(input, 'from');
+  const to = optIsoDate(input, 'to');
+  if (from && to && from > to) throw new ActionError('"from" ligt na "to".');
+  const rounding = optNum(input, 'rounding_minutes') ?? 0;
+  if (!TIME_ROUNDINGS.includes(rounding)) throw new ActionError('"rounding_minutes" is 0 (niet afronden), 6, 15, 30 of 60.');
+  return { clientId, projectId, from, to, grouping: optChoice(input, 'grouping', TIME_GROUPINGS) ?? 'project', rounding };
+}
+
+/**
+ * Wat er nog te factureren is. Uren horen bij de module Uren, bedragen bij
+ * Financiën: wie een van beide niet mag lezen, krijgt dit niet.
+ */
+async function timeInvoicePreview(ctx: ActionCtx, input: Record<string, unknown>): Promise<TimeInvoicePreview> {
+  if (ctx.canRead?.('time') === false) throw new ActionError('Uren factureren kan alleen als je de module Uren mag lezen.');
+  if (ctx.canRead?.('finance') === false) throw new ActionError('Uren factureren kan alleen als je Financiën mag lezen.');
+  const args = timeInvoiceInput(input);
+  const { data, error } = await ctx.db.rpc('time_invoice_preview', {
+    p_organization_id: ctx.organizationId,
+    p_client_id: args.clientId, p_project_id: args.projectId, p_from: args.from, p_to: args.to,
+    p_grouping: args.grouping, p_rounding_minutes: args.rounding,
+  });
+  if (error) throw new ActionError(`De uren ophalen mislukt: ${error.message}`);
+  return data as TimeInvoicePreview;
+}
+
+const TIME_INVOICE_INPUT = {
+  client_id: { type: 'string', description: 'Id van de klant (exact, uit search_clients). Mag weg als je een project geeft.' },
+  project_id: { type: 'string', description: 'Id van het project (uit list_projects). Zonder project: alle uren van de klant.' },
+  from: { type: 'string', description: 'Eerste dag van de periode, JJJJ-MM-DD. Zonder: vanaf het begin.' },
+  to: { type: 'string', description: 'Laatste dag van de periode, JJJJ-MM-DD. Zonder: tot en met vandaag en later.' },
+  grouping: { type: 'string', enum: [...TIME_GROUPINGS], description: '"project" (standaard): één regel per project en tarief. "entry": één regel per registratie, met datum en omschrijving; dat is meteen de urenspecificatie.' },
+  rounding_minutes: { type: 'number', description: 'Per factuurregel naar boven afronden op 6, 15, 30 of 60 minuten. Standaard 0: niet afronden.' },
+};
 
 export const FINANCE_ACTIONS: ActionDef[] = [
   // ── Offerte: de interne goedkeuringsronde ────────────────────────────────
@@ -1427,6 +1489,93 @@ export const FINANCE_ACTIONS: ActionDef[] = [
           warning: 'Klanten betalen voortaan naar dit nieuwe IBAN: het staat op elke nieuwe factuur en in de e-factuur. Controleer het nummer bij de bank zelf.',
         } : {}),
         payload: { patch, changed },
+      };
+    },
+  },
+  // ── Uren factureren ──────────────────────────────────────────────────────
+  {
+    id: 'time.uninvoiced',
+    label: 'Nog te factureren uren bekijken',
+    module: 'finance',
+    kind: 'read',
+    description:
+      'Geeft de declarabele uren van een klant of project die nog op geen enkele factuur staan, over een periode: het totaal aan uren en het bedrag excl. btw, en de factuurregels zoals ze op de conceptfactuur komen. De database telt over de HELE periode, dus dit is het juiste getal, ook bij honderden registraties. ' +
+      'Gebruik dit vóór `invoice.from_time_entries`, en voor vragen als "wat moet ik nog factureren aan deze klant?". Uren die al op een (concept)factuur staan tellen niet mee; `without_rate` zijn declarabele uren zonder uurtarief, die niet gefactureerd kunnen worden tot er een tarief bij staat.',
+    keywords: ['uren factureren', 'nog te factureren', 'declarabel', 'onderhanden werk', 'ongefactureerd', 'urenfactuur', 'urenbasis', 'uurtarief', 'urenspecificatie'],
+    input: TIME_INVOICE_INPUT,
+    async read(ctx, input) {
+      const preview = await timeInvoicePreview(ctx, input);
+      return {
+        client_id: preview.client_id,
+        client_name: await clientNameOf(ctx, preview.client_id),
+        project_id: preview.project_id,
+        from: preview.from, to: preview.to,
+        first_date: preview.first_date, last_date: preview.last_date,
+        entry_count: preview.entry_count,
+        hours: Math.round((preview.minutes / 60) * 100) / 100,
+        billed_hours: Math.round((preview.billed_minutes / 60) * 100) / 100,
+        amount_excl_vat_eur: preview.subtotal_cents / 100,
+        // Bij "per registratie" kunnen het honderden regels zijn; de totalen
+        // hierboven gaan altijd over alles.
+        lines: preview.lines.slice(0, 50).map((line) => ({
+          description: line.description, hours: line.quantity, hourly_rate_eur: line.unit_price,
+          amount_eur: Math.round(line.quantity * line.unit_price * 100) / 100, vat: line.vat, entries: line.entry_count,
+        })),
+        lines_truncated: preview.lines.length > 50,
+        line_count: preview.lines.length,
+        without_rate: { entries: preview.without_rate.entry_count, hours: Math.round((preview.without_rate.minutes / 60) * 100) / 100 },
+        note: 'Bedragen excl. btw. Dit is alleen een overzicht; er is nog niets gefactureerd.',
+      };
+    },
+  },
+
+  {
+    id: 'invoice.from_time_entries',
+    label: 'Uren factureren: conceptfactuur met de nog te factureren uren',
+    module: 'finance',
+    kind: 'write',
+    description:
+      'Zet klaar: één conceptfactuur met alle declarabele, nog niet gefactureerde uren van een klant of project over een periode. Na akkoord maakt ResoFly het concept en legt die uren eraan vast, zodat ze niet nog eens gefactureerd worden en niet meer te wijzigen zijn. Er wordt niets verstuurd: het concept kan daarna nog worden nagekeken en aangepast. ' +
+      'Dit is DE weg voor "factureer de uren van oktober": reken de uren niet zelf uit met `list_time_entries` en `propose_invoice`, want dan staan de uren niet als gefactureerd geboekt. Kijk eerst met `time.uninvoiced` wat erop komt.',
+    keywords: ['uren factureren', 'urenfactuur', 'declarabele uren', 'maandfactuur uren', 'urenbasis', 'conceptfactuur', 'uren naar factuur'],
+    input: TIME_INVOICE_INPUT,
+    async plan(ctx, input) {
+      if (ctx.canWrite?.('finance') === false) throw new ActionError('Uren factureren kan alleen als je facturen mag maken.');
+      const preview = await timeInvoicePreview(ctx, input);
+      const args = timeInvoiceInput(input);
+      if (preview.lines.length === 0) {
+        throw new ActionError(preview.without_rate.entry_count > 0
+          ? `De ${preview.without_rate.entry_count} declarabele registraties in deze periode (${hoursText(preview.without_rate.minutes)}) hebben geen uurtarief. Zet er eerst een tarief bij.`
+          : 'Er zijn in deze periode geen declarabele uren die nog gefactureerd moeten worden.');
+      }
+      if (preview.lines.length > 250) {
+        throw new ActionError(`Dat worden ${preview.lines.length} factuurregels. Kies grouping "project" of een kortere periode.`);
+      }
+      const clientName = await clientNameOf(ctx, preview.client_id);
+      const period = preview.first_date && preview.last_date
+        ? (preview.first_date === preview.last_date ? dateShort(preview.first_date) : `${dateShort(preview.first_date)} t/m ${dateShort(preview.last_date)}`)
+        : null;
+      const skipped = preview.without_rate.entry_count > 0
+        ? `Let op: ${hoursText(preview.without_rate.minutes)} zonder uurtarief komt er niet op.`
+        : null;
+      return {
+        title: `Conceptfactuur van ${hoursText(preview.minutes)} voor ${clientName ?? 'de klant'}`,
+        sub: joinShort([
+          `${euroCents(preview.subtotal_cents)} excl. btw`, period,
+          `${preview.entry_count} registratie${preview.entry_count === 1 ? '' : 's'}`,
+          preview.billed_minutes !== preview.minutes ? `afgerond naar ${hoursText(preview.billed_minutes)}` : null,
+        ], 140),
+        kind: 'money',
+        ...(skipped ? { warning: skipped } : {}),
+        payload: {
+          client_id: preview.client_id, project_id: args.projectId, from: args.from, to: args.to,
+          grouping: args.grouping, rounding_minutes: args.rounding,
+          // Wat de mens goedkeurt. Zijn de uren intussen veranderd, dan weigert
+          // de database in plaats van iets anders te factureren.
+          expected_minutes: preview.minutes,
+          expected_subtotal_cents: preview.subtotal_cents,
+          client_name: clientName,
+        },
       };
     },
   },

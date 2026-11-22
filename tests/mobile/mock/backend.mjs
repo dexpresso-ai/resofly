@@ -767,11 +767,28 @@ function incomeTaxInputs(form, body) {
   };
 }
 
+function timeInvoicePreview(body) {
+  const lines = [
+    { id: 'tl-1', description: 'Uren Huisstijl en website met een lange projectnaam (3-11-2026 t/m 21-11-2026)', quantity: 7.5, unit_price: 85, vat: 21, minutes: 450, entry_count: 4 },
+    { id: 'tl-2', description: 'Uren Campagne voorjaar (17-11-2026)', quantity: 2.5, unit_price: 95, vat: 21, minutes: 150, entry_count: 1 },
+  ];
+  return {
+    client_id: body?.p_client_id ?? null, project_id: body?.p_project_id ?? null, from: body?.p_from ?? null, to: body?.p_to ?? null,
+    grouping: body?.p_grouping ?? 'project', rounding_minutes: body?.p_rounding_minutes ?? 0,
+    entry_count: 5, minutes: 600, billed_minutes: 600, subtotal_cents: 87500,
+    first_date: '2026-11-03', last_date: '2026-11-21', lines,
+    without_rate: { entry_count: 1, minutes: 90 },
+  };
+}
+
 function rpc(fn, body = null) {
   const folderResult = mailFolderRpc(fn, body);
   if (folderResult !== undefined) return folderResult;
   switch (fn) {
     case 'ensure_user_default_organization': return null;
+    // Uren factureren (2026-11-22): het voorbeeld zoals time_invoice_preview het
+    // geeft. De standaard (een lege lijst) is geen voorbeeld.
+    case 'time_invoice_preview': return timeInvoicePreview(body);
     // De prognose (2026-11-17): de cijfers per maand en de offertes.
     case 'forecast_history': return seed.forecastHistory();
     case 'forecast_cash_position': return seed.forecastCashPosition();
