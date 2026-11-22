@@ -158,3 +158,57 @@ test('de verkoper houdt zijn KVK als EndpointID', () => {
   const supplier = partyBlock(buildUblXml(invoiceInput({ attachments: [pdfAttachment] })), 'AccountingSupplierParty');
   assert.ok(supplier.includes('<cbc:EndpointID schemeID="0106">12345678</cbc:EndpointID>'));
 });
+
+// ── Wat de schematron-controle van november 2026 afkeurde ───────────────────
+
+const germanBuyer = { name: 'Müller GmbH', vatNumber: 'DE 123 456 789', country: 'Duitsland', addressLine1: 'Hauptstraße 1', postalCode: '10115', city: 'Berlin', endpointEmail: 'rechnung@mueller.de' };
+
+test('ICP (K): leverdatum en land van levering, na de partijen en vóór de betaalwijze (BR-IC-11/12)', () => {
+  const input = invoiceInput({ buyer: germanBuyer, lines: [{ description: 'Fotoreportage', quantity: 1, unitPrice: 500, vatRate: 0, category: 'K' }] });
+  assert.deepEqual(validateUblInput(input).errors, []);
+  const xml = buildUblXml(input);
+  assert.ok(xml.includes('<cac:Delivery><cbc:ActualDeliveryDate>2026-10-10</cbc:ActualDeliveryDate><cac:DeliveryLocation><cac:Address><cac:Country><cbc:IdentificationCode>DE</cbc:IdentificationCode></cac:Country></cac:Address></cac:DeliveryLocation></cac:Delivery>'), xml);
+  const customer = xml.indexOf('</cac:AccountingCustomerParty>');
+  const delivery = xml.indexOf('<cac:Delivery>');
+  const payment = xml.indexOf('<cac:PaymentMeans>');
+  assert.ok(customer < delivery && delivery < payment);
+  // Met een eigen leverdatum geldt die.
+  assert.ok(buildUblXml({ ...input, deliveryDate: '2026-09-30' }).includes('<cbc:ActualDeliveryDate>2026-09-30</cbc:ActualDeliveryDate>'));
+  // Zonder K geen leverblok.
+  assert.equal(buildUblXml(invoiceInput()).includes('<cac:Delivery>'), false);
+});
+
+test('een kortingsregel met negatieve prijs: hoeveelheid en prijs omgedraaid, het bedrag gelijk (BR-27)', () => {
+  const xml = buildUblXml(invoiceInput({ lines: [
+    { description: 'Fotoshoot', quantity: 1, unitPrice: 500, vatRate: 21, category: 'S' },
+    { description: 'Korting vaste klant', quantity: 1, unitPrice: -50, vatRate: 21, category: 'S' },
+  ] }));
+  assert.ok(xml.includes('<cbc:InvoicedQuantity unitCode="C62">-1</cbc:InvoicedQuantity><cbc:LineExtensionAmount currencyID="EUR">-50.00</cbc:LineExtensionAmount>'), xml);
+  assert.ok(xml.includes('<cac:Price><cbc:PriceAmount currencyID="EUR">50.00</cbc:PriceAmount></cac:Price>'));
+  assert.equal(/<cbc:PriceAmount[^>]*>-/.test(xml), false);
+  assert.ok(xml.includes('<cbc:TaxableAmount currencyID="EUR">450.00</cbc:TaxableAmount><cbc:TaxAmount currencyID="EUR">94.50</cbc:TaxAmount>'));
+  assert.ok(xml.includes('<cbc:PayableAmount currencyID="EUR">544.50</cbc:PayableAmount>'));
+});
+
+test('0% aan een koper buiten de EU is export (G) met reden; binnen de EU blijft het Z', () => {
+  const us = { name: 'Acme Inc.', country: 'Verenigde Staten', addressLine1: '1 Main St', postalCode: '10001', city: 'New York', endpointEmail: 'ap@acme.test' };
+  const zero = [{ description: 'Fotoprints', quantity: 1, unitPrice: 300, vatRate: 0, category: 'Z' as const }];
+  const xml = buildUblXml(invoiceInput({ buyer: us, lines: zero }));
+  assert.ok(xml.includes('<cac:ClassifiedTaxCategory><cbc:ID>G</cbc:ID><cbc:Percent>0</cbc:Percent>'), xml);
+  assert.ok(xml.includes('<cac:TaxCategory><cbc:ID>G</cbc:ID><cbc:Percent>0</cbc:Percent><cbc:TaxExemptionReason>Export buiten de EU, 0% btw</cbc:TaxExemptionReason>'));
+  assert.equal(xml.includes('<cbc:ID>Z</cbc:ID>'), false);
+  const be = buildUblXml(invoiceInput({ buyer: { ...us, country: 'BE' }, lines: zero }));
+  assert.ok(be.includes('<cac:ClassifiedTaxCategory><cbc:ID>Z</cbc:ID>'));
+});
+
+test('Peppol-ID uit een EU-btw-nummer: Duitsland 9930, Frankrijk 9957, Italië 0211', () => {
+  assert.deepEqual(derivePeppolEndpoint({ kvkNumber: null, vatNumber: 'DE 123 456 789', country: 'DE' }), { schemeId: '9930', value: 'DE123456789' });
+  assert.deepEqual(derivePeppolEndpoint({ kvkNumber: null, vatNumber: 'FR12345678901', country: 'Frankrijk' }), { schemeId: '9957', value: 'FR12345678901' });
+  assert.deepEqual(derivePeppolEndpoint({ kvkNumber: null, vatNumber: 'IT01234567890', country: 'IT' }), { schemeId: '0211', value: 'IT01234567890' });
+  // Geen btw-schema in de Peppol-lijst: geen gok.
+  assert.equal(derivePeppolEndpoint({ kvkNumber: null, vatNumber: 'SE556677889901', country: 'SE' }), null);
+  // Een "KVK-nummer" bij een buitenlandse partij is geen KVK-nummer.
+  assert.deepEqual(derivePeppolEndpoint({ kvkNumber: 'HRB 12345678', vatNumber: 'DE123456789', country: 'DE' }), { schemeId: '9930', value: 'DE123456789' });
+  const buyer = partyBlock(buildUblXml(invoiceInput({ buyer: germanBuyer })), 'AccountingCustomerParty');
+  assert.ok(buyer.includes('<cbc:EndpointID schemeID="9930">DE123456789</cbc:EndpointID>'));
+});
