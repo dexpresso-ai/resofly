@@ -12,8 +12,9 @@ import { readFileSync } from 'node:fs';
 import {
   IB_DISCLAIMER, IB_RULES, applyRate, bracketTax, buildIncomeTaxOverview, defaultIncomeTaxProfile, estimatePerson,
   euroText, formatRate, incomeTaxRulesFor, kiaForInvestments, mixedCostsAddBack, phaseOutCredit, premiumMonths, projectYearResult,
-  splitByShares, tableCredit, type IbPersonInput, type IncomeTaxInputs,
+  projectMinutesFromFirstEntry, splitByShares, splitWithPrior, tableCredit, type IbPersonInput, type IncomeTaxInputs,
 } from './inkomstenbelasting.ts';
+import { projectHourCriterion } from './hourCriterion.ts';
 import * as server from '../../supabase/functions/_shared/inkomstenbelasting.ts';
 import * as aangifte from './incomeTax.ts';
 
@@ -775,4 +776,91 @@ test('vof: het urencriterium per vennoot uit de uren van zijn teamlid, zoals bij
     partners: [{ id: 'a', name: 'Anna', partnerNumber: 1, kind: 'beherend', isActive: true, shareBasisPoints: 10000 }],
   }), { basis: 'geboekt', today: TODAY });
   assert.deepEqual([zonder?.persons[0].registeredMinutes, zonder?.persons[0].profile.meetsHoursCriterion], [null, null]);
+});
+
+// ── De verdeling van het boekjaar (20261122100000) ─────────────────────────
+
+test('voorafgaande verdeling: eerst de arbeidsbeloning, de rest naar rato, tot op de cent', () => {
+  // Winst € 100.000; Anna € 30.000 + rente € 2.000, Bram € 10.000 + € 4.000;
+  // het restant € 54.000 50/50. Juist is Anna € 59.000 en Bram € 41.000.
+  const shares = [
+    { key: 'a', basisPoints: 5000, order: 1, priorCents: E(32_000) },
+    { key: 'b', basisPoints: 5000, order: 2, priorCents: E(14_000) },
+  ];
+  assert.deepEqual([...splitWithPrior(E(100_000), shares)], [['a', E(59_000)], ['b', E(41_000)]]);
+  // Een restcent naar de grootste rest, zoals fiscal_year_result_shares.
+  assert.deepEqual([...splitWithPrior(E(100_000) + 1, shares)], [['a', E(59_000) + 1], ['b', E(41_000)]]);
+  // Verlies na de voorafgaande bedragen: het restant is negatief, naar rato.
+  assert.deepEqual([...splitWithPrior(E(40_000), shares)], [['a', E(29_000)], ['b', E(11_000)]]);
+  // Zonder voorafgaande bedragen precies splitByShares.
+  const plain = [{ key: 'a', basisPoints: 6000, order: 1, priorCents: 0 }, { key: 'b', basisPoints: 4000, order: 2, priorCents: 0 }];
+  assert.deepEqual([...splitWithPrior(-30_001, plain)], [...splitByShares(-30_001, plain)]);
+});
+
+test('vof: de raming rekent met het voorafgaande bedrag uit de verdeling van het boekjaar', () => {
+  const overview = buildIncomeTaxOverview(inputs({
+    legalForm: 'vof', isPartnershipForm: true, resultCents: E(9_500), splitFixed: true,
+    partners: [
+      { id: 'a', name: 'Anna', partnerNumber: 1, kind: 'beherend', isActive: true, shareBasisPoints: 6000, priorShareCents: 0 },
+      { id: 'b', name: 'Bram', partnerNumber: 2, kind: 'beherend', isActive: true, shareBasisPoints: 4000, priorShareCents: E(6_000) },
+    ],
+  }), { basis: 'geboekt', today: TODAY });
+  assert.ok(overview);
+  assert.deepEqual(overview.persons.map(p => p.estimate.profitShareCents), [E(2_100), E(7_400)]);
+  assert.ok(overview.persons[1].notes.some(n => /eerst € 6\.000,00 vooraf/.test(n)), overview.persons[1].notes.join(' | '));
+});
+
+test('vof: een uitgetreden vennoot die in de verdeling van dat jaar staat, krijgt zijn raming', () => {
+  const overview = buildIncomeTaxOverview(inputs({
+    year: 2025, legalForm: 'vof', isPartnershipForm: true, resultCents: E(8_000), splitFixed: true, fiscalYearClosed: true,
+    overlappingFiscalYears: [{ id: 'fy', label: '2025', periodStart: '2025-01-01', periodEnd: '2025-12-31', status: 'closed' }],
+    partners: [
+      { id: 'a', name: 'Anna', partnerNumber: 1, kind: 'beherend', isActive: true, currentlyActive: true, shareBasisPoints: 5000 },
+      { id: 'b', name: 'Bram', partnerNumber: 2, kind: 'beherend', isActive: true, currentlyActive: false, shareBasisPoints: 5000 },
+      { id: 'c', name: 'Chris', partnerNumber: 3, kind: 'beherend', isActive: false, currentlyActive: true, shareBasisPoints: 3000 },
+    ],
+  }), { basis: 'geboekt', today: TODAY });
+  assert.ok(overview);
+  assert.deepEqual(overview.persons.map(p => [p.name, p.estimate.profitShareCents]), [['Anna', E(4_000)], ['Bram', E(4_000)]]);
+  assert.ok(!overview.warnings.some(w => /nog niet vastgelegd/.test(w)));
+});
+
+test('vof: een afgesloten jaar neemt het geboekte bedrag over, niet een herberekening', () => {
+  // € 1,01 op 60/40 geboekt als € 0,61 en € 0,40; het teruggerekende
+  // percentage (60,40%) gaf herrekend andere centen.
+  const closed = buildIncomeTaxOverview(inputs({
+    year: 2025, legalForm: 'vof', isPartnershipForm: true, resultCents: 101, splitFixed: true, fiscalYearClosed: true,
+    overlappingFiscalYears: [{ id: 'fy', label: '2025', periodStart: '2025-01-01', periodEnd: '2025-12-31', status: 'closed' }],
+    partners: [
+      { id: 'a', name: 'Anna', partnerNumber: 1, kind: 'beherend', isActive: true, shareBasisPoints: 6040, bookedShareCents: 61 },
+      { id: 'b', name: 'Bram', partnerNumber: 2, kind: 'beherend', isActive: true, shareBasisPoints: 3960, bookedShareCents: 40 },
+    ],
+  }), { basis: 'geboekt', today: TODAY });
+  assert.deepEqual(closed?.persons.map(p => p.estimate.profitShareCents), [61, 40]);
+});
+
+test('vof: een voorbij jaar zonder vastgelegde verdeling zegt dat het met de vennoten van nu rekent', () => {
+  const overview = buildIncomeTaxOverview(inputs({
+    year: 2025, legalForm: 'vof', isPartnershipForm: true, resultCents: E(8_000), splitFixed: false,
+    overlappingFiscalYears: [{ id: 'fy', label: '2025', periodStart: '2025-01-01', periodEnd: '2025-12-31', status: 'open' }],
+    partners: [{ id: 'a', name: 'Anna', partnerNumber: 1, kind: 'beherend', isActive: true, shareBasisPoints: 10000 }],
+  }), { basis: 'geboekt', today: TODAY });
+  assert.ok(overview?.warnings.some(w => /De verdeling van 2025 is nog niet vastgelegd/.test(w)));
+});
+
+test('urencriterium in de prognose: het tempo vanaf de eerste uren, zoals de teller op Vennoten', () => {
+  // Carla begon op 1 juni en heeft op 22 november 1.050 uur.
+  const total = 1_050 * 60;
+  const own = projectMinutesFromFirstEntry(total, '2026-06-01', '2026-11-22', 2026);
+  assert.equal(own, projectHourCriterion({ totalMinutes: total, firstEntryDate: '2026-06-01', today: '2026-11-22', year: 2026 }).projectedMinutes);
+  assert.ok(own >= 1_225 * 60, `${own / 60} uur`);
+  const overview = buildIncomeTaxOverview(inputs({
+    legalForm: 'vof', isPartnershipForm: true, resultCents: E(40_000),
+    partners: [{ id: 'c', name: 'Carla', partnerNumber: 1, kind: 'beherend', isActive: true, shareBasisPoints: 10000 }],
+    partnerMinutes: { c: total }, partnerFirstHourDates: { c: '2026-06-01' },
+  }), { basis: 'prognose', today: '2026-11-22' });
+  assert.equal(overview?.persons[0].projectedMinutes, own);
+  assert.equal(overview?.persons[0].profile.meetsHoursCriterion, true);
+  // Zonder uren blijft het wat er staat.
+  assert.equal(projectMinutesFromFirstEntry(0, null, '2026-11-22', 2026), 0);
 });

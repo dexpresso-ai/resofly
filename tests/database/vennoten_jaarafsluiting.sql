@@ -272,6 +272,20 @@ set local role authenticated;
 select (public.reopen_fiscal_year(:'org', :'fy2025')).status as heropend \gset
 select (public.save_partnership_partner(:'org', :'anna', 'Anna', 6000, 'beherend', false)).id is not null as ok \gset
 select (public.save_partnership_partner(:'org', :'bram', 'Bram', 4000, 'beherend', false)).id is not null as ok \gset
+-- Sinds 20261122100000 ligt de verdeling van 2025 vast bij het afsluiten.
+-- Opnieuw afsluiten gebruikt die weer, ook nu Anna en Bram zijn uitgetreden:
+-- de winst van 2025 was van hen. Eerder ging hij hier naar 0510.
+select (public.close_fiscal_year(:'org', :'fy2025')).status as fy2025_status \gset
+reset role;
+select pg_temp.beheer();
+select pg_temp.gelijk(pg_temp.saldo(:'org', '0501'), -615000::bigint, 'opnieuw afsluiten: Anna draagt weer € 180,01, ook na haar uittreden');
+select pg_temp.gelijk(pg_temp.saldo(:'org', '0502'), -333000::bigint, 'opnieuw afsluiten: Bram draagt weer € 120,00');
+select pg_temp.gelijk(pg_temp.saldo(:'org', '0510'), 0::bigint, 'opnieuw afsluiten: niets naar 0510');
+select pg_temp.als(:'eigenaar');
+set local role authenticated;
+select (public.reopen_fiscal_year(:'org', :'fy2025')).status as heropend \gset
+-- Zonder vastgelegde verdeling geldt die van de actieve vennoten: geen.
+select public.set_fiscal_year_partner_shares(:'org', :'fy2025', '[]'::jsonb) = '[]'::jsonb as ok \gset
 select (public.close_fiscal_year(:'org', :'fy2025')).status as fy2025_status \gset
 select public.owners_equity_overview(:'org', :'fy2025') as ov2025_zonder \gset
 reset role;
@@ -280,8 +294,13 @@ select pg_temp.gelijk(pg_temp.saldo(:'org', '0510'), 30001::bigint, 'zonder acti
 select pg_temp.gelijk(pg_temp.saldo(:'org', '0551'), 0::bigint, 'zonder actieve vennoot: het privé van Anna staat niet meer open');
 select pg_temp.gelijk(pg_temp.saldo(:'org', '0501'), -633001::bigint, 'zonder actieve vennoot: de opname van € 70 gaat naar het kapitaal van Anna');
 select pg_temp.gelijk((select result_account_code from public.fiscal_years where id = :'fy2025'), '0510', 'boekjaar 2025: resultaat naar 0510');
-select pg_temp.gelijk((pg_temp.eigenaar(:'ov2025_zonder'::jsonb, null) ->> 'withdrawalsCents')::bigint, 7000::bigint, 'zonder actieve vennoot: de opname telt in de kapitaalvergelijking als opname');
-select pg_temp.gelijk((pg_temp.eigenaar(:'ov2025_zonder'::jsonb, null) ->> 'otherMovementsCents')::bigint, 0::bigint, 'zonder actieve vennoot: en niet als overig');
+-- Sinds 20261122100000 blijven de vennoten in beeld (eerder: één "Ondernemer"
+-- met het kapitaal van iedereen), en het resultaat staat apart als niet verdeeld.
+select pg_temp.gelijk((pg_temp.eigenaar(:'ov2025_zonder'::jsonb, 1) ->> 'withdrawalsCents')::bigint, 7000::bigint, 'zonder actieve vennoot: de opname van Anna telt bij Anna als opname');
+select pg_temp.gelijk((pg_temp.eigenaar(:'ov2025_zonder'::jsonb, 1) ->> 'otherMovementsCents')::bigint, 0::bigint, 'zonder actieve vennoot: en niet als overig');
+select pg_temp.gelijk((pg_temp.eigenaar(:'ov2025_zonder'::jsonb, 1) ->> 'resultShareCents')::bigint, 0::bigint, 'zonder actieve vennoot: Anna krijgt geen winstaandeel');
+select pg_temp.gelijk((:'ov2025_zonder'::jsonb -> 'unassigned' ->> 'resultCents')::bigint, -30001::bigint, 'zonder actieve vennoot: het verlies staat als niet verdeeld');
+select pg_temp.gelijk(:'ov2025_zonder'::jsonb ->> 'isPartnership', 'false', 'zonder actieve vennoot: er wordt niet verdeeld');
 
 -- ── 10. De overstap naar een eenmanszaak ───────────────────────────────────
 
@@ -293,6 +312,17 @@ select (public.save_partnership_partner(:'org', :'bram', 'Bram', 4000, 'beherend
 reset role;
 select pg_temp.beheer();
 update public.company_settings set legal_form = 'eenmanszaak' where organization_id = :'org';
+-- Sinds 20261122100000 houdt een vorig jaar dat nog open staat zijn
+-- rechtsvorm: wie per 1 januari overstapt, sluit 2025 nog af als vof.
+select pg_temp.gelijk((select legal_form from public.fiscal_years where id = :'fy2025'), 'vof',
+  'overstap: 2025 (voorbij, nog open) blijft een vof');
+-- Gold de overstap ook voor 2025 (de oude instelling was fout), dan zet je
+-- dat jaar zelf om. Zo sluit 2025 hieronder af als eenmanszaak.
+select pg_temp.als(:'eigenaar');
+set local role authenticated;
+select (public.set_fiscal_year_legal_form(:'org', :'fy2025', 'eenmanszaak')).legal_form as fy2025_vorm \gset
+reset role;
+select pg_temp.beheer();
 -- De resultaatrekening volgt de rechtsvorm als hij nog op de standaard stond
 -- (20261118090000): bij een eenmanszaak 0500.
 select pg_temp.gelijk((select year_result_account_code from public.company_settings where organization_id = :'org'), '0500',

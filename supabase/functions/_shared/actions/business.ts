@@ -1081,9 +1081,10 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
     module: 'finance',
     kind: 'read',
     description:
-      'Alleen voor een eenmanszaak, vof, maatschap of cv: daar is de winst van de ondernemer of de vennoten zelf. Geeft voor één boekjaar de kapitaalvergelijking: beginvermogen, resultaat (bij een vof met vennoten het winstaandeel per vennoot volgens de winstverdeling, tot op de cent sluitend), privé-stortingen, privé-opnamen, overige mutaties en eindvermogen. ' +
+      'Alleen voor een eenmanszaak, vof, maatschap of cv: daar is de winst van de ondernemer of de vennoten zelf. Geeft voor één boekjaar de kapitaalvergelijking: beginvermogen, resultaat (bij een vof met vennoten het winstaandeel per vennoot volgens de verdeling van DAT boekjaar, met `priorShareCents` als bedrag vooraf zoals een arbeidsbeloning; bij een afgesloten jaar het geboekte bedrag), privé-stortingen, privé-opnamen, overige mutaties en eindvermogen. ' +
       'Dat is wat de aangifte inkomstenbelasting vraagt als ondernemingsvermogen aan het begin en het eind van het jaar; elke vennoot geeft zijn eigen winstaandeel aan. Bij een open boekjaar is het resultaat voorlopig. `unassigned` is vermogen dat op geen enkele vennoot staat (bijv. een beginbalans van vóór de vennoten). Ook de vennoten zelf met hun winstaandeel en rekeningen, en het teamlid dat de vennoot is (`user_id`). ' +
-      '`hours` geeft per vennoot zijn uren in het kalenderjaar van het boekjaar (direct, indirect, in minuten) voor het urencriterium van 1225 uur; alleen als de aanroeper Uren mag lezen, anders null. Een vennoot zonder gekoppeld teamlid heeft geen uren.',
+      '`hours` geeft per vennoot zijn uren in het kalenderjaar van het boekjaar (direct, indirect, in minuten) voor het urencriterium van 1225 uur; alleen als de aanroeper Uren mag lezen, anders null. Een vennoot zonder gekoppeld teamlid heeft geen uren. ' +
+      '`legalForm` is de rechtsvorm van dat boekjaar (`currentLegalForm` die van nu); `splitFixed` zegt of de verdeling voor dat jaar is vastgelegd, `splitChangedAfterYearEnd` noemt vennoten die na het einde van het jaar zijn gewijzigd (dan eerst `fiscal_year.set_partner_shares`), en `unassigned.openPriorResultCents` is de winst van een vorig jaar dat nog open staat.',
     keywords: ['eigen vermogen', 'kapitaal', 'privé', 'privé-opname', 'privé-storting', 'vennoot', 'vennoten', 'winstverdeling', 'winstaandeel', 'vof', 'eenmanszaak', 'kapitaalvergelijking', 'urencriterium', 'uren per vennoot'],
     input: {
       fiscal_year_id: { type: 'string', description: 'Id van het boekjaar (uit list_fiscal_years).' },
@@ -1128,7 +1129,7 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
     description:
       'Alleen bij een vof, maatschap of cv: legt een vennoot vast (zonder `partner_id`) of past er een aan: naam, winstaandeel in procenten, soort (alleen bij een cv: beherend of commanditair), actief of uitgetreden, en het teamlid dat de vennoot is (`user_id`; een lege tekst koppelt los). ' +
       'Een nieuwe vennoot krijgt eigen rekeningen: kapitaal 050n, privé-opnamen 055n en privé-stortingen 056n. De winstaandelen van de actieve vennoten moeten bij de jaarafsluiting samen precies 100% zijn; de kaart toont de verdeling daarna. ' +
-      'Een vennoot verwijder je niet: zet hem op uitgetreden (`is_active: false`). Bekijk de vennoten eerst met `owners.equity_overview`; teamleden (met hun user_id) met `team.list_access`.',
+      'Een vennoot met boekingen verwijder je niet: zet hem op uitgetreden (`is_active: false`). Een wijziging geldt vanaf nu; de verdeling van een eerder boekjaar leg je vast met `fiscal_year.set_partner_shares`. Bekijk de vennoten eerst met `owners.equity_overview`; teamleden (met hun user_id) met `team.list_access`.',
     keywords: ['vennoot', 'vennoten', 'vennoot toevoegen', 'winstaandeel', 'winstverdeling', 'uittreden', 'vof', 'maatschap', 'cv', 'teamlid koppelen'],
     input: {
       partner_id: { type: 'string', description: 'Id van de vennoot om aan te passen (uit owners.equity_overview). Weglaten voor een nieuwe vennoot.' },
@@ -1162,7 +1163,13 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
       if (percent === null && !current) throw new ActionError('Geef het winstaandeel in procenten (profit_share_percent).');
       if (percent !== null && (percent < 0 || percent > 100)) throw new ActionError('Het winstaandeel ligt tussen 0 en 100 procent.');
       const basisPoints = percent !== null ? Math.round(percent * 100) : current!.profit_share_basis_points;
-      const kind = optChoice(input, 'kind', ['beherend', 'commanditair'] as const) ?? (current?.kind as 'beherend' | 'commanditair' | undefined) ?? 'beherend';
+      // Na de overstap van cv naar vof is een commanditaire vennoot beherend
+      // geworden. De soort van nu meenemen gaf bij alleen "uittreden" een 422
+      // ("bestaat alleen bij een cv"), zonder te zeggen wat er dan moest; het
+      // scherm maakt hem in dat geval al beherend.
+      const kind = optChoice(input, 'kind', ['beherend', 'commanditair'] as const)
+        ?? (legalForm === 'cv' ? (current?.kind as 'beherend' | 'commanditair' | undefined) : 'beherend')
+        ?? 'beherend';
       if (kind === 'commanditair' && legalForm !== 'cv') throw new ActionError('Een commanditaire (stille) vennoot bestaat alleen bij een cv.');
       const isActive = typeof input.is_active === 'boolean' ? input.is_active : (current?.is_active ?? true);
 
@@ -1187,6 +1194,19 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
         .filter((p) => p.is_active)
         .reduce((sum, p) => sum + Number(p.profit_share_basis_points || 0), 0) + (isActive ? basisPoints : 0);
       const pct = (bp: number) => `${(bp / 100).toLocaleString('nl-NL', { maximumFractionDigits: 2 })}%`;
+
+      // Een voorbij boekjaar dat nog open staat (de aangifte doe je in het
+      // voorjaar), rekent zonder vastgelegde verdeling met de vennoten van nu.
+      // Een wijziging hier zou dan stil ook dat jaar raken; sinds 20261122100000
+      // weigert de jaarafsluiting dat, en de kaart zegt het vooraf.
+      const changesSplit = !current || basisPoints !== current.profit_share_basis_points || isActive !== current.is_active || kind !== current.kind;
+      let openPast: string | null = null;
+      if (changesSplit) {
+        const { data: years } = await orgQuery(ctx, 'fiscal_years', 'id, label, period_end, status').eq('status', 'open');
+        const labels = ((years ?? []) as Array<{ label: string; period_end: string }>)
+          .filter((y) => y.period_end < ctx.today).map((y) => y.label);
+        if (labels.length > 0) openPast = labels.join(', ');
+      }
       return {
         title: current ? `Vennoot ${name} aanpassen` : `Vennoot ${name} vastleggen`,
         sub: joinShort([
@@ -1196,7 +1216,8 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
           setUser ? (userId ? `teamlid ${memberLabel}` : 'geen teamlid') : null,
           `verdeling actieve vennoten daarna ${pct(after)}${after === 10000 ? '' : ' (bij het afsluiten moet dat 100% zijn)'}`,
           current ? null : 'met eigen kapitaal- en privérekeningen',
-        ], 240),
+          openPast ? `geldt vanaf nu; ${openPast} staat nog open: leg de verdeling van dat jaar vast (fiscal_year.set_partner_shares) als die anders was` : null,
+        ], 360),
         kind: 'money',
         payload: {
           partner_id: partnerId, name, profit_share_basis_points: basisPoints, kind, is_active: isActive,

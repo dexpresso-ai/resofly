@@ -427,9 +427,11 @@ function PersonCard({ person, rules, year, multiple, partnershipForm, isPrognose
                 <small className="bk-muted">
                   {person.registeredMinutes !== null && followMinutes !== null && (
                     `Bij Uren: ${hoursText(person.registeredMinutes)} uur in ${year}${projectedShown ? `, in dit tempo ongeveer ${hoursText(followMinutes)} op 31 december` : ''}. `
+                    // Bij een vof staat hier de kaart van elke vennoot: "je uren"
+                    // las op de kaart van een ander als de uren van de kijker.
                     + (person.hoursFromTimeTracking
-                      ? `Het urencriterium volgt je uren, ${projectedShown ? 'in de prognose' : 'nu'}: ${followMeets ? 'ja' : 'nee'}. Kies zelf ja of nee als dat niet klopt, en sla op. `
-                      : `Je hebt zelf ${profile.meetsHoursCriterion ? 'ja' : 'nee'} gekozen; kies Volgens Uren om de uren weer te volgen. `)
+                      ? `Het urencriterium volgt ${person.partnerId ? `de uren van ${person.name}` : 'de uren'}, ${projectedShown ? 'in de prognose' : 'nu'}: ${followMeets ? 'ja' : 'nee'}. Kies zelf ja of nee als dat niet klopt, en sla op. `
+                      : `Hier is zelf ${profile.meetsHoursCriterion ? 'ja' : 'nee'} gekozen; kies Volgens Uren om de uren weer te volgen. `)
                   )}
                   Alle uren aan de onderneming tellen, ook indirecte, en meer dan de helft van de werktijd (behalve als starter).
                 </small>
