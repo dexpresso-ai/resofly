@@ -312,6 +312,30 @@ function galleryRows() {
   return { galleries: [gallery, engaged], gallery_items: items, gallery_categories: categories, gallery_favorites: favorites, gallery_category_presets: [] };
 }
 
+/**
+ * `bankGap: true` (2026-11-22): een gekoppelde bankrekening waarvan de
+ * koppeling een periode niet meer kon ophalen (sync_gap_from/to). De
+ * Bankpagina toont dat bij de rekening, met de knop "Gezien".
+ */
+function bankGapRows() {
+  const stamp = { organization_id: seed.ids.ORG, created_by: seed.ids.USER, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-11-22T00:00:00Z' };
+  const requisition = {
+    id: 'ba9c0000-0000-4000-8000-000000000001', ...stamp, provider: 'enablebanking', institution_id: 'ING', institution_name: 'ING',
+    institution_country: 'NL', reference: 'ref', requisition_id: 'sess', link: 'https://enablebanking.com/auth', status: 'linked',
+    accounts: ['acc-1'], linked_at: '2026-11-22T00:00:00Z', expires_at: '2027-05-20T00:00:00Z', error: null,
+  };
+  return {
+    bank_requisitions: [requisition],
+    bank_accounts: [{
+      id: 'ba9c0000-0000-4000-8000-000000000002', ...stamp, name: 'Zakelijke rekening', iban: 'NL69INGB0123456789', currency: 'EUR',
+      ledger_account_id: LEDGER_ACCOUNTS.find(a => a.code === '1100').id, source: 'enablebanking', provider: 'enablebanking',
+      external_account_id: 'acc-1', bank_requisition_id: requisition.id, last_synced_at: '2026-11-22T06:00:00Z',
+      last_sync_attempt_at: '2026-11-22T06:00:00Z', last_sync_error: null, last_imported_at: null, is_active: true,
+      auto_book_purchase_invoices: true, sync_gap_from: '2026-07-08', sync_gap_to: '2026-09-22',
+    }],
+  };
+}
+
 function prepaidRows() {
   const expense = LEDGER_ACCOUNTS.find(a => a.code === '4500').id;
   const bank = LEDGER_ACCOUNTS.find(a => a.code === '1100').id;
@@ -975,6 +999,7 @@ export async function installMock(context, options = {}) {
       // pagina: de rest van de seed heeft bewust geen boekhouding.
       // `prepaid: true`: vooruitbetaalde kosten met de rekening 1350 erbij.
       const prepaid = options.prepaid ? prepaidRows() : null;
+      const bankGap = options.bankGap ? bankGapRows() : null;
       // De albums wél gefilterd (gallery_id=eq.…): het venster "verwijderen?"
       // telt de bestanden van één album, en kreeg anders die van allemaal.
       const gallery = options.gallery ? galleryRows() : null;
@@ -992,6 +1017,7 @@ export async function installMock(context, options = {}) {
         : options.vof && table in VOF_TABLES ? VOF_TABLES[table]
         : options.ledger && table === 'ledger_accounts' ? (options.prepaid ? [...LEDGER_ACCOUNTS, PREPAID_ACCOUNT] : LEDGER_ACCOUNTS)
         : prepaid && table in prepaid ? prepaid[table]
+        : bankGap && table in bankGap ? bankGap[table]
         : gallery && table in gallery ? gallery[table].filter(r => [...url.searchParams.entries()].every(([k, v]) => !(k in r) || matchFilter(r[k], v)))
         : restRows(table, url, setup);
       const accept = req.headers()['accept'] ?? '';

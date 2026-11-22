@@ -9,7 +9,7 @@ import { Button, Input, Select, Textarea } from '../components/Ui';
 import { PageIcon } from '../components/PageIcon';
 import { dateNL, euro } from '../lib/format';
 import { SetupBanner } from './Bookkeeping';
-import { parseBankFile } from '../lib/bankImport';
+import { checkStatementAccount, describeStatementDifference, DUPLICATE_HINT, parseBankFile } from '../lib/bankImport';
 import { consentState, isCancelledBankReturn, isSandboxLink, readBankReturn } from '../lib/bankLink';
 import {
   bookBankTransaction, createBankRequisition, createManualBankTransaction, deleteDuplicateBankTransaction, deleteManualBankTransaction, deleteRow,
@@ -778,7 +778,10 @@ function ReconciliationPanel({ rec }: { rec: BankReconciliation }) {
           {rec.statement_issues.length > 0 && (
             <li>
               {rec.statement_issues.length} afschrift(en) kloppen intern niet (beginsaldo + regels ≠ eindsaldo):{' '}
-              {rec.statement_issues.map(s => `${s.file_name || 'afschrift'} (${euroCents(s.difference_cents)})`).join(', ')}. Er ontbreken regels in die bestanden.
+              {rec.statement_issues.map(s => `${s.file_name || 'afschrift'} (${euroCents(s.difference_cents)})`).join(', ')}.
+              {/* Niet "er ontbreken regels": staat er een betaling dubbel (een
+                  afschrift na de koppeling), dan is het precies andersom. */}
+              {' '}Er ontbreekt een regel, of er staat er een dubbel. {DUPLICATE_HINT}
             </li>
           )}
           {rec.has_opening_balance && rec.duplicate_suspects === 0 && rec.statement_issues.length === 0 && rec.ignored_count === 0 && !rec.manual_unconfirmed_count && (
@@ -856,8 +859,10 @@ function AccountsTab({ data, organizationId, canWrite, onChanged }: PageProps) {
         else if (res.status === 'linked') {
           const done = `Bank gekoppeld: ${res.linked} rekening(en), ${res.imported} transacties opgehaald.`;
           // Gekoppeld maar niet opgehaald: niet als "0 transacties" laten lijken.
+          // En gekoppeld maar met een gat: niet als "alles binnen".
           setBanner(res.syncErrors
             ? { kind: 'err', text: `${done} Ophalen lukte nog niet voor ${res.syncErrors} rekening(en): ${res.syncError ?? 'onbekende fout'}` }
+            : res.syncNotice ? { kind: 'err', text: `${done} ${res.syncNotice}` }
             : { kind: 'ok', text: done });
         }
         else setBanner({ kind: 'err', text: res.error || 'De koppeling is nog niet voltooid. Rond de toestemming bij je bank af en probeer opnieuw.' });
@@ -875,10 +880,18 @@ function AccountsTab({ data, organizationId, canWrite, onChanged }: PageProps) {
       const r = res.results[0];
       if (res.needsReconsent) setBanner({ kind: 'err', text: 'De banktoestemming is verlopen. Koppel de bank opnieuw via "Koppel bank".' });
       else if (r?.error) setBanner({ kind: 'err', text: `Synchroniseren mislukt: ${r.error}` });
+      else if (r?.notice) setBanner({ kind: 'err', text: `${r.inserted ?? 0} nieuwe, ${r.skipped ?? 0} al bekende transacties. ${r.notice}` });
       else setBanner({ kind: 'ok', text: `${r?.inserted ?? 0} nieuwe, ${r?.skipped ?? 0} al bekende transacties.` });
       onChanged();
     } catch (e) { setBanner({ kind: 'err', text: e instanceof Error ? e.message : 'Synchroniseren mislukt' }); }
     finally { setSyncingId(null); }
+  }
+
+  async function dismissGap(a: BankAccount) {
+    try {
+      await updateRow<BankAccount>('bank_accounts', a.id, { sync_gap_from: null, sync_gap_to: null }, organizationId);
+      onChanged();
+    } catch (e) { setBanner({ kind: 'err', text: e instanceof Error ? e.message : 'Opslaan mislukt' }); }
   }
 
   return (
@@ -933,6 +946,15 @@ function AccountsTab({ data, organizationId, canWrite, onChanged }: PageProps) {
                   )}
                   {linked && !consent.expired && a.last_sync_error && (
                     <div className="bank-reconsent"><AlertTriangle size={14} /> Laatste synchronisatie mislukt: {a.last_sync_error}</div>
+                  )}
+                  {/* Een periode die de koppeling niet meer kon ophalen. Eerder
+                      telde zo'n sync als geslaagd en viel het gat stil weg. */}
+                  {a.sync_gap_from && a.sync_gap_to && (
+                    <div className="bank-reconsent">
+                      <AlertTriangle size={14} /> Van {dateNL(a.sync_gap_from)} t/m {dateNL(a.sync_gap_to)} kon de bank via de koppeling geen
+                      transacties meer leveren. Lees met “Afschrift inlezen” een afschrift over die periode in, dan ontbreekt er niets.
+                      {canWrite && <button className="bank-link" onClick={() => void dismissGap(a)}>Gezien</button>}
+                    </div>
                   )}
                   {(() => {
                     const rec = recon.find(r => r.bank_account_id === a.id);
@@ -1048,8 +1070,20 @@ function ImportButton({ account, organizationId, canWrite, onChanged }: { accoun
     if (!file) return;
     setBusy(true); setError(null); setMsg(null); setWarnings([]);
     try {
-      const parsed = await parseBankFile(file);
-      if (parsed.transactions.length === 0) throw new Error('Geen transacties in dit bestand gevonden.');
+      const read = await parseBankFile(file);
+      if (read.transactions.length === 0) throw new Error('Geen transacties in dit bestand gevonden.');
+      // Hoort het afschrift bij deze rekening? Eerst kijken, dan inlezen: wat
+      // er eenmaal in staat, krijg je er niet meer af. Eerder ging een afschrift
+      // van de spaarrekening zonder vraag de zakelijke rekening in, en kwam een
+      // waarschuwing over twee rekeningen pas ná het inlezen.
+      const check = checkStatementAccount(read, account.iban);
+      if (check.kind === 'refuse') throw new Error(check.message);
+      if (check.kind === 'ask' && !confirm(`${check.message}\n\nToch inlezen op ${account.name}?`)) {
+        setMsg('Niet ingelezen.');
+        return;
+      }
+      const parsed = check.statement;
+      const notes = check.kind === 'ok' ? check.notes : [];
       const res = await importBankTransactions(organizationId, account.id, parsed);
       const head = `${res.inserted} nieuw, ${res.duplicates} al bekend (${parsed.format.toUpperCase()}).`;
       // Stopte het matchen bij het inlezen op de tijdgrens, dan gaat het hier
@@ -1069,9 +1103,15 @@ function ImportButton({ account, organizationId, canWrite, onChanged }: { accoun
       if (res.skippedNoDate > 0) serverWarnings.push(`${res.skippedNoDate} regel(s) niet ingelezen: geen leesbare boekdatum.`);
       if (res.skippedZeroAmount > 0) serverWarnings.push(`${res.skippedZeroAmount} regel(s) niet ingelezen: bedrag € 0,00.`);
       if (res.balanceOk === false) {
-        serverWarnings.push(`Let op: beginsaldo + alle mutaties in deze periode wijken ${euroCents(Math.abs(res.balanceDifferenceCents ?? 0))} af van het eindsaldo. Er ontbreken transacties over deze periode.`);
+        serverWarnings.push(describeStatementDifference(res.balanceDifferenceCents ?? 0, euroCents));
       }
-      setWarnings([...parsed.warnings, ...serverWarnings]);
+      setWarnings([...notes, ...parsed.warnings, ...serverWarnings]);
+      // Dekt dit afschrift een periode die de koppeling niet meer kon ophalen,
+      // dan is dat gat nu gevuld en hoeft de melding niet meer.
+      if (account.sync_gap_from && account.sync_gap_to && parsed.period_start && parsed.period_end
+          && parsed.period_start <= account.sync_gap_from && parsed.period_end >= account.sync_gap_to) {
+        await updateRow<BankAccount>('bank_accounts', account.id, { sync_gap_from: null, sync_gap_to: null }, organizationId).catch(() => undefined);
+      }
       onChanged();
     } catch (err) { setError(err instanceof Error ? err.message : 'Inlezen mislukt'); }
     finally { setBusy(false); }

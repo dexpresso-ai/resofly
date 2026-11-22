@@ -2542,6 +2542,8 @@ export async function finalizeBankRequisition(
 ): Promise<{
   status: string; linked: number; imported: number; error?: string | null;
   syncErrors?: number; syncError?: string | null; alreadyLinked?: boolean;
+  /** Gekoppeld, maar de bank leverde een periode niet meer (bank-sync, syncGap). */
+  syncNotice?: string | null;
 }> {
   return invokeBankSync('finalizeRequisition', organizationId, {
     code: input.code ?? null, state: input.state, error: input.error ?? null, errorDescription: input.errorDescription ?? null,
@@ -2549,7 +2551,7 @@ export async function finalizeBankRequisition(
 }
 
 /** Haalt nieuwe transacties op voor één of alle gekoppelde rekeningen. */
-export async function syncBankAccount(organizationId: UUID, bankAccountId?: UUID): Promise<{ results: Array<{ bankAccountId: string; inserted: number; skipped: number; error?: string }>; needsReconsent: boolean }> {
+export async function syncBankAccount(organizationId: UUID, bankAccountId?: UUID): Promise<{ results: Array<{ bankAccountId: string; inserted: number; skipped: number; error?: string; notice?: string }>; needsReconsent: boolean }> {
   return invokeBankSync('sync', organizationId, { bankAccountId: bankAccountId ?? null });
 }
 
@@ -2570,12 +2572,14 @@ export async function importBankTransactions(
   /** Wat de matcher meteen deed met wat er nieuw binnenkwam (20261118190000; nullen daarvóór). */
   match: BankMatchResult;
 }> {
-  const { transactions, warnings: _warnings, ...meta } = statement;
+  // `accounts` en de eigen rekening per regel zijn voor de controle vóór het
+  // inlezen (bankImport/check.ts); de server heeft ze niet nodig.
+  const { transactions, warnings: _warnings, accounts: _accounts, ...meta } = statement;
   const { data, error } = await supabase.rpc('import_bank_transactions', {
     p_organization_id: organizationId,
     p_bank_account_id: bankAccountId,
     p_statement: meta,
-    p_transactions: transactions,
+    p_transactions: transactions.map(({ account: _account, ...t }) => t),
   });
   if (error) throw bookkeepingError(error);
   const row = (data ?? {}) as {
