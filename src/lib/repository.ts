@@ -2314,9 +2314,8 @@ type PageQuery = PromiseLike<PageResponse> & { setHeader?: (name: string, value:
  * komen de pagina's daarna tegelijk binnen in plaats van na elkaar. Eerst
  * wachtte elke pagina op de vorige: een bureau met 3.000 taken deed vier
  * rondgangen achter elkaar, in het laadscherm (gemeten 300-500 ms op een
- * telefoon). Kwamen er intussen rijen bij, of is het totaal onbekend, dan
- * gaat het daarna pagina voor pagina verder tot een pagina niet vol is, zoals
- * voorheen.
+ * telefoon). Is het totaal onbekend, dan gaat het pagina voor pagina tot een
+ * pagina niet vol is, zoals voorheen.
  */
 async function fetchAllPages<T>(
   makeQuery: () => { range: (from: number, to: number) => PageQuery },
@@ -2332,6 +2331,10 @@ async function fetchAllPages<T>(
   if (first.rows.length < FETCH_PAGE_SIZE) return rows;
   let offset = FETCH_PAGE_SIZE;
   if (first.count !== null) {
+    // Het totaal is de grens: bij precies 3.000 rijen is de derde pagina vol,
+    // en een vierde, lege pagina opvragen kostte nog een rondgang, als laatste
+    // in het laadscherm. Een rij die tijdens het ophalen bijkomt, komt bij de
+    // volgende ververs binnen, net als een rij die er net na bijkomt.
     while (offset < first.count) {
       const batch: number[] = [];
       for (let next = offset; next < first.count && batch.length < FETCH_PAGE_PARALLEL; next += FETCH_PAGE_SIZE) batch.push(next);
@@ -2340,7 +2343,9 @@ async function fetchAllPages<T>(
       offset = batch[batch.length - 1] + FETCH_PAGE_SIZE;
       if (pages[pages.length - 1].rows.length < FETCH_PAGE_SIZE) return rows;
     }
+    return rows;
   }
+  // Geen totaal (een omgeving zonder telling): pagina voor pagina, zoals voorheen.
   for (; ; offset += FETCH_PAGE_SIZE) {
     const page = await fetchPage(offset);
     rows.push(...page.rows);
