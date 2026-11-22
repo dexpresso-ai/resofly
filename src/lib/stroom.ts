@@ -76,6 +76,8 @@ export interface StreamInput {
   clients: readonly Pick<Client, 'id' | 'name' | 'color'>[];
   /** Het bruto totaal van een stuk. In de app: `lines => total(lines).total`. */
   amount: (lines: FinanceLine[]) => number;
+  /** Wat er per verstuurde factuur nog openstaat, in centen (AppData.invoiceOpenCents). */
+  openCents?: Readonly<Record<string, number>> | null;
   now?: Date;
 }
 
@@ -121,6 +123,27 @@ export function invoiceIsOverdue(invoice: Pick<Invoice, 'status' | 'due_date'>, 
   return invoice.due_date.slice(0, 10) < amsterdamTodayIso(now);
 }
 
+/**
+ * Wat er van een verstuurde factuur nog openstaat, bruto: het bedrag uit het
+ * grootboek na deelbetalingen en deelcreditnota's (`openCents`, uit de RPC
+ * list_open_invoice_amounts), anders het volle factuurbedrag. Dezelfde regel
+ * voor Openstaand en Te laat op Vandaag, de halte Factuur in de stroom en de
+ * klantpagina.
+ *
+ * Eerder telden die het volle factuurbedrag: een factuur van € 1.210 waarvan
+ * € 400 betaald was, stond er voor € 1.210, terwijl Openstaande posten en
+ * Gerrie € 810 zeiden.
+ */
+export function invoiceOpenAmount(
+  invoice: Pick<Invoice, 'id' | 'lines'>,
+  amount: (lines: FinanceLine[]) => number,
+  openCents?: Readonly<Record<string, number>> | null,
+): number {
+  const cents = openCents?.[invoice.id];
+  if (typeof cents === 'number' && Number.isFinite(cents)) return Math.max(0, cents) / 100;
+  return amount(invoice.lines);
+}
+
 /** Hele kalenderdagen van vandaag (in Nederland) tot de vervaldatum; negatief als die voorbij is. */
 function daysUntilDue(dueDate: string, now: Date): number | null {
   const due = Date.parse(`${dueDate.slice(0, 10)}T00:00:00Z`);
@@ -137,7 +160,7 @@ function paidDate(invoice: Pick<Invoice, 'paid_at' | 'date'>): Date | null {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
-export function computeStream({ quotes, invoices, clients, amount, now = new Date() }: StreamInput): Stream {
+export function computeStream({ quotes, invoices, clients, amount, openCents = null, now = new Date() }: StreamInput): Stream {
   const clientById = new Map(clients.map(client => [client.id, client]));
   const today = isoDay(now);
   const items: StreamItem[] = [];
@@ -188,7 +211,8 @@ export function computeStream({ quotes, invoices, clients, amount, now = new Dat
         amount: value, knot: null, at: invoice.date,
       });
     } else if (invoice.status === 'sent' || invoice.status === 'overdue') {
-      // Precies "Openstaand" op Vandaag: verstuurd of te laat.
+      // Precies "Openstaand" op Vandaag: verstuurd of te laat, met wat er nog openstaat.
+      const open = invoiceOpenAmount(invoice, amount, openCents);
       const overdue = invoiceIsOverdue(invoice, now);
       const reminded = daysSince(invoice.last_reminder_at ?? null, now);
       const calm = reminded != null && reminded < REMINDER_CALM_DAYS;
@@ -200,11 +224,11 @@ export function computeStream({ quotes, invoices, clients, amount, now = new Dat
           : dueIn != null ? (dueIn === 0 ? 'vervalt vandaag' : `vervalt over ${plural(dueIn, 'dag', 'dagen')}`) : 'openstaand';
       items.push({
         id: `invoice:${invoice.id}`, kind: 'invoice', refId: invoice.id, station: 'factuur', ...base(invoice.client_id),
-        title: `Factuur ${invoice.number}`, detail,
-        amount: value, knot: calm ? 'sent' : overdue ? 'late' : null, at: invoice.sent_at ?? invoice.date,
+        title: `Factuur ${invoice.number}`, detail: open + 0.005 < value ? `${detail} · deels betaald` : detail,
+        amount: open, knot: calm ? 'sent' : overdue ? 'late' : null, at: invoice.sent_at ?? invoice.date,
       });
     } else if (invoice.status === 'paid') {
-      // Precies "Omzet deze maand" op Vandaag.
+      // Precies "Ontvangen deze maand" op Vandaag.
       const paid = paidDate(invoice);
       if (paid && paid.getFullYear() === now.getFullYear() && paid.getMonth() === now.getMonth()) {
         items.push({

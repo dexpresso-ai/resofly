@@ -229,7 +229,8 @@ export function Sidebar({
   const settingsGroups = visibleSettingsGroups(activeRole, permissions);
   // De rollen staan hier zoals ze in de database heten; de boekhouder in het Nederlands.
   const roleLabel = isAccountantRole(activeRole) ? 'boekhouder' : activeRole ?? 'geen rol';
-  const purchaseInboxTitle = `${purchaseInboxOpen} per e-mail binnengekomen inkoopfactu${purchaseInboxOpen === 1 ? 'ur' : 'ren'} met aandacht nodig`;
+  // Niet "per e-mail binnengekomen": ook een bon uit de galerij of de camera staat op de werklijst.
+  const purchaseInboxTitle = `${purchaseInboxOpen} ${purchaseInboxOpen === 1 ? 'inkoopfactuur of bon' : 'inkoopfacturen en bonnen'} op de werklijst`;
 
   // De badge op Berichten telt wat aandacht vraagt: ongelezen post én post die
   // nog niet aan een klant hangt. De tooltip houdt de twee uit elkaar.

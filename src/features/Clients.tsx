@@ -25,7 +25,7 @@ import { FolderLabel, MailFolderTree, useMailFolderActions, type MailTreeItem } 
 import { foldersOfClient } from '../lib/mailFolders';
 import { PageIcon } from '../components/PageIcon';
 import { ClientStream, ClientStreamBadge } from '../components/StreamRibbon';
-import { computeStream, invoiceIsOverdue } from '../lib/stroom';
+import { computeStream, invoiceIsOverdue, invoiceOpenAmount } from '../lib/stroom';
 import { useLook } from '../lib/look';
 import { createClientWithServerCode, deleteClientEmail, loadClientEmails, loadClientEmailThreads, loadClientEmailReadIds, loadInboundOpenCount, loadMySenderIdentity, loadSendingDomains, markClientEmailsRead } from '../lib/repository';
 import { resolveEffectiveSender, sendClientEmail, type EffectiveSender } from '../services/mailService';
@@ -207,7 +207,7 @@ export function Clients({
       quoteCount: getClientQuotes(data, client.id).length,
       overdueInvoiceCount: overdueInvoices.length,
       openInvoiceCount: openInvoices.length,
-      openInvoiceTotal: openInvoices.reduce((sum, invoice) => sum + total(invoice.lines).total, 0),
+      openInvoiceTotal: openInvoices.reduce((sum, invoice) => sum + openAmount(invoice, data.invoiceOpenCents), 0),
     };
   }), [data, teamMembers]);
 
@@ -575,8 +575,9 @@ export function ClientDetailPage({
   const overdueInvoices = invoices.filter(isInvoiceOverdue);
   const paidInvoices = invoices.filter(invoice => invoice.status === 'paid');
   const invoiceTotal = invoices.reduce((sum, invoice) => sum + total(invoice.lines).total, 0);
-  const openInvoiceTotal = openInvoices.reduce((sum, invoice) => sum + total(invoice.lines).total, 0);
-  const overdueInvoiceTotal = overdueInvoices.reduce((sum, invoice) => sum + total(invoice.lines).total, 0);
+  // Na deelbetalingen en deelcreditnota's: wat er echt nog openstaat (lib/stroom.ts).
+  const openInvoiceTotal = openInvoices.reduce((sum, invoice) => sum + openAmount(invoice, data.invoiceOpenCents), 0);
+  const overdueInvoiceTotal = overdueInvoices.reduce((sum, invoice) => sum + openAmount(invoice, data.invoiceOpenCents), 0);
   const quoteTotal = quotes.reduce((sum, quote) => sum + total(quote.lines).total, 0);
 
   // Effectief uurtarief: echte gefactureerde omzet (excl. btw, zonder concepten
@@ -663,8 +664,8 @@ export function ClientDetailPage({
   // Stroom: waar deze klant staat, van offerte tot betaald (lib/stroom.ts).
   const [look] = useLook();
   const clientStream = useMemo(() => look === 'stroom'
-    ? computeStream({ quotes: data.quotes.filter(q => q.client_id === client.id), invoices: data.invoices.filter(i => i.client_id === client.id), clients: [client], amount: lines => total(lines).total })
-    : null, [look, data.quotes, data.invoices, client]);
+    ? computeStream({ quotes: data.quotes.filter(q => q.client_id === client.id), invoices: data.invoices.filter(i => i.client_id === client.id), clients: [client], amount: lines => total(lines).total, openCents: data.invoiceOpenCents })
+    : null, [look, data.quotes, data.invoices, data.invoiceOpenCents, client]);
 
   return <div className="client-detail-page">
     <section className="client-detail-hero">
@@ -1537,6 +1538,11 @@ function getClientDocuments(data: AppData, clientId: string) {
 // terugbetaald tellen niet mee, net als op de pagina Facturen.
 function isInvoiceOpen(invoice: Invoice) {
   return !['paid', 'cancelled', 'draft', 'void', 'written_off', 'refunded'].includes(invoice.status);
+}
+
+/** Wat er van een open factuur nog openstaat (zoals het dashboard, lib/stroom.ts). */
+function openAmount(invoice: Invoice, openCents: Readonly<Record<string, number>>) {
+  return invoiceOpenAmount(invoice, lines => total(lines).total, openCents);
 }
 
 // Dezelfde regel als het dashboard en de database (lib/stroom.ts). Eerder

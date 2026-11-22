@@ -244,7 +244,7 @@ async function getInvoicePdf(token: string) {
     usableVersions[0];
 
   if (!version) {
-    throw new PublicInvoiceError('Er is nog geen beschikbare PDF-snapshot voor deze factuur.', 404);
+    throw new PublicInvoiceError('Er is nog geen pdf van deze factuur beschikbaar.', 404);
   }
 
   let base64 = String(version.pdf_data_base64 || '').trim();

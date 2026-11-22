@@ -802,7 +802,7 @@ function QuoteDetailModal({
       </section>
 
       <section className="quote-detail-split">
-        <div className="quote-detail-section"><div className="quote-detail-section-head"><div><span>Versies</span><strong>Vastgelegde snapshots</strong></div></div><QuoteVersions versions={versions} /></div>
+        <div className="quote-detail-section"><div className="quote-detail-section-head"><div><span>Versies</span><strong>Bewaarde pdf's</strong></div></div><QuoteVersions versions={versions} /></div>
         <div className="quote-detail-section"><div className="quote-detail-section-head"><div><span>Regels</span><strong>Offertebedragen</strong></div></div><FinanceLineTable lines={quote.lines} emptyText="Geen offerteregels." /></div>
       </section>
 
@@ -993,17 +993,17 @@ function InvoiceDetailModal({
 
       <section className="quote-detail-split">
         <div className="quote-detail-section"><div className="quote-detail-section-head"><div><span>Regels</span><strong>Factuurbedragen</strong></div></div><FinanceLineTable lines={invoice.lines} emptyText="Geen factuurregels." /></div>
-        <div className="quote-detail-section"><div className="quote-detail-section-head"><div><span>Verzendhistorie</span><strong>Resend, PDF en e-factuur</strong></div></div><InvoiceDeliveries deliveries={deliveries} /></div>
+        <div className="quote-detail-section"><div className="quote-detail-section-head"><div><span>Verzendhistorie</span><strong>Mail, pdf en e-factuur</strong></div></div><InvoiceDeliveries deliveries={deliveries} /></div>
       </section>
 
       <section className="quote-detail-split">
-        <div className="quote-detail-section"><div className="quote-detail-section-head"><div><span>Betalingen</span><strong>Mollie records</strong></div></div><InvoicePayments payments={payments} /></div>
+        <div className="quote-detail-section"><div className="quote-detail-section-head"><div><span>Betalingen</span><strong>Via de betaallink</strong></div></div><InvoicePayments payments={payments} /></div>
         <div className="quote-detail-section"><div className="quote-detail-section-head"><div><span>Verstuurde pdf's</span><strong>Factuurversies</strong></div></div><InvoiceVersions versions={versions} /></div>
       </section>
 
       {(refunds.length > 0 || creditNotes.length > 0) && <section className="quote-detail-split">
-        <div className="quote-detail-section"><div className="quote-detail-section-head"><div><span>Terugbetalingen</span><strong>Refund-ledger</strong></div></div><InvoiceRefunds refunds={refunds} onCreditNoteForRefund={canAdmin ? onCreditNoteForRefund : undefined} /></div>
-        <div className="quote-detail-section"><div className="quote-detail-section-head"><div><span>Creditfacturen</span><strong>Credit notes</strong></div></div><CreditNotes creditNotes={creditNotes} canWrite={canWrite} onDownload={onDownloadCreditNote} onDownloadUbl={onDownloadCreditNoteUbl} onEmail={onEmailCreditNote} onPostToLedger={onPostCreditNote} /></div>
+        <div className="quote-detail-section"><div className="quote-detail-section-head"><div><span>Terugbetalingen</span><strong>Teruggestort aan de klant</strong></div></div><InvoiceRefunds refunds={refunds} onCreditNoteForRefund={canAdmin ? onCreditNoteForRefund : undefined} /></div>
+        <div className="quote-detail-section"><div className="quote-detail-section-head"><div><span>Creditfacturen</span><strong>Creditnota's</strong></div></div><CreditNotes creditNotes={creditNotes} canWrite={canWrite} onDownload={onDownloadCreditNote} onDownloadUbl={onDownloadCreditNoteUbl} onEmail={onEmailCreditNote} onPostToLedger={onPostCreditNote} /></div>
       </section>}
 
       {chargebacks.length > 0 && <section className="quote-detail-section">
@@ -1069,7 +1069,7 @@ export function ProjectQuotesPanel({
 }) {
   const quotes = data.quotes.filter(quote => quote.project_id === projectId);
   return <section className="project-quotes-panel">
-    {!hideHeader && <div className="section-head-inline project-section-head"><div><h2>Offertes</h2><p>Projectgekoppelde offertes met interne goedkeuring, Resend-status, klantbeslissing en factuurconversie.</p></div><Button variant="primary" onClick={onNewQuote} disabled={!canWrite}>+ Offerte</Button></div>}
+    {!hideHeader && <div className="section-head-inline project-section-head"><div><h2>Offertes</h2><p>De offertes van dit project: goedkeuren, versturen, het antwoord van de klant en de factuur.</p></div><Button variant="primary" onClick={onNewQuote} disabled={!canWrite}>+ Offerte</Button></div>}
     {quotes.length === 0 ? <div className="empty project-empty"><div className="e-big">Nog geen offertes bij dit project</div><p>Maak een offerte direct vanuit het project, dan worden klant en project automatisch gekoppeld.</p></div> : <div className="project-quotes-list">
       {quotes.map(quote => {
         const client = data.clients.find(item => item.id === quote.client_id) ?? null;
@@ -1408,7 +1408,7 @@ function InvoiceDunningPanel({ invoice, client, notice, canWrite, onPropose, onS
 }
 
 function InvoicePayments({ payments }: { payments: InvoicePaymentRecord[] }) {
-  if (payments.length === 0) return <div className="quote-timeline-empty">Nog geen Mollie-betaalrecords.</div>;
+  if (payments.length === 0) return <div className="quote-timeline-empty">Nog niets via een betaallink betaald. Een overboeking verwerk je bij Bank.</div>;
   return <div className="quote-versions">{payments.map(payment => <div className="quote-version-pill" key={payment.id}><strong>{paymentStatusLabel(payment.status)}</strong><span>{euro(payment.amount_cents / 100)} {payment.currency}</span><small>{dateNL(payment.created_at)}{payment.provider_payment_id ? ` · ${payment.provider_payment_id}` : ''}</small>{payment.provider_checkout_url && <a href={payment.provider_checkout_url} target="_blank" rel="noreferrer">Open betaallink</a>}{payment.paid_at && <small>Betaald op {dateNL(payment.paid_at)}</small>}</div>)}</div>;
 }
 
@@ -1745,12 +1745,12 @@ function paymentStatusLabel(status: string): string {
 }
 
 function quoteVersionReasonLabel(reason: string): string {
-  const labels: Record<string, string> = { internal_approval: 'Interne goedkeuring', sent_to_client: 'Verzonden versie', client_accepted: 'Geaccepteerde versie', manual: 'Handmatige snapshot' };
+  const labels: Record<string, string> = { internal_approval: 'Interne goedkeuring', sent_to_client: 'Verzonden versie', client_accepted: 'Geaccepteerde versie', manual: 'Met de hand bewaard' };
   return labels[reason] || reason;
 }
 
 function invoiceVersionReasonLabel(reason: string): string {
-  const labels: Record<string, string> = { sent_to_client: 'Verzonden versie', payment_created: 'Betaallink gemaakt', paid: 'Betaalde versie', manual: 'Handmatige snapshot' };
+  const labels: Record<string, string> = { sent_to_client: 'Verzonden versie', payment_created: 'Betaallink gemaakt', paid: 'Betaalde versie', manual: 'Met de hand bewaard' };
   return labels[reason] || reason;
 }
 

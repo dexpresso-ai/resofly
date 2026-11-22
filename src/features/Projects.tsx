@@ -7,6 +7,7 @@ import { AssigneeAvatars } from '../components/AssigneeAvatars';
 import { DetailTabs } from '../components/DetailTabs';
 import type { DetailTab } from '../components/DetailTabs';
 import { dateNL, euro, formatMinutes, priorityLabel, total } from '../lib/format';
+import { invoiceOpenAmount } from '../lib/stroom';
 import { memberColor, memberInitials, memberName } from '../lib/members';
 import { RelatedNotes, getNoteTypeLabel } from './Notes';
 import { RelatedDocuments, getDocumentTypeLabel } from './Documents';
@@ -1082,9 +1083,12 @@ export function ProjectPage({
 
   // Marge/effectief uurtarief: echte gefactureerde omzet (excl. btw, zonder
   // concepten en geannuleerde facturen) afgezet tegen de werkelijk geboekte uren.
-  const invoicedSubtotal = projectInvoices
-    .filter(i => !['draft', 'cancelled', 'void'].includes(i.status))
-    .reduce((sum, i) => sum + total(i.lines).subtotal, 0);
+  // Dezelfde regel voor de kop "Gefactureerd" en het tabblad Uren (en
+  // project.dashboard van Gerrie). De kop telde alle facturen met btw, ook
+  // concepten en ingetrokken facturen: met een concept van € 605 stonden er
+  // twee verschillende "Gefactureerd" op één pagina.
+  const invoicedInvoices = projectInvoices.filter(i => !['draft', 'cancelled', 'void'].includes(i.status));
+  const invoicedSubtotal = invoicedInvoices.reduce((sum, i) => sum + total(i.lines).subtotal, 0);
   const effectiveRate = trackedMinutes > 0 && invoicedSubtotal > 0 ? invoicedSubtotal / (trackedMinutes / 60) : null;
   const budgetedMinutes = project.budgeted_minutes;
   const budgetPct = budgetedMinutes != null && budgetedMinutes > 0 ? (trackedMinutes / budgetedMinutes) * 100 : null;
@@ -1120,10 +1124,11 @@ export function ProjectPage({
       .slice(0, 5);
   }, [tasks]);
   const quoteTotal = projectQuotes.reduce((sum, quote) => sum + total(quote.lines).total, 0);
-  const invoiceTotal = projectInvoices.reduce((sum, invoice) => sum + total(invoice.lines).total, 0);
+  // Openstaand zoals op Vandaag en de klantpagina: verstuurd of te laat, na
+  // deelbetalingen en deelcreditnota's (lib/stroom.ts).
   const openInvoiceTotal = projectInvoices
-    .filter(i => !['draft', 'paid', 'cancelled', 'void'].includes(i.status))
-    .reduce((sum, invoice) => sum + total(invoice.lines).total, 0);
+    .filter(i => i.status === 'sent' || i.status === 'overdue')
+    .reduce((sum, invoice) => sum + invoiceOpenAmount(invoice, lines => total(lines).total, data.invoiceOpenCents), 0);
   const phase = projectPhase(project, tasks.length, progress, overdueTasks, todayIso);
   const period = periodLabel(project.start_date, project.end_date);
   const billingLabel = project.billing_type === 'fixed_price'
@@ -1149,9 +1154,9 @@ export function ProjectPage({
     { key: 'quotes', label: 'Offertes', value: String(projectQuotes.length), sub: quoteTotal > 0 ? euro(quoteTotal) : undefined, tab: 'quotes' },
     {
       key: 'invoiced', label: 'Gefactureerd',
-      value: projectInvoices.length > 0 ? euro(invoiceTotal) : '—',
-      sub: projectInvoices.length > 0 ? `${projectInvoices.length} ${projectInvoices.length === 1 ? 'factuur' : 'facturen'}` : undefined,
-      tone: projectInvoices.length === 0 ? 'muted' : undefined, tab: 'invoices',
+      value: invoicedInvoices.length > 0 ? euro(invoicedSubtotal) : '—',
+      sub: invoicedInvoices.length > 0 ? `excl. btw · ${invoicedInvoices.length} ${invoicedInvoices.length === 1 ? 'factuur' : 'facturen'}` : projectInvoices.length > 0 ? 'nog niets verstuurd' : undefined,
+      tone: invoicedInvoices.length === 0 ? 'muted' : undefined, tab: 'invoices',
     },
     {
       key: 'time', label: 'Uren',

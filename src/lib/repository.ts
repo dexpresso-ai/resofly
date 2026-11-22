@@ -753,6 +753,7 @@ export async function loadCoreData(organizationId: UUID, { organizationCreatedAt
     contractProjects,
     bankTransactionsToReconcile,
     filedVatPeriods,
+    invoiceOpenCents,
   ] = await Promise.all([
     select<Client>('clients', organizationId), selectClientContacts(organizationId), selectClientFieldDefinitions(organizationId), select<Project>('projects', organizationId), select<Task>('tasks', organizationId), select<Ticket>('tickets', organizationId),
     select<Note>('notes', organizationId), selectDocuments(organizationId), selectNoteCalendarLinks(organizationId), selectNoteHandwritingSummaries(organizationId), selectCalendarEventLinks(organizationId), select<Quote>('quotes', organizationId), select<Invoice>('invoices', organizationId),
@@ -772,6 +773,7 @@ export async function loadCoreData(organizationId: UUID, { organizationCreatedAt
     selectContractProjects(organizationId),
     countBankTransactionsToReconcile(organizationId),
     selectFiledVatPeriods(organizationId),
+    selectInvoiceOpenCents(organizationId),
   ]);
   // Btw-aangiftes die nog moeten: afgelopen tijdvakken zonder aangifte (zie
   // lib/vatPeriods.ts). Alleen met een rekeningschema. Dat krijgt sinds
@@ -789,7 +791,7 @@ export async function loadCoreData(organizationId: UUID, { organizationCreatedAt
   });
   const vatReturnsToFile = vatDue.length;
   const vatReturnNextDue = vatDue[0] ?? null;
-  return { clients, clientContacts, clientFieldDefinitions, projects, projectTemplates, projectTemplateTasks, tasks, projectMembers, taskAssignees, contractProjects, tickets, notes, documents, folders, noteCalendarLinks, noteHandwriting, calendarEventLinks, quotes, invoices, ledgerAccounts, vatCodes, suppliers, purchaseInvoices, attachments, driveShares, galleries, savedReports, plannerNotes, plannerCapacity, companySettings, bankTransactionsToReconcile, vatReturnsToFile, vatReturnNextDue };
+  return { clients, clientContacts, clientFieldDefinitions, projects, projectTemplates, projectTemplateTasks, tasks, projectMembers, taskAssignees, contractProjects, tickets, notes, documents, folders, noteCalendarLinks, noteHandwriting, calendarEventLinks, quotes, invoices, ledgerAccounts, vatCodes, suppliers, purchaseInvoices, attachments, driveShares, galleries, savedReports, plannerNotes, plannerCapacity, companySettings, bankTransactionsToReconcile, invoiceOpenCents, vatReturnsToFile, vatReturnNextDue };
 }
 
 /** Per groep: welke tabellen, in welke vorm. TypeScript bewaakt dat elke groep precies zijn eigen velden teruggeeft. */
@@ -883,6 +885,30 @@ async function countBankTransactionsToReconcile(organizationId: UUID): Promise<n
   }
   console.warn('Telling van banktransacties mislukt; het dashboard toont hier nul.', error);
   return 0;
+}
+
+/**
+ * Wat er per verstuurde factuur nog openstaat, in centen, voor het dashboard en
+ * de klantpagina. Die telden het volle factuurbedrag: een deelbetaling of een
+ * deelcreditnota ging er niet af, terwijl het grootboek en Gerrie het wel
+ * aftrokken. Via een RPC (migratie 20261122090000): de betalingen zelf horen
+ * bij de groepen financeHistory en bank, die de kern bewust niet laadt
+ * (dataGroups.ts; tests/laden bewaakt dat). Lukt het niet (de migratie staat
+ * er nog niet, of een andere fout), dan een lege lijst: dan telt weer het volle
+ * bedrag, en de werkruimte opent gewoon.
+ */
+async function selectInvoiceOpenCents(organizationId: UUID): Promise<Record<UUID, number>> {
+  const { data, error } = await supabase.rpc('list_open_invoice_amounts', { p_organization_id: organizationId });
+  if (error || !Array.isArray(data)) {
+    if (error && error.code !== 'PGRST202' && error.code !== '42883') console.warn('Openstaande bedragen ophalen mislukt; het dashboard telt de volle factuurbedragen.', error);
+    return {};
+  }
+  const open: Record<UUID, number> = {};
+  for (const row of data as Array<{ invoice_id: UUID; open_cents: number | string | null }>) {
+    const cents = Number(row.open_cents);
+    if (row.invoice_id && Number.isFinite(cents)) open[row.invoice_id] = cents;
+  }
+  return open;
 }
 
 async function countOptional(table: string, organizationId: UUID, inFilters: Record<string, string[]>): Promise<number> {
@@ -5014,7 +5040,7 @@ export async function downloadQuotePdfSnapshot(organizationId: UUID, quoteId: UU
   if (!data?.ok) throw new Error(data?.error || 'Offerte-PDF downloaden mislukt');
 
   const pdf = data.pdf as { fileName?: string; mimeType?: string; base64?: string } | undefined;
-  if (!pdf?.base64) throw new Error('Geen PDF-snapshot beschikbaar voor deze offerte.');
+  if (!pdf?.base64) throw new Error('Er is nog geen pdf van deze offerte bewaard.');
 
   const binary = atob(pdf.base64);
   const bytes = new Uint8Array(binary.length);
@@ -5072,7 +5098,7 @@ export async function loadInvoicePdfSnapshot(organizationId: UUID, invoiceId: UU
   if (!data?.ok) throw new Error(data?.error || 'Factuur-PDF ophalen mislukt');
 
   const pdf = data.pdf as { fileName?: string; mimeType?: string; base64?: string } | undefined;
-  if (!pdf?.base64) throw new Error('Geen PDF-snapshot beschikbaar voor deze factuur.');
+  if (!pdf?.base64) throw new Error('Er is nog geen pdf van deze factuur bewaard.');
 
   const binary = atob(pdf.base64);
   const bytes = new Uint8Array(binary.length);

@@ -2957,7 +2957,9 @@ body::before{
 .bk-status-booked,.bk-je-posted{border-color:rgba(var(--ok-rgb),.5);color:var(--ok)}
 .bk-status-paid{border-color:rgba(var(--info-rgb),.5);color:var(--info)}
 .bk-status-cancelled,.bk-je-reversed{opacity:.6;text-decoration:line-through}
-.bk-field{display:grid;gap:6px;margin-bottom:12px}
+/* Eén kolom van minmax(0,1fr): zonder kolommaat werd het veld zo breed als de
+   langste onafbreekbare keuze (een bankrekening met IBAN), ook op de telefoon. */
+.bk-field{display:grid;grid-template-columns:minmax(0,1fr);gap:6px;margin-bottom:12px}
 .bk-field>span{font-size:.72rem;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--muted,rgba(var(--ink-rgb),.55))}
 .bk-field small{color:var(--muted,rgba(var(--ink-rgb),.45));font-size:.74rem}
 .bk-grid2{display:grid;grid-template-columns:1fr 1fr;gap:0 16px}
@@ -8101,6 +8103,29 @@ body.pgal-shielded .pgal-shield{position:fixed;inset:0;z-index:300;display:flex;
   .bk-ib-table{min-width:0}
 }
 
+/* De btw-aangifte op de telefoon: per rubriek een blok met de grondslag, de
+   btw en wat je in Mijn Belastingdienst invult onder elkaar. In de tabel van
+   560px stond juist de kolom "Aangifte (hele €)" buiten beeld, achter een
+   veegrij waar niets op wees. De koppen staan bij de bedragen zelf. */
+@media(max-width:640px){
+  .bk-table.bk-vat-boxes{display:block;min-width:0}
+  .bk-vat-boxes thead{display:none}
+  .bk-vat-boxes tbody,.bk-vat-boxes tfoot{display:block}
+  .bk-vat-boxes tr{display:grid;grid-template-columns:2.6em minmax(0,1fr);column-gap:8px;padding:9px 12px;border-bottom:1px solid rgba(var(--sheen-rgb),calc(.05 * var(--sheen-k)))}
+  .bk-vat-boxes tr.bk-report-total,.bk-vat-boxes tr.bk-report-result{border-top:1px solid var(--border)}
+  .bk-table.bk-vat-boxes td{display:flex;justify-content:space-between;align-items:baseline;gap:12px;grid-column:2;padding:2px 0!important;border:0!important;text-align:right}
+  .bk-table.bk-vat-boxes td:empty{display:none}
+  .bk-table.bk-vat-boxes td:nth-child(1){grid-column:1;grid-row:1;font-weight:600}
+  .bk-table.bk-vat-boxes td:nth-child(2){grid-row:1;justify-content:flex-start;text-align:left}
+  .bk-vat-boxes td:nth-child(n+3)::before{color:var(--muted);font-weight:400;font-size:.8rem;text-align:left}
+  .bk-vat-boxes td:nth-child(3)::before{content:"Grondslag"}
+  .bk-vat-boxes td:nth-child(4)::before{content:"Btw"}
+  .bk-vat-boxes td:nth-child(5)::before{content:"Aangifte (hele €)"}
+  .bk-vat-boxes td[colspan="2"]::before{content:"Bedrag"}
+  .bk-vat-boxes tr.bk-report-section{padding:0}
+  .bk-table.bk-vat-boxes .bk-report-section td{grid-column:1/-1;justify-content:flex-start;padding:9px 12px!important}
+}
+
 /* 12 ── Vaste kolomrasters die niet inklappen ─────────────────────────────
    Vijf kolommen in 343px geeft invoervelden van 22 tot 37px breed. Deze
    rasters volgen nu hetzelfde patroon als de factuurregels: de kopregel met
@@ -8129,7 +8154,11 @@ body.pgal-shielded .pgal-shield{position:fixed;inset:0;z-index:300;display:flex;
      op een telefoon ~20px over voor de hoofdkolom. */
   .cc-body{grid-template-columns:minmax(0,1fr)}
   .cc-top{flex-wrap:wrap;gap:10px}
-  .bk-grid2{grid-template-columns:1fr}
+  /* minmax(0,…) en niet 1fr: een kolom van 1fr wordt minstens zo breed als
+     de langste onafbreekbare tekst erin. In "Mutatie invoeren" liep zo de
+     bankrekening ("ABN AMRO zakelijk · NL91 ABNA …") 12px buiten het venster,
+     en alle velden eronder mee. */
+  .bk-grid2{grid-template-columns:minmax(0,1fr)}
 }
 
 /* 13 ── Teamchat schermvullend, net als Gerrie ────────────────────────────

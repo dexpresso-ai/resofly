@@ -1138,10 +1138,16 @@ function BankAccountForm({ data, organizationId, canWrite, account, onClose, onS
   const hasAutoBookSetting = account
     ? account.auto_book_purchase_invoices !== undefined
     : data.bankAccounts.some(a => a.auto_book_purchase_invoices !== undefined);
+  // Een nieuwe rekening krijgt het IBAN uit de bedrijfsgegevens (de inrichting
+  // vroeg het al), zolang er nog geen rekening met dat IBAN is. Eerder stond hier
+  // een leeg veld en moest je het nog eens opzoeken.
+  const compact = (iban: string | null | undefined) => String(iban ?? '').replace(/\s+/g, '').toUpperCase();
+  const companyIban = compact(data.companySettings?.iban);
+  const suggestedIban = !account && companyIban && !data.bankAccounts.some(a => compact(a.iban) === companyIban) ? (data.companySettings?.iban ?? '').trim() : '';
   const [form, setForm] = useState<Record<string, any>>(() => account ? {
     name: account.name, iban: account.iban ?? '', currency: account.currency, ledger_account_id: account.ledger_account_id, is_active: account.is_active,
     auto_book_purchase_invoices: account.auto_book_purchase_invoices ?? true,
-  } : { name: '', iban: '', currency: 'EUR', ledger_account_id: defaultLedger?.id ?? '', is_active: true, auto_book_purchase_invoices: true });
+  } : { name: suggestedIban ? 'Zakelijke rekening' : '', iban: suggestedIban, currency: 'EUR', ledger_account_id: defaultLedger?.id ?? '', is_active: true, auto_book_purchase_invoices: true });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const set = (k: string, v: unknown) => setForm(f => ({ ...f, [k]: v }));
@@ -1177,7 +1183,7 @@ function BankAccountForm({ data, organizationId, canWrite, account, onClose, onS
       {error && <div className="error">{error}</div>}
       <div className="bk-grid2">
         <Field label="Naam" hint="Bijv. Rabobank zakelijk"><Input value={form.name} onChange={e => set('name', e.target.value)} disabled={!canWrite} /></Field>
-        <Field label="IBAN"><Input value={form.iban} onChange={e => set('iban', e.target.value)} disabled={!canWrite} /></Field>
+        <Field label="IBAN" hint={suggestedIban && compact(form.iban) === companyIban ? 'Uit je bedrijfsgegevens.' : undefined}><Input value={form.iban} onChange={e => set('iban', e.target.value)} disabled={!canWrite} /></Field>
         <Field label="Valuta"><Input value={form.currency} onChange={e => set('currency', e.target.value)} disabled={!canWrite} /></Field>
         <Field label="Grootboekrekening" hint="Meestal 1100 Bank. Geef elke rekening een eigen grootboekrekening.">
           <Select value={form.ledger_account_id || ''} onChange={e => set('ledger_account_id', e.target.value)} disabled={!canWrite}>
