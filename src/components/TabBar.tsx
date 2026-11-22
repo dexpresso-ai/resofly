@@ -54,11 +54,19 @@ export function TabBar({ tabs, activeTabId, data, onSelect, onClose, onNew, trai
    * toont — zonder dit meeschuiven open je een tabblad dat je vervolgens niet
    * ziet. `nearest` scrolt alleen als het nodig is, dus de balk springt niet bij
    * elke wissel.
+   *
+   * In het volgende frame, niet meteen na het renderen: scrollIntoView dwingt
+   * een volledige stijlberekening en layout af. Bij het opstarten was dat op
+   * een telefoon 370 ms midden in de eerste render van de werkruimte, en de
+   * browser deed de layout daarna voor het tekenen nog eens.
    */
   useEffect(() => {
-    const node = activeRef.current;
-    if (!node || !stripRef.current) return;
-    node.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+    const frame = requestAnimationFrame(() => {
+      const node = activeRef.current;
+      if (!node || !stripRef.current) return;
+      node.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+    });
+    return () => cancelAnimationFrame(frame);
   }, [activeTabId, tabs.length]);
 
   return (

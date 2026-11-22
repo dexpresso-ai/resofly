@@ -112,7 +112,9 @@ export const EXPORT_FORMAT_VERSION = 1;
 // komt een afgesloten jaar in een andere omgeving op andere winstaandelen uit.
 // 20261122110000 (vof: bank en inkoop privé) vervangt functies; geen tabellen
 // of kolommen.
-export const EXPORT_SCHEMA_VERSION = '20261122110000';
+// 20261122200000 (RLS één keer per query) zet functies erbij en herschrijft
+// leespolicies; geen tabellen of kolommen.
+export const EXPORT_SCHEMA_VERSION = '20261122200000';
 
 export type TableKind =
   | 'export'

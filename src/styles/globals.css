@@ -1,3 +1,6 @@
+/* De lettertypen (@font-face) staan in een eigen bestand. Een @import moet
+   bovenaan staan; Vite neemt het bestand bij het bouwen op in deze bundel. */
+@import './lettertypen.css';
 /* Let op: het oude :root-blok dat hier stond is verwijderd. Al zijn 17 tokens
    werden verderop opnieuw gezet, dus het was dood gewicht — maar zolang het
    bestond, lekte het oude palet (#1a1a1a/#252525/#3a3a3a) door bij elk token

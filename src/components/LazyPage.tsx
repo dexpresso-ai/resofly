@@ -17,7 +17,7 @@
  *    Zie ook lib/chunkReload.ts: die vraagt om te herladen zodra hij ziet dat
  *    er een nieuwe versie staat.
  */
-import React, { lazy, type ComponentType, type ReactNode } from 'react';
+import React, { lazy, useState, type ComponentType, type ReactNode } from 'react';
 import { Button } from './Ui';
 
 export class PageLoadError extends Error {
@@ -27,13 +27,42 @@ export class PageLoadError extends Error {
   }
 }
 
-/** React.lazy voor een benoemde export: `lazyPage(() => import('./features/Bank'), 'BankPage')`. */
+/**
+ * React.lazy voor een benoemde export: `lazyPage(() => import('./features/Bank'), 'BankPage')`.
+ *
+ * `preload()` haalt het bestand alvast op, zonder te renderen: de app doet dat
+ * bij het opstarten voor de pagina waarop hij opent, tegelijk met de gegevens.
+ * Eerst kwam dat bestand pas als de gegevens er waren: in een losse app een
+ * waterval van schil, groep en pagina, gemeten 0,4-1,6 s op een telefoon.
+ *
+ * Is het bestand al binnen, dan rendert de pagina meteen. React.lazy wacht
+ * anders altijd één keer, ook op een bestand dat er al is, en die tweede beurt
+ * kwam op een telefoon achter alle andere renders van de schil (~400 ms).
+ * Welke van de twee een pagina gebruikt, ligt vast zodra hij verschijnt: een
+ * pagina die van de een naar de ander wisselt, zou React opnieuw opbouwen, en
+ * wat je had ingetypt was dan weg.
+ */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function lazyPage<M extends Record<K, ComponentType<any>>, K extends keyof M>(load: () => Promise<M>, name: K) {
-  return lazy(() => load().then(
-    module => ({ default: module[name] }),
-    error => { throw new PageLoadError(error); },
+  type Page = M[K];
+  let loaded: Page | null = null;
+  let pending: Promise<{ default: Page }> | null = null;
+  const start = () => (pending ??= load().then(
+    module => { loaded = module[name]; return { default: module[name] }; },
+    error => {
+      // Een volgende poging mag het opnieuw proberen (na herladen meestal pas).
+      pending = null;
+      throw new PageLoadError(error);
+    },
   ));
+  const Lazy = lazy(start);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function LazyPage(props: any) {
+    const [Direct] = useState(() => loaded);
+    return Direct ? React.createElement(Direct, props) : React.createElement(Lazy, props);
+  }
+  const preload = () => { start().catch(() => undefined); };
+  return Object.assign(LazyPage as unknown as Page, { preload });
 }
 
 /** Terwijl een pagina binnenkomt. Kort: meestal staat hij er binnen een tel. */

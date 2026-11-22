@@ -32,6 +32,11 @@
 #   naar Cloudflare Stream (basic POST of tus-PATCH). Zonder die hosts faalt
 #   elke video-upload pas op staging/productie — lokaal (Vite) geldt dit
 #   bestand namelijk niet.
+# - Lettertypen (2026-11-22): de letters van ResoFly zelf (Poppins, Geist,
+#   Instrument Serif) komen van 'self' (/fonts/web/). fonts.googleapis.com in
+#   style-src en fonts.gstatic.com in font-src blijven nodig voor de
+#   huisstijlletters van een leverancier (src/lib/branding.ts,
+#   ensureBrandFontsLoaded) op de pagina's voor de klant.
 # - Smoke-test na de eerste deploy op staging: inloggen, /portal,
 #   /contract/<token>, bestand-upload/-download, agenda-adres zoeken en
 #   meeting-opname. Wordt er iets geblokkeerd, dan staat het in de console als
@@ -45,7 +50,7 @@
 #   node -e "const h=require('crypto').createHash('sha256');const m=require('fs').readFileSync('index.html','utf8').match(/<script(?![^>]*src=)[^>]*>([\s\S]*?)<\/script>/);h.update(m[1]);console.log(\"'sha256-\"+h.digest('base64')+\"'\")"
 
 /*
-  Content-Security-Policy: default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self' https://resofly-office-server.gerjan.workers.dev; frame-src 'self' blob: https://resofly-office-server.gerjan.workers.dev https://*.cloudflarestream.com; worker-src 'self'; manifest-src 'self'; script-src 'self' 'sha256-cpfoCdrs2JW3+MyNZKaGimX4X5/qwjUacC2aCAsiWnk='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; media-src 'self' blob: https://*.workers.dev; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.workers.dev https://nominatim.openstreetmap.org https://upload.videodelivery.net https://*.cloudflarestream.com
+  Content-Security-Policy: default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self' https://resofly-office-server.gerjan.workers.dev; frame-src 'self' blob: https://resofly-office-server.gerjan.workers.dev https://*.cloudflarestream.com; worker-src 'self'; manifest-src 'self'; script-src 'self' 'sha256-wtsUP8my7X7CvwMRDu18ionMzalXZ47DpmBlpML7lY8='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; media-src 'self' blob: https://*.workers.dev; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.workers.dev https://nominatim.openstreetmap.org https://upload.videodelivery.net https://*.cloudflarestream.com
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
   X-Frame-Options: DENY
@@ -61,6 +66,19 @@
 # standaard van Pages (altijd navragen), zodat een nieuwe deploy meteen
 # doorkomt en naar de nieuwe namen verwijst.
 /assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# De lettertypen van ResoFly zelf (src/styles/lettertypen.css). Vite hasht
+# public/ niet, dus hier staat de versie in de map (poppins-5.3.0/…). Dat is
+# een afspraak, geen controle: een bestand onder dezelfde naam vervangen
+# blijft dan een jaar bij gebruikers hangen. Een nieuwe versie gaat in een
+# nieuwe map, met een nieuw pad in lettertypen.css en index.html. Zonder deze
+# regel geeft Pages max-age=0, net als bij /assets/* hierboven: dan vraagt de
+# browser bij elke start de letters van het laadscherm opnieuw na, en dat zit
+# precies in de weg naar de eerste verf.
+# /fonts/pdf/* (de letters in PDF's) heeft geen versie in de naam en valt
+# hier bewust buiten.
+/fonts/web/*
   Cache-Control: public, max-age=31536000, immutable
 
 # Pagina's achter een deellink (token in de URL) horen niet in een zoekmachine.
@@ -109,7 +127,7 @@
 /portal/voorbeeld
   ! Content-Security-Policy
   ! X-Frame-Options
-  Content-Security-Policy: default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'self'; form-action 'self' https://resofly-office-server.gerjan.workers.dev; frame-src 'self' blob: https://resofly-office-server.gerjan.workers.dev https://*.cloudflarestream.com; worker-src 'self'; manifest-src 'self'; script-src 'self' 'sha256-cpfoCdrs2JW3+MyNZKaGimX4X5/qwjUacC2aCAsiWnk='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; media-src 'self' blob: https://*.workers.dev; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.workers.dev https://nominatim.openstreetmap.org https://upload.videodelivery.net https://*.cloudflarestream.com
+  Content-Security-Policy: default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'self'; form-action 'self' https://resofly-office-server.gerjan.workers.dev; frame-src 'self' blob: https://resofly-office-server.gerjan.workers.dev https://*.cloudflarestream.com; worker-src 'self'; manifest-src 'self'; script-src 'self' 'sha256-wtsUP8my7X7CvwMRDu18ionMzalXZ47DpmBlpML7lY8='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; media-src 'self' blob: https://*.workers.dev; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.workers.dev https://nominatim.openstreetmap.org https://upload.videodelivery.net https://*.cloudflarestream.com
   X-Frame-Options: SAMEORIGIN
 
 /mcp/*
