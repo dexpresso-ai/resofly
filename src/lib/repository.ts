@@ -6712,9 +6712,26 @@ export async function loadAttachmentRef(id: UUID, organizationId: UUID): Promise
  * Ligt een bijlage vast omdat het document waar hij aan hangt geen concept meer
  * is? Dezelfde regel als het scherm (geen Verwijderen-knop bij een verstuurde
  * offerte of factuur, of een geboekte inkoopfactuur), nu gelezen vlak voor het
- * uitvoeren. De database bewaakt bijlagen zelf niet. Null = vrij.
+ * uitvoeren. De database weigert het sinds 20261122131000 zelf ook (trigger
+ * attachments_evidence_guard) en de media-worker vraagt het na; deze controle
+ * blijft, omdat ze vóór het wissen van het bestand een nette melding geeft.
+ * Null = vrij.
  */
 export async function attachmentLockReason(entityType: string, entityId: UUID, organizationId: UUID): Promise<string | null> {
+  if (entityType === 'fixed_asset') {
+    const { data, error } = await supabase.from('fixed_assets').select('acquisition_journal_entry_id').eq('id', entityId).eq('organization_id', organizationId).maybeSingle();
+    if (error) throw error;
+    // Ook een geboekte afschrijving legt het vast, net als in de database. Alleen
+    // naar de aanschaf kijken gaf bij een activum met alleen afschrijvingen de
+    // rauwe databasefout in plaats van deze melding.
+    const { count, error: depError } = await supabase.from('asset_depreciations').select('id', { count: 'exact', head: true })
+      .eq('organization_id', organizationId).eq('asset_id', entityId).not('journal_entry_id', 'is', null);
+    if (depError) throw depError;
+    if ((data as { acquisition_journal_entry_id?: string | null } | null)?.acquisition_journal_entry_id || Number(count ?? 0) > 0) {
+      return 'Dit bestand is het bewijsstuk van een activum waarop geboekt is; het ligt vast (bewaarplicht).';
+    }
+    return null;
+  }
   const table = entityType === 'quote' ? 'quotes' : entityType === 'invoice' ? 'invoices' : entityType === 'purchase_invoice' ? 'purchase_invoices' : null;
   if (!table) return null;
   const columns = table === 'purchase_invoices' ? 'status' : table === 'invoices' ? 'status, sent_at, journal_entry_id' : 'status, sent_at';
