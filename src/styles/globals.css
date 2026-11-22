@@ -3200,7 +3200,7 @@ body::before{
 /* ── De verdeling van een boekjaar over de vennoten (PartnerSplit.tsx) ─────
    In het afsluitvenster bij Boekjaren en op Vennoten. Het venster is ruimer
    dan de gewone 440px: de tabel heeft vier kolommen met bedragen. */
-.bk-modal.bk-modal-split{max-width:640px}
+.bk-modal.bk-modal-split{max-width:640px;max-height:100%;overflow-y:auto;overscroll-behavior:contain}
 .bk-split{display:flex;flex-direction:column;gap:8px;border:1px solid var(--border);border-radius:14px;padding:12px 14px;background:rgba(var(--sheen-rgb),calc(.022 * var(--sheen-k)))}
 .bk-split-head{display:flex;align-items:center;justify-content:space-between;gap:8px 12px;flex-wrap:wrap}
 .bk-split-status{margin:2px 0 10px}
@@ -3235,7 +3235,7 @@ body::before{
   /* Op de telefoon: de naam over de hele breedte, de twee velden naast
      elkaar met hun eigen label, en het bedrag eronder. */
   .bk-split-row-head{display:none}
-  .bk-split-row{grid-template-columns:minmax(0,1fr) minmax(0,1.4fr) 34px;padding:10px 0;border-top:1px solid var(--border)}
+  .bk-split-row{grid-template-columns:minmax(0,1fr) minmax(0,1.4fr) 34px;align-items:end;padding:10px 0;border-top:1px solid var(--border)}
   .bk-split-name{grid-column:1/-1}
   .bk-split-field>span{display:block;font-size:.68rem;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--muted,rgba(var(--ink-rgb),.55))}
   .bk-split-amount{grid-column:1/3;grid-row:3;text-align:left}
