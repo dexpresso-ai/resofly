@@ -307,7 +307,12 @@ Ook de edge functions gaan mee: de handelingen van Gerrie, MCP en de API.
   - de rooktest is geslaagd (Postgres 17.11), ook "boekhouder-hek: elke
     organisatietabel is afgeschermd" (de nieuwe tabel valt eronder) en
     "anon heeft geen rechten in public".
-- *Frontend checks* run 274: liep nog bij het vastleggen van deze uitrol.
+- *Frontend checks* run 274: alles groen.
+  - De keten vanaf nul op een lege database, elk migratiebestand toegepast,
+    en de databasetests.
+  - `deno check` op de edge functions (met esm.sh: dat kon hier niet).
+  - Typecheck, de unit tests, en de mobiele lay-outtest in licht en donker.
+  - Laden per module, de inrichtingsstappen en de terugknop.
 - Cloudflare Pages bouwt de app bij de push naar `staging`; dat is van hieruit
   niet te zien.
 
