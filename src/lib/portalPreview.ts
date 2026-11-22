@@ -16,7 +16,7 @@ import { addDays, formatISODate } from './dates';
 import type { PortalAccount, PortalBackend, PortalInvoice, PortalMessage, PortalMessageThreadSummary, PortalTicket } from './portalApi';
 import type { CompanySettingsInput } from '../types';
 
-export const PORTAL_PREVIEW_PATH = '/portal/voorbeeld';
+export { PORTAL_PREVIEW_PATH } from './portalPreviewPath';
 export const PORTAL_PREVIEW_MESSAGE = 'resofly:portal-preview';
 export const PORTAL_PREVIEW_READY = 'resofly:portal-preview-ready';
 
