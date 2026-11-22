@@ -5,6 +5,7 @@ import { Button, Input, Select, Skeleton } from '../components/Ui';
 import { PageIcon } from '../components/PageIcon';
 import { dateNL, euro } from '../lib/format';
 import { formatISODate } from '../lib/dates';
+import { incomeTaxOpening } from '../lib/jaarwissel';
 import { parseDutchAmountCents } from '../lib/money';
 import { downloadCsv } from '../lib/csv';
 import {
@@ -85,7 +86,13 @@ export function IncomeTaxPage({ data, organizationId, canWrite }: {
     return out;
   }, [currentYear]);
 
-  const [year, setYear] = useState(Math.max(currentYear, IB_FIRST_YEAR));
+  // Van januari tot 1 mei opent de pagina op vorig jaar: het jaar van je
+  // aangifte. Eerst opende ze altijd op het lopende jaar, in januari dus op
+  // "Winst 2027 € 0,00". De knop bovenaan brengt je naar het andere jaar.
+  const [opening] = useState(() => incomeTaxOpening({
+    today: formatISODate(new Date()), firstYear: IB_FIRST_YEAR, bookkeepingStart: data.companySettings?.bookkeeping_start_date ?? null,
+  }));
+  const [year, setYear] = useState(opening.year);
   const [inputs, setInputs] = useState<IncomeTaxInputs | null>(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -219,6 +226,17 @@ export function IncomeTaxPage({ data, organizationId, canWrite }: {
         <Info size={16} aria-hidden="true" />
         <p><strong>Alleen zakelijk inkomen.</strong> {IB_DISCLAIMER}</p>
       </div>
+
+      {opening.filingYear !== null && (
+        <p className="bk-note ib-filing-year">
+          {year === opening.filingYear
+            ? `Tot 1 mei doe je aangifte over ${opening.filingYear}. Daarom zie je hier eerst ${opening.filingYear}.`
+            : `Tot 1 mei doe je aangifte over ${opening.filingYear}. Je kijkt nu naar ${year}.`}{' '}
+          <button type="button" className="bk-link-button" onClick={() => changeYear(year === opening.filingYear ? currentYear : opening.filingYear!)}>
+            {year === opening.filingYear ? `Naar ${currentYear}` : `Naar ${opening.filingYear}`}
+          </button>
+        </p>
+      )}
 
       {error && <div className="error">{error}</div>}
       {message && <p className="bk-note">{message}</p>}
