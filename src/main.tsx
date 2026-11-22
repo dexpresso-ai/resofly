@@ -3162,7 +3162,10 @@ function App() {
       setError('Alleen geaccepteerde offertes kunnen worden omgezet naar een factuur.');
       return;
     }
-    if (!confirm(`Factuur maken van offerte ${quote.number}? Dit gebeurt server-side en voorkomt dubbele facturen bij dubbelklikken.`)) return;
+    // Eén offerte geeft één factuur (idx_invoices_one_per_quote). In delen
+    // factureren (een voorschot, termijnen) kan wel, maar niet als aparte
+    // factuurvorm: dat staat hier, op het moment dat je het kiest.
+    if (!confirm(`Factuur maken van offerte ${quote.number}?\n\nJe krijgt een conceptfactuur met alle regels van de offerte. Bij een offerte hoort één factuur. Wil je in delen factureren, bijvoorbeeld eerst een voorschot? Pas dan in dit concept de bedragen aan tot het eerste deel, en maak voor de volgende delen een nieuwe factuur met "+ Nieuw" (kies daar hetzelfde project).`)) return;
     setLoading(true); setError(null);
     try {
       const invoice = await convertAcceptedQuoteToInvoice(activeOrg.id, quote.id);
