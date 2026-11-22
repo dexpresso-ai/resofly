@@ -1,11 +1,23 @@
 -- Factuurregels: wat er op een factuur staat, en langs welke weg hij uitgaat
 --
--- Uit de controle "van werk naar geld" van 22 november 2026 (bevinding 9):
--- convert_accepted_quote_to_invoice gaf een factuur uit een offerte altijd
--- 14 dagen, ook als op dezelfde factuur "Betaling binnen 30 dagen." stond; de
--- herinneringen begonnen zo 16 dagen te vroeg. Nu volgt de vervaldatum de
--- betaaltermijn uit de bedrijfsgegevens, met dezelfde regel als het
--- factuurformulier.
+-- Uit de controle "van werk naar geld" van 22 november 2026:
+--
+--   1. Uitgeven gaat alleen nog via de server (bevinding 12). "Verzonden" of
+--      "Te laat" in het statusveld, of via Gerrie (invoice.set_status), boekte
+--      een concept zonder de controles van het versturen: het btw-nummer bij
+--      ICP of verlegd, de KOR, een factuurdatum in een afgesloten tijdvak.
+--      Een ICP-factuur aan een Belgische klant zonder btw-nummer kwam zo in
+--      rubriek 3b en in de ICP-opgaaf met een leeg btw-nummer, en er was geen
+--      pdf vastgelegd van wat de klant kreeg. Nu weigert de database dat
+--      rechtstreeks; de server geeft uit (per mail, of met de nieuwe weg
+--      "uitgeven zonder mail") en controleert eerst.
+--   2. issue_invoice_without_email: die nieuwe weg. Wie de pdf zelf mailt of
+--      op papier geeft, krijgt dezelfde controles, en de pdf die de klant krijgt
+--      wordt vastgelegd als verzonden versie.
+--   3. convert_accepted_quote_to_invoice: de vervaldatum volgt de betaaltermijn
+--      uit de bedrijfsgegevens (bevinding 9). Het was altijd 14 dagen, ook als
+--      op dezelfde factuur "Betaling binnen 30 dagen." stond; de herinneringen
+--      begonnen zo 16 dagen te vroeg.
 --
 -- Veilig om opnieuw te draaien: create or replace, drop trigger if exists.
 -- Bestaande facturen veranderen niet.
@@ -211,5 +223,169 @@ $function$;
 revoke all on function public.convert_accepted_quote_to_invoice(uuid, uuid) from public, anon;
 grant execute on function public.convert_accepted_quote_to_invoice(uuid, uuid) to authenticated, service_role;
 
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 3. Een concept geeft alleen de server uit
+-- ═══════════════════════════════════════════════════════════════════════════
+-- Rechtstreeks (de app, Gerrie, de API: allemaal als het teamlid) mag een
+-- concept niet meer op verzonden, te laat of betaald. Dat liep langs alle
+-- controles van het versturen heen, en de database boekte het concept toch
+-- (invoices_autobook). Uitgeven gaat via invoice-workflow (de service-role):
+-- versturen per mail, via Mollie, of zonder mail. Een functie met security
+-- definer (zoals afletteren bij de bank) draait als eigenaar en valt hier ook
+-- buiten.
+--
+-- Eén uitzondering: een factuur van vóór de startdatum van de boekhouding.
+-- Die wordt niet geboekt (de vordering zit in de beginbalans), en wie
+-- overstapt uit een ander pakket zet zijn oude openstaande en betaalde
+-- facturen zo zelf op verzonden of betaald.
+--
+-- Ook een geannuleerd concept dat nooit is uitgegeven, gaat niet zo
+-- alsnog de deur uit.
+create or replace function public.enforce_invoice_issue_via_server()
+ returns trigger
+ language plpgsql
+ set search_path to 'public'
+as $function$
+declare
+  v_start date;
+begin
+  if current_user not in ('anon', 'authenticated', 'authenticator') then return new; end if;
+  if new.status not in ('sent', 'overdue', 'paid') then return new; end if;
+  if tg_op = 'UPDATE' and (old.status not in ('draft', 'cancelled', 'void') or old.journal_entry_id is not null) then
+    return new;
+  end if;
+  select bookkeeping_start_date into v_start
+    from public.company_settings where organization_id = new.organization_id;
+  if v_start is not null and new.date is not null and new.date < v_start then
+    return new;
+  end if;
+  if new.status = 'paid' then
+    raise exception 'Factuur % is nog niet uitgegeven. Geef hem eerst uit met "Verstuur per e-mail" of "Uitgeven zonder mail" bij de factuur. Leg de betaling daarna vast bij Bank; dan gaat hij vanzelf op betaald.',
+      coalesce(new.number, '') using errcode = '23514';
+  end if;
+  raise exception 'Factuur % is nog niet uitgegeven. Dat doe je met "Verstuur per e-mail" bij de factuur, of met "Uitgeven zonder mail" als je hem zelf mailt of print. Dan controleert ResoFly eerst de btw (zoals het btw-nummer van je klant bij ICP of verlegd) en bewaart het de pdf die je klant krijgt.',
+    coalesce(new.number, '') using errcode = '23514';
+end;
+$function$;
+
+revoke all on function public.enforce_invoice_issue_via_server() from public, anon, authenticated;
+
+drop trigger if exists invoices_issue_via_server on public.invoices;
+create trigger invoices_issue_via_server
+  before insert or update of status on public.invoices
+  for each row execute function public.enforce_invoice_issue_via_server();
+
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 4. Uitgeven zonder mail
+-- ═══════════════════════════════════════════════════════════════════════════
+-- Voor wie de pdf zelf mailt, print of in een portaal zet. invoice-workflow
+-- controleert eerst wat het versturen ook controleert, maakt de pdf, bewaart
+-- hem (in private opslag of hier als base64) en roept dan deze functie aan.
+-- Die zet de factuur op verzonden en vast, en legt de pdf vast als de
+-- verzonden versie: "Download verzonden PDF" geeft daarna precies die.
+-- Alleen de server roept hem aan.
+create or replace function public.issue_invoice_without_email(
+  p_invoice_id uuid,
+  p_organization_id uuid,
+  p_actor_user_id uuid,
+  p_pdf_file_name text,
+  p_pdf_mime_type text,
+  p_pdf_size_bytes integer,
+  p_pdf_sha256 text,
+  p_pdf_data_base64 text default null,
+  p_pdf_storage_provider text default null,
+  p_pdf_storage_key text default null
+)
+ returns jsonb
+ language plpgsql
+ security definer
+ set search_path to 'public'
+as $function$
+declare
+  v_invoice public.invoices;
+  v_version public.invoice_versions;
+  v_provider text := nullif(btrim(coalesce(p_pdf_storage_provider, '')), '');
+  v_key text := nullif(btrim(coalesce(p_pdf_storage_key, '')), '');
+  v_base64 text := nullif(btrim(coalesce(p_pdf_data_base64, '')), '');
+begin
+  if auth.role() <> 'service_role' then
+    raise exception 'Alleen de server geeft een factuur uit.' using errcode = '42501';
+  end if;
+  if p_actor_user_id is null then
+    raise exception 'Niet ingelogd.' using errcode = '42501';
+  end if;
+  if p_pdf_file_name is null or coalesce(p_pdf_size_bytes, 0) <= 0 or p_pdf_sha256 is null then
+    raise exception 'Uitgeven vraagt een echte pdf met bestandsnaam, grootte en SHA-256.' using errcode = '23514';
+  end if;
+  if v_provider = 'r2' and v_key is null then
+    raise exception 'Een pdf in private opslag heeft een sleutel nodig.' using errcode = '23514';
+  end if;
+  if v_provider is null and v_base64 is null then
+    raise exception 'De pdf moet in private opslag of in de database worden bewaard.' using errcode = '23514';
+  end if;
+
+  select * into v_invoice
+    from public.invoices
+   where id = p_invoice_id and organization_id = p_organization_id
+   for update;
+  if not found then raise exception 'Factuur niet gevonden.' using errcode = '02000'; end if;
+  if v_invoice.status <> 'draft' then
+    raise exception 'Factuur % is al uitgegeven.', coalesce(v_invoice.number, '') using errcode = '23514';
+  end if;
+  -- Een verzending per mail die nog loopt: niet ook nog zonder mail.
+  if exists (
+    select 1 from public.invoice_email_deliveries d
+     where d.invoice_id = p_invoice_id and d.organization_id = p_organization_id
+       and d.delivery_kind = 'invoice' and d.status = 'queued'
+       and d.created_at > now() - interval '3 minutes'
+  ) then
+    raise exception 'Factuur % wordt op dit moment per mail verstuurd. Wacht even en kijk bij de factuur of hij is verzonden.',
+      coalesce(v_invoice.number, '') using errcode = '23514';
+  end if;
+
+  -- Hetzelfde als na een verzonden mail (complete_invoice_email_send): de
+  -- database boekt hem (invoices_autobook) en zet hem vast.
+  update public.invoices
+     set status = 'sent',
+         sent_at = coalesce(sent_at, now()),
+         locked_at = coalesce(locked_at, now()),
+         locked_reason = coalesce(locked_reason, 'sent_to_client'),
+         updated_at = now()
+   where id = p_invoice_id and organization_id = p_organization_id
+   returning * into v_invoice;
+
+  v_version := public.create_invoice_version_snapshot(
+    p_invoice_id, p_organization_id, 'sent_to_client', p_actor_user_id, null, null,
+    p_pdf_file_name, coalesce(nullif(btrim(coalesce(p_pdf_mime_type, '')), ''), 'application/pdf'), p_pdf_size_bytes, lower(p_pdf_sha256), null,
+    jsonb_build_object('channel', 'without_email', 'pdfStoredInDatabase', v_base64 is not null, 'pdfStorageProvider', v_provider, 'pdfStorageKeyPresent', v_key is not null)
+  );
+
+  update public.invoice_versions
+     set pdf_data_base64 = coalesce(v_base64, pdf_data_base64),
+         pdf_storage_provider = coalesce(v_provider, case when v_base64 is not null then 'database' else pdf_storage_provider end),
+         pdf_storage_key = coalesce(v_key, case when v_base64 is not null then 'invoice_versions/' || v_version.id::text || '.pdf.base64' else pdf_storage_key end)
+   where id = v_version.id
+   returning * into v_version;
+
+  perform public.insert_invoice_workflow_event(
+    p_organization_id, p_invoice_id, 'sent_to_client',
+    'Factuur uitgegeven zonder mail',
+    'De factuur is uitgegeven zonder mail vanuit ResoFly (zelf gemaild, geprint of anders bezorgd). De pdf is vastgelegd en de factuur is vergrendeld.',
+    jsonb_build_object('channel', 'without_email', 'version_id', v_version.id, 'storage_provider', v_version.pdf_storage_provider),
+    p_actor_user_id
+  );
+
+  insert into public.audit_logs(organization_id, actor_user_id, action, entity_type, entity_id, entity_label, metadata)
+  values (p_organization_id, p_actor_user_id, 'invoice_sent_to_client', 'invoice', v_invoice.id, v_invoice.number,
+          jsonb_build_object('channel', 'without_email', 'version_id', v_version.id));
+
+  return jsonb_build_object('invoice', to_jsonb(v_invoice) - 'public_token_hash', 'version', to_jsonb(v_version) - 'pdf_data_base64');
+end;
+$function$;
+
+revoke all on function public.issue_invoice_without_email(uuid, uuid, uuid, text, text, integer, text, text, text, text) from public, anon, authenticated;
+grant execute on function public.issue_invoice_without_email(uuid, uuid, uuid, text, text, integer, text, text, text, text) to service_role;
 
 commit;

@@ -340,7 +340,7 @@ export const FINANCE_ACTIONS: ActionDef[] = [
     kind: 'write',
     risk: 'high',
     description:
-      'Zet de status van een factuur met de hand. "paid" kan alleen voor een factuur van vóór de startdatum van de boekhouding (die vordering staat in de beginbalans). Voor elke andere factuur registreer je een betaling door de banktransactie te koppelen (`invoice.reconcile_bank_transaction`); contant geld gaat net zo, via een kasrekening als bankrekening. Een memoriaalpost op Debiteuren telt niet als betaling van de factuur. Daarna staat hij vanzelf op betaald. ' +
+      'Zet de status van een factuur met de hand. Een CONCEPT uitgeven (sent of overdue) kan hier niet: dat doet de gebruiker bij de factuur in ResoFly met "Verstuur per e-mail" of "Uitgeven zonder mail", zodat eerst de btw (o.a. het btw-nummer van de klant bij ICP of verlegd) wordt gecontroleerd en de pdf wordt vastgelegd. Alleen een factuur van vóór de startdatum van de boekhouding zet je zo op verzonden of betaald (die vordering staat in de beginbalans). "paid" kan alleen voor zo\'n factuur. Voor elke andere factuur registreer je een betaling door de banktransactie te koppelen (`invoice.reconcile_bank_transaction`); contant geld gaat net zo, via een kasrekening als bankrekening. Een memoriaalpost op Debiteuren telt niet als betaling van de factuur. Daarna staat hij vanzelf op betaald. ' +
       'draft = concept, sent = verzonden, overdue = te laat, paid = betaald, cancelled = geannuleerd, void = ongeldig gemaakt, written_off = afgeboekt (oninbaar). ' +
       'Let op: "void" en "written_off" zijn feitelijk eindstations, en de bedragen zelf verander je hiermee niet. Een factuur die in het grootboek staat en waarop nog iets openstaat, annuleer of boek je niet af via de status: dat gaat met "Crediteren" bij de factuur in ResoFly (voor wat nog openstaat, ook na een deelbetaling; daar staat ook "Afboeken als oninbaar"). Zoek de factuur met `list_invoices`.',
     keywords: ['status', 'betaald', 'betaling registreren', 'markeren', 'voldaan', 'geannuleerd', 'afboeken', 'oninbaar', 'storneren', 'debiteuren'],
@@ -359,6 +359,18 @@ export const FINANCE_ACTIONS: ActionDef[] = [
       }
       if (status === 'draft' && invoice.status !== 'draft') {
         throw new ActionError(`Factuur ${invoice.number} is uitgegeven en gaat niet terug naar concept. Crediteer hem en maak een nieuwe factuur.`);
+      }
+      // Een concept uitgeven via de status sloeg de controles van het versturen
+      // over (btw-nummer bij ICP of verlegd, KOR, 0% zonder reden) en legde geen
+      // pdf vast; de database boekte hem toch (controle van 22 november 2026).
+      // Dat weigert de database nu ook (enforce_invoice_issue_via_server), maar
+      // hier met de weg die wel werkt. Alleen vóór de startdatum mag het nog.
+      if (invoice.status === 'draft' && ['sent', 'overdue'].includes(status)) {
+        const startDate = await bookkeepingStartDate(ctx);
+        const inOpeningBalance = Boolean(startDate && invoice.date && invoice.date < startDate);
+        if (!inOpeningBalance) {
+          throw new ActionError(`Factuur ${invoice.number} is nog een concept. Uitgeven gaat niet via de status: dat doet de gebruiker bij de factuur in ResoFly, met "Verstuur per e-mail" of, als hij de pdf zelf mailt of print, "Uitgeven zonder mail". Daar controleert ResoFly eerst de btw en bewaart het de pdf die de klant krijgt.`);
+        }
       }
       // Een concept met een negatief totaal niet uitgeven (ook niet via de
       // status): zo'n zelfgemaakte "creditfactuur" komt negatief op Debiteuren
@@ -400,9 +412,11 @@ export const FINANCE_ACTIONS: ActionDef[] = [
         void: 'Ongeldig gemaakt is een eindstation: de factuur verdwijnt uit de debiteurenstand en uit de herinneringsflow, en je kunt hem daarna niet meer versturen of innen.',
         written_off: 'Afgeboekt betekent dat je deze vordering als oninbaar beschouwt. De factuur verdwijnt uit de debiteurenstand en uit de herinneringsflow.',
         cancelled: 'Een geannuleerde factuur wordt niet meer verstuurd of geïnd, en valt nog steeds onder de bewaarplicht — verwijderen kan niet.',
+        // Een concept komt hier alleen nog met een datum van vóór de start:
+        // die wordt niet geboekt (de vordering zit in de beginbalans).
         ...(invoice.status === 'draft' && !invoice.journal_entry_id ? {
-          sent: 'Op verzonden zetten boekt de omzet en btw in het grootboek en zet de factuur vast; daarna kun je hem alleen nog crediteren. Er gaat geen mail naar de klant — versturen doe je vanuit de factuur in ResoFly.',
-          overdue: 'Dit boekt de omzet en btw in het grootboek en zet de factuur vast; daarna kun je hem alleen nog crediteren.',
+          sent: 'De factuur heeft een datum van vóór de startdatum van je boekhouding en wordt dus niet geboekt. Er gaat geen mail naar de klant.',
+          overdue: 'De factuur heeft een datum van vóór de startdatum van je boekhouding en wordt dus niet geboekt.',
         } : {}),
       };
       return {

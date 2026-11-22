@@ -146,7 +146,7 @@ import { documentTypeLabels } from './features/Documents';
 import { clientFolderOptions } from './lib/folders';
 import { clientEInvoiceChannel, clientWantsEInvoice, eInvoiceReadiness, invoiceRecipientFor, isValidEmail, mollieInvoicingAllowed } from './lib/eInvoicing';
 import type { CreditInput, RefundInput } from './features/Finance';
-import { creditInvoiceAmount, issueCreditNoteForRefund, previewInvoiceSend, refundInvoice as refundInvoiceWithPurpose, type InvoiceBookingNotice } from './services/invoiceRecoveryService';
+import { creditInvoiceAmount, issueCreditNoteForRefund, issueInvoiceWithoutEmail, previewInvoiceSend, refundInvoice as refundInvoiceWithPurpose, type InvoiceBookingNotice } from './services/invoiceRecoveryService';
 import { nextPurchaseNumber, purchaseTotals } from './lib/purchaseInvoiceNumbers';
 import type { InvoiceFormSeed } from './features/Bookkeeping';
 import { clientHostInfo, portalRedirectTarget } from './lib/clientHost';
@@ -3338,6 +3338,28 @@ function App() {
     return confirm(`${notice.message}\n\n${notice.advice}\n\nKlik op OK om de factuur toch zo te versturen, of op Annuleren om eerst de datum aan te passen (Bewerken).`);
   }
 
+  /**
+   * Uitgeven zonder mail: je mailt de pdf zelf, print hem of zet hem ergens
+   * anders neer. Dezelfde controles als versturen, en de pdf wordt bewaard als
+   * de verzonden versie. Hiervoor zette je het statusveld op "Verzonden"; dan
+   * werd er niets gecontroleerd en geen pdf bewaard.
+   */
+  async function issueInvoiceWithoutMail(invoice: Invoice) {
+    if (!ensureCanWrite()) return;
+    if (!confirm(`Factuur ${invoice.number} uitgeven zonder mail?\n\nResoFly stuurt je klant niets. Je krijgt de pdf om zelf te mailen of te printen. De factuur wordt geboekt en ligt daarna vast: corrigeren gaat dan met een creditfactuur.`)) return;
+    if (!(await confirmInvoiceBooking(invoice))) return;
+    setLoading(true); setError(null);
+    try {
+      await issueInvoiceWithoutEmail(activeOrg.id, invoice.id);
+      await refresh();
+      await downloadInvoicePdfSnapshot(activeOrg.id, invoice.id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'De factuur kon niet worden uitgegeven.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function sendInvoiceReminder(invoice: Invoice) {
     if (!ensureCanWrite()) return;
     const client = data.clients.find(item => item.id === invoice.client_id);
@@ -4702,7 +4724,7 @@ function App() {
     if (page === 'quotes') return <Quotes data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'quote'})} onEdit={(item)=>setEdit({kind:'quote', item})} onSubmitApproval={submitQuoteApproval} onApprove={approveQuote} onReject={rejectQuote} onWithdraw={withdrawQuote} onSend={sendQuote} onConvertToInvoice={convertQuoteToInvoice} onDownloadPdf={downloadQuotePdf}/>;
     if (page === 'contracts') return <Contracts data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} refreshKey={refreshRound}
       draft={view.pendingDraft?.kind === 'contract' ? contractDraftFrom(view.pendingDraft.payload) : null} onDraftConsumed={() => setPendingDraft(null)}/>;
-    if (page === 'invoices') return <Invoices data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'invoice'})} onEdit={(item)=>setEdit({kind:'invoice', item})} onSend={sendInvoice} onSendReminder={sendInvoiceReminder} onToggleRemindersPaused={toggleInvoiceRemindersPaused} onDownloadPdf={downloadInvoicePdf} onDownloadUbl={downloadInvoiceUblFile} onRefund={refundInvoice} onDownloadCreditNote={downloadCreditNote} onDownloadCreditNoteUbl={downloadCreditNoteUblFile} onEmailCreditNote={emailCreditNote} onPostCreditNote={postCreditNoteLedger} onCreditNoteForRefund={creditNoteForRefund} onPostToLedger={postInvoiceToLedger} onCreditInvoice={creditUnpaidInvoice} onBookAllUnbooked={bookAllUnbookedInvoices} onProposeDunning={proposeDunning} onSendDunning={sendDunning} onCancelDunning={cancelDunning} onSyncMollie={syncMollieInvoice} onDownloadMolliePdf={downloadMolliePdf}/>;
+    if (page === 'invoices') return <Invoices data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'invoice'})} onEdit={(item)=>setEdit({kind:'invoice', item})} onSend={sendInvoice} onIssueWithoutEmail={issueInvoiceWithoutMail} onSendReminder={sendInvoiceReminder} onToggleRemindersPaused={toggleInvoiceRemindersPaused} onDownloadPdf={downloadInvoicePdf} onDownloadUbl={downloadInvoiceUblFile} onRefund={refundInvoice} onDownloadCreditNote={downloadCreditNote} onDownloadCreditNoteUbl={downloadCreditNoteUblFile} onEmailCreditNote={emailCreditNote} onPostCreditNote={postCreditNoteLedger} onCreditNoteForRefund={creditNoteForRefund} onPostToLedger={postInvoiceToLedger} onCreditInvoice={creditUnpaidInvoice} onBookAllUnbooked={bookAllUnbookedInvoices} onProposeDunning={proposeDunning} onSendDunning={sendDunning} onCancelDunning={cancelDunning} onSyncMollie={syncMollieInvoice} onDownloadMolliePdf={downloadMolliePdf}/>;
     if (page === 'suppliers') return <SuppliersPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}
       draft={view.pendingDraft?.kind === 'supplier' ? (view.pendingDraft.payload as Partial<Supplier>) : null} onDraftConsumed={() => setPendingDraft(null)}/>;
     if (page === 'purchase-invoices') return <PurchaseInvoicesPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}
@@ -5530,6 +5552,16 @@ function FinanceForm({ kind, data, organizationId, form, set, item, readOnly, on
   // niet terug naar verzonden of betaald.
   const savedStatus = (item as Invoice | undefined)?.status;
   const invoiceStatusFixed = !isQuote && (savedStatus === 'refunded' || (invoiceBooked && (savedStatus === 'cancelled' || savedStatus === 'void')));
+  // Een concept geef je uit met "Verstuur per e-mail" of "Uitgeven zonder mail"
+  // bij de factuur, niet hier: via de status gingen de controles van het
+  // versturen (btw-nummer bij ICP, KOR, 0% zonder reden) en de pdf eraan
+  // voorbij, en de database weigert het nu ook. Alleen een factuur van vóór
+  // de startdatum (overstap uit een ander pakket) zet je zelf op verzonden of
+  // betaald: die wordt niet geboekt.
+  const bookkeepingStart = data.companySettings?.bookkeeping_start_date ?? null;
+  const notIssuedYet = !isQuote && !invoiceBooked && (!savedStatus || ['draft', 'cancelled', 'void'].includes(savedStatus));
+  const beforeBookkeepingStart = Boolean(bookkeepingStart && form.date && String(form.date) < bookkeepingStart);
+  const canPickIssuedStatus = (status: string) => !notIssuedYet || beforeBookkeepingStart || form.status === status;
 
   const handleDownloadPdf = () => {
     const client = data.clients.find(c => c.id === form.client_id) ?? null;
@@ -5568,13 +5600,13 @@ function FinanceForm({ kind, data, organizationId, form, set, item, readOnly, on
             <option value="">Geen project</option>{projectOptions.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
           </Select>
         </Field>
-        {isQuote ? <div className="readonly-workflow-status finance-status-card"><span>Offertestatus</span><strong>{quoteFormStatusLabel(form.status, form.internal_approval_status)}</strong><small>Status loopt via de goedkeuringsflow, niet via handmatig opslaan.</small></div> : <Field label="Factuurstatus" hint={invoiceStatusFixed ? 'Een terugbetaalde of gecrediteerde factuur verandert niet meer via de status. Moet er toch iets worden gefactureerd, maak dan een nieuwe factuur.' : invoiceBooked ? 'Deze factuur staat in het grootboek. Annuleren gaat met "Crediteren" bij de factuur; dan worden omzet en btw teruggeboekt. "Betaald" komt vanzelf als er niets meer openstaat: leg de ontvangst vast bij Bank (Mutatie invoeren, en verdeel hem op deze factuur). Contant ontvangen gaat net zo, met een kasrekening (1000 Kas) als bankrekening.' : 'Status van de factuur.'}>
+        {isQuote ? <div className="readonly-workflow-status finance-status-card"><span>Offertestatus</span><strong>{quoteFormStatusLabel(form.status, form.internal_approval_status)}</strong><small>Status loopt via de goedkeuringsflow, niet via handmatig opslaan.</small></div> : <Field label="Factuurstatus" hint={invoiceStatusFixed ? 'Een terugbetaalde of gecrediteerde factuur verandert niet meer via de status. Moet er toch iets worden gefactureerd, maak dan een nieuwe factuur.' : invoiceBooked ? 'Deze factuur staat in het grootboek. Annuleren gaat met "Crediteren" bij de factuur; dan worden omzet en btw teruggeboekt. "Betaald" komt vanzelf als er niets meer openstaat: leg de ontvangst vast bij Bank (Mutatie invoeren, en verdeel hem op deze factuur). Contant ontvangen gaat net zo, met een kasrekening (1000 Kas) als bankrekening.' : notIssuedYet && !beforeBookkeepingStart ? 'Uitgeven doe je bij de factuur: "Verstuur per e-mail" of "Uitgeven zonder mail".' : 'Status van de factuur.'}>
           <Select value={form.status} onChange={e=>set('status',e.target.value)} disabled={disabled || invoiceStatusFixed}>
             {form.status === 'refunded' && <option value="refunded">Terugbetaald</option>}
             <option value="draft">Concept</option>
-            <option value="sent">Verzonden</option>
-            <option value="overdue">Te laat</option>
-            <option value="paid">Betaald</option>
+            {canPickIssuedStatus('sent') && <option value="sent">Verzonden</option>}
+            {canPickIssuedStatus('overdue') && <option value="overdue">Te laat</option>}
+            {canPickIssuedStatus('paid') && <option value="paid">Betaald</option>}
             {(!invoiceBooked || form.status === 'cancelled') && <option value="cancelled">Geannuleerd</option>}
             {(!invoiceBooked || form.status === 'void') && <option value="void">Ongeldig gemaakt</option>}
             {(!invoiceBooked || form.status === 'written_off') && <option value="written_off">Afgeboekt</option>}
