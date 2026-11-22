@@ -190,35 +190,67 @@ test('terugdraaien van bestemming, dividend, DGA-rente, Vpb en jaarrekening is a
 test('afsluiten weigert vooraf als de winstverdeling van de vennoten niet op 100% uitkomt', async () => {
   const close = action(BOOKKEEPING_ACTIONS, 'fiscal_year.close');
   const rows = {
-    fiscal_years: [{ label: '2025', period_start: '2025-01-01', period_end: '2025-12-31', status: 'open' }],
+    fiscal_years: [{ label: '2025', period_start: '2025-01-01', period_end: '2025-12-31', status: 'open', legal_form: 'vof' }],
     company_settings: [{ year_result_account_code: '0510', legal_form: 'vof' }],
-    partnership_partners: [{ name: 'Anna', profit_share_basis_points: 6000 }, { name: 'Bram', profit_share_basis_points: 3000 }],
   };
-  await assert.rejects(close.plan!(ctx(rows, { list_fiscal_years: [{ id: ID, computed_result_cents: 100000 }] }), { fiscal_year_id: ID }),
+  // Sinds 20261122100000 komt de verdeling van dít boekjaar uit
+  // owners_equity_overview, met de bedragen per vennoot.
+  const verdeling = (extra: Record<string, unknown> = {}) => ({
+    list_fiscal_years: [{ id: ID, computed_result_cents: 100000 }],
+    owners_equity_overview: {
+      isPartnership: true, shareTotalBasisPoints: 10000, splitFixed: false, splitChangedAfterYearEnd: [], generalPrivateCents: 0, partnersDefined: true,
+      owners: [
+        { name: 'Anna', inSplit: true, shareBasisPoints: 6000, priorShareCents: 0, resultShareCents: 60000 },
+        { name: 'Bram', inSplit: true, shareBasisPoints: 4000, priorShareCents: 0, resultShareCents: 40000 },
+      ],
+      ...extra,
+    },
+  });
+  await assert.rejects(close.plan!(ctx(rows, verdeling({ shareTotalBasisPoints: 9000 })), { fiscal_year_id: ID }),
     (error: unknown) => error instanceof ActionError && /90% in plaats van 100%/.test(error.message));
-  const ok = { ...rows, partnership_partners: [{ name: 'Anna', profit_share_basis_points: 6000 }, { name: 'Bram', profit_share_basis_points: 4000 }] };
-  const plan = await close.plan!(ctx(ok, { list_fiscal_years: [{ id: ID, computed_result_cents: 100000 }] }), { fiscal_year_id: ID });
-  assert.match(plan.sub, /kapitaalrekeningen van 2 vennoten/);
+  const plan = await close.plan!(ctx(rows, verdeling()), { fiscal_year_id: ID });
+  assert.match(plan.sub, /naar de vennoten \(Anna €\s600,00; Bram €\s400,00\)/);
+  assert.match(plan.sub, /de verdeling is die van de vennoten nu/);
+  // Een vennoot die na het einde van het jaar is gewijzigd: eerst de verdeling van dat jaar.
+  await assert.rejects(close.plan!(ctx(rows, verdeling({ splitChangedAfterYearEnd: ['Bram'] })), { fiscal_year_id: ID }),
+    (error: unknown) => error instanceof ActionError && /na het einde van 2025 gewijzigd \(Bram\)/.test(error.message) && /fiscal_year\.set_partner_shares/.test(error.message));
+  // Een bedrag vooraf, en privé zonder vennoot, staan op de kaart.
+  const vooraf = await close.plan!(ctx(rows, verdeling({
+    splitFixed: true, generalPrivateCents: 30000,
+    owners: [
+      { name: 'Anna', inSplit: true, shareBasisPoints: 6000, priorShareCents: 0, resultShareCents: 30000 },
+      { name: 'Bram', inSplit: true, shareBasisPoints: 4000, priorShareCents: 50000, resultShareCents: 70000 },
+    ],
+  })), { fiscal_year_id: ID });
+  assert.match(vooraf.sub, /Bram €\s700,00, waarvan €\s500,00 vooraf/);
+  assert.match(vooraf.sub, /de verdeling van 2025 is vastgelegd/);
+  assert.match(vooraf.sub, /0550\/0560 \(privé, geen vennoot\)/);
+  // Na de overstap naar een eenmanszaak sluit 2025 nog af als vof.
+  const overstap = await close.plan!(ctx({ ...rows, company_settings: [{ year_result_account_code: '0500', legal_form: 'eenmanszaak' }] }, verdeling()), { fiscal_year_id: ID });
+  assert.match(overstap.sub, /2025 sluit af als vof, de rechtsvorm in dat jaar; nu is het een eenmanszaak/);
+  assert.match(overstap.sub, /naar de vennoten/);
 });
 
 // ── Vennoten: privé en uren (17 november 2026) ───────────────────────────
 
 test('zonder actieve vennoot of na de overstap naar een eenmanszaak: privé van de vennoten naar hun eigen kapitaal', async () => {
   const close = action(BOOKKEEPING_ACTIONS, 'fiscal_year.close');
-  const lijst = { list_fiscal_years: [{ id: ID, computed_result_cents: 100000 }] };
-  const fiscal_years = [{ label: '2025', period_start: '2025-01-01', period_end: '2025-12-31', status: 'open' }];
-  const vroegere = [{ name: 'Anna', profit_share_basis_points: 6000, is_active: false }, { name: 'Bram', profit_share_basis_points: 0, is_active: false }];
+  const zonderVerdeling = (partnersDefined: boolean) => ({
+    list_fiscal_years: [{ id: ID, computed_result_cents: 100000 }],
+    owners_equity_overview: { isPartnership: false, shareTotalBasisPoints: 0, splitFixed: false, splitChangedAfterYearEnd: [], generalPrivateCents: 0, partnersDefined, owners: [] },
+  });
+  const jaar = (legal_form: string) => [{ label: '2025', period_start: '2025-01-01', period_end: '2025-12-31', status: 'open', legal_form }];
 
   // Een vof waarvan iedereen is uitgetreden: geen weigering om 0%, het resultaat naar 0510.
-  const vof = await close.plan!(ctx({ fiscal_years, company_settings: [{ year_result_account_code: '0510', legal_form: 'vof' }], partnership_partners: vroegere }, lijst), { fiscal_year_id: ID });
-  assert.match(vof.sub, /naar 0510 \(geen actieve vennoot: niet verdeeld\); privé \(0550\/0560\) naar 0500 Eigen vermogen; het privé van de vennoten naar hun eigen kapitaal/);
+  const vof = await close.plan!(ctx({ fiscal_years: jaar('vof'), company_settings: [{ year_result_account_code: '0510', legal_form: 'vof' }] }, zonderVerdeling(true)), { fiscal_year_id: ID });
+  assert.match(vof.sub, /naar 0510 \(geen vennoten in de verdeling: niet verdeeld\); privé \(0550\/0560\) naar 0500 Eigen vermogen; het privé van de vennoten naar hun eigen kapitaal/);
 
   // Een eenmanszaak die eerst een vof was.
-  const eenmanszaak = await close.plan!(ctx({ fiscal_years, company_settings: [{ year_result_account_code: '0500', legal_form: 'eenmanszaak' }], partnership_partners: vroegere }, lijst), { fiscal_year_id: ID });
+  const eenmanszaak = await close.plan!(ctx({ fiscal_years: jaar('eenmanszaak'), company_settings: [{ year_result_account_code: '0500', legal_form: 'eenmanszaak' }] }, zonderVerdeling(true)), { fiscal_year_id: ID });
   assert.match(eenmanszaak.sub, /naar 0500; privé \(0550\/0560\) naar 0500 Eigen vermogen; het privé van de vennoten naar hun eigen kapitaal/);
 
   // Een gewone eenmanszaak: geen woord over vennoten.
-  const gewoon = await close.plan!(ctx({ fiscal_years, company_settings: [{ year_result_account_code: '0500', legal_form: 'eenmanszaak' }] }, lijst), { fiscal_year_id: ID });
+  const gewoon = await close.plan!(ctx({ fiscal_years: jaar('eenmanszaak'), company_settings: [{ year_result_account_code: '0500', legal_form: 'eenmanszaak' }] }, zonderVerdeling(false)), { fiscal_year_id: ID });
   assert.doesNotMatch(gewoon.sub, /vennoten/);
 });
 
@@ -249,13 +281,28 @@ test('privé betaald via Gerrie: alleen bij IB, en bij een vof met vennoten de v
   const pay = action(BOOKKEEPING_ACTIONS, 'purchase_invoice.pay_privately');
   const invoice = { internal_number: 'INK-1', supplier_invoice_number: 'VD-1077', supplier_id: null, date: '2025-10-10', status: 'booked', payment_status: 'unpaid', total_cents: 12100, journal_entry_id: ID };
   const bram = { id: ID, name: 'Bram', is_active: true };
-  await assert.rejects(pay.plan!(ctx({ purchase_invoices: [invoice], company_settings: [{ legal_form: 'bv' }] }), { purchase_invoice_id: ID }),
+  const open = (cents: number) => ({ purchase_invoice_open_payable_cents: cents });
+  await assert.rejects(pay.plan!(ctx({ purchase_invoices: [invoice], company_settings: [{ legal_form: 'bv' }] }, open(12100)), { purchase_invoice_id: ID }),
     (error: unknown) => error instanceof ActionError && /alleen bij een eenmanszaak, vof/.test(error.message));
-  await assert.rejects(pay.plan!(ctx({ purchase_invoices: [invoice], company_settings: [{ legal_form: 'vof' }], partnership_partners: [bram] }), { purchase_invoice_id: ID }),
+  await assert.rejects(pay.plan!(ctx({ purchase_invoices: [invoice], company_settings: [{ legal_form: 'vof' }], partnership_partners: [bram] }, open(12100)), { purchase_invoice_id: ID }),
     (error: unknown) => error instanceof ActionError && /Kies de vennoot/.test(error.message));
-  const plan = await pay.plan!(ctx({ purchase_invoices: [invoice], company_settings: [{ legal_form: 'vof' }], partnership_partners: [bram] }), { purchase_invoice_id: ID, partner_id: ID });
+  const plan = await pay.plan!(ctx({ purchase_invoices: [invoice], company_settings: [{ legal_form: 'vof' }], partnership_partners: [bram] }, open(12100)), { purchase_invoice_id: ID, partner_id: ID });
   assert.match(plan.sub, /betaald door Bram/);
   assert.equal(plan.payload.date, '2025-10-10', 'standaard de factuurdatum');
+  // Het open bedrag, niet het factuurtotaal (20261122100000): na € 50 via de bank.
+  const rest = await pay.plan!(ctx({ purchase_invoices: [invoice], company_settings: [{ legal_form: 'vof' }], partnership_partners: [bram] }, open(7100)), { purchase_invoice_id: ID, partner_id: ID });
+  assert.match(rest.sub, /€\s71,00 openstaand \(factuur €\s121,00\) betaald door Bram/);
+  // De factuurdatum in een afgesloten boekjaar: de eerste dag daarna.
+  const dicht = await pay.plan!(ctx({ purchase_invoices: [invoice], company_settings: [{ legal_form: 'vof' }], partnership_partners: [bram], closed_periods: [{ period_end: '2025-12-31' }] }, open(12100)), { purchase_invoice_id: ID, partner_id: ID });
+  assert.equal(dicht.payload.date, '2026-01-01');
+  assert.match(dicht.sub, /valt in een afgesloten boekjaar/);
+  // Een creditnota die op de rekening van Bram terugkwam: privé ontvangen.
+  const credit = await pay.plan!(ctx({ purchase_invoices: [{ ...invoice, total_cents: -12100 }], company_settings: [{ legal_form: 'vof' }], partnership_partners: [bram] }, open(-12100)), { purchase_invoice_id: ID, partner_id: ID });
+  assert.match(credit.title, /Creditnota INK-1 als privé ontvangen vastleggen/);
+  assert.match(credit.sub, /€\s121,00 terugontvangen door Bram \(privé-opnamen van de vennoot\)/);
+  assert.equal(credit.payload.refund, true);
+  await assert.rejects(pay.plan!(ctx({ purchase_invoices: [invoice], company_settings: [{ legal_form: 'vof' }], partnership_partners: [bram] }, open(0)), { purchase_invoice_id: ID, partner_id: ID }),
+    (error: unknown) => error instanceof ActionError && /niets meer open/.test(error.message));
   await assert.rejects(pay.plan!(ctx({ purchase_invoices: [{ ...invoice, payment_status: 'paid' }], company_settings: [{ legal_form: 'vof' }] }), { purchase_invoice_id: ID }),
     (error: unknown) => error instanceof ActionError && /al betaald/.test(error.message));
   await assert.rejects(pay.plan!(ctx({ purchase_invoices: [{ ...invoice, status: 'draft', journal_entry_id: null }], company_settings: [{ legal_form: 'eenmanszaak' }] }), { purchase_invoice_id: ID }),
@@ -274,6 +321,14 @@ test('vennoot vastleggen via Gerrie: alleen bij een vof, met de verdeling op de 
   assert.match(plan.title, /Vennoot Anna vastleggen/);
   assert.match(plan.sub, /verdeling actieve vennoten daarna 100%/);
   assert.equal(plan.payload.profit_share_basis_points, 6000);
+  // Een vorig jaar dat nog open staat: de kaart zegt dat de wijziging vanaf nu geldt.
+  const metOpenJaar = await save.plan!(ctx({ ...rows, fiscal_years: [{ id: ID, label: '2025', period_end: '2025-12-31', status: 'open' }] }), { name: 'Anna', profit_share_percent: 60 });
+  assert.match(metOpenJaar.sub, /geldt vanaf nu; 2025 staat nog open/);
+  // Na de overstap van cv naar vof: een commanditaire vennoot laten uittreden
+  // gaf een 422; nu wordt hij beherend.
+  const vroegerCv = { ...rows, partnership_partners: [{ ...rows.partnership_partners[0], kind: 'commanditair' }] };
+  const uit = await save.plan!(ctx(vroegerCv), { partner_id: 'c0000000-0000-4000-8000-000000000002', is_active: false });
+  assert.equal(uit.payload.kind, 'beherend');
   const krap = await save.plan!(ctx(rows), { name: 'Anna', profit_share_percent: 50 });
   assert.match(krap.sub, /daarna 90% \(bij het afsluiten moet dat 100% zijn\)/);
   await assert.rejects(save.plan!(ctx(rows), { name: 'Anna', profit_share_percent: 60, kind: 'commanditair' }),

@@ -375,7 +375,7 @@ export function AnnualAccountsPage({ data, organizationId, canWrite, canAdmin, b
       <div>
         Een jaarrekening volgens Titel 9 Boek 2 BW hoort bij een BV, NV of coöperatie.
         Bij deze rechtsvorm ({legalForm}) geldt die verplichting niet.
-        Staat je rechtsvorm verkeerd, pas hem dan aan bij Instellingen → Bedrijfsgegevens.
+        Staat je rechtsvorm verkeerd, pas hem dan aan bij Instellingen → Geld → Facturatie.
       </div>
     </div></div>;
   }

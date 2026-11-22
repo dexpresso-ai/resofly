@@ -2032,6 +2032,21 @@ export function Settings({
       setTemplateError('Alleen owners en admins kunnen bedrijfsinstellingen aanpassen.');
       return;
     }
+    // Van vof naar eenmanszaak ging hier zonder één vraag, ook met vennoten
+    // met kapitaal. Wat er gebeurt: het lopende boekjaar en de jaren daarna
+    // sluiten af als eenmanszaak (de winst naar 0500, niet naar de vennoten);
+    // een vorig jaar dat nog open staat blijft een vof (20261122100000).
+    const fromForm = settings?.legal_form ?? 'eenmanszaak';
+    const toForm = form.legal_form ?? 'eenmanszaak';
+    const partnershipForms = ['vof', 'maatschap', 'cv'];
+    const leavesPartnership = toForm !== fromForm && partnershipForms.includes(fromForm) && toForm === 'eenmanszaak';
+    const becomesPartnership = toForm !== fromForm && fromForm === 'eenmanszaak' && partnershipForms.includes(toForm);
+    if (leavesPartnership && !confirm(
+      `Van ${LEGAL_FORM_LABELS[fromForm]} naar eenmanszaak?\n\n`
+      + 'Het lopende boekjaar en de jaren daarna worden een eenmanszaak: bij het afsluiten gaat de winst naar 0500 Eigen vermogen, niet meer naar de vennoten.\n\n'
+      + `Een vorig jaar dat nog open staat, blijft een ${LEGAL_FORM_LABELS[fromForm]} en sluit af met de vennoten van dat jaar. Was dat jaar ook al een eenmanszaak, zet het dan om in het afsluitvenster bij Financiën → Boekjaren.\n\n`
+      + 'Het kapitaal van de vennoten blijft op hun eigen rekeningen staan.',
+    )) return;
     setMessage(null);
     setTemplateError(null);
     setIsSaving(true);
@@ -2041,7 +2056,10 @@ export function Settings({
         ? 'Huisstijl opgeslagen. Het klantportaal, je offerte-, factuur- en contractpagina\'s en je PDF\'s gebruiken hem direct.'
         : activeTab === 'documenten'
           ? 'Opmaak opgeslagen. Nieuwe offertes en facturen krijgen hem direct; wat al verstuurd is, blijft zoals het was.'
-          : 'Bedrijfsinstellingen opgeslagen. Nieuwe factuur-PDFs gebruiken deze gegevens direct.');
+          : becomesPartnership
+            // Andersom: zonder vennoten gaat de winst nergens heen. Zeg waar je ze vastlegt.
+            ? `Bedrijfsinstellingen opgeslagen. Je administratie is nu een ${LEGAL_FORM_LABELS[toForm]}: leg bij Financiën → Vennoten de vennoten en hun winstaandeel vast. Het lopende boekjaar wordt dan over hen verdeeld; een vorig jaar dat nog open staat, blijft een eenmanszaak (om te zetten in het afsluitvenster bij Boekjaren).`
+            : 'Bedrijfsinstellingen opgeslagen. Nieuwe factuur-PDFs gebruiken deze gegevens direct.');
     } catch (error) {
       setTemplateError(error instanceof Error ? error.message : 'Bedrijfsinstellingen opslaan mislukt.');
     } finally {
