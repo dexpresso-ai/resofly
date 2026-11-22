@@ -630,17 +630,24 @@ export const INSIGHT_ACTIONS: ActionDef[] = [
           const due = typeof r.due_date === 'string' ? r.due_date : null;
           return due !== null && due < asOf;
         });
+        // Bij "alleen te laat" is het totaal dat van de gefilterde posten. Eerder
+        // kwam het totaal van álle posten mee, en las Gerrie "debiteuren
+        // € 3.971,10 (1)" voor terwijl er € 810 te laat was.
+        const allOpen = Number(s.open_total_cents ?? 0);
+        const shownOpen = overdueOnly ? rows.reduce((sum, r) => sum + Number(r.open_cents ?? 0), 0) : allOpen;
         return {
           rows: rows.slice(0, limit),
           row_count: rows.length,
           truncated: rows.length > limit,
-          open_total_cents: Number(s.open_total_cents ?? 0),
+          open_total_cents: shownOpen,
+          all_open_total_cents: allOpen,
           gl_balance_cents: Number(s.gl_balance_cents ?? 0),
           unmatched_cents: Number(s.unmatched_cents ?? 0),
         };
       };
       const receivables = side === 'payables' ? null : shape(report?.receivables);
       const payables = side === 'receivables' ? null : shape(report?.payables);
+      const lateWord = overdueOnly ? ' te laat' : '';
 
       return {
         as_of: asOf,
@@ -648,8 +655,8 @@ export const INSIGHT_ACTIONS: ActionDef[] = [
         receivables,
         payables,
         summary: joinShort([
-          receivables ? `debiteuren ${euroCents(receivables.open_total_cents)} (${receivables.row_count})` : null,
-          payables ? `crediteuren ${euroCents(payables.open_total_cents)} (${payables.row_count})` : null,
+          receivables ? `debiteuren${lateWord} ${euroCents(receivables.open_total_cents)} (${receivables.row_count})` : null,
+          payables ? `crediteuren${lateWord} ${euroCents(payables.open_total_cents)} (${payables.row_count})` : null,
           receivables && receivables.unmatched_cents !== 0 ? `niet-gekoppeld op 1300: ${euroCents(receivables.unmatched_cents)}` : null,
           payables && payables.unmatched_cents !== 0 ? `niet-gekoppeld op 1600: ${euroCents(payables.unmatched_cents)}` : null,
         ], 220),

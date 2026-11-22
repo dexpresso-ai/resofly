@@ -283,6 +283,26 @@ export function orgQuery(ctx: ActionCtx, table: string, select = '*') {
 }
 
 /**
+ * Alle rijen van een vraag, in pagina's van duizend. Een `.limit(20000)` helpt
+ * niet: de API geeft er per keer hooguit duizend (max_rows). Zo kwam het
+ * urencriterium bij 1.155 registraties op 1.100 uur ("niet gehaald") terwijl
+ * het scherm terecht 1.270 uur zei. `make` maakt elke keer een nieuwe vraag
+ * met een vaste volgorde, anders schuiven rijen tussen de pagina's.
+ */
+// deno-lint-ignore no-explicit-any
+export async function orgRowsAll<T>(make: () => any, label: string, cap = 50_000): Promise<T[]> {
+  const rows: T[] = [];
+  for (let offset = 0; offset < cap; offset += 1000) {
+    const { data, error } = await make().range(offset, offset + 999);
+    if (error) throw new ActionError(`${label} ophalen mislukt: ${error.message}`);
+    const page = (data ?? []) as T[];
+    rows.push(...page);
+    if (page.length < 1000) break;
+  }
+  return rows;
+}
+
+/**
  * Een veld uit een ándere module dan de handeling zetten mag alleen wie daar
  * ook mag schrijven — net als bij de vaste adressen van de API. Roep dit aan
  * zodra het veld in de invoer staat, vóór je iets vergelijkt: anders verraadt
