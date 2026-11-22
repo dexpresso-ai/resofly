@@ -6,7 +6,8 @@ import { financeTotals } from '../financeTotals.ts';
 // Ingebouwde standaardteksten. Een organisatie kan deze per veld overschrijven via
 // email_templates (sleutel 'invoice.sent'); lege velden vallen hierop terug.
 const DEFAULT_SUBJECT = 'Factuur {{invoice_number}} van {{company_name}}';
-const DEFAULT_INTRO = 'Beste {{recipient_name}},\nJe factuur staat klaar. In de bijlage vind je de PDF-snapshot.';
+// "PDF-snapshot" was vaktaal; de klant hoeft alleen te weten dat de pdf erbij zit.
+const DEFAULT_INTRO = 'Beste {{recipient_name}},\nJe factuur staat klaar. De factuur zit als pdf in de bijlage.';
 const DEFAULT_CTA_WITH_PAYMENT = 'Bekijk en betaal factuur';
 // Vaste regel (geen aanpasbare tekst): legt uit wat het XML-bestand in de bijlage is.
 const E_INVOICE_NOTE = 'Deze factuur zit ook als e-factuur (UBL) in de bijlage, met de PDF erin — voor je boekhoudpakket.';

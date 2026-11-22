@@ -342,7 +342,7 @@ export function VatReturnsPage({ data, organizationId, canWrite, onChanged }: { 
           )}
 
           {hasBoxes ? (
-            <div className="bk-table-wrap"><table className="bk-table bk-report-table">
+            <div className="bk-table-wrap"><table className="bk-table bk-report-table bk-vat-boxes">
               <thead><tr><th>Rubriek</th><th>Omschrijving</th><th className="bk-num">Grondslag</th><th className="bk-num">BTW</th><th className="bk-num" title="Wat je in Mijn Belastingdienst invult: omzet · btw">Aangifte (hele €)</th></tr></thead>
               <tbody>
                 {boxTableRows}

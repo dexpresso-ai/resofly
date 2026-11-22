@@ -91,7 +91,7 @@ export const EMAIL_TEMPLATES: EmailTemplateMeta[] = [
     fields: ['subject', 'intro', 'closing', 'cta_label'],
     defaults: {
       subject: 'Factuur {{invoice_number}} van {{company_name}}',
-      intro: 'Beste {{recipient_name}},\nJe factuur staat klaar. In de bijlage vind je de PDF-snapshot.',
+      intro: 'Beste {{recipient_name}},\nJe factuur staat klaar. De factuur zit als pdf in de bijlage.',
       closing: '',
       cta_label: 'Bekijk en betaal factuur',
     },

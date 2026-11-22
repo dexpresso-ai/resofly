@@ -193,3 +193,24 @@ test('betaaltermijn en vervaldatum uit de betaaltekst', async () => {
   assert.equal(defaultDueDate('2026-12-20', 'Betaling binnen 14 dagen.'), '2027-01-03');
   assert.equal(defaultDueDate('2026-02-14', 'binnen 14 dagen'), '2026-02-28');
 });
+
+test('de vervaldatum schuift mee met de factuurdatum, tot je hem zelf kiest', async () => {
+  const { dueDateAfterDateChange } = await import('./financeRules.ts');
+  const terms = 'Betaling binnen 14 dagen.';
+  // Het voorbeeld uit de controle: vandaag 22-11, factuurdatum 15-09.
+  assert.equal(dueDateAfterDateChange('2026-11-22', '2026-09-15', '2026-12-06', terms), '2026-09-29');
+  // Een eigen vervaldatum blijft staan.
+  assert.equal(dueDateAfterDateChange('2026-11-22', '2026-09-15', '2026-12-31', terms), '2026-12-31');
+  // Leeg: vanaf de nieuwe datum.
+  assert.equal(dueDateAfterDateChange('2026-11-22', '2026-09-15', '', 'binnen 30 dagen'), '2026-10-15');
+  // Halverwege typen of leeggemaakt: niets verschuiven.
+  assert.equal(dueDateAfterDateChange('2026-11-22', '', '2026-12-06', terms), '2026-12-06');
+  // Stap voor stap typen (de browser geeft tussenwaarden): de keten blijft volgen.
+  let due = '2026-12-06';
+  let date = '2026-11-22';
+  for (const next of ['0002-11-22', '0020-11-22', '0202-11-22', '2025-11-22']) {
+    due = dueDateAfterDateChange(date, next, due, terms);
+    date = next;
+  }
+  assert.equal(due, '2025-12-06');
+});

@@ -3787,6 +3787,13 @@ export interface ForecastVersion {
 export interface AppData { clients: Client[]; clientContacts: ClientContact[]; clientCalls: ClientCall[]; clientFieldDefinitions: ClientFieldDefinition[]; projects: Project[]; projectTemplates: ProjectTemplate[]; projectTemplateTasks: ProjectTemplateTask[]; tasks: Task[]; projectMembers: ProjectMember[]; taskAssignees: TaskAssignee[]; contractProjects: ContractProject[]; tickets: Ticket[]; ticketNotes: TicketNote[]; notes: Note[]; documents: InternalDocument[]; folders: ContentFolder[]; noteCalendarLinks: NoteCalendarLink[]; noteHandwriting: NoteHandwritingSummary[]; calendarEventLinks: CalendarEventLink[]; timeEntries: TimeEntry[]; quotes: Quote[]; quoteApprovalEvents: QuoteApprovalEvent[]; quoteEmailDeliveries: QuoteEmailDelivery[]; quoteVersions: QuoteVersion[]; invoices: Invoice[]; invoiceWorkflowEvents: InvoiceWorkflowEvent[]; invoiceEmailDeliveries: InvoiceEmailDelivery[]; invoicePaymentRecords: InvoicePaymentRecord[]; invoiceVersions: InvoiceVersion[]; invoiceRefunds: InvoiceRefund[]; creditNotes: CreditNote[]; invoiceChargebacks: InvoiceChargeback[]; dunningNotices: DunningNotice[]; ledgerAccounts: LedgerAccount[]; vatCodes: VatCode[]; journalEntries: JournalEntry[]; journalLines: JournalLine[]; closedPeriods: ClosedPeriod[]; fiscalYears: FiscalYear[]; suppliers: Supplier[]; purchaseInvoices: PurchaseInvoice[]; fixedAssets: FixedAsset[]; assetDepreciations: AssetDepreciation[]; prepaidExpenses: PrepaidExpense[]; prepaidExpenseReleases: PrepaidExpenseRelease[]; vatReturns: VatReturn[]; bankAccounts: BankAccount[]; bankStatements: BankStatement[]; bankTransactions: BankTransaction[]; bankAllocations: BankAllocation[]; bankRules: BankRule[]; bankRequisitions: BankRequisition[]; attachments: Attachment[]; driveShares: DriveShare[]; galleries: Gallery[]; savedReports: SavedReport[]; plannerNotes: PlannerNote[]; plannerCapacity: PlannerDayCapacity | null; companySettings: CompanySettings | null;
   /** Tellingen voor het dashboard, zonder de bank en de boekhouding te laden (src/lib/dataGroups.ts). */
   bankTransactionsToReconcile: number;
+  /**
+   * Per verstuurde, geboekte factuur wat er nog openstaat, in centen (na
+   * deelbetalingen en deelcreditnota's; RPC list_open_invoice_amounts). Een
+   * factuur die er niet in staat, telt met het volle bedrag (lib/stroom.ts,
+   * invoiceOpenAmount). Leeg zonder leesrecht op Financiën.
+   */
+  invoiceOpenCents: Record<UUID, number>;
   /** Afgelopen btw-tijdvakken zonder aangifte (lib/vatPeriods.ts), en de eerste daarvan met zijn deadline. */
   vatReturnsToFile: number; vatReturnNextDue: VatPeriodDue | null; }
 

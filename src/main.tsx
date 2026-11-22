@@ -16,7 +16,7 @@ import { appHomePage, applyStandaloneAppHead, canonicalAppUrl, installableAppFro
 import { captureInstallPrompt } from './lib/installPrompt';
 import { InstallAppCard } from './components/StandaloneApps';
 import { GlobalSearch, type SearchResult } from './components/GlobalSearch';
-import { Button, ColorPicker, DEFAULT_PROJECT_COLOR, Input, Select, Textarea, normalizeColor } from './components/Ui';
+import { Button, ColorPicker, DecimalInput, DEFAULT_PROJECT_COLOR, Input, Select, Textarea, normalizeColor } from './components/Ui';
 import { MemberSelect } from './components/MemberSelect';
 import { RichTextEditor, sanitizeRichText } from './components/RichTextEditor';
 import { Modal } from './components/Modal';
@@ -163,7 +163,7 @@ import { ProjectShiftDialog } from './components/ProjectShiftDialog';
 import type { ProjectShift } from './components/ProjectShiftDialog';
 import { applyPeriodLocally, applyPlanningLocally, applyTimeLocally, clockLabel, mergeTaskRows, restoreTasksForDates, splitTitleAndEstimate } from './lib/planning';
 import { formatISODate, parseISODate, startOfWeek } from './lib/dates';
-import { defaultDueDate } from './lib/financeRules';
+import { defaultDueDate, dueDateAfterDateChange, paymentTermDays } from './lib/financeRules';
 import { AttachmentList } from './components/AttachmentList';
 import { GerrieChat, askGerrie } from './components/GerrieChat';
 import { CallLogDialog, CallReturnPrompt } from './components/CallLogDialog';
@@ -340,7 +340,7 @@ type EditMode =
   | { kind: 'invoice'; item?: Invoice; defaults?: Partial<Pick<Invoice, 'client_id' | 'project_id' | 'notes' | 'due_date' | 'lines'>> }
   | null;
 
-const emptyData: AppData = { clients: [], clientContacts: [], clientCalls: [], clientFieldDefinitions: [], projects: [], projectTemplates: [], projectTemplateTasks: [], tasks: [], projectMembers: [], taskAssignees: [], contractProjects: [], tickets: [], ticketNotes: [], notes: [], documents: [], folders: [], noteCalendarLinks: [], noteHandwriting: [], calendarEventLinks: [], timeEntries: [], quotes: [], quoteApprovalEvents: [], quoteEmailDeliveries: [], quoteVersions: [], invoices: [], invoiceWorkflowEvents: [], invoiceEmailDeliveries: [], invoicePaymentRecords: [], invoiceVersions: [], invoiceRefunds: [], creditNotes: [], invoiceChargebacks: [], dunningNotices: [], ledgerAccounts: [], vatCodes: [], journalEntries: [], journalLines: [], closedPeriods: [], fiscalYears: [], suppliers: [], purchaseInvoices: [], fixedAssets: [], assetDepreciations: [], prepaidExpenses: [], prepaidExpenseReleases: [], vatReturns: [], bankAccounts: [], bankStatements: [], bankTransactions: [], bankAllocations: [], bankRules: [], bankRequisitions: [], attachments: [], driveShares: [], galleries: [], savedReports: [], plannerNotes: [], plannerCapacity: null, companySettings: null, bankTransactionsToReconcile: 0, vatReturnsToFile: 0, vatReturnNextDue: null };
+const emptyData: AppData = { clients: [], clientContacts: [], clientCalls: [], clientFieldDefinitions: [], projects: [], projectTemplates: [], projectTemplateTasks: [], tasks: [], projectMembers: [], taskAssignees: [], contractProjects: [], tickets: [], ticketNotes: [], notes: [], documents: [], folders: [], noteCalendarLinks: [], noteHandwriting: [], calendarEventLinks: [], timeEntries: [], quotes: [], quoteApprovalEvents: [], quoteEmailDeliveries: [], quoteVersions: [], invoices: [], invoiceWorkflowEvents: [], invoiceEmailDeliveries: [], invoicePaymentRecords: [], invoiceVersions: [], invoiceRefunds: [], creditNotes: [], invoiceChargebacks: [], dunningNotices: [], ledgerAccounts: [], vatCodes: [], journalEntries: [], journalLines: [], closedPeriods: [], fiscalYears: [], suppliers: [], purchaseInvoices: [], fixedAssets: [], assetDepreciations: [], prepaidExpenses: [], prepaidExpenseReleases: [], vatReturns: [], bankAccounts: [], bankStatements: [], bankTransactions: [], bankAllocations: [], bankRules: [], bankRequisitions: [], attachments: [], driveShares: [], galleries: [], savedReports: [], plannerNotes: [], plannerCapacity: null, companySettings: null, bankTransactionsToReconcile: 0, invoiceOpenCents: {}, vatReturnsToFile: 0, vatReturnNextDue: null };
 const emptyOrganizationContext: OrganizationContext = { memberships: [], organizations: [], activeOrganization: null, activeMembership: null, teamMembers: [], pendingInvitations: [], organizationInvitations: [], licenseUsage: null, auditLogs: [], billingOverview: null, creativeStatus: null, businessStatus: null, aiConsent: null, aiConsents: [] };
 const activeOrgStorageKey = 'brandcore.activeOrganizationId';
 /** Volgnummer voor sprongen naar de pagina Berichten (zie openCommunication). */
@@ -3084,7 +3084,7 @@ function App() {
 
   async function approveQuote(quote: Quote) {
     if (!ensureCanAdmin()) return;
-    if (!confirm(`Offerte ${quote.number} intern goedkeuren? Daarna kan deze via Resend naar de klant.`)) return;
+    if (!confirm(`Offerte ${quote.number} intern goedkeuren? Daarna kun je hem naar de klant sturen.`)) return;
     setLoading(true); setError(null);
     try {
       await approveQuoteInternal(activeOrg.id, quote.id);
@@ -3132,12 +3132,12 @@ function App() {
     const recipientEmail = prompt('Naar welk e-mailadres wil je de offerte versturen?', client?.email || '');
     if (!recipientEmail) return;
     const recipientName = prompt('Naam/contactpersoon voor de e-mail', client?.contact_name || client?.name || '') || undefined;
-    setLoading(true); setSending('Offerte wordt verstuurd via Resend…'); setError(null);
+    setLoading(true); setSending('Offerte wordt verstuurd…'); setError(null);
     try {
       await sendQuoteEmailViaResend(activeOrg.id, quote.id, { recipientEmail, recipientName });
       await refresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Offerte verzenden via Resend mislukt');
+      setError(e instanceof Error ? e.message : 'De offerte versturen lukte niet.');
     } finally {
       setLoading(false); setSending(null);
     }
@@ -3161,7 +3161,7 @@ function App() {
       setError('Alleen geaccepteerde offertes kunnen worden omgezet naar een factuur.');
       return;
     }
-    if (!confirm(`Factuur maken van offerte ${quote.number}? Dit gebeurt server-side en voorkomt dubbele facturen bij dubbelklikken.`)) return;
+    if (!confirm(`Factuur maken van offerte ${quote.number}? Er komt één factuur van, ook als je twee keer klikt.`)) return;
     setLoading(true); setError(null);
     try {
       const invoice = await convertAcceptedQuoteToInvoice(activeOrg.id, quote.id);
@@ -3272,7 +3272,7 @@ function App() {
 
     // Toon meteen de laad-overlay: de Mollie-statuscheck hieronder plus het
     // versturen zelf kunnen samen enkele seconden duren.
-    setSending(viaMollie ? 'E-factuur wordt via Mollie uitgegeven…' : eInvoice ? 'E-factuur wordt verstuurd…' : 'Factuur wordt verstuurd via Resend…');
+    setSending(viaMollie ? 'E-factuur wordt via Mollie uitgegeven…' : eInvoice ? 'E-factuur wordt verstuurd…' : 'Factuur wordt verstuurd…');
 
     // Een betaallink van Mollie gaat vanzelf mee als de organisatie via Mollie
     // verstuurt (Instellingen → Online betalen), een eigen Mollie-account
@@ -3319,7 +3319,7 @@ function App() {
         setError(`${label}. Let op: ${notes.join(' Daarnaast: ')}`);
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : (viaMollie ? 'E-factuur via Mollie versturen mislukt' : eInvoice ? 'E-factuur verzenden mislukt' : 'Factuur verzenden via Resend mislukt'));
+      setError(e instanceof Error ? e.message : (viaMollie ? 'E-factuur via Mollie versturen mislukt' : eInvoice ? 'E-factuur verzenden mislukt' : 'De factuur versturen lukte niet.'));
     } finally {
       setLoading(false); setSending(null);
     }
@@ -3349,7 +3349,7 @@ function App() {
     const levelLabel = nextLevel === 3 ? 'aanmaning (niveau 3)' : `herinnering (niveau ${nextLevel})`;
     if (!confirm(`Betalings${levelLabel} versturen voor factuur ${invoice.number} naar ${client.email}?`)) return;
 
-    setSending('Herinnering wordt verstuurd via Resend…');
+    setSending('Herinnering wordt verstuurd…');
     // Net als bij versturen: eerst kijken of Mollie gekoppeld is (en of de
     // organisatie niet per e-mail verstuurt), en de keuze meegeven. Zonder die
     // vlag vroeg de server ook zonder Mollie een betaallink; die liet een
@@ -3364,7 +3364,7 @@ function App() {
         setError(`Herinnering is verstuurd, maar de Mollie-betaallink kon niet worden aangemaakt (alleen de PDF is meegestuurd): ${result.paymentLinkError}`);
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Herinnering verzenden via Resend mislukt');
+      setError(e instanceof Error ? e.message : 'De herinnering versturen lukte niet.');
     } finally {
       setLoading(false); setSending(null);
     }
@@ -3405,7 +3405,7 @@ function App() {
     const client = invoice ? data.clients.find(c => c.id === invoice.client_id) : null;
     if (!client?.email) { setError('Deze factuur heeft geen klant met e-mailadres.'); return; }
     if (!confirm(`Aanmaning versturen naar ${client.email} voor factuur ${invoice?.number ?? ''}? De rente wordt op vandaag herberekend en de formele brief (PDF) gaat mee.`)) return;
-    setSending('Aanmaning wordt verstuurd via Resend…');
+    setSending('Aanmaning wordt verstuurd…');
     setLoading(true); setError(null);
     try {
       await sendInvoiceDunningNotice(activeOrg.id, notice.id);
@@ -3546,7 +3546,7 @@ function App() {
     if (!ensureCanWrite()) return;
     const invoice = data.invoices.find(item => item.id === creditNote.invoice_id);
     const eInvoice = clientWantsEInvoice(data.clients.find(item => item.id === invoice?.client_id));
-    setLoading(true); setSending(eInvoice ? 'E-creditnota wordt verstuurd…' : 'Creditfactuur wordt gemaild via Resend…'); setError(null);
+    setLoading(true); setSending(eInvoice ? 'E-creditnota wordt verstuurd…' : 'Creditnota wordt gemaild…'); setError(null);
     try {
       await sendCreditNoteEmail(activeOrg.id, creditNote.id);
       await refresh();
@@ -4707,7 +4707,7 @@ function App() {
       draft={view.pendingDraft?.kind === 'supplier' ? (view.pendingDraft.payload as Partial<Supplier>) : null} onDraftConsumed={() => setPendingDraft(null)}/>;
     if (page === 'purchase-invoices') return <PurchaseInvoicesPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}
       draft={view.pendingDraft?.kind === 'purchase_invoice' ? purchaseInvoiceSeedFrom(view.pendingDraft.payload) : null} onDraftConsumed={() => setPendingDraft(null)}
-      inboxActivity={purchaseInbox.activity}/>;
+      inboxActivity={purchaseInbox.activity} onInboxChanged={purchaseInbox.refresh}/>;
     if (page === 'declarations') return <DeclarationsPage organizationId={activeOrg.id} canWrite={canWrite}/>;
     if (page === 'ledger') return <LedgerPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} canWriteClients={orgCanWrite && permissions.canWrite('clients')}/>;
     if (page === 'bank') return <BankPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;
@@ -5130,8 +5130,8 @@ function EditModal({ edit, data, dataStatus, organizationId, currentUserId, team
       <Field label="Klantnaam">
         <Input value={form.name} onChange={e=>set('name',e.target.value)} placeholder="Bijv. Acme BV" disabled={disabled}/>
       </Field>
-      <Field label="Klantnummer" hint={item ? "Bestaand klantnummer. Wijzig dit alleen bewust." : "Preview vanuit Supabase. Bij opslaan wordt het definitieve nummer atomair gereserveerd."}>
-        <Input value={form.client_code} onChange={e=>set('client_code',e.target.value)} placeholder="Wordt door de server aangemaakt" disabled={disabled || !item}/>
+      <Field label="Klantnummer" hint={item ? "Bestaand klantnummer. Wijzig dit alleen bewust." : "Een voorstel. Bij opslaan krijgt de klant het eerstvolgende vrije nummer."}>
+        <Input value={form.client_code} onChange={e=>set('client_code',e.target.value)} placeholder="Komt vanzelf bij opslaan" disabled={disabled || !item}/>
       </Field>
       <Field label="Contactpersoon">
         <Input value={form.contact_name} onChange={e=>set('contact_name',e.target.value)} placeholder="Naam contactpersoon" disabled={disabled}/>
@@ -5558,7 +5558,7 @@ function FinanceForm({ kind, data, organizationId, form, set, item, readOnly, on
         <Field label={isQuote ? 'Offertenummer' : 'Factuurnummer'} hint="Automatisch gegenereerd, maar nog handmatig aanpasbaar vóór opslaan.">
           <Input value={form.number} onChange={e=>set('number',e.target.value)} placeholder={isQuote ? 'OFF-2026-0001' : 'FAC-2026-0001'} disabled={disabled}/>
         </Field>
-        <Field label="Klant" hint="Koppel de offerte aan de juiste relatie.">
+        <Field label="Klant" hint={isQuote ? 'Aan wie de offerte gaat.' : 'Aan wie de factuur gaat.'}>
           <Select value={form.client_id} onChange={e=>set('client_id',e.target.value)} disabled={disabled}>
             <option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
           </Select>
@@ -5587,9 +5587,12 @@ function FinanceForm({ kind, data, organizationId, form, set, item, readOnly, on
       <div className="finance-section-head"><strong>{isQuote ? 'Offertedatums' : 'Factuurdatums'}</strong><span>Maak publicatie- en verloopdatum expliciet zichtbaar</span></div>
       <div className="finance-date-grid">
         <Field label={isQuote ? 'Offertedatum' : 'Factuurdatum'} hint="De datum waarop het document wordt opgesteld.">
-          <Input type="date" value={form.date} onChange={e=>set('date',e.target.value)} disabled={disabled}/>
+          <Input type="date" value={form.date} onChange={e=>{
+            if (!isQuote) set('due_date', dueDateAfterDateChange(form.date, e.target.value, form.due_date, data.companySettings?.invoice_payment_terms));
+            set('date',e.target.value);
+          }} disabled={disabled}/>
         </Field>
-        <Field label={isQuote ? 'Verloopdatum' : 'Vervaldatum'} hint={isQuote ? 'Tot wanneer de offerte geldig blijft.' : 'Uiterste betaaldatum voor de factuur.'}>
+        <Field label={isQuote ? 'Verloopdatum' : 'Vervaldatum'} hint={isQuote ? 'Tot wanneer de offerte geldig blijft.' : `Uiterste betaaldatum: ${paymentTermDays(data.companySettings?.invoice_payment_terms)} dagen na de factuurdatum. Schuift mee met de factuurdatum, tot je hem zelf aanpast.`}>
           <Input type="date" value={isQuote ? form.valid_until : form.due_date} onChange={e=>set(isQuote ? 'valid_until' : 'due_date',e.target.value)} disabled={disabled}/>
         </Field>
       </div>
@@ -5616,10 +5619,10 @@ function FinanceForm({ kind, data, organizationId, form, set, item, readOnly, on
               <Input value={line.description} onChange={e=>updateLine(line.id,'description',e.target.value)} placeholder="Bijv. Strategie, ontwerp en implementatie" disabled={disabled}/>
             </Field>
             <Field label="Aantal" compact>
-              <Input type="number" min="0" step="0.01" value={line.quantity} onChange={e=>updateLine(line.id,'quantity',e.target.value)} disabled={disabled}/>
+              <DecimalInput value={line.quantity} onValueChange={v=>updateLine(line.id,'quantity',v ?? 0)} disabled={disabled}/>
             </Field>
             <Field label="Prijs ex. btw" compact>
-              <Input type="number" min="0" step="0.01" value={line.unit_price} onChange={e=>updateLine(line.id,'unit_price',e.target.value)} disabled={disabled}/>
+              <DecimalInput value={line.unit_price} onValueChange={v=>updateLine(line.id,'unit_price',v ?? 0)} disabled={disabled}/>
             </Field>
             <Field label="BTW" compact>
               {salesVatCodes.length > 0
@@ -5627,7 +5630,7 @@ function FinanceForm({ kind, data, organizationId, form, set, item, readOnly, on
                     {lineVatSelectValue(line) === '__custom' && <option value="__custom">{line.vat}% (aangepast)</option>}
                     {salesVatCodes.map(v => <option key={v.code} value={v.code}>{v.label}</option>)}
                   </Select>
-                : <Input type="number" min="0" step="0.01" value={line.vat} onChange={e=>updateLine(line.id,'vat',e.target.value)} disabled={disabled}/>}
+                : <DecimalInput value={line.vat} onValueChange={v=>updateLine(line.id,'vat',v ?? 0)} disabled={disabled}/>}
             </Field>
             <div className="finance-line-total"><span>Regeltotaal</span><strong>{euro(lineTotal)}</strong></div>
             <Button className="finance-line-remove" onClick={()=>removeLine(line.id)} disabled={disabled || lines.length <= 1} title="Regel verwijderen">×</Button>

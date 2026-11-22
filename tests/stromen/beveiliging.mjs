@@ -877,7 +877,9 @@ async function anoniem(A, d) {
     ...[['withdraw_quote', { p_quote_id: d.qVerstuurd.id, p_organization_id: A.orgId, p_reason: null }],
       ['convert_accepted_quote_to_invoice', { p_quote_id: d.qGeaccepteerd.id, p_organization_id: A.orgId }],
       ['void_contract', { p_contract_id: d.cVerstuurd.id, p_organization_id: A.orgId, p_reason: null }],
-      ['invoice_open_receivable_checked', { p_invoice_id: d.fOpen.id }]].map(([naam, args]) => [naam, async () => geenRecht(await rpc(naam, args), naam)]),
+      ['invoice_open_receivable_checked', { p_invoice_id: d.fOpen.id }],
+      // Openstaand na deelbetaling voor het dashboard (20261122090000): alleen voor wie ingelogd is.
+      ['list_open_invoice_amounts', { p_organization_id: A.orgId }]].map(([naam, args]) => [naam, async () => geenRecht(await rpc(naam, args), naam)]),
   ]));
 
   const ingelogd = [
