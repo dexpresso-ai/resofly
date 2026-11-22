@@ -178,6 +178,7 @@ import { plainTextToEmailHtml, sendClientEmail } from './services/mailService';
 import { loadBillingOverview } from './services/billingService';
 import { exportFinancePDF, financePdfOptions } from './lib/pdf';
 import { FinanceDocPreview } from './components/FinanceDocPreview';
+import { FinanceLineChecks } from './components/FinanceLineChecks';
 import type {
   AppData, CalendarEventLink, CalendarExternalEvent, CalendarNoteLinkInput, Client, ClientFieldDefinition, CompanySettingsInput, Contract, CreditNote, DunningNotice, EntityType, FinanceLine, InboundMessage, InternalDocument, Invoice, InvoiceRefund, Note, NoteHandwritingSummary, Organization, OrganizationContext, OrganizationMember, OrganizationRole, Project, ProjectMember, PurchaseInvoice, PurchaseInvoiceLine, Quote, Supplier, Task, TaskAssignee, TaskStatus, Ticket, Subtask, Comment as TaskComment,
 } from './types';
@@ -5535,7 +5536,9 @@ function FinanceForm({ kind, data, organizationId, form, set, item, readOnly, on
     // Een opgeslagen code die niet meer bestaat/actief is niet stil op een
     // andere code laten matchen — dan maskeer je verlies. Toon '__custom'.
     if (line.vat_code) return '__custom';
-    const byRate = salesVatCodes.find(v => ['standard', 'reduced', 'zero'].includes(v.kind) && Math.abs(v.rate - (Number(line.vat) || 0)) < 0.005);
+    // 0% zonder code niet als "BTW 0%" tonen: dan stond er een reden die niet
+    // werd opgeslagen, en ging de factuur zonder vermelding de deur uit.
+    const byRate = salesVatCodes.find(v => ['standard', 'reduced'].includes(v.kind) && Math.abs(v.rate - (Number(line.vat) || 0)) < 0.005);
     return byRate?.code ?? '__custom';
   };
   const setLineVatCode = (id: string, code: string) => set('lines', lines.map(l => {
@@ -5656,7 +5659,7 @@ function FinanceForm({ kind, data, organizationId, form, set, item, readOnly, on
             <Field label="BTW" compact>
               {salesVatCodes.length > 0
                 ? <Select value={lineVatSelectValue(line)} onChange={e=>setLineVatCode(line.id, e.target.value)} disabled={disabled}>
-                    {lineVatSelectValue(line) === '__custom' && <option value="__custom">{line.vat}% (aangepast)</option>}
+                    {lineVatSelectValue(line) === '__custom' && <option value="__custom">{Number(line.vat) === 0 && !line.vat_code ? '0%: kies waarom' : `${line.vat}% (aangepast)`}</option>}
                     {salesVatCodes.map(v => <option key={v.code} value={v.code}>{v.label}</option>)}
                   </Select>
                 : <Input type="number" min="0" step="0.01" value={line.vat} onChange={e=>updateLine(line.id,'vat',e.target.value)} disabled={disabled}/>}
@@ -5666,6 +5669,7 @@ function FinanceForm({ kind, data, organizationId, form, set, item, readOnly, on
           </div>;
         })}
       </div>
+      <FinanceLineChecks kind={kind} lines={lines} client={data.clients.find(c => c.id === selectedClientId) ?? null} vatCodes={data.vatCodes} korEnabled={Boolean(data.companySettings?.kor_enabled)} disabled={disabled} onChangeLines={next => set('lines', next)} newId={uid}/>
     </section>
 
     <section className="finance-editor-section">

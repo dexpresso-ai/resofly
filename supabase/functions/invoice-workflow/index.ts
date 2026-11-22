@@ -15,6 +15,7 @@ import { clientWantsEInvoice, defaultInvoiceRecipient, embeddedPdf, invoiceDeliv
 import { loadMollieInvoicingAllowed, SEND_METHOD_EMAIL_NO_PAYMENT_LINK } from '../_shared/invoiceSendMethod.ts';
 import { invoiceVatGroups, splitRefundOverVatGroups, type VatGroup } from '../_shared/creditNoteSplit.ts';
 import { invoiceVatNotes } from '../_shared/invoiceVatNotes.ts';
+import { zeroVatIssues, zeroVatRefusal } from '../_shared/invoiceZeroVat.ts';
 import { loadVatCodeInfo } from '../_shared/vatCodeInfo.ts';
 import { loadDocumentDesign, renderCreditNotePdf, renderDunningLetterPdf, renderSalesDocumentPdf } from '../_shared/documentPdf.ts';
 import {
@@ -345,6 +346,9 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
 
   // Vóór er een betaallink, Mollie-factuur of mail ontstaat.
   assertKorAllowsInvoice(company, invoice);
+  // 0% met een reden die past bij het land van de klant; alleen bij uitgeven
+  // (een verstuurde factuur opnieuw mailen verandert er niets meer aan).
+  if (invoice.status === 'draft') await assertZeroVatExplained(organizationId, invoice, client, company);
 
   // E-facturatie staat per klant aan of uit. Aan: de e-factuur (UBL met de PDF
   // erin) is verplicht en gaat naar het e-factuuradres van de klant. Uit: de
@@ -639,6 +643,24 @@ function assertKorAllowsInvoice(company: CompanySettingsRow | null, invoice: Inv
 }
 
 /**
+ * 0% btw: staat erbij waarom, en past dat bij het land van de klant? Zie
+ * _shared/invoiceZeroVat.ts. Een regel met 0% zonder code ging de deur uit
+ * zonder vermelding en zonder controle op het btw-nummer, in rubriek 1e in
+ * plaats van 3b en buiten de ICP-opgaaf (bevinding 11, 22 november 2026).
+ */
+async function assertZeroVatExplained(organizationId: string, invoice: InvoiceRow, client: ClientRow, company: CompanySettingsRow | null): Promise<void> {
+  // Zelf laden, met een fout als het niet lukt: loadVatCodeInfo geeft dan een
+  // lege lijst, en daarmee zou elke 0%-regel "zonder reden" lijken (of, zonder
+  // codes, niets gecontroleerd worden).
+  const { data, error } = await supabaseAdmin.from('vat_codes').select('code,kind,sales_box').eq('organization_id', organizationId);
+  if (error) throwSupabaseError('btw-codes laden', error);
+  const codes = Object.fromEntries(((data ?? []) as Array<{ code: string; kind: string; sales_box: string | null }>)
+    .map((row) => [String(row.code), { kind: String(row.kind), salesBox: row.sales_box ?? null }]));
+  const refusal = zeroVatRefusal(zeroVatIssues(invoice.lines, codes, client, { korEnabled: Boolean(company?.kor_enabled) }));
+  if (refusal) throw new WorkflowHttpError(refusal, 422);
+}
+
+/**
  * Uitgeven zonder mail: voor wie de pdf zelf mailt, print of in een portaal
  * zet. Tot 22 november 2026 ging dat met "Verzonden" in het statusveld; dan
  * werd er niets gecontroleerd en geen pdf bewaard. Nu dezelfde controles als
@@ -663,6 +685,7 @@ async function issueInvoiceWithoutEmail(userId: string, organizationId: string, 
     loadCompanySettings(organizationId),
   ]);
   assertKorAllowsInvoice(company, invoice);
+  await assertZeroVatExplained(organizationId, invoice, client, company);
   // Al bij Mollie in de maak of uitgegeven: dan heeft de klant hem (straks) al.
   const atMollie = activeMollieDelivery(await loadMollieDeliveries(organizationId, invoice.id));
   if (atMollie) throw new WorkflowHttpError('Deze factuur is al via Mollie uitgegeven, of dat loopt nog. Klik bij de factuur op "Ververs bij Mollie" om de stand op te halen.', 409);

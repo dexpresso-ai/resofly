@@ -1638,7 +1638,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'propose_invoice',
-    description: 'Zet een CONCEPTFACTUUR klaar voor de gebruiker. Je voert NIETS uit: het voorstel opent als vooringevuld factuurformulier dat de gebruiker zelf controleert en opslaat. Gebruik dit pas als je de juiste klant (via search_clients) én alle factuurregels weet. Vraag ontbrekende gegevens kort na in plaats van te gissen.',
+    description: 'Zet een CONCEPTFACTUUR klaar voor de gebruiker. Je voert NIETS uit: het voorstel opent als vooringevuld factuurformulier dat de gebruiker zelf controleert en opslaat. Gebruik dit pas als je de juiste klant (via search_clients) én alle factuurregels weet. Vraag ontbrekende gegevens kort na in plaats van te gissen. Bij 0% btw hoort bij elke regel een vat_code. Korting op het totaal van een factuur met meer btw-tarieven: één kortingsregel per tarief, naar rato van het bedrag excl. btw per tarief (anders klopt de btw niet).',
     input_schema: {
       type: 'object',
       properties: {
@@ -1653,7 +1653,7 @@ const TOOL_DEFINITIONS = [
               quantity: { type: 'number', description: 'Aantal (bijv. uren of stuks).' },
               unit_price: { type: 'number', description: "Prijs per stuk in euro's, EXCLUSIEF btw." },
               vat: { type: 'number', description: 'Btw-percentage (meestal 21, soms 9 of 0).' },
-              vat_code: { type: 'string', description: 'Optioneel: de btw-code van de regel (bijv. HOOG, LAAG, VERL_VERK, ICP_GOED, ICP_DIENST, EXPORT, VRIJ, KOR). Bij 0% hoort er altijd een code bij die zegt waarom.' },
+              vat_code: { type: 'string', description: 'De btw-code van de regel (bijv. HOOG, LAAG, VERL_VERK, ICP_GOED, ICP_DIENST, EXPORT, VRIJ, KOR, NUL). VERPLICHT bij 0%: de code zegt waarom er geen btw op staat (ICP_DIENST/ICP_GOED: ondernemer in een ander EU-land; EXPORT: goederen buiten de EU; VERL_VERK: verlegd; VRIJ: vrijgesteld; KOR; NUL: alleen het Nederlandse 0%-tarief of een dienst aan een ondernemer buiten de EU). Weet je het niet, vraag het dan.' },
             },
             required: ['description', 'quantity', 'unit_price', 'vat'],
           },
@@ -1666,7 +1666,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'propose_quote',
-    description: 'Zet een CONCEPTOFFERTE klaar voor de gebruiker. Je voert NIETS uit: het voorstel opent als vooringevuld offerteformulier dat de gebruiker zelf controleert en opslaat. Gebruik dit pas als je de juiste klant (via search_clients) én de offerteregels weet.',
+    description: 'Zet een CONCEPTOFFERTE klaar voor de gebruiker. Je voert NIETS uit: het voorstel opent als vooringevuld offerteformulier dat de gebruiker zelf controleert en opslaat. Gebruik dit pas als je de juiste klant (via search_clients) én de offerteregels weet. Bij 0% btw hoort bij elke regel een vat_code. Korting op het totaal bij meer btw-tarieven: één kortingsregel per tarief, naar rato.',
     input_schema: {
       type: 'object',
       properties: {
@@ -1681,7 +1681,7 @@ const TOOL_DEFINITIONS = [
               quantity: { type: 'number', description: 'Aantal (bijv. uren of stuks).' },
               unit_price: { type: 'number', description: "Prijs per stuk in euro's, EXCLUSIEF btw." },
               vat: { type: 'number', description: 'Btw-percentage (meestal 21, soms 9 of 0).' },
-              vat_code: { type: 'string', description: 'Optioneel: de btw-code van de regel (bijv. HOOG, LAAG, VERL_VERK, ICP_GOED, ICP_DIENST, EXPORT, VRIJ, KOR). Bij 0% hoort er altijd een code bij die zegt waarom.' },
+              vat_code: { type: 'string', description: 'De btw-code van de regel (bijv. HOOG, LAAG, VERL_VERK, ICP_GOED, ICP_DIENST, EXPORT, VRIJ, KOR, NUL). VERPLICHT bij 0%: de code zegt waarom er geen btw op staat (ICP_DIENST/ICP_GOED: ondernemer in een ander EU-land; EXPORT: goederen buiten de EU; VERL_VERK: verlegd; VRIJ: vrijgesteld; KOR; NUL: alleen het Nederlandse 0%-tarief of een dienst aan een ondernemer buiten de EU). Weet je het niet, vraag het dan.' },
             },
             required: ['description', 'quantity', 'unit_price', 'vat'],
           },
@@ -4391,9 +4391,20 @@ function parseProposalLines(input: Record<string, unknown>): { ok: true; lines: 
     const quantity = num(raw.quantity);
     if (!(quantity > 0)) return { ok: false, error: `Ongeldig aantal voor "${description}".` };
     const code = typeof raw.vat_code === 'string' ? raw.vat_code.trim().toUpperCase() : '';
+    const validCode = /^[A-Z0-9_]{1,32}$/.test(code);
+    const vat = raw.vat == null ? 21 : num(raw.vat);
+    const unitPrice = num(raw.unit_price);
+    // 0% zonder code zegt niet waarom er geen btw op staat. Zo'n regel kwam
+    // als "BTW 0%" in het formulier zonder dat er een code werd opgeslagen, en
+    // de factuur ging de deur uit zonder vermelding, in rubriek 1e en buiten
+    // de ICP-opgaaf (controle van 22 november 2026). Een regel van € 0 (tekst)
+    // mag zonder.
+    if (vat === 0 && !validCode && unitPrice !== 0) {
+      return { ok: false, error: `Regel "${description}" heeft 0% btw: geef in vat_code de reden (ICP_DIENST of ICP_GOED voor een ondernemer in een ander EU-land, EXPORT voor goederen buiten de EU, VERL_VERK, VRIJ, KOR, of NUL voor het Nederlandse 0%-tarief of een dienst aan een ondernemer buiten de EU). Weet je het niet, vraag het de gebruiker.` };
+    }
     lines.push({
-      description: description.slice(0, 500), quantity, unit_price: num(raw.unit_price), vat: raw.vat == null ? 21 : num(raw.vat),
-      ...(/^[A-Z0-9_]{1,32}$/.test(code) ? { vat_code: code } : {}),
+      description: description.slice(0, 500), quantity, unit_price: unitPrice, vat,
+      ...(validCode ? { vat_code: code } : {}),
     });
   }
   return { ok: true, lines };
