@@ -17,6 +17,7 @@ import { vatPeriodKey, vatPeriodsToFile, type VatPeriodDue } from './vatPeriods'
 import { runMatchRounds } from './bankMatch';
 import { letterheadMissing, withoutUnloadedLetterhead } from './letterhead';
 import type { IbCorrectionCode, IncomeTaxInputs, IncomeTaxProfile } from './inkomstenbelasting';
+import type { XafReferences } from './xaf';
 import type {
   AiConsent,
   AppData,
@@ -2491,6 +2492,25 @@ export const selectBankAllocations = (organizationId: UUID) =>
     orderBy: 'created_at', ascending: true, thenBy: 'position', columns: '*, credit_note:credit_notes(number)',
     hint: 'Voer de migratie 20261107110000_bank_handmatig_boeken.sql uit om banktransacties te kunnen verdelen.',
   });
+/**
+ * Voor de auditfile: de nummers van creditnota's en hoe bankboekingen over
+ * facturen verdeeld zijn, zodat elke boekstukregel zijn factuurnummer (invRef)
+ * krijgt. Grootboek laadt die tabellen niet; alleen de paar kolommen die de
+ * auditfile nodig heeft. Lukt het niet (geen rechten op de bank, een oude
+ * database), dan komt de auditfile er zonder die nummers.
+ */
+export async function loadXafReferences(organizationId: UUID): Promise<XafReferences> {
+  const [creditNotes, allocations] = await Promise.all([
+    selectOptional<{ id: UUID; number: string }>('credit_notes', organizationId, {
+      columns: 'id,number', orderBy: 'created_at', ascending: true, hint: 'Creditnota\'s zijn nog niet beschikbaar.',
+    }).catch(() => []),
+    selectOptional<NonNullable<XafReferences['paymentAllocations']>[number]>('bank_transaction_allocations', organizationId, {
+      columns: 'journal_entry_id,position,kind,invoice_id,credit_note_id,purchase_invoice_id,client_id,supplier_id,amount_cents',
+      orderBy: 'created_at', ascending: true, thenBy: 'position', hint: 'De bankverdeling is nog niet beschikbaar.',
+    }).catch(() => []),
+  ]);
+  return { creditNoteNumbers: new Map(creditNotes.map(c => [c.id, c.number])), paymentAllocations: allocations };
+}
 export const selectBankRules = (organizationId: UUID) =>
   selectOptional<BankRule>('bank_rules', organizationId, { orderBy: 'priority', ascending: true, hint: BANKFEED_MIGRATION_HINT });
 export const selectBankRequisitions = (organizationId: UUID) =>
