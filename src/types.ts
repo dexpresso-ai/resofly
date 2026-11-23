@@ -3520,7 +3520,14 @@ export interface Attachment extends OrgScopedRow {
   entity_type: EntityType; entity_id: UUID; parent_task_id: UUID | null; name: string; mime_type: string; size_bytes: number; storage_key: string; public_url: string | null; created_at: string;
   /** Online Office-bewerken: oplopend versienummer + laatst-bewerkt + zachte lock. Alleen gevuld voor office-bestanden die via de editor bewerkt zijn. */
   edit_version?: number; last_edited_by?: UUID | null; last_edited_at?: string | null; locked_by?: UUID | null; locked_at?: string | null;
+  /** Gekoppeld uit Google Drive of OneDrive (20261123150000): het bestand staat daar, hier alleen de verwijzing.
+   *  Ontbreekt zolang die migratie er niet is; dan is het een gewoon bestand. */
+  cloud_provider?: CloudDriveProvider | null; cloud_file_id?: string | null; cloud_drive_id?: string | null;
+  cloud_connection_id?: UUID | null; cloud_web_url?: string | null; cloud_size_bytes?: number | null;
 }
+
+/** Waar een gekoppeld bestand staat. */
+export type CloudDriveProvider = 'google' | 'microsoft';
 
 // ── Teamchat (interne chat tussen organisatieleden) ──────────────────────────
 /** dm = 1-op-1 · group = groepschat (meerdere collega's) · channel = kanaal met draadjes. */

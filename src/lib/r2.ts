@@ -1,5 +1,6 @@
 import { createAttachment } from './repository';
 import { deleteR2Object, getAccessToken, getWorkerBase } from './r2-api';
+import { cloudOpenUrl, cloudProviderLabel, isCloudAttachment } from './cloudDrive';
 import type { Attachment, EntityType, UUID } from '../types';
 
 const publicBase = import.meta.env.VITE_R2_PUBLIC_BASE_URL as string | undefined;
@@ -14,6 +15,14 @@ export { deleteR2Object };
  * otherwise fetches via the authenticated Worker endpoint and forces a download via blob URL.
  */
 export async function downloadAttachment(att: Attachment): Promise<void> {
+  // Een gekoppeld bestand staat in Google Drive of OneDrive: daar openen (en
+  // downloaden), want in onze opslag ligt het niet.
+  if (isCloudAttachment(att)) {
+    const url = cloudOpenUrl(att);
+    if (!url) throw new Error(`Dit bestand staat in ${cloudProviderLabel(att.cloud_provider)}, maar de link ernaartoe ontbreekt. Open het daar.`);
+    window.open(url, '_blank', 'noopener,noreferrer');
+    return;
+  }
   if (publicBase && att.public_url && att.public_url.startsWith(publicBase)) {
     // Public asset — open in a new tab and let the browser save it.
     window.open(att.public_url, '_blank', 'noopener,noreferrer');

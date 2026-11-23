@@ -5,6 +5,13 @@
 [functions.calendar-integrations]
 verify_jwt = false
 
+# cloud-files (Google Drive en OneDrive koppelen): Google en Microsoft sturen de
+# browser na "toestaan" terug naar deze functie, zonder Supabase-sessie, en de
+# geplande taak (?cron=deletions) komt met een eigen geheim. Elke actie van de
+# app eist in code requireUser() + requireOrganizationAccess() + de module Inhoud.
+[functions.cloud-files]
+verify_jwt = false
+
 # invoice-workflow must be callable by Mollie's server-to-server payment webhook,
 # which carries no Supabase JWT. The webhook path is verified instead by the
 # Mollie webhook secret (?secret=...), and every authenticated app action still

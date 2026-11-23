@@ -1,5 +1,6 @@
-import { FileText, Image as ImageIcon, Presentation, Sheet } from 'lucide-react';
+import { Cloud, FileText, Image as ImageIcon, Presentation, Sheet } from 'lucide-react';
 import type { Attachment, InternalDocument } from '../types';
+import { cloudProviderLabel, cloudProviderOf } from '../lib/cloudDrive';
 
 /**
  * Iconen, kleuren en typelabels van de verkenner op één plek. De Inhoud-pagina en
@@ -28,11 +29,24 @@ function attCategory(att: Attachment): AttCategory {
   if (['xlsx', 'xls', 'ods', 'csv'].includes(ext)) return 'sheet';
   if (['pptx', 'ppt', 'odp'].includes(ext)) return 'slides';
   const m = att.mime_type || '';
+  // De eigen bestanden van Google (Documenten, Spreadsheets, Presentaties)
+  // hebben geen extensie; het mime-type zegt wat het is.
+  if (m === GOOGLE_DOC) return 'word';
+  if (m === GOOGLE_SHEET) return 'sheet';
+  if (m === GOOGLE_SLIDES) return 'slides';
   if (m.startsWith('image/')) return 'image';
   if (m === 'application/pdf') return 'pdf';
   return 'other';
 }
-export function attTypeLabel(att: Attachment): string {
+const GOOGLE_DOC = 'application/vnd.google-apps.document';
+const GOOGLE_SHEET = 'application/vnd.google-apps.spreadsheet';
+const GOOGLE_SLIDES = 'application/vnd.google-apps.presentation';
+
+function baseTypeLabel(att: Attachment): string {
+  const m = att.mime_type || '';
+  if (m === GOOGLE_DOC) return 'Google-document';
+  if (m === GOOGLE_SHEET) return 'Google-spreadsheet';
+  if (m === GOOGLE_SLIDES) return 'Google-presentatie';
   switch (attCategory(att)) {
     case 'word': return 'Word-document';
     case 'sheet': return attExt(att) === 'csv' ? 'CSV-bestand' : 'Excel-werkblad';
@@ -42,14 +56,32 @@ export function attTypeLabel(att: Attachment): string {
     default: return 'Bestand';
   }
 }
-/** Icoon voor een geüpload bestand op basis van het bestandstype. */
-export function AttachmentGlyph({ att, size }: { att: Attachment; size: number }) {
+/** Het type in de kolom Type; bij een gekoppeld bestand met waar het staat ("PDF · OneDrive"). */
+export function attTypeLabel(att: Attachment): string {
+  const base = baseTypeLabel(att);
+  const provider = cloudProviderOf(att);
+  return provider ? `${base} · ${cloudProviderLabel(provider)}` : base;
+}
+function CategoryGlyph({ att, size }: { att: Attachment; size: number }) {
   switch (attCategory(att)) {
     case 'image': return <ImageIcon size={size} />;
     case 'sheet': return <Sheet size={size} />;
     case 'slides': return <Presentation size={size} />;
     default: return <FileText size={size} />;
   }
+}
+/**
+ * Icoon voor een bestand op basis van het type. Een bestand uit Google Drive of
+ * OneDrive krijgt een wolkje in de hoek: het opent daar, en verwijderen gooit
+ * het daar in de prullenbak.
+ */
+export function AttachmentGlyph({ att, size }: { att: Attachment; size: number }) {
+  const provider = cloudProviderOf(att);
+  if (!provider) return <CategoryGlyph att={att} size={size} />;
+  return <span className="att-cloud-glyph" title={`Staat in ${cloudProviderLabel(provider)}`}>
+    <CategoryGlyph att={att} size={size} />
+    <span className={`att-cloud-badge is-${provider}`} aria-hidden="true"><Cloud size={Math.max(9, Math.round(size * 0.42))} strokeWidth={2.4} /></span>
+  </span>;
 }
 /**
  * Bestandstype-kleur: Word/tekst blauw, Excel/csv groen, presentaties oranje, PDF rood

@@ -29,6 +29,10 @@
 #      domeinen na bij Cloudflare en ruimt oude namen en inlogaanvragen op.
 #      CLIENT_DOMAINS_WORKER_SECRET zet dit script NIET: dezelfde waarde moet
 #      ook in de Worker staan, dus die kies je zelf (docs/setup/KLANTDOMEINEN_SETUP.md).
+#   7. Google Drive en OneDrive (migratie 20261123150000): staat de pg_cron-taak
+#      'cloud-files-deletions' er nog niet, dan een nieuw CLOUD_FILES_CRON_SECRET
+#      en de taak (elk kwartier). Die zet wat in ResoFly is verwijderd alsnog in
+#      de prullenbak van Drive of OneDrive.
 #
 # Veilig om opnieuw te draaien: het zet alleen wat ontbreekt, en geen enkele
 # waarde komt in beeld. Draait in de workflow "Deploy Supabase (staging)"
@@ -214,6 +218,33 @@ select cron.schedule(
     :'url', :'secret'));
 SQL
   echo "CLIENT_DOMAINS_CRON_SECRET gezet en de taak 'client-domains-recheck' ingepland (elk kwartier)."
+fi
+
+# ── 7. Google Drive en OneDrive: wat in ResoFly is verwijderd, ook daar weg ──
+#
+# Meestal gooit de app een verwijderd gekoppeld bestand meteen in de
+# prullenbak van Drive of OneDrive. Deze taak pakt wat bleef liggen: een
+# storing, een cascade zonder scherm (een klant verwijderd), of een koppeling
+# die net opnieuw is gezet. Elk kwartier; een mislukte poging wacht steeds
+# langer (cloud_file_deletions.next_attempt_at), dus dat is geen druk op Google
+# of Microsoft.
+if [ "$(sql -c "select to_regclass('public.cloud_file_deletions') is not null")" != "t" ]; then
+  echo "Drive en OneDrive: de migratie 20261123150000 staat nog niet op deze database; overgeslagen."
+elif [ "$(sql -c "select count(*) from cron.job where jobname = 'cloud-files-deletions'")" != "0" ]; then
+  echo "De taak 'cloud-files-deletions' staat al ingepland; taak en CLOUD_FILES_CRON_SECRET blijven zoals ze zijn."
+else
+  # Zelfde volgorde als hierboven: eerst het secret, dan de taak.
+  cloud_secret="$(generate)"; mask "$cloud_secret"
+  "$supabase_cli" secrets set --project-ref "$ref" "CLOUD_FILES_CRON_SECRET=$cloud_secret" >/dev/null
+  sql -v secret="$cloud_secret" -v url="https://${ref}.functions.supabase.co/cloud-files?cron=deletions" >/dev/null <<'SQL'
+select cron.schedule(
+  'cloud-files-deletions',
+  '*/15 * * * *',
+  format(
+    'select net.http_post(url := %L, headers := jsonb_build_object(''Content-Type'', ''application/json'', ''x-cron-secret'', %L), body := ''{}''::jsonb, timeout_milliseconds := 120000);',
+    :'url', :'secret'));
+SQL
+  echo "CLOUD_FILES_CRON_SECRET gezet en de taak 'cloud-files-deletions' ingepland (elk kwartier)."
 fi
 
 echo "Klaar: de webhooks zijn ingericht op ${ref}."

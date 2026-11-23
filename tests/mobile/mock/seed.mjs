@@ -116,6 +116,19 @@ export const attachments = [
   ['moodboard.jpg', 'image/jpeg', 2_400_000, 'project', 0],
   ['offerte-website.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 64_000, 'client', 1],
 ].map(([name, mime_type, size_bytes, entity_type, idx]) => ({ id: uid('b'), ...base(), entity_type, entity_id: entity_type === 'client' ? clients[idx].id : projects[idx].id, parent_task_id: null, name, mime_type, size_bytes, storage_key: `org/${ORG}/${name}`, public_url: null }));
+// Een bestand uit Google Drive in een dossiermap (2026-11-23): een verwijzing,
+// met een lange naam die in de lijst niet zijwaarts uit beeld mag lopen.
+// Een vaste id (geen uid()): een extra uid() schoof alle id's hierna een plek op.
+{
+  const id = 'c1d00000-0000-4000-8000-000000000001';
+  attachments.push({
+    id, ...base(), entity_type: 'folder', entity_id: folders[0].id, parent_task_id: null,
+    name: 'Aangeleverde-teksten-voor-de-nieuwe-website-definitief-versie-3.pdf', mime_type: 'application/pdf', size_bytes: 0,
+    storage_key: `${ORG}/cloud/google/${id}`, public_url: null,
+    cloud_provider: 'google', cloud_file_id: 'g-seed-1', cloud_drive_id: null, cloud_connection_id: null,
+    cloud_web_url: 'https://drive.google.com/file/d/g-seed-1/view', cloud_size_bytes: 412_000,
+  });
+}
 
 const line = (description, quantity, unit_price) => ({ id: uid('l'), description, quantity, unit_price, vat: 21, vat_code: null });
 const quoteBase = () => ({ sent_at: null, accepted_at: null, internal_approval_status: 'draft', internal_approval_requested_at: null, internal_approval_requested_by: null, internal_approved_at: null, internal_approved_by: null, internal_rejected_at: null, internal_rejected_by: null, internal_rejection_note: null, client_decision_at: null, client_decision_by_name: null, client_decision_by_email: null, client_decision_note: null, public_token_hash: null, public_token_created_at: null, public_token_expires_at: null, resend_last_email_id: null, last_email_delivery_status: null, last_email_delivery_at: null, last_email_opened_at: null, last_email_clicked_at: null, last_email_failed_at: null, latest_version_id: null, internal_approved_version_id: null, sent_version_id: null, accepted_version_id: null, accepted_sent_version_id: null, last_pdf_file_name: null, last_pdf_mime_type: null, last_pdf_size_bytes: null, last_pdf_sha256: null });

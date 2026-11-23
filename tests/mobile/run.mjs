@@ -227,6 +227,24 @@ const PAGES = {
   'tickets-search': { page: 'tickets', storage: { 'resofly.tickets.view': 'list' }, prepare: ['.ticket-search-toggle', { fill: '.ticket-search input', value: 'website' }] },
   'tickets-filters': { page: 'tickets', storage: { 'resofly.tickets.view': 'list' }, prepare: '.ticket-filter-toggle' },
   'client-tickets': { page: 'client', clientId: seed.clients[0].id, prepare: '.client-tab-btn:has-text("Tickets")' },
+  // Google Drive en OneDrive (2026-11-23): de map met een gekoppeld bestand, en
+  // het venster "Uit OneDrive" met een lang account, een lijst uit OneDrive en
+  // een bestand dat nog niet uit OneDrive weg kon. Op de telefoon mag geen
+  // naam, adres of knop eraf vallen.
+  'content-drive-map': {
+    page: 'client', clientId: seed.clients[0].id, storage: { 'resofly:driveView': 'list' },
+    prepare: ['.client-tab-btn:has-text("Bestanden")', '.odrv-row:has-text("Aangeleverd materiaal")'],
+    mustShow: [{ selector: '.odrv-row .att-cloud-badge', label: 'het wolkje bij het bestand uit Google Drive' }],
+  },
+  'content-onedrive': {
+    page: 'client', clientId: seed.clients[0].id, storage: { 'resofly:driveView': 'list' },
+    prepare: ['.client-tab-btn:has-text("Bestanden")', '.odrv-row:has-text("Aangeleverd materiaal")', '.drive-new', '.drive-pop-item:has-text("Uit OneDrive")'],
+    contained: '.cloud-modal',
+    mustShow: [
+      { selector: '.cloud-modal .cloud-pick', label: 'een bestand uit OneDrive om aan te vinken' },
+      { selector: '.cloud-modal .cloud-del-row', label: 'het bestand dat nog niet uit OneDrive weg kon' },
+    ],
+  },
   // Uren factureren (2026-11-22): het venster vanaf de klant, met regels, een
   // lange omschrijving en de waarschuwing over uren zonder tarief. Op de
   // telefoon mag geen bedrag of aantal uren eraf vallen.

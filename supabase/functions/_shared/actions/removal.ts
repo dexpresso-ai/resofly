@@ -400,20 +400,22 @@ export const REMOVAL_ACTIONS: ActionDef[] = [
     module: 'content',
     kind: 'write',
     risk: 'high',
-    description: 'Verwijdert een geüpload bestand, ook uit de opslag. Zoek het met `attachment.list` of `content.search`.',
+    description: 'Verwijdert een geüpload bestand, ook uit de opslag. Een bestand dat uit Google Drive of OneDrive is gekoppeld, gaat daar naar de prullenbak. Zoek het met `attachment.list` of `content.search`.',
     keywords: ['bestand', 'bijlage', 'verwijderen', 'weggooien', 'upload'],
     input: { attachment_id: { type: 'string', description: 'Id van het bestand.' } },
     required: ['attachment_id'],
     async plan(ctx, input) {
       const attachmentId = id(input, 'attachment_id');
-      const file = await row<{ name: string; entity_type: string; entity_id: string }>(ctx, 'attachments', attachmentId, 'name, entity_type, entity_id', 'Bestand');
+      const file = await row<{ name: string; entity_type: string; entity_id: string; cloud_provider: string | null }>(ctx, 'attachments', attachmentId, 'name, entity_type, entity_id, cloud_provider', 'Bestand');
       const module = ({ folder: 'content', note: 'content', document: 'content', client: 'clients', project: 'projects', task: 'projects', subtask: 'projects', ticket: 'tickets', quote: 'finance', invoice: 'finance', supplier: 'finance', purchase_invoice: 'finance', fixed_asset: 'finance', meeting_recording: 'calendar' } as Record<string, string>)[file.entity_type];
       if (!module) throw new ActionError('Dit bestand hoort bij de teamchat; dat beheer je in de chat zelf.');
       if (ctx.canWrite?.(module) === false) throw new ActionError('Dit bestand hangt aan iets waar je niet mag wijzigen.');
       await assertAttachmentParentOpen(ctx, file.entity_type, file.entity_id);
+      // Wie goedkeurt, moet weten dat het niet alleen uit ResoFly gaat.
+      const cloud = file.cloud_provider === 'google' ? 'Google Drive' : file.cloud_provider === 'microsoft' ? 'OneDrive' : null;
       return plan({
         title: `Bestand "${file.name}" verwijderen`,
-        sub: 'ook uit de opslag',
+        sub: cloud ? `gaat ook in ${cloud} naar de prullenbak` : 'ook uit de opslag',
         warning: IRREVERSIBLE,
         payload: { kind: 'attachment', id: attachmentId, label: `Bestand "${file.name}"` },
       });

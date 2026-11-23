@@ -87,6 +87,10 @@ check "mcp-oauth stuurt een onbekende client nergens heen" 400 'Onbekende AI-cli
   "$base/mcp-oauth/authorize?client_id=rooktest&redirect_uri=https%3A%2F%2Frooktest.invalid%2Fcb&response_type=code"
 check "mail-inbound weigert zonder geheim" 401 'Niet geautoriseerd' \
   -X POST "$base/mail-inbound" -H 'Content-Type: application/json' --data '{}'
+# Google Drive en OneDrive (migratie 20261123150000): het platform controleert
+# geen JWT (de terugkeer van Google heeft er geen), dus de verwijderronde moet
+# zelf weigeren zonder het geheim.
+check "cloud-files weigert de verwijderronde zonder cron-secret" 401 'cron-secret' -X POST "$base/cloud-files?cron=deletions"
 
 # Het eigen adres van de AI-koppeling (workers/mcp; op staging sinds 11 november
 # https://mcp-staging.resofly.com/mcp, op productie straks

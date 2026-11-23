@@ -3,6 +3,8 @@ import type { ExportPageRequest } from './dataExport';
 import { supabase, supabaseAuth } from './supabase';
 import { recordInvitationBlockedBySeats } from '../services/licenseService';
 import { deleteR2Object } from './r2-api';
+import { isCloudAttachment } from './cloudDrive';
+import { kickCloudDeletions } from './cloudDrive-api';
 import { throwFunctionError } from './functionErrors';
 import { ConnectionError, isConnectionError, SIGNED_OUT_MESSAGE } from './networkRetry';
 import { isMissingColumn, isMissingRelation, NotMigratedError } from './postgrestErrors';
@@ -7012,6 +7014,17 @@ export async function moveDriveItem(item: DriveDragItem, target: DriveLocation, 
  * Opnieuw proberen kan altijd: een object dat al weg is, laat R2 zonder fout los.
  */
 export async function deleteAttachment(att: { id: UUID; storage_key: string; organization_id?: UUID }): Promise<void> {
+  // Een gekoppeld bestand uit Google Drive of OneDrive ligt niet in R2. De
+  // database zet het bij het verwijderen van de rij zelf in de wachtrij
+  // (cloud_file_deletions); daarna gooit cloud-files het daar in de prullenbak.
+  if (isCloudAttachment(att)) {
+    let query = supabase.from('attachments').delete().eq('id', att.id);
+    if (att.organization_id) query = query.eq('organization_id', att.organization_id);
+    const { error } = await query;
+    if (error) throw new Error(`Het bestand kon niet worden verwijderd (${error.message}). Probeer het opnieuw.`);
+    if (att.organization_id) void kickCloudDeletions(att.organization_id);
+    return;
+  }
   if (att.storage_key) {
     try {
       await deleteR2Object(att.storage_key);
