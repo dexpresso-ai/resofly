@@ -7,10 +7,12 @@ import { PageIcon } from '../components/PageIcon';
 import { dateNL, euro } from '../lib/format';
 import { formatISODate } from '../lib/dates';
 import { vatFilingDeadline } from '../lib/vatPeriods';
+import { vatOpening } from '../lib/jaarwissel';
 import { downloadCsv } from '../lib/csv';
+import { VAT_RETURN_CSV_HEADER, vatReturnCsvRows } from '../lib/financeCsv';
 import {
   closeVatPeriod, computeIcpDeclaration, computeVatReturn, computeVatSupplementDelta, createVatSupplement,
-  listVatSupplementEntries, reportProfitAndLoss, setUpBookkeeping, updateRow,
+  listVatSupplementEntries, reportProfitAndLoss, setUpBookkeeping, setVatReturnStatus,
 } from '../lib/repository';
 
 const euroCents = (cents: number | null | undefined) => euro((cents ?? 0) / 100);
@@ -132,10 +134,15 @@ export function VatReturnsPage({ data, organizationId, canWrite, onChanged }: { 
   const settingPeriod: ViewPeriod = data.companySettings?.vat_return_period === 'monthly' ? 'monthly' : 'quarterly';
   const kor = Boolean(data.companySettings?.kor_enabled);
 
-  const [view, setView] = useState<ViewPeriod>(settingPeriod);
-  const [year, setYear] = useState(now.getFullYear());
-  const [month, setMonth] = useState(now.getMonth() + 1);
-  const [quarter, setQuarter] = useState(Math.floor(now.getMonth() / 3) + 1);
+  // De pagina opent op het oudste tijdvak dat nog moet, hetzelfde als de
+  // herinnering op het dashboard. Eerst opende ze altijd op het tijdvak van
+  // vandaag: wie op 2 januari op "Btw-aangifte Q4 2026 nog doen" klikte, zag
+  // "Saldo Q1 2027 € 0,00" en moest het jaar zelf terugzetten.
+  const [opening] = useState(() => vatOpening({ today: formatISODate(now), frequency: settingPeriod, nextDue: data.vatReturnNextDue }));
+  const [view, setView] = useState<ViewPeriod>(opening.view);
+  const [year, setYear] = useState(opening.year);
+  const [month, setMonth] = useState(opening.month);
+  const [quarter, setQuarter] = useState(opening.quarter);
   const [live, setLive] = useState<VatReturnRubrieken | null>(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -219,7 +226,11 @@ export function VatReturnsPage({ data, organizationId, canWrite, onChanged }: { 
   async function setStatus(target: VatReturn, status: VatReturn['status']) {
     if (!canWrite) return;
     setBusy(true); setError(null);
-    try { await updateRow<VatReturn>('vat_returns', target.id, { status }, organizationId); onChanged(); }
+    try {
+      if (status !== 'filed' && status !== 'paid') throw new Error('Deze statuswijziging van de btw-aangifte is niet toegestaan.');
+      await setVatReturnStatus(organizationId, target.id, status);
+      onChanged();
+    }
     catch (e) { setError(e instanceof Error ? e.message : 'Status bijwerken mislukt'); }
     finally { setBusy(false); }
   }
@@ -314,6 +325,9 @@ export function VatReturnsPage({ data, organizationId, canWrite, onChanged }: { 
               <div><span>Saldo {period.label}</span><strong className={saldoAfgerond > 0 ? 'bk-neg' : 'bk-pos'}>{euroCents(Math.abs(saldoAfgerond))}</strong></div>
               <div className={saldoAfgerond > 0 ? 'bk-balance-bad' : 'bk-balance-ok'}>{saldoAfgerond > 0 ? 'Te betalen' : saldoAfgerond < 0 ? 'Terug te ontvangen' : 'Nihil'}</div>
             </div>
+            {/* De rubrieken van dit tijdvak om te bewaren of door te sturen; tot
+                november 2026 kon dat alleen als schermafdruk. */}
+            <Button onClick={() => downloadCsv(`btw-aangifte-${period.label.replace(/\s/g, '-')}.csv`, VAT_RETURN_CSV_HEADER, vatReturnCsvRows(r, BOX_ROWS))}><Download size={14} /> CSV</Button>
             {!finalized && !overlapsClosed && !periodRunning && !otherFrequency && canWrite && <Button variant="primary" onClick={() => setShowClose(true)} disabled={busy}><Landmark size={14} /> Periode afsluiten</Button>}
             {!finalized && overlapsClosed && <span className="bk-muted">Deze periode valt binnen een al afgesloten aangifteperiode.</span>}
             {finalized && existing!.status === 'finalized' && canWrite && <Button onClick={() => setStatus(existing!, 'filed')} disabled={busy}><CheckCircle2 size={14} /> Markeer als ingediend</Button>}
@@ -342,7 +356,7 @@ export function VatReturnsPage({ data, organizationId, canWrite, onChanged }: { 
           )}
 
           {hasBoxes ? (
-            <div className="bk-table-wrap"><table className="bk-table bk-report-table">
+            <div className="bk-table-wrap"><table className="bk-table bk-report-table bk-vat-boxes">
               <thead><tr><th>Rubriek</th><th>Omschrijving</th><th className="bk-num">Grondslag</th><th className="bk-num">BTW</th><th className="bk-num" title="Wat je in Mijn Belastingdienst invult: omzet · btw">Aangifte (hele €)</th></tr></thead>
               <tbody>
                 {boxTableRows}

@@ -28,7 +28,7 @@ function fakeDb(rows: Record<string, Array<Record<string, unknown>>>) {
       const list = rows[table] ?? [];
       const chain: Record<string, unknown> = {};
       const self = () => chain;
-      for (const name of ['select', 'eq', 'in', 'is', 'order', 'limit', 'gte', 'lte', 'neq', 'not', 'or', 'ilike']) chain[name] = self;
+      for (const name of ['select', 'eq', 'in', 'is', 'order', 'limit', 'range', 'gte', 'lte', 'neq', 'not', 'or', 'ilike']) chain[name] = self;
       chain.maybeSingle = async () => ({ data: list[0] ?? null, error: null });
       chain.single = async () => ({ data: list[0] ?? null, error: null });
       chain.then = (resolve: (value: unknown) => unknown) => resolve({ data: list, error: null });

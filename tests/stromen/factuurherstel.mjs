@@ -458,9 +458,12 @@ export default async function factuurherstel() {
     const fout = geweigerd(await verstuur(w, c, kSend), 'versturen', [422]).error;
     verwacht(/btw-code HOOG/.test(fout) && /21%/.test(fout), `tekst: ${fout}`);
     gelijk(mailsAan(kSend.email).length, aantal, 'er ging toch een mail uit');
-    // Ook rechtstreeks via de status (Gerrie, de API) weigert de database.
+    // Ook rechtstreeks via de status (Gerrie, de API) weigert de database. Sinds
+    // 22 november geeft alleen de server een concept uit
+    // (enforce_invoice_issue_via_server, zie factuurregels.mjs); die melding
+    // komt dan eerst.
     const patch = await rest(`invoices?id=eq.${c.id}`, { method: 'PATCH', token: w.eigenaar.token, prefer: 'return=representation', body: { status: 'sent' } });
-    verwacht(patch.status === 400 && /btw-code HOOG/.test(patch.tekst), `uitgeven via de status: ${patch.status} ${patch.tekst.slice(0, 200)}`);
+    verwacht(patch.status === 400 && /btw-code HOOG|Uitgeven zonder mail/.test(patch.tekst), `uitgeven via de status: ${patch.status} ${patch.tekst.slice(0, 200)}`);
     // Een code met 0% en 21% op de regel (btw gerekend op een verlegde dienst) ook niet.
     const e = await conceptFactuur(w, kSend, vandaag(), [{ description: 'ICP met btw', quantity: 1, unit_price: 300, vat: 21, vat_code: 'ICP_DIENST' }]);
     geweigerd(await verstuur(w, e, kSend), 'ICP met 21%', [422]);

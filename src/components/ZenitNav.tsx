@@ -107,7 +107,8 @@ function buildModules({ permissions, legalForm, decisionCount, ticketUnread, pur
   ].filter(Boolean).join(' · ');
   const decisionTitle = `${plural(decisionCount, 'kaart', 'kaarten')} te beslissen`;
   const ticketTitle = `${plural(ticketUnread, 'ticket', 'tickets')} met nieuwe klant-activiteit`;
-  const purchaseTitle = `${plural(purchaseInboxOpen, 'per e-mail binnengekomen inkoopfactuur', 'per e-mail binnengekomen inkoopfacturen')} met aandacht nodig`;
+  // Niet "per e-mail binnengekomen": ook een bon uit de galerij of de camera staat op de werklijst.
+  const purchaseTitle = `${plural(purchaseInboxOpen, 'inkoopfactuur of bon', 'inkoopfacturen en bonnen')} op de werklijst`;
   const chatTitle = plural(chatUnread, 'ongelezen chatbericht', 'ongelezen chatberichten');
 
   const modules: ModuleDef[] = [

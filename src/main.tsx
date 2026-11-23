@@ -16,7 +16,7 @@ import { appHomePage, applyStandaloneAppHead, canonicalAppUrl, installableAppFro
 import { captureInstallPrompt } from './lib/installPrompt';
 import { InstallAppCard } from './components/StandaloneApps';
 import { GlobalSearch, type SearchResult } from './components/GlobalSearch';
-import { Button, ColorPicker, DEFAULT_PROJECT_COLOR, Input, Select, Textarea, normalizeColor } from './components/Ui';
+import { Button, ColorPicker, DecimalInput, DEFAULT_PROJECT_COLOR, Input, Select, Textarea, normalizeColor } from './components/Ui';
 import { MemberSelect } from './components/MemberSelect';
 import { RichTextEditor, sanitizeRichText } from './components/RichTextEditor';
 import { Modal } from './components/Modal';
@@ -56,6 +56,7 @@ import {
   createTimeEntry,
   updateTimeEntry,
   disableOrganizationMember,
+  setAccountantBooking,
   createSavedReport,
   insertRow,
   inviteOrganizationMember,
@@ -142,7 +143,7 @@ import { documentTypeLabels } from './features/Documents';
 import { clientFolderOptions } from './lib/folders';
 import { clientEInvoiceChannel, clientWantsEInvoice, eInvoiceReadiness, invoiceRecipientFor, isValidEmail, mollieInvoicingAllowed } from './lib/eInvoicing';
 import type { CreditInput, RefundInput } from './features/Finance';
-import { creditInvoiceAmount, issueCreditNoteForRefund, previewInvoiceSend, refundInvoice as refundInvoiceWithPurpose, type InvoiceBookingNotice } from './services/invoiceRecoveryService';
+import { creditInvoiceAmount, issueCreditNoteForRefund, issueInvoiceWithoutEmail, previewInvoiceSend, refundInvoice as refundInvoiceWithPurpose, type InvoiceBookingNotice } from './services/invoiceRecoveryService';
 import { nextPurchaseNumber, purchaseTotals } from './lib/purchaseInvoiceNumbers';
 import type { InvoiceFormSeed } from './features/Bookkeeping';
 import { clientHostInfo, portalRedirectTarget } from './lib/clientHost';
@@ -158,7 +159,7 @@ import type { BookingFocus } from './features/MeetingBookingManager';
 import type { ProjectShift } from './components/ProjectShiftDialog';
 import { applyPeriodLocally, applyPlanningLocally, applyTimeLocally, clockLabel, mergeTaskRows, restoreTasksForDates, splitTitleAndEstimate } from './lib/planning';
 import { formatISODate, parseISODate, startOfWeek } from './lib/dates';
-import { defaultDueDate } from './lib/financeRules';
+import { defaultDueDate, dueDateAfterDateChange, paymentTermDays } from './lib/financeRules';
 import { AttachmentList } from './components/AttachmentList';
 import { GerrieChat, askGerrie } from './components/GerrieChat';
 import { watchForReturn, type FinishedCall } from './lib/callBridge';
@@ -171,11 +172,13 @@ import { plainTextToEmailHtml, sendClientEmail } from './services/mailService';
 import { loadBillingOverview } from './services/billingService';
 import { exportFinancePDF, financePdfOptions } from './lib/pdf';
 import { FinanceDocPreview } from './components/FinanceDocPreview';
+import { FinanceLineChecks } from './components/FinanceLineChecks';
 import type {
   AppData, CalendarEventLink, CalendarExternalEvent, CalendarNoteLinkInput, Client, ClientFieldDefinition, CompanySettingsInput, Contract, CreditNote, DunningNotice, EntityType, FinanceLine, InboundMessage, InternalDocument, Invoice, InvoiceRefund, Note, NoteHandwritingSummary, Organization, OrganizationContext, OrganizationMember, OrganizationRole, Project, ProjectMember, PurchaseInvoice, PurchaseInvoiceLine, Quote, Supplier, Task, TaskAssignee, TaskStatus, Ticket, Subtask, Comment as TaskComment,
 } from './types';
 import { CustomFieldsSection, normalizeCustomFieldValues } from './components/CustomFields';
 import { euro, total, uid, lineGross } from './lib/format';
+import { InvoiceHoursNote } from './components/InvoiceHoursNote';
 import { normalizeSubtasks, subtasksForSave } from './lib/subtasks';
 import './styles/globals.css';
 // Na globals.css: de Cockpit-laag (look & feel naar Value Backlog) moet van
@@ -251,6 +254,9 @@ const ClientPortal = lazyPage(() => import('./features/portal/ClientPortal'), 'C
 const PortalPreview = lazyPage(() => import('./features/portal/ClientPortal'), 'PortalPreview');
 const OrganizationSetup = lazyPage(() => import('./features/OrganizationSetup'), 'OrganizationSetup');
 const OrganizationSetupPending = lazyPage(() => import('./features/OrganizationSetup'), 'OrganizationSetupPending');
+// "Uren factureren" opent vanaf Uren, een project of een klant; het venster
+// laadt pas als iemand op de knop drukt.
+const TimeInvoiceDialog = lazyPage(() => import('./features/TimeInvoiceDialog'), 'TimeInvoiceDialog');
 /*
  * De pagina's van de werkruimte laden pas als je ze opent (zie
  * components/LazyPage.tsx). Ook het dashboard (sinds 22 november): een losse
@@ -348,7 +354,7 @@ type EditMode =
   | { kind: 'invoice'; item?: Invoice; defaults?: Partial<Pick<Invoice, 'client_id' | 'project_id' | 'notes' | 'due_date' | 'lines'>> }
   | null;
 
-const emptyData: AppData = { clients: [], clientContacts: [], clientCalls: [], clientFieldDefinitions: [], projects: [], projectTemplates: [], projectTemplateTasks: [], tasks: [], projectMembers: [], taskAssignees: [], contractProjects: [], tickets: [], ticketNotes: [], notes: [], documents: [], folders: [], noteCalendarLinks: [], noteHandwriting: [], calendarEventLinks: [], timeEntries: [], quotes: [], quoteApprovalEvents: [], quoteEmailDeliveries: [], quoteVersions: [], invoices: [], invoiceWorkflowEvents: [], invoiceEmailDeliveries: [], invoicePaymentRecords: [], invoiceVersions: [], invoiceRefunds: [], creditNotes: [], invoiceChargebacks: [], dunningNotices: [], ledgerAccounts: [], vatCodes: [], journalEntries: [], journalLines: [], closedPeriods: [], fiscalYears: [], suppliers: [], purchaseInvoices: [], fixedAssets: [], assetDepreciations: [], prepaidExpenses: [], prepaidExpenseReleases: [], vatReturns: [], bankAccounts: [], bankStatements: [], bankTransactions: [], bankAllocations: [], bankRules: [], bankRequisitions: [], attachments: [], driveShares: [], galleries: [], savedReports: [], plannerNotes: [], plannerCapacity: null, companySettings: null, bankTransactionsToReconcile: 0, vatReturnsToFile: 0, vatReturnNextDue: null };
+const emptyData: AppData = { clients: [], clientContacts: [], clientCalls: [], clientFieldDefinitions: [], projects: [], projectTemplates: [], projectTemplateTasks: [], tasks: [], projectMembers: [], taskAssignees: [], contractProjects: [], tickets: [], ticketNotes: [], notes: [], documents: [], folders: [], noteCalendarLinks: [], noteHandwriting: [], calendarEventLinks: [], timeEntries: [], quotes: [], quoteApprovalEvents: [], quoteEmailDeliveries: [], quoteVersions: [], invoices: [], invoiceWorkflowEvents: [], invoiceEmailDeliveries: [], invoicePaymentRecords: [], invoiceVersions: [], invoiceRefunds: [], creditNotes: [], invoiceChargebacks: [], dunningNotices: [], ledgerAccounts: [], vatCodes: [], journalEntries: [], journalLines: [], closedPeriods: [], fiscalYears: [], suppliers: [], purchaseInvoices: [], fixedAssets: [], assetDepreciations: [], prepaidExpenses: [], prepaidExpenseReleases: [], vatReturns: [], bankAccounts: [], bankStatements: [], bankTransactions: [], bankAllocations: [], bankRules: [], bankRequisitions: [], attachments: [], driveShares: [], galleries: [], savedReports: [], plannerNotes: [], plannerCapacity: null, companySettings: null, bankTransactionsToReconcile: 0, invoiceOpenCents: {}, vatReturnsToFile: 0, vatReturnNextDue: null };
 const emptyOrganizationContext: OrganizationContext = { memberships: [], organizations: [], activeOrganization: null, activeMembership: null, teamMembers: [], pendingInvitations: [], organizationInvitations: [], licenseUsage: null, auditLogs: [], billingOverview: null, creativeStatus: null, businessStatus: null, aiConsent: null, aiConsents: [] };
 const activeOrgStorageKey = 'brandcore.activeOrganizationId';
 /** Volgnummer voor sprongen naar de pagina Berichten (zie openCommunication). */
@@ -783,7 +789,7 @@ function editModeForProposal(p: GerrieProposal, data: AppData): ProposalEditTarg
   switch (p.type) {
     case 'invoice':
       return { page: 'invoices', edit: { kind: 'invoice', item: undefined, defaults: {
-        client_id: p.client_id, notes: p.notes ?? undefined, due_date: p.due_date ?? undefined,
+        client_id: p.client_id, project_id: p.project_id ?? undefined, notes: p.notes ?? undefined, due_date: p.due_date ?? undefined,
         lines: proposalLines(p.lines),
       } } };
     case 'quote':
@@ -1718,6 +1724,8 @@ function App() {
   // Eerder liet Ververs die lijsten staan: een contract dat de klant net had
   // ondertekend, bleef daar "Wacht op ondertekening".
   const [refreshRound, setRefreshRound] = useState(0);
+  // Het venster "Uren factureren", met de klant of het project waar de knop stond.
+  const [timeInvoice, setTimeInvoice] = useState<{ clientId?: string | null; projectId?: string | null } | null>(null);
   /** Loopt op als de app zelf iets in de opvangbak veranderde (een mail aan een nieuwe klant gekoppeld). */
   const [inboxRevision, setInboxRevision] = useState(0);
   async function refresh() {
@@ -2046,6 +2054,12 @@ function App() {
     if (!activeMembership || activeMembership.role !== 'owner') throw new Error('Alleen owners kunnen teamleden uitschakelen.');
     assertNotPeerOwner(memberId, 'uitschakelen');
     await disableOrganizationMember(memberId, activeOrganizationId);
+    await loadWorkspace();
+  }
+
+  async function changeAccountantBooking(memberId: string, enabled: boolean) {
+    if (!ensureCanAdmin()) throw new Error('Alleen owners en admins bepalen of de boekhouder mag boeken.');
+    await setAccountantBooking(memberId, enabled);
     await loadWorkspace();
   }
 
@@ -3235,7 +3249,7 @@ function App() {
 
   async function approveQuote(quote: Quote) {
     if (!ensureCanAdmin()) return;
-    if (!confirm(`Offerte ${quote.number} intern goedkeuren? Daarna kan deze via Resend naar de klant.`)) return;
+    if (!confirm(`Offerte ${quote.number} intern goedkeuren? Daarna kun je hem naar de klant sturen.`)) return;
     setLoading(true); setError(null);
     try {
       await approveQuoteInternal(activeOrg.id, quote.id);
@@ -3283,12 +3297,12 @@ function App() {
     const recipientEmail = prompt('Naar welk e-mailadres wil je de offerte versturen?', client?.email || '');
     if (!recipientEmail) return;
     const recipientName = prompt('Naam/contactpersoon voor de e-mail', client?.contact_name || client?.name || '') || undefined;
-    setLoading(true); setSending('Offerte wordt verstuurd via Resend…'); setError(null);
+    setLoading(true); setSending('Offerte wordt verstuurd…'); setError(null);
     try {
       await sendQuoteEmailViaResend(activeOrg.id, quote.id, { recipientEmail, recipientName });
       await refresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Offerte verzenden via Resend mislukt');
+      setError(e instanceof Error ? e.message : 'De offerte versturen lukte niet.');
     } finally {
       setLoading(false); setSending(null);
     }
@@ -3312,7 +3326,10 @@ function App() {
       setError('Alleen geaccepteerde offertes kunnen worden omgezet naar een factuur.');
       return;
     }
-    if (!confirm(`Factuur maken van offerte ${quote.number}? Dit gebeurt server-side en voorkomt dubbele facturen bij dubbelklikken.`)) return;
+    // Eén offerte geeft één factuur (idx_invoices_one_per_quote). In delen
+    // factureren (een voorschot, termijnen) kan wel, maar niet als aparte
+    // factuurvorm: dat staat hier, op het moment dat je het kiest.
+    if (!confirm(`Factuur maken van offerte ${quote.number}?\n\nJe krijgt een conceptfactuur met alle regels van de offerte. Bij een offerte hoort één factuur. Wil je in delen factureren, bijvoorbeeld eerst een voorschot? Pas dan in dit concept de bedragen aan tot het eerste deel, en maak voor de volgende delen een nieuwe factuur met "+ Nieuw" (kies daar hetzelfde project).`)) return;
     setLoading(true); setError(null);
     try {
       const invoice = await convertAcceptedQuoteToInvoice(activeOrg.id, quote.id);
@@ -3423,7 +3440,7 @@ function App() {
 
     // Toon meteen de laad-overlay: de Mollie-statuscheck hieronder plus het
     // versturen zelf kunnen samen enkele seconden duren.
-    setSending(viaMollie ? 'E-factuur wordt via Mollie uitgegeven…' : eInvoice ? 'E-factuur wordt verstuurd…' : 'Factuur wordt verstuurd via Resend…');
+    setSending(viaMollie ? 'E-factuur wordt via Mollie uitgegeven…' : eInvoice ? 'E-factuur wordt verstuurd…' : 'Factuur wordt verstuurd…');
 
     // Een betaallink van Mollie gaat vanzelf mee als de organisatie via Mollie
     // verstuurt (Instellingen → Online betalen), een eigen Mollie-account
@@ -3470,7 +3487,7 @@ function App() {
         setError(`${label}. Let op: ${notes.join(' Daarnaast: ')}`);
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : (viaMollie ? 'E-factuur via Mollie versturen mislukt' : eInvoice ? 'E-factuur verzenden mislukt' : 'Factuur verzenden via Resend mislukt'));
+      setError(e instanceof Error ? e.message : (viaMollie ? 'E-factuur via Mollie versturen mislukt' : eInvoice ? 'E-factuur verzenden mislukt' : 'De factuur versturen lukte niet.'));
     } finally {
       setLoading(false); setSending(null);
     }
@@ -3489,6 +3506,28 @@ function App() {
     return confirm(`${notice.message}\n\n${notice.advice}\n\nKlik op OK om de factuur toch zo te versturen, of op Annuleren om eerst de datum aan te passen (Bewerken).`);
   }
 
+  /**
+   * Uitgeven zonder mail: je mailt de pdf zelf, print hem of zet hem ergens
+   * anders neer. Dezelfde controles als versturen, en de pdf wordt bewaard als
+   * de verzonden versie. Hiervoor zette je het statusveld op "Verzonden"; dan
+   * werd er niets gecontroleerd en geen pdf bewaard.
+   */
+  async function issueInvoiceWithoutMail(invoice: Invoice) {
+    if (!ensureCanWrite()) return;
+    if (!confirm(`Factuur ${invoice.number} uitgeven zonder mail?\n\nResoFly stuurt je klant niets. Je krijgt de pdf om zelf te mailen of te printen. De factuur wordt geboekt en ligt daarna vast: corrigeren gaat dan met een creditfactuur.`)) return;
+    if (!(await confirmInvoiceBooking(invoice))) return;
+    setLoading(true); setError(null);
+    try {
+      await issueInvoiceWithoutEmail(activeOrg.id, invoice.id);
+      await refresh();
+      await downloadInvoicePdfSnapshot(activeOrg.id, invoice.id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'De factuur kon niet worden uitgegeven.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function sendInvoiceReminder(invoice: Invoice) {
     if (!ensureCanWrite()) return;
     const client = data.clients.find(item => item.id === invoice.client_id);
@@ -3500,7 +3539,7 @@ function App() {
     const levelLabel = nextLevel === 3 ? 'aanmaning (niveau 3)' : `herinnering (niveau ${nextLevel})`;
     if (!confirm(`Betalings${levelLabel} versturen voor factuur ${invoice.number} naar ${client.email}?`)) return;
 
-    setSending('Herinnering wordt verstuurd via Resend…');
+    setSending('Herinnering wordt verstuurd…');
     // Net als bij versturen: eerst kijken of Mollie gekoppeld is (en of de
     // organisatie niet per e-mail verstuurt), en de keuze meegeven. Zonder die
     // vlag vroeg de server ook zonder Mollie een betaallink; die liet een
@@ -3515,7 +3554,7 @@ function App() {
         setError(`Herinnering is verstuurd, maar de Mollie-betaallink kon niet worden aangemaakt (alleen de PDF is meegestuurd): ${result.paymentLinkError}`);
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Herinnering verzenden via Resend mislukt');
+      setError(e instanceof Error ? e.message : 'De herinnering versturen lukte niet.');
     } finally {
       setLoading(false); setSending(null);
     }
@@ -3556,7 +3595,7 @@ function App() {
     const client = invoice ? data.clients.find(c => c.id === invoice.client_id) : null;
     if (!client?.email) { setError('Deze factuur heeft geen klant met e-mailadres.'); return; }
     if (!confirm(`Aanmaning versturen naar ${client.email} voor factuur ${invoice?.number ?? ''}? De rente wordt op vandaag herberekend en de formele brief (PDF) gaat mee.`)) return;
-    setSending('Aanmaning wordt verstuurd via Resend…');
+    setSending('Aanmaning wordt verstuurd…');
     setLoading(true); setError(null);
     try {
       await sendInvoiceDunningNotice(activeOrg.id, notice.id);
@@ -3697,7 +3736,7 @@ function App() {
     if (!ensureCanWrite()) return;
     const invoice = data.invoices.find(item => item.id === creditNote.invoice_id);
     const eInvoice = clientWantsEInvoice(data.clients.find(item => item.id === invoice?.client_id));
-    setLoading(true); setSending(eInvoice ? 'E-creditnota wordt verstuurd…' : 'Creditfactuur wordt gemaild via Resend…'); setError(null);
+    setLoading(true); setSending(eInvoice ? 'E-creditnota wordt verstuurd…' : 'Creditnota wordt gemaild…'); setError(null);
     try {
       await sendCreditNoteEmail(activeOrg.id, creditNote.id);
       await refresh();
@@ -4517,7 +4556,7 @@ function App() {
     },
   };
 
-  const pageReadOnly = !(orgCanWrite && permissions.canWritePage(page));
+  const pageReadOnly = !((orgCanWrite && permissions.canWritePage(page)) || permissions.canBookPage(page));
   // Baken: de gouden knop "+ Nieuw" rechtsboven, zoals "Nieuwe taak" in Value
   // Backlog. Alleen wat dit teamlid mag maken: de module moet open staan en
   // schrijfbaar zijn, net als bij de knop op de pagina zelf. De rechten gaan per
@@ -4680,6 +4719,19 @@ function App() {
           {/* Pagina's laden pas als je ze opent (components/LazyPage.tsx). De grens
               begint opnieuw bij een andere pagina in dit tabblad. */}
           <PageLoadBoundary resetKey={tab.page}><Suspense fallback={<PageLoading />}>{renderPage(tab)}</Suspense></PageLoadBoundary>
+          {tab.id === activeTab.id && timeInvoice && <Suspense fallback={null}>
+            <TimeInvoiceDialog data={data} organizationId={activeOrg.id} defaults={timeInvoice} onClose={() => setTimeInvoice(null)}
+              onCreated={async (invoice) => {
+                // Zoals "Factuur maken" bij een offerte: naar Facturen, met het
+                // concept open om na te kijken. refresh() haalt ook de uren
+                // opnieuw op, zodat ze als gefactureerd in de lijst staan.
+                setTimeInvoice(null);
+                await refresh();
+                setPage('invoices'); setProjectId(null); setClientId(null);
+                setEdit({ kind: 'invoice', item: invoice });
+                notify({ tone: 'ok', title: `Conceptfactuur ${invoice.number} gemaakt`, detail: 'Kijk hem na en verstuur hem. De uren staan nu als gefactureerd.' });
+              }} />
+          </Suspense>}
           {tab.edit && <EditModal edit={tab.edit} data={data} dataStatus={dataGroupStatus} organizationId={activeOrg.id} currentUserId={currentUserId} teamMembers={workMembers} canWrite={canEditKind(tab.edit.kind)} readOnly={!canEditKind(tab.edit.kind)} onClose={() => setEdit(null)} onSave={saveEdit} onDelete={removeCurrent} onAttachmentsChanged={refresh} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewClientNote={(client) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id }})} onConvertToWord={convertDocumentToWord} onCreateFromOfficeFile={createDocumentFromOfficeFile} onCreateBlankOffice={createDocumentFromBlankOffice} onNoteHandwritingChanged={applyNoteHandwritingSummary} taskAgenda={{ onReserve: reserveTimeForTask, onLinkEvent: linkTaskToEvent, onUnlink: unlinkTaskEvent, onOpenDay: (dateKey) => { setEdit(null); setCalendarJump(dateKey); setPage('calendar'); } }} />}
           </BackScope.Provider>
         </section>
@@ -4814,14 +4866,24 @@ function App() {
     // wijzig-knoppen in de pagina actief zijn. Schaduwt bewust de organisatie-
     // brede canWrite hierboven, zodat elke pagina automatisch het juiste niveau
     // meekrijgt zonder dat elke prop apart aangepast hoeft te worden.
-    const canWrite = orgCanWrite && permissions.canWritePage(page);
+    // De boekhouder die mag boeken is geen schrijver (orgCanWrite), maar mag op
+    // de boekhoudpagina's wel corrigeren en afsluiten. Alleen daar; de pagina's
+    // zelf laten weg wat hij niet mag (rekeningschema, activum aanmaken).
+    const canBook = permissions.canBookPage(page);
+    const canManage = orgCanWrite && permissions.canWritePage(page);
+    const canWrite = canManage || canBook;
     // Contracten horen bij de financiële module, ook als je ze vanaf een project
     // bekijkt. De projectpagina leunt dus niet op canWrite hierboven (dat is
     // 'projects'), maar op het niveau van 'finance'.
     const canReadContracts = permissions.canRead('finance');
     const canWriteContracts = orgCanWrite && permissions.canWrite('finance');
+    // Uren factureren maakt een factuur (Financiën schrijven) van uren (Uren
+    // lezen). De database eist hetzelfde; zonder die rechten is er geen knop.
+    const onInvoiceHours = orgCanWrite && permissions.canWrite('finance') && permissions.canRead('time')
+      ? (defaults: { clientId?: string | null; projectId?: string | null }) => setTimeInvoice(defaults)
+      : undefined;
     if (page === 'dashboard') return <Dashboard data={data} organizationContext={organizationContext} organizationId={activeOrg.id} currentUserId={currentUserId} canWriteTasks={orgCanWrite && permissions.canWrite('projects')} permissions={permissions} gerrieActions={gerrieActions} canWriteGerrie={orgCanWrite && permissions.canWrite('gerrie')} orgCanWrite={orgCanWrite} onOpenDecisionTarget={openDecisionTarget} openFinanceDoc={(kind, id) => { const item = kind === 'quote' ? data.quotes.find(q => q.id === id) : data.invoices.find(i => i.id === id); setPage(kind === 'quote' ? 'quotes' : 'invoices'); setProjectId(null); setClientId(null); if (item) setEdit(kind === 'quote' ? { kind: 'quote', item: item as Quote } : { kind: 'invoice', item: item as Invoice }); }} openProject={(id) => { setProjectId(id); setPage('project'); }} openSettings={() => openSettings('organisatie')} openLogbook={() => openSettings('logboek')} onOpenAuditTarget={openAuditTarget} openPage={(p) => { setPage(p); setProjectId(null); setClientId(null); setStatsReportId(null); }} openReport={(id) => { setStatsReportId(id); setProjectId(null); setClientId(null); setPage('stats'); }} openTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onSetTaskStatus={setTaskStatus} />;
-    if (page === 'project' && project) return <ProjectPage data={data} project={project} organizationId={activeOrg.id} teamMembers={workMembers} currentUserId={currentUserId} onChanged={refresh} canWrite={canWrite} canAdmin={canAdmin} canReadContracts={canReadContracts} canWriteContracts={canWriteContracts} refreshKey={refreshRound} creativeActive={organizationContext.creativeStatus?.active ?? true} creativeGraceUntil={organizationContext.creativeStatus?.grace_until ?? null} onOpenGalleryTab={(gid) => openGalleryTab(gid, project.id)} canReadContent={permissions.canRead('content')} logbook={canAdmin ? { members: organizationContext.teamMembers, permissions, onOpenTarget: openAuditTarget, onOpenAll: () => openSettings('logboek', { auditProjectId: project.id }) } : null} onNewTask={() => ensureCanWrite() && setEdit({kind:'task', projectId: project.id})} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: project.id})} onEditProject={() => setEdit({kind:'project', item: project})} onNewQuote={() => ensureCanWrite() && setEdit({kind:'quote', defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditQuote={(quote) => setEdit({kind:'quote', item: quote})} onNewInvoice={() => ensureCanWrite() && setEdit({kind:'invoice', defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditInvoice={(invoice) => setEdit({kind:'invoice', item: invoice})} onSubmitQuoteApproval={submitQuoteApproval} onApproveQuote={approveQuote} onRejectQuote={rejectQuote} onWithdrawQuote={withdrawQuote} onSendQuote={sendQuote} onConvertQuoteToInvoice={convertQuoteToInvoice} onDownloadQuotePdf={downloadQuotePdf} onNewNote={() => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewDocument={() => ensureCanWrite() && setEdit({kind:'document', item: undefined, defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditDocument={openDocument} setTaskStatus={setTaskStatus}/>;
+    if (page === 'project' && project) return <ProjectPage data={data} project={project} organizationId={activeOrg.id} onInvoiceHours={onInvoiceHours} teamMembers={workMembers} currentUserId={currentUserId} onChanged={refresh} canWrite={canWrite} canAdmin={canAdmin} canReadContracts={canReadContracts} canWriteContracts={canWriteContracts} refreshKey={refreshRound} creativeActive={organizationContext.creativeStatus?.active ?? true} creativeGraceUntil={organizationContext.creativeStatus?.grace_until ?? null} onOpenGalleryTab={(gid) => openGalleryTab(gid, project.id)} canReadContent={permissions.canRead('content')} logbook={canAdmin ? { members: organizationContext.teamMembers, permissions, onOpenTarget: openAuditTarget, onOpenAll: () => openSettings('logboek', { auditProjectId: project.id }) } : null} onNewTask={() => ensureCanWrite() && setEdit({kind:'task', projectId: project.id})} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: project.id})} onEditProject={() => setEdit({kind:'project', item: project})} onNewQuote={() => ensureCanWrite() && setEdit({kind:'quote', defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditQuote={(quote) => setEdit({kind:'quote', item: quote})} onNewInvoice={() => ensureCanWrite() && setEdit({kind:'invoice', defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditInvoice={(invoice) => setEdit({kind:'invoice', item: invoice})} onSubmitQuoteApproval={submitQuoteApproval} onApproveQuote={approveQuote} onRejectQuote={rejectQuote} onWithdrawQuote={withdrawQuote} onSendQuote={sendQuote} onConvertQuoteToInvoice={convertQuoteToInvoice} onDownloadQuotePdf={downloadQuotePdf} onNewNote={() => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewDocument={() => ensureCanWrite() && setEdit({kind:'document', item: undefined, defaults: { project_id: project.id, client_id: project.client_id ?? '' }})} onEditDocument={openDocument} setTaskStatus={setTaskStatus}/>;
     if (page === 'gallery') {
       // Het project leiden we uit de galerij zelf af: dat blijft kloppen ook als
       // de projectverwijzing van het tabblad ooit achterloopt.
@@ -4844,7 +4906,7 @@ function App() {
     }
     if (page === 'projects') return <ProjectsListPage data={data} canWrite={canWrite} onNewProject={() => ensureCanWrite() && setEdit({kind:'project'})} onOpenProject={(item) => { setProjectId(item.id); setClientId(null); setPage('project'); }} onEditProject={(item) => setEdit({kind:'project', item})}/>;
     if (page === 'project-planning') return <ProjectsPlanningPage data={data} onOpenProject={(item) => { setProjectId(item.id); setClientId(null); setPage('project'); }} />;
-    if (page === 'client' && client) return <ClientDetailPage data={data} client={client} teamMembers={workMembers} canWrite={canWrite} organizationId={activeOrg.id} onChanged={refresh} onBack={() => { setClientId(null); setPage('clients'); }} onEditClient={() => setEdit({kind:'client', item: client})} onNewQuote={() => ensureCanWrite() && setEdit({kind:'quote', defaults: { client_id: client.id }})} onEditQuote={(item)=>setEdit({kind:'quote', item})} onNewInvoice={() => ensureCanWrite() && setEdit({kind:'invoice', defaults: { client_id: client.id }})} onEditInvoice={(item)=>setEdit({kind:'invoice', item})} onOpenProject={(project) => { setProjectId(project.id); setClientId(null); setPage('project'); }} onNewProject={() => ensureCanWrite() && setEdit({kind:'project', defaults: { client_id: client.id }})} onNewNote={(t) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: t?.client_id ?? client.id, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }})} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewDocument={(t) => ensureCanWrite() && setEdit({kind:'document', item: undefined, defaults: { client_id: t?.client_id ?? client.id, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }})} onNewOfficeDocument={(docType, title, t) => { if (!ensureCanWrite()) return; void createDocumentFromBlankOffice(docType, { title, client_id: t?.client_id ?? client.id, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }); }} onEditDocument={openDocument} unreadCount={clientEmailUnread.byClient[client.id] ?? 0} onUnreadChanged={refreshClientEmailUnread} onNewTicket={() => { if (!canEditKind('ticket')) { setError('Je hebt geen wijzigrechten voor Tickets. Vraag een owner of admin om deze module voor je open te zetten.'); return; } setEdit({kind:'ticket', defaults: { client_id: client.id }}); }} onEditTicket={(item) => { setEdit({kind:'ticket', item}); markTicketRead(item.id).then(refreshTicketUnread).catch(() => {}); }} unreadTicketIds={ticketUnreadIds} canReadTickets={permissions.canRead('tickets')} canWriteTickets={orgCanWrite && permissions.canWrite('tickets')} canReadCalendar={permissions.canRead('calendar')} canWriteCalendar={orgCanWrite && permissions.canWrite('calendar')} onOpenBookingLink={(linkId) => openBookingLinks({ linkId })} onNewBookingLink={() => openBookingLinks({ create: true, clientId: client.id })}/>;
+    if (page === 'client' && client) return <ClientDetailPage data={data} client={client} teamMembers={workMembers} canWrite={canWrite} organizationId={activeOrg.id} onChanged={refresh} onInvoiceHours={onInvoiceHours} onBack={() => { setClientId(null); setPage('clients'); }} onEditClient={() => setEdit({kind:'client', item: client})} onNewQuote={() => ensureCanWrite() && setEdit({kind:'quote', defaults: { client_id: client.id }})} onEditQuote={(item)=>setEdit({kind:'quote', item})} onNewInvoice={() => ensureCanWrite() && setEdit({kind:'invoice', defaults: { client_id: client.id }})} onEditInvoice={(item)=>setEdit({kind:'invoice', item})} onOpenProject={(project) => { setProjectId(project.id); setClientId(null); setPage('project'); }} onNewProject={() => ensureCanWrite() && setEdit({kind:'project', defaults: { client_id: client.id }})} onNewNote={(t) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: t?.client_id ?? client.id, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }})} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewDocument={(t) => ensureCanWrite() && setEdit({kind:'document', item: undefined, defaults: { client_id: t?.client_id ?? client.id, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }})} onNewOfficeDocument={(docType, title, t) => { if (!ensureCanWrite()) return; void createDocumentFromBlankOffice(docType, { title, client_id: t?.client_id ?? client.id, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }); }} onEditDocument={openDocument} unreadCount={clientEmailUnread.byClient[client.id] ?? 0} onUnreadChanged={refreshClientEmailUnread} onNewTicket={() => { if (!canEditKind('ticket')) { setError('Je hebt geen wijzigrechten voor Tickets. Vraag een owner of admin om deze module voor je open te zetten.'); return; } setEdit({kind:'ticket', defaults: { client_id: client.id }}); }} onEditTicket={(item) => { setEdit({kind:'ticket', item}); markTicketRead(item.id).then(refreshTicketUnread).catch(() => {}); }} unreadTicketIds={ticketUnreadIds} canReadTickets={permissions.canRead('tickets')} canWriteTickets={orgCanWrite && permissions.canWrite('tickets')} canReadCalendar={permissions.canRead('calendar')} canWriteCalendar={orgCanWrite && permissions.canWrite('calendar')} onOpenBookingLink={(linkId) => openBookingLinks({ linkId })} onNewBookingLink={() => openBookingLinks({ create: true, clientId: client.id })}/>;
     if (page === 'communication') return <CommunicationPage data={data} organizationId={activeOrg.id} canWrite={canWrite} inboxCount={inboxCount} activity={communicationActivity} focus={view.commFocus} ticketUnreadIds={ticketUnreadIds} currentUserId={currentUserId} canReadTickets={permissions.canRead('tickets')} canWriteTickets={orgCanWrite && permissions.canWrite('tickets')} onUnreadChanged={refreshClientEmailUnread} onInboxChanged={refreshInbox} onTicketUnreadChanged={refreshTicketUnread} onOpenClient={(id) => { setClientId(id); setProjectId(null); setPage('client'); }} onOpenTicket={(item) => { setEdit({kind:'ticket', item}); markTicketRead(item.id).then(refreshTicketUnread).catch(() => {}); }} onChanged={refresh} onNewClientFromMail={openClientFromMail} inboxRefreshKey={inboxRevision} />;
     if (page === 'clients') return <Clients data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} onNew={() => ensureCanWrite() && setEdit({kind:'client'})} onOpen={(item)=>{ setClientId(item.id); setProjectId(null); setPage('client'); }} unreadByClient={clientEmailUnread.byClient} teamMembers={workMembers} currentUserId={currentUserId} onNewFromMail={openClientFromMail} inboxRefreshKey={inboxRevision}/>;
     if (page === 'tickets') return <Tickets data={data} onNew={() => ensureCanWrite() && setEdit({kind:'ticket'})} onEdit={(item)=>{ setEdit({kind:'ticket', item}); markTicketRead(item.id).then(refreshTicketUnread).catch(()=>{}); }} onConvert={convert} onPlan={planTicket} onResolve={(item) => void setTicketStatus(item, 'resolved')} onReopen={(item) => void setTicketStatus(item, TICKET_REOPEN_STATUS)} unreadTicketIds={ticketUnreadIds} teamMembers={workMembers} currentUserId={currentUserId}/>;
@@ -4858,16 +4920,31 @@ function App() {
     if (page === 'quotes') return <Quotes data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'quote'})} onEdit={(item)=>setEdit({kind:'quote', item})} onSubmitApproval={submitQuoteApproval} onApprove={approveQuote} onReject={rejectQuote} onWithdraw={withdrawQuote} onSend={sendQuote} onConvertToInvoice={convertQuoteToInvoice} onDownloadPdf={downloadQuotePdf}/>;
     if (page === 'contracts') return <Contracts data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} refreshKey={refreshRound}
       draft={view.pendingDraft?.kind === 'contract' ? contractDraftFrom(view.pendingDraft.payload) : null} onDraftConsumed={() => setPendingDraft(null)}/>;
-    if (page === 'invoices') return <Invoices data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'invoice'})} onEdit={(item)=>setEdit({kind:'invoice', item})} onSend={sendInvoice} onSendReminder={sendInvoiceReminder} onToggleRemindersPaused={toggleInvoiceRemindersPaused} onDownloadPdf={downloadInvoicePdf} onDownloadUbl={downloadInvoiceUblFile} onRefund={refundInvoice} onDownloadCreditNote={downloadCreditNote} onDownloadCreditNoteUbl={downloadCreditNoteUblFile} onEmailCreditNote={emailCreditNote} onPostCreditNote={postCreditNoteLedger} onCreditNoteForRefund={creditNoteForRefund} onPostToLedger={postInvoiceToLedger} onCreditInvoice={creditUnpaidInvoice} onBookAllUnbooked={bookAllUnbookedInvoices} onProposeDunning={proposeDunning} onSendDunning={sendDunning} onCancelDunning={cancelDunning} onSyncMollie={syncMollieInvoice} onDownloadMolliePdf={downloadMolliePdf}/>;
+    if (page === 'invoices') return <Invoices data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'invoice'})} onEdit={(item)=>setEdit({kind:'invoice', item})} onCopyInvoice={(item) => {
+      // Een kopie is een nieuw concept: nieuw nummer, de datum van vandaag en
+      // een nieuwe vervaldatum. De regels krijgen een eigen id, anders zou de
+      // kopie naar de uren van het origineel wijzen. De offerte gaat niet mee:
+      // bij een offerte hoort één factuur.
+      //
+      // Voor een vaste maandprijs typte je elke maand de factuur opnieuw
+      // (controle 22 november 2026, bevinding 16). Terugkerende facturen die
+      // zichzelf maken en versturen bouwen we bewust niet: een verstuurde
+      // factuur ligt vast (bewaarplicht), dus een fout tarief of een klant die
+      // net opzegde wordt dan elke maand een creditnota. Hier kijkt een mens
+      // elk concept na. Wie het toch elke maand klaar wil hebben, laat een
+      // geplande agent een factuur voorstellen; die keurt hij dan goed.
+      if (!ensureCanWrite()) return;
+      setEdit({ kind: 'invoice', defaults: { client_id: item.client_id ?? '', project_id: item.project_id ?? '', notes: item.notes ?? '', lines: item.lines.map(line => ({ ...line, id: uid() })) } });
+    }} onSend={sendInvoice} onIssueWithoutEmail={issueInvoiceWithoutMail} onSendReminder={sendInvoiceReminder} onToggleRemindersPaused={toggleInvoiceRemindersPaused} onDownloadPdf={downloadInvoicePdf} onDownloadUbl={downloadInvoiceUblFile} onRefund={refundInvoice} onDownloadCreditNote={downloadCreditNote} onDownloadCreditNoteUbl={downloadCreditNoteUblFile} onEmailCreditNote={emailCreditNote} onPostCreditNote={postCreditNoteLedger} onCreditNoteForRefund={creditNoteForRefund} onPostToLedger={postInvoiceToLedger} onCreditInvoice={creditUnpaidInvoice} onBookAllUnbooked={bookAllUnbookedInvoices} onProposeDunning={proposeDunning} onSendDunning={sendDunning} onCancelDunning={cancelDunning} onSyncMollie={syncMollieInvoice} onDownloadMolliePdf={downloadMolliePdf}/>;
     if (page === 'suppliers') return <SuppliersPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}
       draft={view.pendingDraft?.kind === 'supplier' ? (view.pendingDraft.payload as Partial<Supplier>) : null} onDraftConsumed={() => setPendingDraft(null)}/>;
     if (page === 'purchase-invoices') return <PurchaseInvoicesPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}
       draft={view.pendingDraft?.kind === 'purchase_invoice' ? purchaseInvoiceSeedFrom(view.pendingDraft.payload) : null} onDraftConsumed={() => setPendingDraft(null)}
-      inboxActivity={purchaseInbox.activity}/>;
+      inboxActivity={purchaseInbox.activity} onInboxChanged={purchaseInbox.refresh}/>;
     if (page === 'declarations') return <DeclarationsPage organizationId={activeOrg.id} canWrite={canWrite}/>;
-    if (page === 'ledger') return <LedgerPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} canWriteClients={orgCanWrite && permissions.canWrite('clients')}/>;
+    if (page === 'ledger') return <LedgerPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canManageChart={canManage} onChanged={refresh} canWriteClients={orgCanWrite && permissions.canWrite('clients')}/>;
     if (page === 'bank') return <BankPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;
-    if (page === 'assets') return <AssetsPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;
+    if (page === 'assets') return <AssetsPage data={data} organizationId={activeOrg.id} canWrite={canManage} canDepreciate={canBook} onChanged={refresh}/>;
     if (page === 'prepaid') return <PrepaidPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}/>;
     if (page === 'pnl') return <ProfitLossPage data={data} organizationId={activeOrg.id} onChanged={refresh}/>;
     // De prognose laadt zijn eigen cijfers (forecast_history); refreshRound laat
@@ -4879,12 +4956,12 @@ function App() {
     if (page === 'owners') return <OwnersPage data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} ownerUserId={organizationContext.teamMembers.find(member => member.role === 'owner')?.user_id ?? null} canReadHours={permissions.canRead('time')} teamMembers={workMembers} currentUserId={currentUserId}/>;
     if (page === 'income-tax') return <IncomeTaxPage data={data} organizationId={activeOrg.id} canWrite={canWrite}/>;
     if (page === 'shareholders') return <ShareholdersPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;
-    if (page === 'fiscal-years') return <FiscalYearsPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;
+    if (page === 'fiscal-years') return <FiscalYearsPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin || canBook} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;
     if (page === 'annual-accounts') return <AnnualAccountsPage data={data} organizationId={activeOrg.id} canWrite={canWrite} canAdmin={canAdmin} businessActive={organizationContext.businessStatus?.active ?? false} onChanged={refresh}/>;
     if (page === 'weekplanner') return <WeekPlanner data={data} organizationId={activeOrg.id} canWrite={canWrite} teamMembers={workMembers} currentUserId={currentUserId} onPlanTask={updateTaskPlanning} onPlanTaskTime={planTaskAtTime} onSetTaskPeriod={updateTaskPeriod} onQuickAddTask={quickAddTask} onCarryOver={carryOverTasks} onAssignTask={assignTaskToMember} onAddNote={addPlannerNote} onToggleNote={togglePlannerNote} onRemoveNote={removePlannerNote} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onSetTaskStatus={setTaskStatus} onSetTaskEstimate={setTaskEstimate} onOpenProject={(id) => { setProjectId(id); setClientId(null); setPage('project'); }} onOpenCalendar={(dateKey) => { setCalendarJump(dateKey); setPage('calendar'); }} onSaveCapacity={savePlannerCapacity} onStopTimer={stopTimerForTask} onOpenTicket={(ticketId) => { const ticket = data.tickets.find(t => t.id === ticketId); if (ticket) { setEdit({ kind: 'ticket', item: ticket }); markTicketRead(ticket.id).then(refreshTicketUnread).catch(() => {}); } }} onLinkTaskToEvent={linkTaskToEvent} onUnlinkTaskEvent={unlinkTaskEvent} onReserveTime={reserveTimeForTask}/>;
     if (page === 'calendar') return <CalendarPage mode="agenda" initialDate={calendarJump} key={calendarJump ?? 'today'} initialDraft={calendarDraft} onDraftConsumed={() => setCalendarDraft(null)} onMoveTask={(task, dayKey, startMin, endMin) => planTaskAtTime(task.id, dayKey, startMin, Math.max(15, endMin - startMin))} organizationId={activeOrg.id} currentUserId={currentUserId} data={data} canWrite={canWrite} onChanged={refresh} onEditTask={(task) => setEdit({kind:'task', item: task, projectId: task.project_id})} onNewNoteForEvent={openNoteForCalendarEvent} onNewDocumentForEvent={openDocumentForCalendarEvent} onSetEventLink={setCalendarEventLink} onEditNote={(note) => setEdit({kind:'note', item: note})} onLinkExistingNoteToEvent={linkExistingNoteToCalendarEvent} onUnlinkNoteFromEvent={unlinkNoteFromCalendarEvent}/>;
     if (page === 'meeting-booking') return <MeetingBookingManager organizationId={activeOrg.id} currentUserId={currentUserId ?? ''} data={data} canWrite={canWrite} focus={view.bookingFocus ?? null} onFocusHandled={() => setBookingFocus(null)}/>;
-    if (page === 'time') return <TimeTracking data={data} organizationId={activeOrg.id} currentUserId={currentUserId} teamMembers={workMembers} canWrite={canWrite} canAdmin={canAdmin} onChanged={refresh}/>;
+    if (page === 'time') return <TimeTracking data={data} organizationId={activeOrg.id} currentUserId={currentUserId} teamMembers={workMembers} canWrite={canWrite} canAdmin={canAdmin} onChanged={refresh} onInvoiceHours={onInvoiceHours}/>;
     if (page === 'stats') return <Reports data={data} organizationId={activeOrg.id} teamMembers={workMembers} currentUserId={currentUserId} canWrite={canWrite} canChat={permissions.canRead('gerrie')} onChanged={refresh} openReportId={statsReportId} pendingReport={pendingReport}
       onOpenReport={(id) => { setStatsReportId(id); setProjectId(null); setClientId(null); setPage('report'); }}
       onNewReport={(key) => { setStatsReportId(key); setProjectId(null); setClientId(null); setPage('report'); }}/>;
@@ -4908,7 +4985,7 @@ function App() {
       // (er lichtte niets op), en sloeg de terugknop het onderdeel over. De
       // `key` blijft gelijk: die zet het logboek op nul, en dat hoort alleen
       // bij navigeren via het menu.
-      return <Settings settings={data.companySettings} data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} organizationContext={organizationContext} currentUserId={currentUserId} push={push} settingsNav={settingsNav} calendarSettings={calendarSettings} onCreateOrganization={createNewOrganization} onSwitchOrganization={switchOrganization} onInviteMember={inviteMember} onAcceptInvitation={acceptInvitation} onUpdateMemberRole={changeMemberRole} onSetMemberModuleAccess={changeMemberModuleAccess} onDisableMember={disableMember} onRevokeInvitation={revokeInvitation} onSave={saveCompanySettings} permissions={permissions} onOpenAuditTarget={openAuditTarget} onSetAiConsent={changeAiConsent} onTabChange={tab => setSettingsNav(prev => ({ tab, key: prev?.key ?? 0 }))}/>;
+      return <Settings settings={data.companySettings} data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} organizationContext={organizationContext} currentUserId={currentUserId} push={push} settingsNav={settingsNav} calendarSettings={calendarSettings} onCreateOrganization={createNewOrganization} onSwitchOrganization={switchOrganization} onInviteMember={inviteMember} onAcceptInvitation={acceptInvitation} onUpdateMemberRole={changeMemberRole} onSetMemberModuleAccess={changeMemberModuleAccess} onDisableMember={disableMember} onSetAccountantBooking={changeAccountantBooking} onRevokeInvitation={revokeInvitation} onSave={saveCompanySettings} permissions={permissions} onOpenAuditTarget={openAuditTarget} onSetAiConsent={changeAiConsent} onTabChange={tab => setSettingsNav(prev => ({ tab, key: prev?.key ?? 0 }))}/>;
     }
     return <div className="empty"><div className="e-big">Geen project geselecteerd</div></div>;
   }
@@ -5288,8 +5365,8 @@ function EditModal({ edit, data, dataStatus, organizationId, currentUserId, team
       <Field label="Klantnaam">
         <Input value={form.name} onChange={e=>set('name',e.target.value)} placeholder="Bijv. Acme BV" disabled={disabled}/>
       </Field>
-      <Field label="Klantnummer" hint={item ? "Bestaand klantnummer. Wijzig dit alleen bewust." : "Preview vanuit Supabase. Bij opslaan wordt het definitieve nummer atomair gereserveerd."}>
-        <Input value={form.client_code} onChange={e=>set('client_code',e.target.value)} placeholder="Wordt door de server aangemaakt" disabled={disabled || !item}/>
+      <Field label="Klantnummer" hint={item ? "Bestaand klantnummer. Wijzig dit alleen bewust." : "Een voorstel. Bij opslaan krijgt de klant het eerstvolgende vrije nummer."}>
+        <Input value={form.client_code} onChange={e=>set('client_code',e.target.value)} placeholder="Komt vanzelf bij opslaan" disabled={disabled || !item}/>
       </Field>
       <Field label="Contactpersoon">
         <Input value={form.contact_name} onChange={e=>set('contact_name',e.target.value)} placeholder="Naam contactpersoon" disabled={disabled}/>
@@ -5388,7 +5465,7 @@ function EditModal({ edit, data, dataStatus, organizationId, currentUserId, team
       {!disabled && item && <FileUpload organizationId={organizationId} entity={editKindToEntity.client} id={item.id} onUploaded={onAttachmentsChanged}/>}
       {attachmentBlock}
     </FormGrid>}
-    {edit.kind === 'project' && <FormGrid><Input value={form.name} onChange={e=>set('name',e.target.value)} placeholder="Projectnaam"/><Select value={form.client_id} onChange={e=>set('client_id',e.target.value)} disabled={disabled}><option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select><Textarea value={form.description} onChange={e=>set('description',e.target.value)} placeholder="Omschrijving"/><Input type="date" value={form.start_date} onChange={e=>set('start_date',e.target.value)}/><Input type="date" value={form.end_date} onChange={e=>set('end_date',e.target.value)}/>{!item && <ProjectTemplatePicker data={data} value={String(form._templateId ?? '')} startDate={String(form.start_date ?? '')} disabled={disabled} onChange={templateId=>set('_templateId',templateId)}/>}<Field label="Facturatie" hint="Urenbasis: geregistreerde uren zijn declarabel en vormen de factuurbasis. Aangenomen prijs: factureren via offerte/factuur; uren worden geregistreerd maar standaard niet-declarabel."><Select value={form.billing_type} onChange={e=>set('billing_type',e.target.value)} disabled={disabled}><option value="hourly">Urenbasis</option><option value="fixed_price">Aangenomen prijs (offerte)</option></Select></Field><Field label="Uurtarief (€)" hint="Voor de declarabele waarde van geregistreerde uren. Leeg = bedrijfsbreed standaardtarief."><Input type="number" min="0" step="0.01" value={form.hourly_rate_euro} onChange={e=>set('hourly_rate_euro',e.target.value)} placeholder="Standaardtarief" disabled={disabled}/></Field><Field label="Begrote uren" hint="Urenbudget voor dit project — op het projectdashboard zie je begroot vs. werkelijk geboekt en het effectieve uurtarief."><Input type="number" min="0" step="0.5" value={form.budgeted_hours} onChange={e=>set('budgeted_hours',e.target.value)} placeholder="Geen budget" disabled={disabled}/></Field><Field label="Projectkleur" hint="Bepaalt de kleur van het project in lijsten, kanban en de timeline."><ColorPicker value={form.color} onChange={color=>set('color',color)} disabled={disabled}/></Field><label className="check-row"><input type="checkbox" checked={Boolean(form.archived)} onChange={e=>set('archived',e.target.checked)}/><span>Project archiveren</span></label>{!disabled && (item ? <FileUpload organizationId={organizationId} entity={editKindToEntity.project} id={item.id} onUploaded={onAttachmentsChanged}/> : <UploadHint/>)}{attachmentBlock}</FormGrid>}
+    {edit.kind === 'project' && <FormGrid><Input value={form.name} onChange={e=>set('name',e.target.value)} placeholder="Projectnaam"/><Select value={form.client_id} onChange={e=>set('client_id',e.target.value)} disabled={disabled}><option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select><Textarea value={form.description} onChange={e=>set('description',e.target.value)} placeholder="Omschrijving"/><Input type="date" value={form.start_date} onChange={e=>set('start_date',e.target.value)}/><Input type="date" value={form.end_date} onChange={e=>set('end_date',e.target.value)}/>{!item && <ProjectTemplatePicker data={data} value={String(form._templateId ?? '')} startDate={String(form.start_date ?? '')} disabled={disabled} onChange={templateId=>set('_templateId',templateId)}/>}<Field label="Facturatie" hint="Urenbasis: geregistreerde uren zijn declarabel; met 'Uren factureren' zet je ze in een conceptfactuur. Aangenomen prijs: factureren via offerte/factuur; uren worden geregistreerd maar standaard niet-declarabel."><Select value={form.billing_type} onChange={e=>set('billing_type',e.target.value)} disabled={disabled}><option value="hourly">Urenbasis</option><option value="fixed_price">Aangenomen prijs (offerte)</option></Select></Field><Field label="Uurtarief (€)" hint="Voor de declarabele waarde van geregistreerde uren. Leeg = bedrijfsbreed standaardtarief."><Input type="number" min="0" step="0.01" value={form.hourly_rate_euro} onChange={e=>set('hourly_rate_euro',e.target.value)} placeholder="Standaardtarief" disabled={disabled}/></Field><Field label="Begrote uren" hint="Urenbudget voor dit project — op het projectdashboard zie je begroot vs. werkelijk geboekt en het effectieve uurtarief."><Input type="number" min="0" step="0.5" value={form.budgeted_hours} onChange={e=>set('budgeted_hours',e.target.value)} placeholder="Geen budget" disabled={disabled}/></Field><Field label="Projectkleur" hint="Bepaalt de kleur van het project in lijsten, kanban en de timeline."><ColorPicker value={form.color} onChange={color=>set('color',color)} disabled={disabled}/></Field><label className="check-row"><input type="checkbox" checked={Boolean(form.archived)} onChange={e=>set('archived',e.target.checked)}/><span>Project archiveren</span></label>{!disabled && (item ? <FileUpload organizationId={organizationId} entity={editKindToEntity.project} id={item.id} onUploaded={onAttachmentsChanged}/> : <UploadHint/>)}{attachmentBlock}</FormGrid>}
     {edit.kind === 'task' && <FormGrid><Field label="Taaktitel"><Input value={form.title} onChange={e=>set('title',e.target.value)} placeholder="Taaktitel" disabled={disabled}/></Field><Field label="Status"><Select value={form.status} onChange={e=>set('status',e.target.value)} disabled={disabled}><option value="todo">Te doen</option><option value="doing">Bezig</option><option value="review">Review</option><option value="done">Klaar</option></Select></Field><Field label="Prioriteit"><Select value={form.priority} onChange={e=>set('priority',e.target.value)} disabled={disabled}><option value="low">Laag</option><option value="med">Normaal</option><option value="high">Hoog</option></Select></Field><Field label="Klant" hint={taskClientFollowsProject ? 'Volgt automatisch uit het gekozen project.' : 'Optioneel — handig als je het project nog niet weet.'}><Select value={form.client_id} onChange={e=>setTaskClient(e.target.value)} disabled={disabled || taskClientFollowsProject}><option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select></Field><Field label="Project" hint="Optioneel — een taak mag ook los in de weekplanner staan."><Select value={form.project_id} onChange={e=>setTaskProject(e.target.value)} disabled={disabled}><option value="">Geen project</option>{taskProjectOptions.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</Select></Field><Field label="Tags" hint="Gebruik komma’s om meerdere tags toe te voegen."><Input value={form.tags} onChange={e=>set('tags',e.target.value)} placeholder="Tags" disabled={disabled}/></Field><Field label="Toegewezen aan" group hint={form.project_id ? 'Kies wie aan deze taak werkt: iemand uit het projectteam, een ander teamlid of jezelf.' : 'Kies wie aan deze taak werkt.'}><TaskAssigneePicker projectId={form.project_id || null} assigneeIds={(form._assigneeIds as string[]) ?? []} teamMembers={teamMembers} projectMembers={data.projectMembers} currentUserId={currentUserId} disabled={disabled} onChange={ids => set('_assigneeIds', ids)}/></Field><Field label="Beschrijving"><Textarea value={form.description} onChange={e=>set('description',e.target.value)} placeholder="Beschrijving" disabled={disabled}/></Field><Field label="Startdatum"><Input type="date" value={form.start_date} onChange={e=>set('start_date',e.target.value)} disabled={disabled}/></Field><Field label="Deadline" hint="Deze datum blijft de inhoudelijke deadline en wordt niet meer aangepast door de weekplanner."><Input type="date" value={form.end_date} onChange={e=>set('end_date',e.target.value)} disabled={disabled}/></Field><Field label="Plandatum" hint="Deze datum bepaalt op welke dag de taak in de weekplanner staat."><Input type="date" value={form.planned_date} onChange={e=>set('planned_date',e.target.value)} disabled={disabled}/></Field><Field label="Loopt door tot" hint="Laat leeg voor werk van één dag. Vul je een latere dag in, dan wordt het een weekstrook over die dagen heen."><Input type="date" value={form.planned_end_date} min={form.planned_date || undefined} onChange={e=>set('planned_end_date',e.target.value)} disabled={disabled || !form.planned_date}/></Field><Field label="Tijd in het rooster" hint={form.planned_end_date ? 'Een weekstrook heeft geen tijdstip.' : 'Leeg = wel op de dag, nog niet op een tijd. Met een tijd staat de taak als blok in de weekplanner en de agenda, zo lang als de geschatte duur.'}><Input type="time" step="900" value={form.planned_start_time} onChange={e=>set('planned_start_time',e.target.value)} disabled={disabled || !form.planned_date || !!form.planned_end_date}/></Field><Field label="Geschatte duur" hint="In minuten. Laat leeg als je het nog niet weet — de taak telt dan nergens als tijd mee."><Input type="number" min="0" max="1440" step="15" placeholder="Nog geen schatting" value={form.estimated_minutes} onChange={e=>set('estimated_minutes',e.target.value)} disabled={disabled}/></Field><TaskDetailEditor subtasks={form.subtasks} comments={form.comments} set={set}/>{item && <TaskAgendaSection task={item as Task} data={data} organizationId={organizationId} canWrite={!disabled} onReserve={taskAgenda.onReserve} onLinkEvent={taskAgenda.onLinkEvent} onUnlink={taskAgenda.onUnlink} onOpenDay={taskAgenda.onOpenDay}/>}{!disabled && (item ? <FileUpload organizationId={organizationId} entity={editKindToEntity.task} id={item.id} onUploaded={onAttachmentsChanged}/> : <UploadHint/>)}{attachmentBlock}</FormGrid>}
     {edit.kind === 'ticket' && <FormGrid><Input value={form.title} onChange={e=>set('title',e.target.value)} placeholder="Ticket titel"/><Select value={form.client_id} onChange={e=>set('client_id',e.target.value)} disabled={disabled}><option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select><Select value={form.priority} onChange={e=>set('priority',e.target.value)}><option value="low">Laag</option><option value="med">Normaal</option><option value="high">Hoog</option></Select><Select value={form.status} onChange={e=>set('status',e.target.value)} disabled={Boolean((item as Ticket | undefined)?.converted_to_project_id)}><option value="new">Nieuw</option><option value="review">Review</option><option value="approved">Goedgekeurd</option><option value="rejected">Geweigerd</option><option value="resolved">Afgehandeld</option>{(item as Ticket | undefined)?.converted_to_project_id && <option value="converted">Omgezet</option>}</Select><Field label="Toegewezen aan" hint="Wie dit ticket oppakt. Op de ticketpagina filter je op je eigen tickets; in Rapportages tel je per teamlid. Hangt het ticket aan een klant, dan ziet die in het portaal wie het oppakt."><MemberSelect value={form.assignee_user_id} members={teamMembers} module="tickets" emptyLabel="Niet toegewezen" currentUserId={currentUserId} disabled={disabled} onChange={userId => set('assignee_user_id', userId)} organizationId={organizationId}/></Field><Textarea value={form.description} onChange={e=>set('description',e.target.value)} placeholder="Beschrijving"/><Field label="Korte interne notitie" hint="Privé memo op het ticket. Voor een gesprek met de klant gebruik je de tijdlijn hieronder."><Textarea value={form.notes} onChange={e=>set('notes',e.target.value)} placeholder="Interne notities (privé, niet in de tijdlijn)"/></Field><small className="ticket-status-hint"><strong>Afgehandeld</strong> haalt het ticket van de werklijst; je vindt het terug in het archief. Gebruik <strong>Project maken</strong> om een ticket om te zetten. <strong>Omgezet</strong> is geen handmatige status.</small>{item ? (dataStatus('communication') === 'ready' ? <TicketTimeline ticketId={item.id} organizationId={organizationId} currentUserId={currentUserId} notes={data.ticketNotes.filter(n => n.ticket_id === item.id)} canWrite={!disabled} onChanged={onAttachmentsChanged} clientId={(item as Ticket).client_id} data={data}/> : <div className="ticket-timeline-hint" role="status">{dataStatus('communication') === 'failed' ? 'De tijdlijn kon niet worden geladen. Ververs de pagina om het opnieuw te proberen.' : 'Tijdlijn laden…'}</div>) : <div className="ticket-timeline-hint">Sla het ticket eerst op om de notitietijdlijn te gebruiken — daar kunnen jij en de klant berichten plaatsen.</div>}{!disabled && item && <FileUpload organizationId={organizationId} entity={editKindToEntity.ticket} id={item.id} onUploaded={onAttachmentsChanged}/>}{attachmentBlock}</FormGrid>}
     {edit.kind === 'note' && <FormGrid>
@@ -5671,7 +5748,9 @@ function FinanceForm({ kind, data, organizationId, form, set, item, readOnly, on
     // Een opgeslagen code die niet meer bestaat/actief is niet stil op een
     // andere code laten matchen — dan maskeer je verlies. Toon '__custom'.
     if (line.vat_code) return '__custom';
-    const byRate = salesVatCodes.find(v => ['standard', 'reduced', 'zero'].includes(v.kind) && Math.abs(v.rate - (Number(line.vat) || 0)) < 0.005);
+    // 0% zonder code niet als "BTW 0%" tonen: dan stond er een reden die niet
+    // werd opgeslagen, en ging de factuur zonder vermelding de deur uit.
+    const byRate = salesVatCodes.find(v => ['standard', 'reduced'].includes(v.kind) && Math.abs(v.rate - (Number(line.vat) || 0)) < 0.005);
     return byRate?.code ?? '__custom';
   };
   const setLineVatCode = (id: string, code: string) => set('lines', lines.map(l => {
@@ -5688,6 +5767,16 @@ function FinanceForm({ kind, data, organizationId, form, set, item, readOnly, on
   // niet terug naar verzonden of betaald.
   const savedStatus = (item as Invoice | undefined)?.status;
   const invoiceStatusFixed = !isQuote && (savedStatus === 'refunded' || (invoiceBooked && (savedStatus === 'cancelled' || savedStatus === 'void')));
+  // Een concept geef je uit met "Verstuur per e-mail" of "Uitgeven zonder mail"
+  // bij de factuur, niet hier: via de status gingen de controles van het
+  // versturen (btw-nummer bij ICP, KOR, 0% zonder reden) en de pdf eraan
+  // voorbij, en de database weigert het nu ook. Alleen een factuur van vóór
+  // de startdatum (overstap uit een ander pakket) zet je zelf op verzonden of
+  // betaald: die wordt niet geboekt.
+  const bookkeepingStart = data.companySettings?.bookkeeping_start_date ?? null;
+  const notIssuedYet = !isQuote && !invoiceBooked && (!savedStatus || ['draft', 'cancelled', 'void'].includes(savedStatus));
+  const beforeBookkeepingStart = Boolean(bookkeepingStart && form.date && String(form.date) < bookkeepingStart);
+  const canPickIssuedStatus = (status: string) => !notIssuedYet || beforeBookkeepingStart || form.status === status;
 
   const handleDownloadPdf = () => {
     const client = data.clients.find(c => c.id === form.client_id) ?? null;
@@ -5716,7 +5805,7 @@ function FinanceForm({ kind, data, organizationId, form, set, item, readOnly, on
         <Field label={isQuote ? 'Offertenummer' : 'Factuurnummer'} hint="Automatisch gegenereerd, maar nog handmatig aanpasbaar vóór opslaan.">
           <Input value={form.number} onChange={e=>set('number',e.target.value)} placeholder={isQuote ? 'OFF-2026-0001' : 'FAC-2026-0001'} disabled={disabled}/>
         </Field>
-        <Field label="Klant" hint="Koppel de offerte aan de juiste relatie.">
+        <Field label="Klant" hint={isQuote ? 'Aan wie de offerte gaat.' : 'Aan wie de factuur gaat.'}>
           <Select value={form.client_id} onChange={e=>set('client_id',e.target.value)} disabled={disabled}>
             <option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
           </Select>
@@ -5726,13 +5815,13 @@ function FinanceForm({ kind, data, organizationId, form, set, item, readOnly, on
             <option value="">Geen project</option>{projectOptions.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
           </Select>
         </Field>
-        {isQuote ? <div className="readonly-workflow-status finance-status-card"><span>Offertestatus</span><strong>{quoteFormStatusLabel(form.status, form.internal_approval_status)}</strong><small>Status loopt via de goedkeuringsflow, niet via handmatig opslaan.</small></div> : <Field label="Factuurstatus" hint={invoiceStatusFixed ? 'Een terugbetaalde of gecrediteerde factuur verandert niet meer via de status. Moet er toch iets worden gefactureerd, maak dan een nieuwe factuur.' : invoiceBooked ? 'Deze factuur staat in het grootboek. Annuleren gaat met "Crediteren" bij de factuur; dan worden omzet en btw teruggeboekt. "Betaald" komt vanzelf als er niets meer openstaat: leg de ontvangst vast bij Bank (Mutatie invoeren, en verdeel hem op deze factuur). Contant ontvangen gaat net zo, met een kasrekening (1000 Kas) als bankrekening.' : 'Status van de factuur.'}>
+        {isQuote ? <div className="readonly-workflow-status finance-status-card"><span>Offertestatus</span><strong>{quoteFormStatusLabel(form.status, form.internal_approval_status)}</strong><small>Status loopt via de goedkeuringsflow, niet via handmatig opslaan.</small></div> : <Field label="Factuurstatus" hint={invoiceStatusFixed ? 'Een terugbetaalde of gecrediteerde factuur verandert niet meer via de status. Moet er toch iets worden gefactureerd, maak dan een nieuwe factuur.' : invoiceBooked ? 'Deze factuur staat in het grootboek. Annuleren gaat met "Crediteren" bij de factuur; dan worden omzet en btw teruggeboekt. "Betaald" komt vanzelf als er niets meer openstaat: leg de ontvangst vast bij Bank (Mutatie invoeren, en verdeel hem op deze factuur). Contant ontvangen gaat net zo, met een kasrekening (1000 Kas) als bankrekening.' : notIssuedYet && !beforeBookkeepingStart ? 'Uitgeven doe je bij de factuur: "Verstuur per e-mail" of "Uitgeven zonder mail".' : 'Status van de factuur.'}>
           <Select value={form.status} onChange={e=>set('status',e.target.value)} disabled={disabled || invoiceStatusFixed}>
             {form.status === 'refunded' && <option value="refunded">Terugbetaald</option>}
             <option value="draft">Concept</option>
-            <option value="sent">Verzonden</option>
-            <option value="overdue">Te laat</option>
-            <option value="paid">Betaald</option>
+            {canPickIssuedStatus('sent') && <option value="sent">Verzonden</option>}
+            {canPickIssuedStatus('overdue') && <option value="overdue">Te laat</option>}
+            {canPickIssuedStatus('paid') && <option value="paid">Betaald</option>}
             {(!invoiceBooked || form.status === 'cancelled') && <option value="cancelled">Geannuleerd</option>}
             {(!invoiceBooked || form.status === 'void') && <option value="void">Ongeldig gemaakt</option>}
             {(!invoiceBooked || form.status === 'written_off') && <option value="written_off">Afgeboekt</option>}
@@ -5745,9 +5834,12 @@ function FinanceForm({ kind, data, organizationId, form, set, item, readOnly, on
       <div className="finance-section-head"><strong>{isQuote ? 'Offertedatums' : 'Factuurdatums'}</strong><span>Maak publicatie- en verloopdatum expliciet zichtbaar</span></div>
       <div className="finance-date-grid">
         <Field label={isQuote ? 'Offertedatum' : 'Factuurdatum'} hint="De datum waarop het document wordt opgesteld.">
-          <Input type="date" value={form.date} onChange={e=>set('date',e.target.value)} disabled={disabled}/>
+          <Input type="date" value={form.date} onChange={e=>{
+            if (!isQuote) set('due_date', dueDateAfterDateChange(form.date, e.target.value, form.due_date, data.companySettings?.invoice_payment_terms));
+            set('date',e.target.value);
+          }} disabled={disabled}/>
         </Field>
-        <Field label={isQuote ? 'Verloopdatum' : 'Vervaldatum'} hint={isQuote ? 'Tot wanneer de offerte geldig blijft.' : 'Uiterste betaaldatum voor de factuur.'}>
+        <Field label={isQuote ? 'Verloopdatum' : 'Vervaldatum'} hint={isQuote ? 'Tot wanneer de offerte geldig blijft.' : `Uiterste betaaldatum: ${paymentTermDays(data.companySettings?.invoice_payment_terms)} dagen na de factuurdatum. Schuift mee met de factuurdatum, tot je hem zelf aanpast.`}>
           <Input type="date" value={isQuote ? form.valid_until : form.due_date} onChange={e=>set(isQuote ? 'valid_until' : 'due_date',e.target.value)} disabled={disabled}/>
         </Field>
       </div>
@@ -5774,30 +5866,33 @@ function FinanceForm({ kind, data, organizationId, form, set, item, readOnly, on
               <Input value={line.description} onChange={e=>updateLine(line.id,'description',e.target.value)} placeholder="Bijv. Strategie, ontwerp en implementatie" disabled={disabled}/>
             </Field>
             <Field label="Aantal" compact>
-              <Input type="number" min="0" step="0.01" value={line.quantity} onChange={e=>updateLine(line.id,'quantity',e.target.value)} disabled={disabled}/>
+              <DecimalInput value={line.quantity} onValueChange={v=>updateLine(line.id,'quantity',v ?? 0)} disabled={disabled}/>
             </Field>
             <Field label="Prijs ex. btw" compact>
-              <Input type="number" min="0" step="0.01" value={line.unit_price} onChange={e=>updateLine(line.id,'unit_price',e.target.value)} disabled={disabled}/>
+              <DecimalInput value={line.unit_price} onValueChange={v=>updateLine(line.id,'unit_price',v ?? 0)} disabled={disabled}/>
             </Field>
             <Field label="BTW" compact>
               {salesVatCodes.length > 0
                 ? <Select value={lineVatSelectValue(line)} onChange={e=>setLineVatCode(line.id, e.target.value)} disabled={disabled}>
-                    {lineVatSelectValue(line) === '__custom' && <option value="__custom">{line.vat}% (aangepast)</option>}
+                    {lineVatSelectValue(line) === '__custom' && <option value="__custom">{Number(line.vat) === 0 && !line.vat_code ? '0%: kies waarom' : `${line.vat}% (aangepast)`}</option>}
                     {salesVatCodes.map(v => <option key={v.code} value={v.code}>{v.label}</option>)}
                   </Select>
-                : <Input type="number" min="0" step="0.01" value={line.vat} onChange={e=>updateLine(line.id,'vat',e.target.value)} disabled={disabled}/>}
+                : <DecimalInput value={line.vat} onValueChange={v=>updateLine(line.id,'vat',v ?? 0)} disabled={disabled}/>}
             </Field>
             <div className="finance-line-total"><span>Regeltotaal</span><strong>{euro(lineTotal)}</strong></div>
             <Button className="finance-line-remove" onClick={()=>removeLine(line.id)} disabled={disabled || lines.length <= 1} title="Regel verwijderen">×</Button>
           </div>;
         })}
       </div>
+      <FinanceLineChecks kind={kind} lines={lines} client={data.clients.find(c => c.id === selectedClientId) ?? null} vatCodes={data.vatCodes} korEnabled={Boolean(data.companySettings?.kor_enabled)} disabled={disabled} onChangeLines={next => set('lines', next)} newId={uid}/>
     </section>
 
     <section className="finance-editor-section">
       <div className="finance-section-head"><strong>Notities</strong><span>Interne toelichting of aanvullende voorwaarden</span></div>
       <Textarea value={form.notes} onChange={e=>set('notes',e.target.value)} placeholder="Bijv. geldigheid, voorwaarden of aanvullende afspraken" disabled={disabled}/>
     </section>
+
+    {kind === 'invoice' && item && <InvoiceHoursNote organizationId={organizationId} invoiceId={item.id} invoiceNumber={String(form.number ?? '')} draft={form.status === 'draft'} />}
 
     <div className="finance-actions"><Button onClick={handleDownloadPdf} disabled={!lines || lines.length === 0}>Download PDF</Button></div>
     {!disabled && item && <FileUpload organizationId={organizationId} entity={editKindToEntity[kind]} id={item.id} onUploaded={onUploaded}/>} 

@@ -4,7 +4,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { clientPosition, computeStream, intentGaps, invoiceIsOverdue, parseIntent, type StreamInput } from './stroom.ts';
+import { clientPosition, computeStream, intentGaps, invoiceIsOverdue, invoiceOpenAmount, parseIntent, type StreamInput } from './stroom.ts';
 import { computeTotals } from './money.ts';
 
 const NOW = new Date(2026, 9, 30, 10, 0, 0); // vrijdag 30 oktober 2026, 10:00
@@ -49,7 +49,29 @@ test('Factuur in de stroom = Openstaand op Vandaag: verstuurd of te laat, bruto'
   assert.deepEqual(factuur?.items.map(i => i.refId).sort(), ['i1', 'i2']);
 });
 
-test('Betaald in de stroom = Omzet deze maand: betaald in de lopende maand', () => {
+test('Openstaand na een deelbetaling: wat er nog openstaat, in de stroom en op Vandaag gelijk', () => {
+  // Het voorbeeld uit de urencontrole: € 1.210, waarvan € 400 betaald.
+  const invoices = [
+    invoice({ id: 'i-deel', status: 'sent', lines: [line(1000)] }),
+    invoice({ id: 'i-heel', status: 'overdue', due_date: '2026-10-01', lines: [line(500)] }),
+  ];
+  const openCents = { 'i-deel': 81000 };
+  const stream = computeStream({ quotes: [], invoices: invoices as never, clients, amount, openCents, now: NOW });
+  const factuur = stream.stations.find(s => s.id === 'factuur');
+  // Zoals Dashboard.tsx: dezelfde helper over dezelfde facturen.
+  const outstanding = invoices.reduce((sum, i) => sum + invoiceOpenAmount(i as never, amount, openCents), 0);
+  assert.equal(factuur?.amount, outstanding);
+  assert.equal(factuur?.amount, 810 + 605);
+  assert.match(stream.items.find(i => i.refId === 'i-deel')?.detail ?? '', /deels betaald/);
+  assert.doesNotMatch(stream.items.find(i => i.refId === 'i-heel')?.detail ?? '', /deels betaald/);
+  // Niet geboekt of geen leesrecht: het volle bedrag, zoals voorheen.
+  assert.equal(invoiceOpenAmount(invoices[0] as never, amount, {}), 1210);
+  assert.equal(invoiceOpenAmount(invoices[0] as never, amount, null), 1210);
+  // Te veel betaald staat niet negatief open.
+  assert.equal(invoiceOpenAmount(invoices[0] as never, amount, { 'i-deel': -500 }), 0);
+});
+
+test('Betaald in de stroom = Ontvangen deze maand: betaald in de lopende maand', () => {
   const stream = streamOf([], [
     invoice({ id: 'i1', status: 'paid', paid_at: '2026-10-03T10:00:00Z', lines: [line(1000)] }),
     invoice({ id: 'i2', status: 'paid', paid_at: '2026-09-30T10:00:00Z', lines: [line(1000)] }),

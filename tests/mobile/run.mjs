@@ -121,6 +121,17 @@ const PAGES = {
   // werklijst met het afwijzen van een declaratie open; en Declaraties als
   // teamlid zonder Financiën, leeg en na het indienen.
   'purchase-invoices': { page: 'purchase-invoices', mock: { ledger: true } },
+  // Factuurregels (2026-11-22): een concept met "Uitgeven zonder mail" naast
+  // versturen, en het formulier met de vraag de korting over de tarieven te
+  // verdelen.
+  'factuur-concept': {
+    page: 'invoices', prepare: 'tr:has-text("2026-042")', contained: '.invoice-detail-modal',
+    mustShow: [{ selector: '.invoice-actions [data-action="issue-without-email"]', text: 'Uitgeven zonder mail', label: 'de knop Uitgeven zonder mail' }],
+  },
+  'factuur-korting': {
+    page: 'invoices', prepare: ['tr:has-text("2026-042")', '.invoice-actions button:has-text("Bewerken")'],
+    mustShow: [{ selector: '.finance-line-checks button', text: 'Verdeel over de tarieven', label: 'de knop Verdeel over de tarieven' }],
+  },
   'bon-lezen': {
     page: 'purchase-invoices', mock: { ledger: true, receiptReading: true }, prepare: { upload: CAMERA }, contained: '.rcp-modal',
     mustShow: [{ selector: '.rcp-working .rcp-paper', label: 'de bon op de scanner' }, { selector: '.rcp-working .aire-steps', label: 'de stappen van Gerrie' }],
@@ -216,6 +227,13 @@ const PAGES = {
   'tickets-search': { page: 'tickets', storage: { 'resofly.tickets.view': 'list' }, prepare: ['.ticket-search-toggle', { fill: '.ticket-search input', value: 'website' }] },
   'tickets-filters': { page: 'tickets', storage: { 'resofly.tickets.view': 'list' }, prepare: '.ticket-filter-toggle' },
   'client-tickets': { page: 'client', clientId: seed.clients[0].id, prepare: '.client-tab-btn:has-text("Tickets")' },
+  // Uren factureren (2026-11-22): het venster vanaf de klant, met regels, een
+  // lange omschrijving en de waarschuwing over uren zonder tarief. Op de
+  // telefoon mag geen bedrag of aantal uren eraf vallen.
+  'time-invoice': {
+    page: 'client', clientId: seed.projects[0].client_id, prepare: 'button:has-text("Uren factureren")', contained: '.time-invoice-modal',
+    mustShow: [{ selector: '.time-invoice-total strong', text: 'excl. btw', label: 'het totaal' }],
+  },
   // Inkomstenbelasting (2026-11-18): de raming als eenmanszaak en als vof, met
   // de disclaimer bovenaan. Per persoon het formulier naast de berekening; op de
   // telefoon onder elkaar, zonder dat een bedrag of een lange naam eraf valt.
@@ -235,6 +253,12 @@ const PAGES = {
   // Instellingen → Boekhouder: de kaart met wat de gast wel en niet ziet staat
   // op de telefoon onder elkaar.
   'settings-boekhouder': settingsPage('boekhouder'),
+  // 2026-11-22: met een actieve boekhouder, en de schakelaar "mag boeken en
+  // afsluiten" met zijn uitleg onder de rij met de boekhouder.
+  'settings-boekhouder-boekt': settingsPage('boekhouder', {
+    mock: { accountant: true },
+    mustShow: [{ selector: '.accountant-booking input[type="checkbox"]:checked', label: 'de schakelaar "mag boeken", aan' }],
+  }),
   // Instellingen → Apps (2026-11-12): ResoFly zelf en de drie losse apps, elk
   // met Openen en Link. Op de telefoon onder elkaar, zonder dat de knoppen eraf vallen.
   'settings-apps': settingsPage('apps'),
@@ -365,10 +389,32 @@ const PAGES = {
   // boeken", een lopende post met zijn schema, en het formulier voor een
   // nieuwe vooruitbetaling met het voorbeeld van de verdeling.
   prepaid: { page: 'prepaid', mock: { ledger: true, prepaid: true } },
+  // Bank → Rekeningen & koppeling (2026-11-22): een gekoppelde rekening met
+  // een periode die de koppeling niet meer kon ophalen. Eerder viel zo'n gat
+  // stil weg; nu staat het bij de rekening, met "Gezien".
+  'bank-rekeningen': {
+    page: 'bank', mock: { ledger: true, bankGap: true }, prepare: 'button:has-text("Rekeningen & koppeling")',
+    mustShow: [{ selector: '.bank-reconsent', text: 'kon de bank via de koppeling geen', label: 'de melding over de periode die de koppeling niet ophaalde' }],
+  },
   // Het journaal in het Grootboek heeft naast Memoriaalboeking nu ook de knop
   // Vooruitbetaald; de pagina "ledger" hierboven toont zonder rekeningschema
   // alleen de knop om dat aan te maken.
   'ledger-journaal': { page: 'ledger', mock: { ledger: true } },
+  // 2026-11-22: een verkeerd ingelezen regel of afschrift herstellen. De knop
+  // "Niet van deze rekening" bij een open mutatie, en bij de rekening de lijst
+  // met ingelezen afschriften (terugdraaien) onder de aansluiting.
+  'bank-herstel': {
+    page: 'bank', mock: { ledger: true, bankHerstel: true },
+    mustShow: [{ selector: 'button[title^="Deze regel hoort bij een andere rekening"]', label: 'de knop "Niet van deze rekening"' }],
+  },
+  'bank-afschriften': {
+    page: 'bank', mock: { ledger: true, bankHerstel: true },
+    prepare: ['.bk-tabs button:has-text("Rekeningen")', '.bank-statements > summary'],
+    mustShow: [
+      { selector: '.bank-statements[open] li button', label: 'een afschrift met Terugdraaien' },
+      { selector: '.bank-recon-rows div[title*="niet van deze rekening"]', label: 'de regel "niet van deze rekening" in de aansluiting' },
+    ],
+  },
   'prepaid-venster': { page: 'prepaid', mock: { ledger: true, prepaid: true }, prepare: '.bk-row' },
   'prepaid-nieuw': {
     page: 'prepaid', mock: { ledger: true, prepaid: true },
@@ -522,7 +568,12 @@ const FIRST_ITEM = {
   // donker gelijk; de grens ligt 20% hoger.
   'purchase-invoices': { selector: '.pi-inbox-row', maxTop: 386 },
   declaraties: { selector: '.decl-row', maxTop: 425 },
-  dashboard: { selector: '.dash-task', maxTop: 280 },
+  // 290 en niet 280: de omzettegel bovenaan krijgt een trendlabel ("778%")
+  // als er vorige maand iets binnenkwam. De testgegevens rekenen vanaf de
+  // maandag van deze week, dus of dat zo is wisselt per week. Met het label
+  // staat de eerste taak 7px lager: 287px op maandag 23 november, ook op
+  // staging zonder andere wijzigingen.
+  dashboard: { selector: '.dash-task', maxTop: 290 },
   // De klantenlijst toont boven de kaarten de tabstrook "Klanten | Niet
   // gekoppeld" zodra er post in de opvangbak ligt — en dat ligt er in de seed
   // (twee berichten). Die strook telde tot 2026-09-17 nooit mee: de mock gaf
@@ -579,7 +630,8 @@ const FIRST_ITEM = {
   'app-agenda': { selector: '.tb-scroll', maxTop: 260 },
   'app-financien': { selector: '.quote-table tbody tr', maxTop: 496 },
   'app-communicatie': { selector: '.comm-row', maxTop: 185 },
-  'app-werkruimte': { selector: '.dash-task', maxTop: 280 },
+  // Zelfde dashboard, zelfde trendlabel (zie dashboard hierboven).
+  'app-werkruimte': { selector: '.dash-task', maxTop: 290 },
   suppliers: { selector: '.supplier-table tbody tr', maxTop: 356 },
   // 2026-11-12 — Gerrie → Gesprekken: kop van Gerrie, de vijf tabbladen, de
   // titel met "Nieuw gesprek" en het zoekveld gaan voor het eerste gesprek.

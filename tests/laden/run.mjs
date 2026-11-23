@@ -180,6 +180,9 @@ try {
       // RPC (list_filed_vat_periods), voor de herinnering met de deadline;
       // vat_returns zelf haalt het dashboard niet op (zie de controle hierboven).
       check('dashboard: telt banktransacties zonder ze te laden', heads.length === 0 && rpcs.includes('bank_transactions_to_reconcile'), `HEAD: [${sorted(heads).join(', ')}], RPC bank_transactions_to_reconcile: ${rpcs.includes('bank_transactions_to_reconcile') ? 'ja' : 'nee'}`);
+      // Wat er na een deelbetaling nog openstaat, komt sinds 22 november uit één
+      // RPC (list_open_invoice_amounts), zonder de betalingen of de bank te laden.
+      check('dashboard: openstaand na deelbetaling via één RPC', rpcs.includes('list_open_invoice_amounts'), `RPC's: [${sorted(rpcs).join(', ')}]`);
     }
     const state = await screenState(page);
     check(`${key}: toont de pagina (geen laadmelding, geen fout)`, !state.loading && !state.failed && state.text.length > 40, state.loading ? 'nog aan het laden' : state.failed ? 'foutmelding' : `te weinig inhoud: "${state.text.slice(0, 60)}"`);

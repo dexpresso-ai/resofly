@@ -129,8 +129,8 @@ export function PublicInvoicePage({ token }: { token: string }) {
       const { data, error } = await supabase.functions.invoke('invoice-public', {
         body: { action: 'getInvoicePdf', token },
       });
-      if (error) throw new Error(await extractFunctionError(error, 'PDF-snapshot downloaden mislukt'));
-      if (!data?.ok || !data.pdf?.base64) throw new Error(data?.error || 'PDF-snapshot downloaden mislukt');
+      if (error) throw new Error(await extractFunctionError(error, 'De pdf downloaden lukte niet.'));
+      if (!data?.ok || !data.pdf?.base64) throw new Error(data?.error || 'De pdf downloaden lukte niet.');
       downloadBase64File(data.pdf.base64, data.pdf.fileName || `factuur-${payload.invoice.number}.pdf`, data.pdf.mimeType || 'application/pdf');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'PDF downloaden mislukt');
@@ -178,7 +178,9 @@ export function PublicInvoicePage({ token }: { token: string }) {
         </div>
         <div className="public-decision-actions public-invoice-actions">
           <Button onClick={downloadPdf} disabled={downloading}>{downloading ? 'PDF maken…' : 'PDF downloaden'}</Button>
-          <Button variant="primary" disabled={isPaid || !checkoutHref} onClick={() => checkoutHref && window.open(checkoutHref, '_blank', 'noopener,noreferrer')}>{isPaid ? 'Betaald' : 'Betaal nu'}</Button>
+          {/* Zonder betaallink (betalen per overboeking) geen grijze "Betaal nu":
+              die leek kapot, terwijl de klant gewoon kan overmaken (zie hieronder). */}
+          {(isPaid || checkoutHref) && <Button variant="primary" disabled={isPaid || !checkoutHref} onClick={() => checkoutHref && window.open(checkoutHref, '_blank', 'noopener,noreferrer')}>{isPaid ? 'Betaald' : 'Betaal nu'}</Button>}
         </div>
       </div>
       {/* Zonder bedrijfsnaam stond hier "Neem contact op met ." Zonder link (de
@@ -227,13 +229,14 @@ export function PublicInvoicePage({ token }: { token: string }) {
       </article>
     </section>
 
+    {/* De klant zag hier "PDF-snapshot" en de interne code "sent_to_client". */}
     {payload.versions?.length > 0 && <section className="public-quote-card">
-      <h2>PDF-snapshot</h2>
+      <h2>Verstuurde factuur (pdf)</h2>
       <div className="quote-timeline public">
         {payload.versions.slice(0, 3).map(version => <div className="quote-timeline-item" key={`${version.version_number}-${version.created_at}`}>
-          <span>v{version.version_number} · {dateNL(version.created_at)}</span>
-          <strong>{version.pdf_file_name || 'Factuur PDF'}</strong>
-          <p>{version.snapshot_reason}</p>
+          <span>Versie {version.version_number} · {dateNL(version.created_at)}</span>
+          <strong>{version.pdf_file_name || 'Factuur (pdf)'}</strong>
+          {versionReasonLabel(version.snapshot_reason) && <p>{versionReasonLabel(version.snapshot_reason)}</p>}
         </div>)}
       </div>
     </section>}
@@ -270,6 +273,16 @@ function downloadBase64File(base64: string, fileName: string, mimeType: string) 
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
+}
+
+/** Waarom deze versie van de pdf bewaard is, in gewone woorden; een onbekende code tonen we niet. */
+function versionReasonLabel(reason: string | null | undefined): string {
+  const labels: Record<string, string> = {
+    sent_to_client: 'Naar jou verstuurd',
+    payment_created: 'Bij het maken van de betaallink',
+    paid: 'Bij de betaling',
+  };
+  return labels[String(reason ?? '')] ?? '';
 }
 
 function statusLabel(status: string, paidAt?: string | null): string {

@@ -15,7 +15,7 @@ import type { AiDecision, DecisionTarget } from '../lib/decisions-api';
 import type { GerrieActionHandlers } from '../lib/gerrie-api';
 import { FULL_PERMISSIONS, isAccountantRole, isAdminRole, type ModuleKey, type Permissions } from '../lib/permissions';
 import { isZenitFamily, useLook } from '../lib/look';
-import { computeStream, invoiceIsOverdue, type StationId, type Stream, type StreamItem } from '../lib/stroom';
+import { computeStream, invoiceIsOverdue, invoiceOpenAmount, type StationId, type Stream, type StreamItem } from '../lib/stroom';
 import { useNarrowViewport } from '../lib/useNarrowViewport';
 import { askGerrie } from '../components/GerrieChat';
 import { DayArc, type DayArcItem } from './DayArc';
@@ -211,18 +211,19 @@ export function Dashboard({
     return sumInvoices(paidInvoices.filter(invoice => isSameMonth(paidDate(invoice), month.getFullYear(), month.getMonth())));
   });
 
+  // Wat er nog openstaat, na deelbetalingen en deelcreditnota's (data.invoiceOpenCents).
   const outstandingInvoices = data.invoices.filter(i => i.status === 'sent' || i.status === 'overdue');
-  const outstandingTotal = sumInvoices(outstandingInvoices);
+  const outstandingTotal = sumOpen(outstandingInvoices, data.invoiceOpenCents);
   const overdueInvoices = data.invoices.filter(invoiceOverdue);
-  const overdueTotal = sumInvoices(overdueInvoices);
+  const overdueTotal = sumOpen(overdueInvoices, data.invoiceOpenCents);
 
   // ── De stroom (Stroom) ──────────────────────────────────────────────────
   // Dezelfde statussen en dezelfde bruto-totalen als hierboven: "Factuur" in de
-  // stroom is Openstaand, "Betaald" is Omzet deze maand (stroom.test.ts).
+  // stroom is Openstaand, "Betaald" is Ontvangen deze maand (stroom.test.ts).
   // Baken toont dezelfde stroom als spoor in de cockpit (FlowRail).
   const stream = useMemo(
-    () => ((stroom || baken) && showFinance ? computeStream({ quotes: data.quotes, invoices: data.invoices, clients: data.clients, amount: lines => total(lines).total }) : null),
-    [stroom, baken, showFinance, data.quotes, data.invoices, data.clients],
+    () => ((stroom || baken) && showFinance ? computeStream({ quotes: data.quotes, invoices: data.invoices, clients: data.clients, amount: lines => total(lines).total, openCents: data.invoiceOpenCents }) : null),
+    [stroom, baken, showFinance, data.quotes, data.invoices, data.clients, data.invoiceOpenCents],
   );
   // Baken: welk spoor onderin de cockpit staat. Wie de financiën en de
   // projecten mag zien, kiest zelf (onthouden per browser); wie maar één van
@@ -459,7 +460,7 @@ export function Dashboard({
   // Dicht fluistert "Meer van vandaag" de cijfers die je het vaakst zoekt.
   const monthName = now.toLocaleDateString('nl-NL', { month: 'long' });
   const foldWhisper = [
-    showFinance ? `Omzet ${monthName} ${euro(revenueThisMonth)}` : '',
+    showFinance ? `Ontvangen ${monthName} ${euro(revenueThisMonth)}` : '',
     showFinance && outstandingTotal > 0 ? `${euro(outstandingTotal)} openstaand` : '',
     showProjects ? pl(weekTasks.length, 'actie deze week', 'acties deze week') : '',
   ].filter(Boolean);
@@ -470,7 +471,10 @@ export function Dashboard({
   const canSeeClients = permissions.canRead('clients');
   const statCount = (showFinance ? 3 : 0) + Number(canSeeTickets) + Number(showProjects) + Number(canSeeClients);
   const statTiles = <>
-    {showFinance && <Stat label="Omzet deze maand" value={euro(revenueThisMonth)} tone="accent" trend={revenueTrend} sub={revenueTrend != null ? 'vs. vorige maand' : undefined} spark={revenueSeries} countTo={revenueThisMonth} countFormat={euro} onClick={() => openPage('invoices')} />}
+    {/* Dit is wat er binnenkwam (betaalde facturen, incl. btw), geen omzet:
+        "Omzet deze maand" stond op € 1.700,53 terwijl Winst & verlies € 1.405,40
+        zei, en een zzp'er leest omzet als het bedrag zonder btw. */}
+    {showFinance && <Stat label="Ontvangen deze maand" value={euro(revenueThisMonth)} tone="accent" trend={revenueTrend} sub={revenueTrend != null ? 'incl. btw · vs. vorige maand' : 'betaalde facturen, incl. btw'} spark={revenueSeries} countTo={revenueThisMonth} countFormat={euro} onClick={() => openPage('invoices')} />}
     {showFinance && <Stat label="Openstaand" value={euro(outstandingTotal)} sub={pl(outstandingInvoices.length, 'openstaande factuur', 'openstaande facturen')} onClick={() => openPage('invoices')} />}
     {showFinance && <Stat label="Te laat betaald" value={euro(overdueTotal)} tone={overdueInvoices.length ? 'danger' : 'default'} sub={pl(overdueInvoices.length, 'factuur', 'facturen')} onClick={() => openPage('invoices')} />}
     {canSeeTickets && <Stat label="Open tickets" value={openTickets} sub={newTickets ? `${newTickets} nieuw` : undefined} onClick={() => openPage('tickets')} />}
@@ -859,7 +863,7 @@ const FLOW_ICON: Record<StationId, LucideIcon> = {
  * Betaald. Per halte het bedrag en een stip per stuk in de kleur van de
  * klant; een rode of oranje stip op de halte als er iets vastzit. De bedragen
  * komen uit computeStream (stroom.test.ts): "Factuur" is precies Openstaand
- * en "Betaald" precies Omzet deze maand, zoals in de tegels erboven.
+ * en "Betaald" precies Ontvangen deze maand, zoals in de tegels erboven.
  */
 function FlowRail({ stream, monthLabel, onStation }: { stream: Stream; monthLabel: string; onStation: (id: StationId) => void }) {
   return <ol className="bk-flow">
@@ -1060,6 +1064,11 @@ function withSmallCents(value: string | number): ReactNode {
 // Cent-exacte bruto-totalen via de centrale geldmodule, identiek aan de Financiën-module.
 function sumInvoices(invoices: Invoice[]) {
   return invoices.reduce((sum, invoice) => sum + total(invoice.lines).total, 0);
+}
+
+/** Wat er van verstuurde facturen nog openstaat; dezelfde regel als de stroom (lib/stroom.ts). */
+function sumOpen(invoices: Invoice[], openCents: Readonly<Record<string, number>>) {
+  return invoices.reduce((sum, invoice) => sum + invoiceOpenAmount(invoice, lines => total(lines).total, openCents), 0);
 }
 
 function paidDate(invoice: Invoice): Date | null {

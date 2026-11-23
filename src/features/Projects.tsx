@@ -7,6 +7,7 @@ import { AssigneeAvatars } from '../components/AssigneeAvatars';
 import { DetailTabs } from '../components/DetailTabs';
 import type { DetailTab } from '../components/DetailTabs';
 import { dateNL, euro, formatMinutes, priorityLabel, total } from '../lib/format';
+import { invoiceOpenAmount } from '../lib/stroom';
 import { memberColor, memberInitials, memberName } from '../lib/members';
 import { RelatedNotes, getNoteTypeLabel } from './Notes';
 import { RelatedDocuments, getDocumentTypeLabel } from './Documents';
@@ -14,6 +15,7 @@ import { ProjectQuotesPanel } from './Finance';
 import { ContractStatusBadge } from './Contracts';
 import { ProjectTimeline } from './ProjectTimeline';
 import { TimeEntryModal, timeEntryValueCents } from './TimeTracking';
+import { hoursLabel, invoicedLabel, openHoursSummary } from '../lib/timeRates';
 import { GalleryTab, formatConfig, galleryFormatLabels, galleryStatusLabels } from './ProjectGallery';
 import { ProjectAuditFeed } from './AuditLog';
 import { DocumentGlyph, documentAccentColor, officeDocumentLabel } from '../components/DriveGlyphs';
@@ -967,6 +969,7 @@ export function ProjectPage({
   onNewQuote,
   onEditQuote,
   onNewInvoice,
+  onInvoiceHours,
   onSubmitQuoteApproval,
   onApproveQuote,
   onRejectQuote,
@@ -1019,6 +1022,8 @@ export function ProjectPage({
   onNewQuote: () => void;
   onEditQuote: (quote: Quote) => void;
   onNewInvoice: () => void;
+  /** Opent "Uren factureren". Ontbreekt bij wie geen facturen mag maken. */
+  onInvoiceHours?: (defaults: { clientId?: UUID | null; projectId?: UUID | null }) => void;
   onSubmitQuoteApproval: (quote: Quote) => void;
   onApproveQuote: (quote: Quote) => void;
   onRejectQuote: (quote: Quote) => void;
@@ -1073,12 +1078,17 @@ export function ProjectPage({
   }, [data.taskAssignees]);
   const trackedMinutes = projectTimeEntries.reduce((s, t) => s + t.minutes, 0);
   const trackedValueCents = projectTimeEntries.reduce((s, t) => s + timeEntryValueCents(t), 0);
+  // Declarabel, met tarief en nog op geen factuur: wat "Uren factureren" oppakt.
+  const openHours = openHoursSummary(projectTimeEntries);
 
   // Marge/effectief uurtarief: echte gefactureerde omzet (excl. btw, zonder
   // concepten en geannuleerde facturen) afgezet tegen de werkelijk geboekte uren.
-  const invoicedSubtotal = projectInvoices
-    .filter(i => !['draft', 'cancelled', 'void'].includes(i.status))
-    .reduce((sum, i) => sum + total(i.lines).subtotal, 0);
+  // Dezelfde regel voor de kop "Gefactureerd" en het tabblad Uren (en
+  // project.dashboard van Gerrie). De kop telde alle facturen met btw, ook
+  // concepten en ingetrokken facturen: met een concept van € 605 stonden er
+  // twee verschillende "Gefactureerd" op één pagina.
+  const invoicedInvoices = projectInvoices.filter(i => !['draft', 'cancelled', 'void'].includes(i.status));
+  const invoicedSubtotal = invoicedInvoices.reduce((sum, i) => sum + total(i.lines).subtotal, 0);
   const effectiveRate = trackedMinutes > 0 && invoicedSubtotal > 0 ? invoicedSubtotal / (trackedMinutes / 60) : null;
   const budgetedMinutes = project.budgeted_minutes;
   const budgetPct = budgetedMinutes != null && budgetedMinutes > 0 ? (trackedMinutes / budgetedMinutes) * 100 : null;
@@ -1114,10 +1124,11 @@ export function ProjectPage({
       .slice(0, 5);
   }, [tasks]);
   const quoteTotal = projectQuotes.reduce((sum, quote) => sum + total(quote.lines).total, 0);
-  const invoiceTotal = projectInvoices.reduce((sum, invoice) => sum + total(invoice.lines).total, 0);
+  // Openstaand zoals op Vandaag en de klantpagina: verstuurd of te laat, na
+  // deelbetalingen en deelcreditnota's (lib/stroom.ts).
   const openInvoiceTotal = projectInvoices
-    .filter(i => !['draft', 'paid', 'cancelled', 'void'].includes(i.status))
-    .reduce((sum, invoice) => sum + total(invoice.lines).total, 0);
+    .filter(i => i.status === 'sent' || i.status === 'overdue')
+    .reduce((sum, invoice) => sum + invoiceOpenAmount(invoice, lines => total(lines).total, data.invoiceOpenCents), 0);
   const phase = projectPhase(project, tasks.length, progress, overdueTasks, todayIso);
   const period = periodLabel(project.start_date, project.end_date);
   const billingLabel = project.billing_type === 'fixed_price'
@@ -1143,9 +1154,9 @@ export function ProjectPage({
     { key: 'quotes', label: 'Offertes', value: String(projectQuotes.length), sub: quoteTotal > 0 ? euro(quoteTotal) : undefined, tab: 'quotes' },
     {
       key: 'invoiced', label: 'Gefactureerd',
-      value: projectInvoices.length > 0 ? euro(invoiceTotal) : '—',
-      sub: projectInvoices.length > 0 ? `${projectInvoices.length} ${projectInvoices.length === 1 ? 'factuur' : 'facturen'}` : undefined,
-      tone: projectInvoices.length === 0 ? 'muted' : undefined, tab: 'invoices',
+      value: invoicedInvoices.length > 0 ? euro(invoicedSubtotal) : '—',
+      sub: invoicedInvoices.length > 0 ? `excl. btw · ${invoicedInvoices.length} ${invoicedInvoices.length === 1 ? 'factuur' : 'facturen'}` : projectInvoices.length > 0 ? 'nog niets verstuurd' : undefined,
+      tone: invoicedInvoices.length === 0 ? 'muted' : undefined, tab: 'invoices',
     },
     {
       key: 'time', label: 'Uren',
@@ -1601,17 +1612,19 @@ export function ProjectPage({
           <h3>Urenregistratie</h3>
           <div className="client-panel-head-right">
             <span>{formatMinutes(trackedMinutes)}{trackedValueCents > 0 ? ` · ${euro(trackedValueCents / 100)}` : ''}</span>
+            {onInvoiceHours && project.client_id && openHours.minutes > 0 && <Button onClick={() => onInvoiceHours({ clientId: project.client_id, projectId: project.id })}><Receipt size={14} /> Uren factureren</Button>}
             {canWrite && !project.archived && <Button variant="primary" onClick={() => setTimeModal({ entry: null })}><Clock size={14} /> Uren loggen</Button>}
           </div>
         </div>
         {project.billing_type === 'fixed_price'
           ? <p className="settings-help" style={{ margin: '0 0 10px' }}>Aangenomen-prijs-project: uren worden geregistreerd voor inzicht, maar staan standaard niet-declarabel — factureren loopt via offerte/factuur.</p>
-          : <p className="settings-help" style={{ margin: '0 0 10px' }}>Urenbasis-project: geregistreerde uren zijn declarabel en vormen de factuurbasis.</p>}
+          : <p className="settings-help" style={{ margin: '0 0 10px' }}>Urenbasis-project: geregistreerde uren zijn declarabel. Met "Uren factureren" zet je wat nog openstaat in één conceptfactuur.</p>}
 
         {/* Marge: begroot vs. werkelijk + effectief uurtarief op echte omzet */}
         <div className="proj-time-stats">
           <div className="proj-time-stat"><strong>{budgetedMinutes != null ? formatMinutes(budgetedMinutes) : '—'}</strong><span>Begroot</span></div>
           <div className="proj-time-stat"><strong style={overBudget ? { color: 'var(--accent-r)' } : undefined}>{formatMinutes(trackedMinutes)}{budgetPct != null ? ` (${Math.round(budgetPct)}%)` : ''}</strong><span>Werkelijk</span></div>
+          <div className="proj-time-stat"><strong>{openHours.valueCents > 0 ? euro(openHours.valueCents / 100) : '—'}</strong><span>Nog te factureren{openHours.minutes > 0 ? ` · ${hoursLabel(openHours.minutes)}` : ''}</span></div>
           <div className="proj-time-stat"><strong>{invoicedSubtotal > 0 ? euro(invoicedSubtotal) : '—'}</strong><span>Gefactureerd (excl. btw)</span></div>
           <div className="proj-time-stat"><strong>{effectiveRate != null ? `${euro(effectiveRate)}/u` : '—'}</strong><span>Effectief uurtarief</span></div>
         </div>
@@ -1622,14 +1635,18 @@ export function ProjectPage({
           {projectTimeEntries.length === 0 && <div className="client-empty-line">Nog geen uren op dit project. Koppel een afspraak in de agenda of log handmatig uren.</div>}
           {projectTimeEntries.map(entry => {
             const value = timeEntryValueCents(entry);
-            const editable = canWrite && entry.source !== 'calendar';
+            // Uren op een factuur liggen in de database vast.
+            const invoiced = invoicedLabel(entry, data.invoices);
+            const editable = canWrite && entry.source !== 'calendar' && !invoiced;
             return (
               <div className="proj-time-row" key={entry.id}>
                 <span className="proj-time-date">{dateNL(entry.entry_date)}</span>
                 <span className="proj-time-dur">{formatMinutes(entry.minutes)}</span>
                 <span className="proj-time-desc">{entry.description || (entry.source === 'calendar' ? 'Agenda-afspraak' : 'Registratie')}{entry.entry_type === 'indirect' && <em className="proj-time-indirect"> · indirect</em>}</span>
                 <span className={`tt-source-badge tt-source-${entry.source}`}>{entry.source === 'calendar' ? 'Agenda' : entry.source === 'timer' ? 'Timer' : 'Handmatig'}</span>
-                <button type="button" className={`tt-billable-pill${entry.billable ? ' is-billable' : ''}`} disabled={!canWrite} onClick={() => toggleTimeEntryBillable(entry)} title="Declarabel aan/uit">{entry.billable ? 'Declarabel' : 'Niet decl.'}</button>
+                {invoiced
+                  ? <span className="tt-billable-pill tt-invoiced-pill" title="Deze uren staan op een factuur en liggen vast">{invoiced}</span>
+                  : <button type="button" className={`tt-billable-pill${entry.billable ? ' is-billable' : ''}`} disabled={!canWrite} onClick={() => toggleTimeEntryBillable(entry)} title="Declarabel aan/uit">{entry.billable ? 'Declarabel' : 'Niet decl.'}</button>}
                 <span className="proj-time-value">{value > 0 ? euro(value / 100) : '—'}</span>
                 <span className="proj-time-actions">
                   {editable && <button type="button" className="icon-btn" onClick={() => setTimeModal({ entry })} title="Bewerken"><Pencil size={14} /></button>}

@@ -1,21 +1,22 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, Banknote, Check, Landmark, Link2, PenSquare, Plus, RefreshCw, RotateCcw, Search, Sparkles, Trash2, Upload, X } from 'lucide-react';
+import { AlertTriangle, Ban, Banknote, Check, Landmark, Link2, PenSquare, Plus, RefreshCw, RotateCcw, Search, Sparkles, Trash2, Upload, X } from 'lucide-react';
 import type {
   AppData, BankAccount, BankAllocationCandidates, BankAllocationKind, BankInstitution, BankOpenDocument, BankPsuType,
-  BankReconciliation, BankRequisition, BankRule, BankTransaction, LedgerAccount,
+  BankReconciliation, BankRequisition, BankRule, BankStatement, BankTransaction, LedgerAccount,
 } from '../types';
 import { Modal } from '../components/Modal';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { PageIcon } from '../components/PageIcon';
 import { dateNL, euro } from '../lib/format';
 import { SetupBanner } from './Bookkeeping';
-import { parseBankFile } from '../lib/bankImport';
+import { checkStatementAccount, describeStatementDifference, DUPLICATE_HINT, parseBankFile } from '../lib/bankImport';
 import { consentState, isCancelledBankReturn, isSandboxLink, readBankReturn } from '../lib/bankLink';
 import {
   bookBankTransaction, createBankRequisition, createManualBankTransaction, deleteDuplicateBankTransaction, deleteManualBankTransaction, deleteRow,
   fetchBankAllocationCandidates, finalizeBankRequisition, importBankTransactions, insertRow, listBankInstitutions,
   matchBankTransactionsInRounds, mergeBankTransactions, PossibleDuplicateBankTransactionError, selectBankReconciliation,
-  setBankTransactionStatus, syncBankAccount, unbookBankTransaction, unmergeBankTransaction, updateManualBankTransaction, updateRow,
+  setBankTransactionExcluded, setBankTransactionStatus, syncBankAccount, undoBankStatement, unbookBankTransaction, unmergeBankTransaction,
+  updateManualBankTransaction, updateRow,
 } from '../lib/repository';
 import { parseDutchAmountCents } from '../lib/money';
 import { describeMatchProgress, describeMatchResult } from '../lib/bankMatch';
@@ -251,6 +252,20 @@ function BankTxRow({ txn, data, organizationId, canWrite, accountName, candidate
     if (!confirm('Deze mutatie verwijderen omdat hij dubbel is ingelezen? De andere mutatie met dezelfde datum en hetzelfde bedrag blijft staan. Doe dit alleen als het om dezelfde betaling gaat: twee echte betalingen staan allebei op je afschrift.')) return;
     void run(() => deleteDuplicateBankTransaction(organizationId, txn.id), 'Verwijderen mislukt');
   };
+  // Een regel die niet bij deze rekening hoort: de spaarrekening in hetzelfde
+  // bestand, of een afschrift dat op de verkeerde rekening is ingelezen. Negeren
+  // was de enige weg en hield de aansluiting voorgoed scheef. Niet bij een
+  // mutatie van de bankkoppeling: die staat echt op deze rekening.
+  const excluded = Boolean(txn.excluded_at);
+  const fromLink = (() => {
+    const format = data.bankStatements.find(s => s.id === txn.statement_id)?.format;
+    return format === 'enablebanking' || format === 'gocardless';
+  })();
+  const canExclude = canWrite && !manual && !excluded && !fromLink;
+  const exclude = () => {
+    if (!confirm('Hoort deze mutatie niet bij deze bankrekening? Bijvoorbeeld een regel van je spaarrekening, of een afschrift van een andere rekening. Hij blijft bij Genegeerd staan, maar telt niet meer mee in de aansluiting. Je kunt dit terugzetten. Staat hij wel echt op het afschrift van deze rekening, kies dan Negeren of boek hem.')) return;
+    void run(() => setBankTransactionExcluded(organizationId, txn.id, true), 'Mislukt');
+  };
   const unmerge = () => {
     if (!confirm('Losmaken? De bankregel komt dan apart in "Af te letteren" te staan. Is de handmatige mutatie al geboekt, boek de bankregel dan niet nog eens.')) return;
     void run(() => unmergeBankTransaction(organizationId, txn.id), 'Losmaken mislukt');
@@ -269,6 +284,7 @@ function BankTxRow({ txn, data, organizationId, canWrite, accountName, candidate
             {txn.counterparty_name || txn.description || 'Transactie'}
             {manual && <span className="bank-tag bank-tag-manual">handmatig</span>}
             {manual && partner && <span className="bank-tag">bevestigd door bank</span>}
+            {excluded && <span className="bank-tag bank-tag-manual">niet van deze rekening</span>}
             {txn.status === 'booked' && txn.auto_booked && <span className="bank-tag bank-tag-auto" title="Door ResoFly geboekt omdat het zeker was">automatisch</span>}
           </strong>
           <small className="bk-muted">
@@ -324,6 +340,7 @@ function BankTxRow({ txn, data, organizationId, canWrite, accountName, candidate
           {manual && canWrite && <Button onClick={() => onEditManual(txn)} disabled={busy}><PenSquare size={14} /> Bewerken</Button>}
           {manual && canWrite && !everBooked && <Button onClick={remove} disabled={busy} title="Verwijderen"><Trash2 size={14} /> Verwijderen</Button>}
           {twin && canWrite && <Button onClick={removeDuplicate} disabled={busy} title="Dezelfde betaling staat er twee keer: deze verwijderen"><Trash2 size={14} /> Dubbele verwijderen</Button>}
+          {canExclude && <Button onClick={exclude} disabled={busy} title="Deze regel hoort bij een andere rekening: niet meetellen in de aansluiting"><Ban size={14} /> Niet van deze rekening</Button>}
           <Button onClick={() => void run(() => setBankTransactionStatus(organizationId, txn.id, 'ignored'), 'Mislukt')}
             disabled={!canWrite || busy || (manual && Boolean(partner))}
             title={manual && partner ? 'Bevestigd door de bank: maak eerst los' : 'Negeren'}><X size={14} /> Negeren</Button>
@@ -339,8 +356,14 @@ function BankTxRow({ txn, data, organizationId, canWrite, accountName, candidate
       )}
       {txn.status === 'ignored' && (
         <div className="bank-tx-actions">
-          <span className="bk-muted">Genegeerd</span>
+          <span className="bk-muted">
+            {excluded
+              ? `Niet van deze rekening: telt niet mee in de aansluiting${txn.excluded_reason && txn.excluded_reason !== 'Hoort niet bij deze rekening' ? ` (${txn.excluded_reason})` : ''}`
+              : 'Genegeerd'}
+          </span>
           <span className="bk-spacer" />
+          {canExclude && <Button onClick={exclude} disabled={busy} title="Deze regel hoort bij een andere rekening: niet meetellen in de aansluiting"><Ban size={14} /> Niet van deze rekening</Button>}
+          {excluded && canWrite && <Button onClick={() => void run(() => setBankTransactionExcluded(organizationId, txn.id, false), 'Mislukt')} disabled={busy} title="De mutatie staat toch op het afschrift van deze rekening">Telt toch mee</Button>}
           {manual && canWrite && !everBooked && <Button onClick={remove} disabled={busy}><Trash2 size={14} /> Verwijderen</Button>}
           {twin && canWrite && <Button onClick={removeDuplicate} disabled={busy} title="Dezelfde betaling staat er twee keer: deze verwijderen"><Trash2 size={14} /> Dubbele verwijderen</Button>}
           {canWrite && <Button onClick={() => void run(() => setBankTransactionStatus(organizationId, txn.id, 'unmatched'), 'Mislukt')} disabled={busy}>Weer openen</Button>}
@@ -753,6 +776,9 @@ function ReconciliationPanel({ rec }: { rec: BankReconciliation }) {
         {rec.ignored_count > 0 && (
           <div><dt>Genegeerd ({rec.ignored_count})</dt><dd>{euroCents(rec.ignored_sum_cents)}</dd></div>
         )}
+        {(rec.excluded_count ?? 0) > 0 && (
+          <div title="Mutaties die je op 'niet van deze rekening' hebt gezet. Ze staan bij Genegeerd en tellen hier niet mee."><dt>Niet van deze rekening ({rec.excluded_count}), telt niet mee</dt><dd>{euroCents(rec.excluded_sum_cents ?? 0)}</dd></div>
+        )}
         {(rec.timing_count ?? 0) > 0 && (
           <div><dt>Datumverschil handmatig/bank ({rec.timing_count})</dt><dd>{euroCents(rec.timing_sum_cents ?? 0)}</dd></div>
         )}
@@ -760,7 +786,11 @@ function ReconciliationPanel({ rec }: { rec: BankReconciliation }) {
       {!ok && (
         <ul className="bank-recon-hints">
           {rec.ignored_count > 0 && (
-            <li>Genegeerde transacties staan wél op het afschrift en tellen dus mee in de aansluiting. Heb je een dubbele regel genegeerd, dan blijft het verschil zichtbaar tot de dubbele rij echt weg is: open hem bij Genegeerd en kies "Dubbele verwijderen".</li>
+            <li>
+              Genegeerde transacties staan wél op het afschrift en tellen dus mee in de aansluiting. Staat er een regel tussen die hier niet hoort, open hem dan bij Genegeerd:
+              een dubbel ingelezen regel haal je weg met "Dubbele verwijderen", een regel van een andere rekening (je spaarrekening, een verkeerd bestand) zet je op "Niet van deze rekening".
+              Is een heel afschrift op de verkeerde rekening ingelezen, draai het dan hieronder terug bij "Ingelezen afschriften".
+            </li>
           )}
           {(rec.manual_unconfirmed_count ?? 0) > 0 && (
             <li>
@@ -778,7 +808,11 @@ function ReconciliationPanel({ rec }: { rec: BankReconciliation }) {
           {rec.statement_issues.length > 0 && (
             <li>
               {rec.statement_issues.length} afschrift(en) kloppen intern niet (beginsaldo + regels ≠ eindsaldo):{' '}
-              {rec.statement_issues.map(s => `${s.file_name || 'afschrift'} (${euroCents(s.difference_cents)})`).join(', ')}. Er ontbreken regels in die bestanden.
+              {rec.statement_issues.map(s => `${s.file_name || 'afschrift'} (${euroCents(s.difference_cents)})`).join(', ')}.
+              {/* Niet alleen "er ontbreken regels": staat er een betaling dubbel (een
+                  afschrift na de koppeling), dan is het precies andersom. En een
+                  regel die niet van deze rekening is, zet je apart. */}
+              {' '}Er ontbreekt een regel, er staat er een dubbel, of er staat een regel tussen die niet van deze rekening is: zet die bij de mutatie op "Niet van deze rekening". {DUPLICATE_HINT}
             </li>
           )}
           {rec.has_opening_balance && rec.duplicate_suspects === 0 && rec.statement_issues.length === 0 && rec.ignored_count === 0 && !rec.manual_unconfirmed_count && (
@@ -787,6 +821,59 @@ function ReconciliationPanel({ rec }: { rec: BankReconciliation }) {
         </ul>
       )}
     </div>
+  );
+}
+
+/**
+ * De ingelezen afschriften van een rekening, met de weg terug. Tot nu toe was
+ * een afschrift na het inlezen onzichtbaar: een bestand van de verkeerde
+ * rekening (je privérekening op de zakelijke) kreeg je er niet meer af, en het
+ * eindsaldo ervan bleef de peildatum van de aansluiting.
+ */
+function StatementList({ account, data, organizationId, canWrite, onChanged }: PageProps & { account: BankAccount }) {
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [message, setMessage] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  // Alleen bestanden. Wat de bankkoppeling ophaalt, is van deze rekening en
+  // heeft geen bestand om terug te draaien.
+  const statements = data.bankStatements.filter(s => s.bank_account_id === account.id && s.format !== 'enablebanking' && s.format !== 'gocardless');
+  if (statements.length === 0) return null;
+
+  const period = (s: BankStatement) => s.period_start && s.period_end
+    ? (s.period_start === s.period_end ? dateNL(s.period_start) : `${dateNL(s.period_start)} t/m ${dateNL(s.period_end)}`)
+    : 'periode onbekend';
+
+  async function undo(s: BankStatement) {
+    const rows = data.bankTransactions.filter(t => t.statement_id === s.id);
+    const name = s.file_name || 'dit afschrift';
+    if (!confirm(`${name} terugdraaien? Doe dit als het bestand niet van deze rekening is of verkeerd is ingelezen. De ${rows.length} mutatie(s) die uit dit bestand kwamen gaan weg, en het eindsaldo ervan telt niet meer in de aansluiting. Mutaties die je al geboekt hebt, draai je eerst terug. Opnieuw inlezen op de goede rekening kan daarna gewoon.`)) return;
+    setBusyId(s.id); setMessage(null);
+    try {
+      const res = await undoBankStatement(organizationId, s.id);
+      setMessage({ kind: 'ok', text: `${name} is teruggedraaid: ${res.removed} mutatie(s) weggehaald${res.keptExcluded > 0 ? `, ${res.keptExcluded} bewaard als "niet van deze rekening" omdat er ooit een boeking op stond` : ''}.` });
+      onChanged();
+    } catch (e) { setMessage({ kind: 'err', text: e instanceof Error ? e.message : 'Terugdraaien mislukt' }); }
+    finally { setBusyId(null); }
+  }
+
+  return (
+    <details className="bank-statements">
+      <summary>Ingelezen afschriften ({statements.length})</summary>
+      {message && <div className={message.kind === 'ok' ? 'bk-note' : 'error'}>{message.text}</div>}
+      <ul>
+        {statements.map(s => (
+          <li key={s.id}>
+            <span className="bank-statement-name">
+              <strong>{s.file_name || 'Afschrift'}</strong>
+              <small className="bk-muted">
+                {period(s)} · ingelezen {dateNL(s.imported_at.slice(0, 10))}
+                {s.closing_balance_cents !== null ? ` · eindsaldo ${euroCents(s.closing_balance_cents)}` : ''}
+              </small>
+            </span>
+            {canWrite && <Button onClick={() => void undo(s)} disabled={busyId !== null}><RotateCcw size={13} /> {busyId === s.id ? 'Bezig…' : 'Terugdraaien'}</Button>}
+          </li>
+        ))}
+      </ul>
+    </details>
   );
 }
 
@@ -856,8 +943,10 @@ function AccountsTab({ data, organizationId, canWrite, onChanged }: PageProps) {
         else if (res.status === 'linked') {
           const done = `Bank gekoppeld: ${res.linked} rekening(en), ${res.imported} transacties opgehaald.`;
           // Gekoppeld maar niet opgehaald: niet als "0 transacties" laten lijken.
+          // En gekoppeld maar met een gat: niet als "alles binnen".
           setBanner(res.syncErrors
             ? { kind: 'err', text: `${done} Ophalen lukte nog niet voor ${res.syncErrors} rekening(en): ${res.syncError ?? 'onbekende fout'}` }
+            : res.syncNotice ? { kind: 'err', text: `${done} ${res.syncNotice}` }
             : { kind: 'ok', text: done });
         }
         else setBanner({ kind: 'err', text: res.error || 'De koppeling is nog niet voltooid. Rond de toestemming bij je bank af en probeer opnieuw.' });
@@ -875,10 +964,18 @@ function AccountsTab({ data, organizationId, canWrite, onChanged }: PageProps) {
       const r = res.results[0];
       if (res.needsReconsent) setBanner({ kind: 'err', text: 'De banktoestemming is verlopen. Koppel de bank opnieuw via "Koppel bank".' });
       else if (r?.error) setBanner({ kind: 'err', text: `Synchroniseren mislukt: ${r.error}` });
+      else if (r?.notice) setBanner({ kind: 'err', text: `${r.inserted ?? 0} nieuwe, ${r.skipped ?? 0} al bekende transacties. ${r.notice}` });
       else setBanner({ kind: 'ok', text: `${r?.inserted ?? 0} nieuwe, ${r?.skipped ?? 0} al bekende transacties.` });
       onChanged();
     } catch (e) { setBanner({ kind: 'err', text: e instanceof Error ? e.message : 'Synchroniseren mislukt' }); }
     finally { setSyncingId(null); }
+  }
+
+  async function dismissGap(a: BankAccount) {
+    try {
+      await updateRow<BankAccount>('bank_accounts', a.id, { sync_gap_from: null, sync_gap_to: null }, organizationId);
+      onChanged();
+    } catch (e) { setBanner({ kind: 'err', text: e instanceof Error ? e.message : 'Opslaan mislukt' }); }
   }
 
   return (
@@ -934,10 +1031,20 @@ function AccountsTab({ data, organizationId, canWrite, onChanged }: PageProps) {
                   {linked && !consent.expired && a.last_sync_error && (
                     <div className="bank-reconsent"><AlertTriangle size={14} /> Laatste synchronisatie mislukt: {a.last_sync_error}</div>
                   )}
+                  {/* Een periode die de koppeling niet meer kon ophalen. Eerder
+                      telde zo'n sync als geslaagd en viel het gat stil weg. */}
+                  {a.sync_gap_from && a.sync_gap_to && (
+                    <div className="bank-reconsent">
+                      <AlertTriangle size={14} /> Van {dateNL(a.sync_gap_from)} t/m {dateNL(a.sync_gap_to)} kon de bank via de koppeling geen
+                      transacties meer leveren. Lees met “Afschrift inlezen” een afschrift over die periode in, dan ontbreekt er niets.
+                      {canWrite && <button className="bank-link" onClick={() => void dismissGap(a)}>Gezien</button>}
+                    </div>
+                  )}
                   {(() => {
                     const rec = recon.find(r => r.bank_account_id === a.id);
                     return rec ? <ReconciliationPanel rec={rec} /> : null;
                   })()}
+                  <StatementList account={a} data={data} organizationId={organizationId} canWrite={canWrite} onChanged={onChanged} />
                   <div className="bank-account-meta">
                     <span className="bk-muted">
                       {count} transacties · {linked ? lastSync(a) : lastImport(a)}
@@ -1048,8 +1155,20 @@ function ImportButton({ account, organizationId, canWrite, onChanged }: { accoun
     if (!file) return;
     setBusy(true); setError(null); setMsg(null); setWarnings([]);
     try {
-      const parsed = await parseBankFile(file);
-      if (parsed.transactions.length === 0) throw new Error('Geen transacties in dit bestand gevonden.');
+      const read = await parseBankFile(file);
+      if (read.transactions.length === 0) throw new Error('Geen transacties in dit bestand gevonden.');
+      // Hoort het afschrift bij deze rekening? Eerst kijken, dan inlezen: wat
+      // er eenmaal in staat, krijg je er niet meer af. Eerder ging een afschrift
+      // van de spaarrekening zonder vraag de zakelijke rekening in, en kwam een
+      // waarschuwing over twee rekeningen pas ná het inlezen.
+      const check = checkStatementAccount(read, account.iban);
+      if (check.kind === 'refuse') throw new Error(check.message);
+      if (check.kind === 'ask' && !confirm(`${check.message}\n\nToch inlezen op ${account.name}?`)) {
+        setMsg('Niet ingelezen.');
+        return;
+      }
+      const parsed = check.statement;
+      const notes = check.kind === 'ok' ? check.notes : [];
       const res = await importBankTransactions(organizationId, account.id, parsed);
       const head = `${res.inserted} nieuw, ${res.duplicates} al bekend (${parsed.format.toUpperCase()}).`;
       // Stopte het matchen bij het inlezen op de tijdgrens, dan gaat het hier
@@ -1069,9 +1188,15 @@ function ImportButton({ account, organizationId, canWrite, onChanged }: { accoun
       if (res.skippedNoDate > 0) serverWarnings.push(`${res.skippedNoDate} regel(s) niet ingelezen: geen leesbare boekdatum.`);
       if (res.skippedZeroAmount > 0) serverWarnings.push(`${res.skippedZeroAmount} regel(s) niet ingelezen: bedrag € 0,00.`);
       if (res.balanceOk === false) {
-        serverWarnings.push(`Let op: beginsaldo + alle mutaties in deze periode wijken ${euroCents(Math.abs(res.balanceDifferenceCents ?? 0))} af van het eindsaldo. Er ontbreken transacties over deze periode.`);
+        serverWarnings.push(describeStatementDifference(res.balanceDifferenceCents ?? 0, euroCents));
       }
-      setWarnings([...parsed.warnings, ...serverWarnings]);
+      setWarnings([...notes, ...parsed.warnings, ...serverWarnings]);
+      // Dekt dit afschrift een periode die de koppeling niet meer kon ophalen,
+      // dan is dat gat nu gevuld en hoeft de melding niet meer.
+      if (account.sync_gap_from && account.sync_gap_to && parsed.period_start && parsed.period_end
+          && parsed.period_start <= account.sync_gap_from && parsed.period_end >= account.sync_gap_to) {
+        await updateRow<BankAccount>('bank_accounts', account.id, { sync_gap_from: null, sync_gap_to: null }, organizationId).catch(() => undefined);
+      }
       onChanged();
     } catch (err) { setError(err instanceof Error ? err.message : 'Inlezen mislukt'); }
     finally { setBusy(false); }
@@ -1098,10 +1223,16 @@ function BankAccountForm({ data, organizationId, canWrite, account, onClose, onS
   const hasAutoBookSetting = account
     ? account.auto_book_purchase_invoices !== undefined
     : data.bankAccounts.some(a => a.auto_book_purchase_invoices !== undefined);
+  // Een nieuwe rekening krijgt het IBAN uit de bedrijfsgegevens (de inrichting
+  // vroeg het al), zolang er nog geen rekening met dat IBAN is. Eerder stond hier
+  // een leeg veld en moest je het nog eens opzoeken.
+  const compact = (iban: string | null | undefined) => String(iban ?? '').replace(/\s+/g, '').toUpperCase();
+  const companyIban = compact(data.companySettings?.iban);
+  const suggestedIban = !account && companyIban && !data.bankAccounts.some(a => compact(a.iban) === companyIban) ? (data.companySettings?.iban ?? '').trim() : '';
   const [form, setForm] = useState<Record<string, any>>(() => account ? {
     name: account.name, iban: account.iban ?? '', currency: account.currency, ledger_account_id: account.ledger_account_id, is_active: account.is_active,
     auto_book_purchase_invoices: account.auto_book_purchase_invoices ?? true,
-  } : { name: '', iban: '', currency: 'EUR', ledger_account_id: defaultLedger?.id ?? '', is_active: true, auto_book_purchase_invoices: true });
+  } : { name: suggestedIban ? 'Zakelijke rekening' : '', iban: suggestedIban, currency: 'EUR', ledger_account_id: defaultLedger?.id ?? '', is_active: true, auto_book_purchase_invoices: true });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const set = (k: string, v: unknown) => setForm(f => ({ ...f, [k]: v }));
@@ -1137,7 +1268,7 @@ function BankAccountForm({ data, organizationId, canWrite, account, onClose, onS
       {error && <div className="error">{error}</div>}
       <div className="bk-grid2">
         <Field label="Naam" hint="Bijv. Rabobank zakelijk"><Input value={form.name} onChange={e => set('name', e.target.value)} disabled={!canWrite} /></Field>
-        <Field label="IBAN"><Input value={form.iban} onChange={e => set('iban', e.target.value)} disabled={!canWrite} /></Field>
+        <Field label="IBAN" hint={suggestedIban && compact(form.iban) === companyIban ? 'Uit je bedrijfsgegevens.' : undefined}><Input value={form.iban} onChange={e => set('iban', e.target.value)} disabled={!canWrite} /></Field>
         <Field label="Valuta"><Input value={form.currency} onChange={e => set('currency', e.target.value)} disabled={!canWrite} /></Field>
         <Field label="Grootboekrekening" hint="Meestal 1100 Bank. Geef elke rekening een eigen grootboekrekening.">
           <Select value={form.ledger_account_id || ''} onChange={e => set('ledger_account_id', e.target.value)} disabled={!canWrite}>

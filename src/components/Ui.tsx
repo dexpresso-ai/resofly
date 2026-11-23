@@ -1,6 +1,7 @@
 import { Children, Fragment, isValidElement, useCallback, useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Search } from 'lucide-react';
+import { parseDutchAmount } from '../lib/money';
 import type { ButtonHTMLAttributes, CSSProperties, InputHTMLAttributes, KeyboardEvent, ReactNode, TextareaHTMLAttributes } from 'react';
 
 export function Button(props: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: 'primary' | 'ghost' | 'danger' }) {
@@ -8,6 +9,41 @@ export function Button(props: ButtonHTMLAttributes<HTMLButtonElement> & { varian
   return <button className={`btn btn-${variant} ${className}`} {...rest} />;
 }
 export function Input(props: InputHTMLAttributes<HTMLInputElement>) { return <input className="form-input" {...props} />; }
+
+/** Een getal om te bewerken: komma als decimaalteken, zonder duizendtallen. */
+function decimalText(value: number | string | null | undefined): string {
+  if (value === null || value === undefined || value === '') return '';
+  const n = Number(value);
+  return Number.isFinite(n) ? String(n).replace('.', ',') : String(value);
+}
+
+/**
+ * Een bedrag of aantal dat een komma leest ("12,95"), ook in een Engelstalige
+ * browser. Met type="number" besliste de browser over het decimaalteken: in
+ * Chrome in het Engels werd "12,95" stil 1295, en sprong een offerte van
+ * € 1.700 naar € 20.315. Je typt hier vrij; het getal gaat door zodra het te
+ * lezen is (zoals bij Bank), en na het verlaten staat er weer het getal.
+ * Leeg geeft `null`.
+ */
+export function DecimalInput({ value, onValueChange, onFocus, onBlur, ...rest }: Omit<InputHTMLAttributes<HTMLInputElement>, 'value' | 'onChange' | 'type'> & { value: number | string | null | undefined; onValueChange: (value: number | null) => void }) {
+  const shown = decimalText(value);
+  const [text, setText] = useState(shown);
+  const [focused, setFocused] = useState(false);
+  useEffect(() => { if (!focused) setText(shown); }, [shown, focused]);
+  const invalid = text.trim() !== '' && parseDutchAmount(text) === null;
+  return <input className="form-input" type="text" inputMode="decimal" autoComplete="off" {...rest}
+    value={text}
+    aria-invalid={invalid || undefined}
+    onFocus={event => { setFocused(true); onFocus?.(event); }}
+    onBlur={event => { setFocused(false); onBlur?.(event); }}
+    onChange={event => {
+      const next = event.target.value;
+      setText(next);
+      if (next.trim() === '') { onValueChange(null); return; }
+      const parsed = parseDutchAmount(next);
+      if (parsed !== null) onValueChange(parsed);
+    }} />;
+}
 
 /** Laadplaceholder in de huisstijl — vervangt kale "Laden…"-tekst door rustig
  *  glanzende regels die de vorm van de komende inhoud aankondigen. `role=status`

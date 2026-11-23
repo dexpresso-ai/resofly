@@ -487,7 +487,10 @@ async function activumEnBeginbalans() {
 
   await stap('een boekjaar met een tikfout in de datum kan weer weg, een boekjaar met boekingen niet', async () => {
     const jaren = await boekjaren(b);
-    const fout = gelukt(await rpc('open_fiscal_year', { p_organization_id: b.orgId, p_period_start: '2027-01-01', p_period_end: '2027-06-30', p_label: '2027' }, b.eigenaar.token), 'boekjaar 2027 met een verkeerde einddatum');
+    // Volgend jaar, gerekend vanaf vandaag. Er stond 2027: vanaf 1 januari
+    // 2027 heeft de inrichting dat boekjaar al geopend en overlapt dit.
+    const volgend = Number(new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Amsterdam' }).format(new Date()).slice(0, 4)) + 1;
+    const fout = gelukt(await rpc('open_fiscal_year', { p_organization_id: b.orgId, p_period_start: `${volgend}-01-01`, p_period_end: `${volgend}-06-30`, p_label: String(volgend) }, b.eigenaar.token), `boekjaar ${volgend} met een verkeerde einddatum`);
     const id = (Array.isArray(fout) ? fout[0] : fout).id;
     gelukt(await rpc('delete_open_fiscal_year', { p_organization_id: b.orgId, p_fiscal_year_id: id }, b.eigenaar.token), 'verwijderen');
     gelijk((await boekjaren(b)).length, jaren.length, 'het boekjaar is weg');
@@ -620,6 +623,136 @@ async function vanzelfBoeken() {
   });
 }
 
+// ── 7. Een verkeerd ingelezen regel of afschrift ─────────────────────────
+//
+// Controle bank van 22 november 2026, bevinding 2: een afschrift met een regel
+// van de spaarrekening erin kwam op de zakelijke rekening, en die regel kreeg je
+// er niet meer af. De aansluiting bleef voorgoed € 5.000 scheef.
+// Zie supabase/migrations/20261123130000_bank_herstel_verkeerd_ingelezen.sql.
+
+async function verkeerdIngelezen() {
+  groep('Herstelwegen — een verkeerd ingelezen regel of afschrift');
+  const w = await stap('een eenmanszaak met € 1.000 op de bank en twee afschriften, waarvan één met een regel van de spaarrekening', async () => {
+    const w0 = await maakEenmanszaak('verkeerd', { start: '2026-01-01' });
+    w0.t = {};
+    w0.t.bank = await bankrekening(w0);
+    const gb = await rekening(w0, '1100');
+    gelukt(await rpc('create_opening_balance', { p_organization_id: w0.orgId, p_as_of_date: '2026-11-01',
+      p_lines: [{ account_id: gb.id, description: 'Beginbalans Bank', debit_cents: 100000, credit_cents: 0 }] }, w0.eigenaar.token), 'beginbalans');
+    return w0;
+  });
+  if (!w) return;
+  const t = w.t;
+  const lees = (afschrift, regels) => rpc('import_bank_transactions', {
+    p_organization_id: w.orgId, p_bank_account_id: t.bank.id, p_statement: afschrift, p_transactions: regels,
+  }, w.eigenaar.token);
+  const rij = (bedrag) => sqlRij(`select id, status, statement_id, excluded_at, excluded_reason from public.bank_transactions where bank_account_id = ${q(t.bank.id)} and amount_cents = ${bedrag}`);
+  const aansluiting = async () => gelukt(await rpc('report_bank_reconciliation', { p_organization_id: w.orgId }, w.eigenaar.token), 'aansluiting')[0];
+  const sluit = (naam, tekst) => rpc(naam, { p_organization_id: w.orgId, ...tekst }, w.eigenaar.token);
+
+  await stap('de regel van de spaarrekening negeren helpt niet: het verschil blijft € 5.000', async () => {
+    gelukt(await lees({ format: 'camt053', file_name: 'dag1.xml', file_hash: `h1-${randomUUID()}`, period_start: '2026-11-02', period_end: '2026-11-02', opening_balance_cents: 100000, closing_balance_cents: 337450 }, [
+      { booking_date: '2026-11-02', amount_cents: 242000, counterparty_name: 'Bakkerij Jansen', description: 'Fotoreportage' },
+      { booking_date: '2026-11-02', amount_cents: -4550, counterparty_name: 'KPN B.V.', description: 'Incasso' },
+      { booking_date: '2026-11-02', amount_cents: 500000, counterparty_name: 'Fotografie Van Dijk', description: 'Naar spaarrekening' },
+    ]), 'dag 1, met de spaarregel erin');
+    gelukt(await lees({ format: 'camt053', file_name: 'dag2.xml', file_hash: `h2-${randomUUID()}`, period_start: '2026-11-03', period_end: '2026-11-03', opening_balance_cents: 337450, closing_balance_cents: 324166 }, [
+      { booking_date: '2026-11-03', amount_cents: -13284, counterparty_name: 'Shell', description: 'Tanken' },
+    ]), 'dag 2');
+    t.spaar = rij(500000).id;
+    gelukt(await sluit('set_bank_transaction_status', { p_transaction_id: t.spaar, p_status: 'ignored' }), 'negeren');
+    const rec = await aansluiting();
+    gelijk(rec.difference_cents, -500000, 'genegeerd telt mee: het verschil staat er nog');
+  });
+
+  await stap('"niet van deze rekening": de regel blijft staan, telt niet meer mee en de bank sluit aan', async () => {
+    const res = gelukt(await sluit('set_bank_transaction_excluded', { p_transaction_id: nodig(t.spaar, 'spaarregel'), p_excluded: true, p_reason: 'Regel van de spaarrekening' }), 'niet van deze rekening');
+    gelijk((Array.isArray(res) ? res[0] : res).status, 'ignored', 'de regel staat bij Genegeerd');
+    const rec = await aansluiting();
+    gelijk([rec.difference_cents, rec.ignored_count, rec.excluded_count, rec.excluded_sum_cents], [0, 0, 1, 500000], 'de bank sluit aan; de regel staat apart vermeld');
+    gelijk(rec.statement_issues.length, 0, 'dag 1 klopt nu ook met zichzelf');
+    gelijk(rij(500000).excluded_reason, 'Regel van de spaarrekening', 'de reden is bewaard');
+  });
+
+  await stap('"weer openen" haalt de uitsluiting eraf (een open mutatie telt altijd mee), en terugzetten kan ook', async () => {
+    gelukt(await sluit('set_bank_transaction_status', { p_transaction_id: t.spaar, p_status: 'unmatched' }), 'weer openen');
+    gelijk(rij(500000).excluded_at, null, 'niet meer uitgesloten');
+    const open = await aansluiting();
+    gelijk([open.difference_cents, open.unbooked_sum_cents, open.excluded_count], [-500000, 242000 - 4550 - 13284 + 500000, 0], 'hij telt weer mee, bij nog te boeken');
+    gelukt(await sluit('set_bank_transaction_excluded', { p_transaction_id: t.spaar, p_excluded: true }), 'opnieuw uitsluiten');
+    gelukt(await sluit('set_bank_transaction_excluded', { p_transaction_id: t.spaar, p_excluded: false }), 'terugzetten');
+    gelijk([rij(500000).status, rij(500000).excluded_at], ['ignored', null], 'weer een gewone genegeerde mutatie');
+    gelukt(await sluit('set_bank_transaction_excluded', { p_transaction_id: t.spaar, p_excluded: true }), 'en weer uitsluiten');
+  });
+
+  await stap('wat niet kan: een geboekte mutatie, een handmatige, een mutatie van de bankkoppeling, en zonder rechten', async () => {
+    const shell = rij(-13284).id;
+    gelukt(await boekMutatie(w, shell, [{ kind: 'ledger', account_id: (await rekening(w, '4200')).id, amount_cents: 13284 }]), 'Shell boeken');
+    const geboekt = await sluit('set_bank_transaction_excluded', { p_transaction_id: shell, p_excluded: true });
+    geweigerd(geboekt, 'een geboekte mutatie uitsluiten');
+    verwacht(/Draai de boeking eerst terug/.test(geboekt.tekst), `melding: ${geboekt.tekst.slice(0, 200)}`);
+    const hand = await invoeren(w, t.bank, '2026-11-03', -1000, 'Parkeren');
+    geweigerd(await sluit('set_bank_transaction_excluded', { p_transaction_id: hand, p_excluded: true }), 'een handmatige mutatie uitsluiten');
+    gelukt(await lees({ format: 'enablebanking' }, [{ booking_date: '2026-11-06', amount_cents: -777, counterparty_name: 'Bol', description: 'Bestelling' }]), 'een mutatie van de bankkoppeling');
+    const koppeling = await sluit('set_bank_transaction_excluded', { p_transaction_id: rij(-777).id, p_excluded: true });
+    geweigerd(koppeling, 'een mutatie van de bankkoppeling uitsluiten');
+    verwacht(/bankkoppeling/.test(koppeling.tekst), `melding: ${koppeling.tekst.slice(0, 200)}`);
+    const vreemde = await maakEenmanszaak('verkeerd-ander');
+    geweigerd(await rpc('set_bank_transaction_excluded', { p_organization_id: w.orgId, p_transaction_id: t.spaar, p_excluded: false }, vreemde.eigenaar.token), 'een ander uit een andere organisatie');
+    geweigerd(await rpc('set_bank_transaction_excluded', { p_organization_id: vreemde.orgId, p_transaction_id: t.spaar, p_excluded: false }, vreemde.eigenaar.token), 'met de eigen organisatie en andermans mutatie');
+    geweigerd(await rpc('undo_bank_statement', { p_organization_id: w.orgId, p_statement_id: rij(-4550).statement_id }, vreemde.eigenaar.token), 'andermans afschrift terugdraaien');
+    gelijk(rij(500000).excluded_at !== null, true, 'de uitsluiting staat er nog');
+    // Opruimen voor de volgende stap: de aansluiting moet weer op nul staan.
+    gelukt(await rpc('delete_manual_bank_transaction', { p_organization_id: w.orgId, p_transaction_id: hand }, w.eigenaar.token), 'handmatige weg');
+  });
+
+  await stap('een heel afschrift van een andere rekening: terugdraaien weigert zolang er een boeking op staat', async () => {
+    gelukt(await lees({ format: 'mt940', file_name: 'prive.940', file_hash: `h3-${randomUUID()}`, period_start: '2026-11-04', period_end: '2026-11-05', opening_balance_cents: 9000000, closing_balance_cents: 9004500 }, [
+      { booking_date: '2026-11-04', amount_cents: 10000, counterparty_name: 'Oma', description: 'Verjaardag' },
+      { booking_date: '2026-11-05', amount_cents: -5500, counterparty_name: 'Albert Heijn', description: 'Boodschappen' },
+    ]), 'het afschrift van de privérekening');
+    t.afschrift = rij(10000).statement_id;
+    t.ah = rij(-5500).id;
+    const rec = await aansluiting();
+    gelijk(rec.statement_closing_cents, 9004500, 'de aansluiting kijkt nu naar het verkeerde eindsaldo');
+    verwacht(rec.difference_cents !== 0, 'en sluit dus niet aan');
+    const boeking = gelukt(await boekMutatie(w, t.ah, [{ kind: 'ledger', account_id: (await rekening(w, '0550')).id, amount_cents: 5500 }]), 'per ongeluk geboekt');
+    t.boekstuk = (Array.isArray(boeking) ? boeking[0] : boeking).id;
+    const res = await sluit('undo_bank_statement', { p_statement_id: t.afschrift });
+    geweigerd(res, 'terugdraaien met een boeking erop');
+    verwacht(/1 mutatie\(s\) eruit zijn geboekt/.test(res.tekst), `melding: ${res.tekst.slice(0, 200)}`);
+    gelijk(sqlRijen(`select id from public.bank_transactions where statement_id = ${q(t.afschrift)}`).length, 2, 'er is niets gewist');
+  });
+
+  await stap('na het terugdraaien van de boeking kan het: nooit geboekte regels weg, de ooit geboekte blijft als "niet van deze rekening"', async () => {
+    await terugdraaien(w, nodig(t.ah, 'de mutatie'));
+    const res = gelukt(await sluit('undo_bank_statement', { p_statement_id: nodig(t.afschrift, 'het afschrift') }), 'afschrift terugdraaien');
+    gelijk([res.removed, res.kept_excluded], [1, 1], 'één regel weg, één bewaard');
+    gelijk(sqlRijen(`select id from public.bank_statements where id = ${q(t.afschrift)}`).length, 0, 'het afschrift is weg');
+    gelijk(sqlRijen(`select id from public.bank_transactions where bank_account_id = ${q(t.bank.id)} and amount_cents = 10000`).length, 0, 'de nooit geboekte regel is weg');
+    const ah = rij(-5500);
+    gelijk([ah.status, ah.excluded_at !== null], ['ignored', true], 'de ooit geboekte regel staat er nog, buiten de aansluiting');
+    const stuk = boekstuk(nodig(t.boekstuk, 'het boekstuk'));
+    verwacht(stuk.reversed_by_entry_id !== null && boekstuk(stuk.reversed_by_entry_id) !== null, 'het boekstuk en zijn tegenboeking staan er nog');
+    const log = sqlRij(`select action, entity_label, metadata from public.audit_logs where organization_id = ${q(w.orgId)} and entity_type = 'bank_statement' and entity_id = ${q(t.afschrift)}`);
+    gelijk([log?.action, log?.metadata?.removed_transactions, log?.metadata?.file_name], ['deleted', 1, 'prive.940'], 'het logboek legt vast wat er is teruggedraaid');
+    const rec = await aansluiting();
+    gelijk([rec.as_of, rec.statement_closing_cents, rec.difference_cents], ['2026-11-03', 324166, 0], 'de aansluiting kijkt weer naar het goede afschrift en klopt');
+  });
+
+  await stap('een afschrift van de bankkoppeling draai je niet terug', async () => {
+    const res = await sluit('undo_bank_statement', { p_statement_id: rij(-777).statement_id });
+    geweigerd(res, 'bankkoppeling terugdraaien');
+    verwacht(/bankkoppeling/.test(res.tekst), `melding: ${res.tekst.slice(0, 200)}`);
+  });
+
+  await stap('wissen of de uitsluiting zetten via REST raakt niets', async () => {
+    await rest(`bank_transactions?id=eq.${t.spaar}`, { method: 'PATCH', token: w.eigenaar.token, body: { excluded_at: null } });
+    await rest(`bank_transactions?id=eq.${t.spaar}`, { method: 'DELETE', token: w.eigenaar.token });
+    gelijk(rij(500000).excluded_at !== null, true, 'de regel staat er nog, uitgesloten');
+  });
+}
+
 export default async function herstelwegen() {
   await tegenboekenEnOpnieuw();
   await afgeslotenJaar();
@@ -627,4 +760,5 @@ export default async function herstelwegen() {
   await activumEnBeginbalans();
   await kor();
   await vanzelfBoeken();
+  await verkeerdIngelezen();
 }

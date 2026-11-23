@@ -11,8 +11,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
-  bankReturnError, choosePsuType, consentExpired, consentValidUntil, ebErrorCode, FALLBACK_CONSENT_DAYS,
-  isBookedTransaction, mapAspsp, mapEbTransaction, needsReconsent, psuTypesOf, syncDateFrom,
+  accountErrorText, bankReturnError, choosePsuType, consentExpired, consentValidUntil, describeSyncGap, ebErrorCode,
+  FALLBACK_CONSENT_DAYS, isBookedTransaction, mapAspsp, mapEbTransaction, needsReconsent, psuTypesOf, syncDateFrom, syncGap,
 } from './bankSync.ts';
 import * as app from '../../../src/lib/bankLink.ts';
 
@@ -113,11 +113,56 @@ test('foutcodes van Enable Banking en wanneer de klant opnieuw toestemming moet 
   assert.equal(ebErrorCode({ code: 422, error: 'iets ging mis' }), null, 'geen code, maar tekst');
   assert.equal(ebErrorCode(null), null);
   assert.equal(needsReconsent(401, null), true);
-  assert.equal(needsReconsent(403, null), true);
   assert.equal(needsReconsent(422, 'EXPIRED_SESSION'), true);
   assert.equal(needsReconsent(400, 'CLOSED_SESSION'), true);
+  assert.equal(needsReconsent(403, 'REVOKED_SESSION'), true);
   assert.equal(needsReconsent(502, 'ASPSP_ERROR'), false);
   assert.equal(needsReconsent(undefined, null), false);
+});
+
+test('een 403 of 404 voor één rekening is een fout van die rekening, niet van de hele koppeling', () => {
+  // Eerder telde elke 403 als verlopen toestemming: één spaarrekening die de
+  // bank niet meer vrijgaf, zette de koppeling op "verlopen", en de
+  // nachtelijke sync sloeg daarna ook de betaalrekening over.
+  assert.equal(needsReconsent(403, null), false);
+  assert.equal(needsReconsent(403, 'ASPSP_ERROR'), false);
+  assert.equal(needsReconsent(404, 'ACCOUNT_DOES_NOT_EXIST'), false);
+  assert.equal(needsReconsent(400, 'ACCOUNT_CLOSED'), false, 'een gesloten rekening is geen gesloten sessie');
+  assert.match(accountErrorText(403, 'Enable Banking-fout (403 ASPSP_ERROR): Forbidden'), /geeft deze rekening niet \(meer\) vrij.*zet hem dan op inactief/);
+  assert.equal(accountErrorText(502, 'Bank onbereikbaar'), 'Bank onbereikbaar');
+});
+
+test('opnieuw koppelen na een lange onderbreking: het gat dat de bank niet meer leverde', () => {
+  // Laatste sync 130 dagen geleden (15-7), gevraagd vanaf 8-7; de bank gaf
+  // alleen de laatste 90 dagen, de eerste mutatie is van 24-8.
+  const gap = syncGap('2026-07-08', '2026-07-15T03:00:00Z', true, ['2026-09-23', '2026-08-24', null], '2026-11-22');
+  assert.deepEqual(gap, { from: '2026-07-08', to: '2026-08-23' });
+  assert.match(describeSyncGap(gap!), /Van 8-7-2026 t\/m 23-8-2026 .*Afschrift inlezen/);
+  assert.equal(syncGap('2026-07-08', '2026-07-15', false, ['2026-08-24'], '2026-11-22'), null, 'zonder "longest" geen gat');
+  assert.equal(syncGap('2026-07-08', '2026-07-15', true, ['2026-07-14', '2026-08-24'], '2026-11-22'), null, 'de bank leverde tot in de vorige sync');
+  assert.equal(syncGap('2026-08-24', null, true, ['2026-09-01'], '2026-11-22'), null, 'de eerste sync: vóór de koppeling is geen gat');
+  assert.deepEqual(syncGap('2026-07-08', '2026-07-15', true, [], '2026-11-22'), { from: '2026-07-08', to: '2026-11-22' }, 'niets ontvangen: tot vandaag');
+});
+
+test('storno via de koppeling: nooit de eigen rekening als tegenpartij', () => {
+  const own = 'NL69INGB0123456789';
+  const storno = mapEbTransaction({
+    credit_debit_indicator: 'CRDT', transaction_amount: { amount: '45.50' }, booking_date: '2026-11-05',
+    debtor: { name: 'Fotografie Van Dijk' }, debtor_account: { iban: 'NL69 INGB 0123 4567 89' },
+    creditor: { name: 'KPN B.V.' }, creditor_account: { iban: 'NL08ABNA0430096617' },
+  }, own);
+  assert.equal(storno.counterparty_name, 'KPN B.V.');
+  assert.equal(storno.counterparty_iban, 'NL08ABNA0430096617');
+  const reversal = mapEbTransaction({
+    credit_debit_indicator: 'CRDT', reversal_indicator: true, transaction_amount: { amount: '45.50' }, booking_date: '2026-11-05',
+    debtor: { name: 'Fotografie Van Dijk' }, creditor: { name: 'KPN B.V.' },
+  });
+  assert.equal(reversal.counterparty_name, 'KPN B.V.');
+  const gewoon = mapEbTransaction({
+    credit_debit_indicator: 'CRDT', transaction_amount: { amount: '1210' }, booking_date: '2026-11-02',
+    debtor: { name: 'Bakkerij Jansen' }, debtor_account: { iban: 'NL91ABNA0417164300' }, creditor: { name: 'Fotografie Van Dijk' },
+  }, own);
+  assert.equal(gewoon.counterparty_name, 'Bakkerij Jansen');
 });
 
 test('app en server verstaan hetzelfde onder "verlopen" en "afgebroken"', () => {

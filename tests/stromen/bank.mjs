@@ -462,7 +462,7 @@ export default async function bank() {
       method: 'POST', token: w.medewerker.token, prefer: 'return=representation',
       body: { organization_id: w.orgId, created_by: w.medewerker.id, name: naam, iban },
     }), `leverancier ${naam}`)[0];
-    const inkoop = async (lev, nummer, netto, datum) => {
+    const inkoop = async (lev, nummer, netto, datum, extra = {}) => {
       const btw = Math.round(netto * 0.21);
       const pi = gelukt(await rest('purchase_invoices?select=*', {
         method: 'POST', token: w.medewerker.token, prefer: 'return=representation',
@@ -470,6 +470,7 @@ export default async function bank() {
           organization_id: w.orgId, created_by: w.medewerker.id, supplier_id: lev.id, supplier_invoice_number: nummer,
           date: datum, due_date: vandaag(14), subtotal_cents: netto, vat_cents: btw, total_cents: netto + btw, currency: 'EUR', status: 'draft',
           lines: [{ id: randomUUID(), description: 'Inkoop', amount_cents: netto, vat_code: 'HOOG', vat_rate: 21, account_id: kosten }],
+          ...extra,
         },
       }), `inkoopfactuur ${nummer}`)[0];
       gelukt(await rpc('book_purchase_invoice', { p_organization_id: w.orgId, p_purchase_invoice_id: pi.id }, w.medewerker.token), `${nummer} boeken`);
@@ -548,6 +549,18 @@ export default async function bank() {
     const voorstel = regel(-4961);
     gelijk([voorstel.status, voorstel.matched_purchase_invoice_id], ['suggested', t2.id], 'uit: wel het voorstel');
     verwacht(/Automatisch boeken staat uit/.test(voorstel.match_reason ?? ''), `reden bij uit: ${voorstel.match_reason}`);
+
+    // De reden noemt het nummer dat echt in de omschrijving staat: dat van de
+    // leverancier, met het eigen nummer erbij. Eerder stond er alleen het eigen
+    // nummer ("Factuurnummer INK-… staat in de omschrijving"), dat er nergens in
+    // stond (controle UI, 22 november 2026).
+    const metEigenNummer = await inkoop(webwinkel, 'WW-9912', 1000, vandaag(-2), { internal_number: 'INK-2026-0901' });   // € 12,10
+    gelukt(await inlezen(w, w.medewerker, rekening2, [
+      { booking_date: vandaag(), amount_cents: -1210, counterparty_name: 'Webwinkel', description: 'Bestelling WW-9912' },
+    ]), 'betaling met het nummer van de leverancier');
+    const genoemd = regel(-1210);
+    gelijk(genoemd.matched_purchase_invoice_id, metEigenNummer.id, 'het voorstel: de factuur met dat nummer');
+    verwacht((genoemd.match_reason ?? '').startsWith('Factuurnummer WW-9912 (inkoopfactuur INK-2026-0901) staat in de omschrijving'), `reden: ${genoemd.match_reason}`);
 
     // Een andere organisatie, en de interne functies.
     geweigerd(await rpc('match_bank_transactions', { p_organization_id: w.orgId }, ander.eigenaar.token), 'een andere organisatie matcht hier niet');

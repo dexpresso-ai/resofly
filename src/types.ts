@@ -100,6 +100,11 @@ export interface OrganizationMember {
   /** Rechtenniveau per module (none/read/write). Ontbrekende sleutel = volledig.
    *  Zie src/lib/permissions.ts; genegeerd voor owners en admins. */
   module_access?: Record<string, string> | null;
+  /**
+   * Alleen bij de boekhouder: mag hij boeken en afsluiten (vanaf 20261123133000)?
+   * Zie BOOKING_PAGES in src/lib/permissions.ts voor wat dat opent.
+   */
+  accountant_can_book?: boolean | null;
 }
 
 export interface AuditLog {
@@ -985,8 +990,41 @@ export interface TimeEntry extends OrgScopedRow {
   entry_type: TimeEntryType;
   indirect_category: IndirectHoursCategory | null;
   hourly_rate_cents: number | null;
+  /** De verkoopfactuur (concept of definitief) waar dit uur op staat; leeg =
+   *  nog te factureren. Komt uit time_entry_invoices, niet uit de rij zelf.
+   *  Gefactureerde uren liggen in de database vast. */
+  invoice_id?: UUID | null;
   created_at: string;
   updated_at: string;
+}
+
+/** Hoe uren op een factuur komen: samengevoegd per project en tarief, of één regel per registratie. */
+export type TimeInvoiceGrouping = 'project' | 'entry';
+
+/** Eén factuurregel uit het voorbeeld van "Uren factureren". */
+export interface TimeInvoicePreviewLine extends FinanceLine {
+  minutes: number;
+  entry_count: number;
+  project_id?: UUID | null;
+}
+
+/** Wat time_invoice_preview teruggeeft: de regels zoals ze op het concept komen. */
+export interface TimeInvoicePreview {
+  client_id: UUID;
+  project_id: UUID | null;
+  from: string | null;
+  to: string | null;
+  grouping: TimeInvoiceGrouping;
+  rounding_minutes: number;
+  entry_count: number;
+  minutes: number;
+  billed_minutes: number;
+  subtotal_cents: number;
+  first_date: string | null;
+  last_date: string | null;
+  lines: TimeInvoicePreviewLine[];
+  /** Declarabele uren zonder uurtarief: die komen niet op de factuur. */
+  without_rate: { entry_count: number; minutes: number };
 }
 
 export interface NoteCalendarLink extends OrgScopedRow {
@@ -3146,7 +3184,8 @@ export interface VatReturn {
 // Bankfeed: bankrekeningen, transacties en regels (automatisch journaliseren).
 // ---------------------------------------------------------------------------
 export type BankAccountSource = 'import' | 'gocardless' | 'enablebanking';
-export type BankStatementFormat = 'camt053' | 'mt940' | 'csv' | 'gocardless';
+// 'enablebanking' ontbrak hier terwijl de database het al toestond (bank-sync schrijft het).
+export type BankStatementFormat = 'camt053' | 'mt940' | 'csv' | 'gocardless' | 'enablebanking';
 /**
  * 'merged': een bankregel die een handmatig ingevoerde mutatie bevestigt. Hij
  * verwijst met merged_into_id naar die mutatie, en die draagt de boeking; los
@@ -3178,6 +3217,12 @@ export interface BankAccount extends OrgScopedRow {
    * 20261118190000; ontbreekt daarvóór). Uit = alleen voorstellen.
    */
   auto_book_purchase_invoices?: boolean;
+  /**
+   * Een periode die de bankkoppeling niet meer kon ophalen (migratie
+   * 20261123100000; ontbreekt daarvóór). Leeg = geen gat bekend.
+   */
+  sync_gap_from?: string | null;
+  sync_gap_to?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -3261,6 +3306,13 @@ export interface BankTransaction {
   updated_at: string;
   /** Met de hand ingevoerd in plaats van van de bank. Optioneel: vóór migratie 20261107110000 bestond het niet. */
   is_manual?: boolean;
+  /**
+   * Niet van deze rekening (vanaf 20261123130000): de mutatie blijft bij
+   * Genegeerd staan, maar telt niet mee in de aansluiting.
+   */
+  excluded_at?: string | null;
+  excluded_by?: UUID | null;
+  excluded_reason?: string | null;
   created_by?: UUID | null;
   /** Bij een bankregel met status 'merged': de handmatige mutatie die hij bevestigt. */
   merged_into_id?: UUID | null;
@@ -3380,6 +3432,21 @@ export interface ParsedBankTransaction {
   structured_reference: string | null;
   end_to_end_id: string | null;
   bank_tx_id: string | null;
+  /**
+   * De eigen rekening van deze regel, zoals het bestand hem noemt (CSV-kolom
+   * "Rekening"/"IBAN/BBAN", MT940 :25:, CAMT Stmt/Acct). Alleen voor de
+   * controle vóór het inlezen (bankImport/account.ts); de server leest hem niet.
+   */
+  account?: string | null;
+}
+
+/** Begin- en eindsaldo van één eigen rekening in een bestand met meer rekeningen. */
+export interface ParsedBankAccountSection {
+  account: string;
+  period_start: string | null;
+  period_end: string | null;
+  opening_balance_cents: number | null;
+  closing_balance_cents: number | null;
 }
 
 export interface ParsedBankStatement {
@@ -3393,6 +3460,12 @@ export interface ParsedBankStatement {
   /** Waarschuwingen van de parser (overgeslagen regels, niet-herkende kolommen). Getoond na de import. */
   warnings: string[];
   transactions: ParsedBankTransaction[];
+  /**
+   * Per eigen rekening in het bestand (MT940 en CAMT): periode en saldi. Zo
+   * kan het scherm bij een bestand met twee rekeningen het saldo van de
+   * gekozen rekening nemen in plaats van dat van het eerste afschrift.
+   */
+  accounts?: ParsedBankAccountSection[];
 }
 
 /** Eén regel uit report_bank_reconciliation: sluit de bank aan op het grootboek. */
@@ -3415,6 +3488,9 @@ export interface BankReconciliation {
   unbooked_sum_cents: number;
   ignored_count: number;
   ignored_sum_cents: number;
+  /** Mutaties die niet van deze rekening zijn; ze tellen nergens in mee (vanaf 20261123130000). */
+  excluded_count?: number;
+  excluded_sum_cents?: number;
   booked_count: number;
   expected_cents: number;
   /** Afschriftsaldo − (grootboekstand + nog niet geboekt). 0 = sluitend; null = geen afschriftsaldo bekend. */
@@ -3845,6 +3921,13 @@ export interface ForecastVersion {
 export interface AppData { clients: Client[]; clientContacts: ClientContact[]; clientCalls: ClientCall[]; clientFieldDefinitions: ClientFieldDefinition[]; projects: Project[]; projectTemplates: ProjectTemplate[]; projectTemplateTasks: ProjectTemplateTask[]; tasks: Task[]; projectMembers: ProjectMember[]; taskAssignees: TaskAssignee[]; contractProjects: ContractProject[]; tickets: Ticket[]; ticketNotes: TicketNote[]; notes: Note[]; documents: InternalDocument[]; folders: ContentFolder[]; noteCalendarLinks: NoteCalendarLink[]; noteHandwriting: NoteHandwritingSummary[]; calendarEventLinks: CalendarEventLink[]; timeEntries: TimeEntry[]; quotes: Quote[]; quoteApprovalEvents: QuoteApprovalEvent[]; quoteEmailDeliveries: QuoteEmailDelivery[]; quoteVersions: QuoteVersion[]; invoices: Invoice[]; invoiceWorkflowEvents: InvoiceWorkflowEvent[]; invoiceEmailDeliveries: InvoiceEmailDelivery[]; invoicePaymentRecords: InvoicePaymentRecord[]; invoiceVersions: InvoiceVersion[]; invoiceRefunds: InvoiceRefund[]; creditNotes: CreditNote[]; invoiceChargebacks: InvoiceChargeback[]; dunningNotices: DunningNotice[]; ledgerAccounts: LedgerAccount[]; vatCodes: VatCode[]; journalEntries: JournalEntry[]; journalLines: JournalLine[]; closedPeriods: ClosedPeriod[]; fiscalYears: FiscalYear[]; suppliers: Supplier[]; purchaseInvoices: PurchaseInvoice[]; fixedAssets: FixedAsset[]; assetDepreciations: AssetDepreciation[]; prepaidExpenses: PrepaidExpense[]; prepaidExpenseReleases: PrepaidExpenseRelease[]; vatReturns: VatReturn[]; bankAccounts: BankAccount[]; bankStatements: BankStatement[]; bankTransactions: BankTransaction[]; bankAllocations: BankAllocation[]; bankRules: BankRule[]; bankRequisitions: BankRequisition[]; attachments: Attachment[]; driveShares: DriveShare[]; galleries: Gallery[]; savedReports: SavedReport[]; plannerNotes: PlannerNote[]; plannerCapacity: PlannerDayCapacity | null; companySettings: CompanySettings | null;
   /** Tellingen voor het dashboard, zonder de bank en de boekhouding te laden (src/lib/dataGroups.ts). */
   bankTransactionsToReconcile: number;
+  /**
+   * Per verstuurde, geboekte factuur wat er nog openstaat, in centen (na
+   * deelbetalingen en deelcreditnota's; RPC list_open_invoice_amounts). Een
+   * factuur die er niet in staat, telt met het volle bedrag (lib/stroom.ts,
+   * invoiceOpenAmount). Leeg zonder leesrecht op Financiën.
+   */
+  invoiceOpenCents: Record<UUID, number>;
   /** Afgelopen btw-tijdvakken zonder aangifte (lib/vatPeriods.ts), en de eerste daarvan met zijn deadline. */
   vatReturnsToFile: number; vatReturnNextDue: VatPeriodDue | null; }
 

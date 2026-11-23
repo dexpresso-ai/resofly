@@ -156,7 +156,7 @@ type Usage = TokenUsage;
  * rubriek 1e in plaats van 3b, en niet in de ICP-opgaaf.
  */
 interface ProposalLine { description: string; quantity: number; unit_price: number; vat: number; vat_code?: string }
-interface InvoiceProposal { type: 'invoice'; client_id: string; client_name: string; lines: ProposalLine[]; notes: string | null; due_date: string | null; total_eur: number }
+interface InvoiceProposal { type: 'invoice'; client_id: string; client_name: string; project_id?: string | null; project_name?: string | null; lines: ProposalLine[]; notes: string | null; due_date: string | null; total_eur: number }
 interface QuoteProposal { type: 'quote'; client_id: string; client_name: string; lines: ProposalLine[]; notes: string | null; valid_until: string | null; total_eur: number }
 interface ClientProposal { type: 'client'; name: string; contact_name: string | null; email: string | null; phone: string | null; notes: string | null; status: string; account_lead_user_id: string | null; account_lead_name: string | null }
 interface SendInvoiceProposal { type: 'send_invoice'; id: string; number: string; client_name: string; recipient_email: string; recipient_name: string | null }
@@ -1039,7 +1039,7 @@ function buildSystemPrompt(ctx: GerrieContext): string {
       ? [
           '- `propose_invoice` — conceptfactuur klaarzetten. Zoek eerst de klant met `search_clients` (gebruik diens exacte id) en bepaal de regels (omschrijving, aantal, prijs per stuk EXCL. btw, btw% — meestal 21).',
           '- `propose_quote` — conceptofferte klaarzetten. Net als de factuur, met een optionele geldig-tot-datum.',
-          '- UREN FACTUREREN — vraagt iemand de uren van een klant of project te factureren: haal de declarabele uren op met `list_time_entries` (billable_only, periode), neem het uurtarief van het project (of vraag het), en zet één factuur klaar met `propose_invoice` met per regel de omschrijving, het aantal uren en het tarief. Noem in je antwoord over welke periode en hoeveel uur het gaat.',
+          '- UREN FACTUREREN — vraagt iemand de uren van een klant of project te factureren: zoek met `find_actions` → `time.uninvoiced` (wat er over de hele periode nog te factureren is, met uren en bedrag) en zet dan `invoice.from_time_entries` klaar. Na akkoord legt ResoFly die uren vast aan het concept, zodat ze niet nog eens op een factuur komen. Reken de uren NIET zelf op met `list_time_entries` en `propose_invoice`: dan staan ze niet als gefactureerd. Noem in je antwoord over welke periode en hoeveel uur het gaat.',
           '- `propose_client` — nieuwe klant klaarzetten. Controleer eerst met `search_clients` of de klant al bestaat (voorkom dubbelen). Naam is verplicht; contactpersoon/e-mail/telefoon optioneel.',
           '- `propose_send_invoice` / `propose_send_quote` — ÉÉN BESTAANDE factuur/offerte per e-mail naar de klant versturen. Zoek het document eerst met `list_invoices`/`list_quotes` en gebruik het exacte id. Het gaat naar het e-mailadres van de gekoppelde klant — of, staat bij die klant e-facturatie aan, als e-factuur (UBL met de PDF erin) naar het e-factuuradres; benoem dat adres in je antwoord zodat de gebruiker het kan controleren vóór hij bevestigt. Staat bij de klant "via Mollie", dan geeft Mollie de factuur uit en verstuurt hem over Peppol, met een eigen Mollie-nummer en betalen via Mollie; dat kan alleen voor een factuur die nog niet verstuurd is.',
           '- `propose_send_invoices` / `propose_send_quotes` — MEERDERE facturen/offertes tegelijk. Gaat het om meer dan één document, gebruik dan ALTIJD deze en geef alle id\'s in één aanroep mee: de gebruiker krijgt dan één lijst waarin hij per regel een vinkje zet (of in één klik alles aan- of uitzet). Zet nooit meerdere losse voorstellen achter elkaar.',
@@ -1517,14 +1517,14 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'list_invoices',
-    description: 'Toon facturen, te filteren op status, klant, periode, bedrag, of ze verstuurd zijn en of ze te laat zijn.',
+    description: 'Toon facturen, te filteren op status, klant, periode, bedrag, of ze verstuurd zijn en of ze te laat zijn. `count`, `total_eur` en `open_eur` gaan over alle facturen die aan de vraag voldoen; `truncated` zegt of er meer zijn dan getoond. Een concept staat nooit open en is nooit te laat.',
     input_schema: {
       type: 'object',
       properties: {
         status: { type: 'string', enum: ['draft', 'sent', 'overdue', 'paid', 'cancelled', 'void', 'written_off', 'refunded'] },
         client_id: { type: 'string', description: 'Optioneel: filter op klant-id (uit search_clients).' },
         overdue_only: { type: 'boolean', description: 'Alleen facturen die te laat zijn (vervaldatum verstreken en nog niet betaald).' },
-        unpaid_only: { type: 'boolean', description: 'Alleen facturen die nog niet betaald zijn, ook als ze nog niet te laat zijn.' },
+        unpaid_only: { type: 'boolean', description: 'Alleen verstuurde facturen die nog niet (helemaal) betaald zijn, ook als ze nog niet te laat zijn. Concepten horen er niet bij.' },
         sent: { type: 'boolean', description: 'true = alleen verstuurde facturen; false = alleen facturen die nog NIET naar de klant zijn gemaild.' },
         from: { type: 'string', description: 'Vanaf factuurdatum YYYY-MM-DD.' },
         to: { type: 'string', description: 'Tot en met factuurdatum YYYY-MM-DD.' },
@@ -1555,7 +1555,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'get_financial_summary',
-    description: 'Geef een financieel overzicht over een periode: openstaand bedrag (debiteuren), te laat, gefactureerd en betaald. Gebruik dit voor vragen over omzet, openstaand saldo of cashflow.',
+    description: 'Geef een overzicht van de debiteuren over een periode: wat er openstaat en te laat is (verstuurde facturen, met deelbetalingen eraf), wat er is gefactureerd (met en zonder btw) en wat er is betaald. Gebruik dit voor openstaand saldo en cashflow. Voor de omzet of winst zoals Winst & verlies: gebruik de handeling `ledger.profit_and_loss` (via find_actions en run_action).',
     input_schema: {
       type: 'object',
       properties: {
@@ -1638,7 +1638,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'propose_invoice',
-    description: 'Zet een CONCEPTFACTUUR klaar voor de gebruiker. Je voert NIETS uit: het voorstel opent als vooringevuld factuurformulier dat de gebruiker zelf controleert en opslaat. Gebruik dit pas als je de juiste klant (via search_clients) én alle factuurregels weet. Vraag ontbrekende gegevens kort na in plaats van te gissen.',
+    description: 'Zet een CONCEPTFACTUUR klaar voor de gebruiker. Je voert NIETS uit: het voorstel opent als vooringevuld factuurformulier dat de gebruiker zelf controleert en opslaat. Gebruik dit pas als je de juiste klant (via search_clients) én alle factuurregels weet. Vraag ontbrekende gegevens kort na in plaats van te gissen. Bij 0% btw hoort bij elke regel een vat_code. Korting op het totaal van een factuur met meer btw-tarieven: één kortingsregel per tarief, naar rato van het bedrag excl. btw per tarief (anders klopt de btw niet).',
     input_schema: {
       type: 'object',
       properties: {
@@ -1653,11 +1653,12 @@ const TOOL_DEFINITIONS = [
               quantity: { type: 'number', description: 'Aantal (bijv. uren of stuks).' },
               unit_price: { type: 'number', description: "Prijs per stuk in euro's, EXCLUSIEF btw." },
               vat: { type: 'number', description: 'Btw-percentage (meestal 21, soms 9 of 0).' },
-              vat_code: { type: 'string', description: 'Optioneel: de btw-code van de regel (bijv. HOOG, LAAG, VERL_VERK, ICP_GOED, ICP_DIENST, EXPORT, VRIJ, KOR). Bij 0% hoort er altijd een code bij die zegt waarom.' },
+              vat_code: { type: 'string', description: 'De btw-code van de regel (bijv. HOOG, LAAG, VERL_VERK, ICP_GOED, ICP_DIENST, EXPORT, VRIJ, KOR, NUL). VERPLICHT bij 0%: de code zegt waarom er geen btw op staat (ICP_DIENST/ICP_GOED: ondernemer in een ander EU-land; EXPORT: goederen buiten de EU; VERL_VERK: verlegd; VRIJ: vrijgesteld; KOR; NUL: alleen het Nederlandse 0%-tarief of een dienst aan een ondernemer buiten de EU). Weet je het niet, vraag het dan.' },
             },
             required: ['description', 'quantity', 'unit_price', 'vat'],
           },
         },
+        project_id: { type: 'string', description: 'Optioneel: het exacte id van het project (uit list_projects) waar de factuur bij hoort, bijv. bij het factureren van uren op een project.' },
         due_date: { type: 'string', description: 'Optioneel: vervaldatum YYYY-MM-DD.' },
         notes: { type: 'string', description: 'Optionele opmerking op de factuur.' },
       },
@@ -1666,7 +1667,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'propose_quote',
-    description: 'Zet een CONCEPTOFFERTE klaar voor de gebruiker. Je voert NIETS uit: het voorstel opent als vooringevuld offerteformulier dat de gebruiker zelf controleert en opslaat. Gebruik dit pas als je de juiste klant (via search_clients) én de offerteregels weet.',
+    description: 'Zet een CONCEPTOFFERTE klaar voor de gebruiker. Je voert NIETS uit: het voorstel opent als vooringevuld offerteformulier dat de gebruiker zelf controleert en opslaat. Gebruik dit pas als je de juiste klant (via search_clients) én de offerteregels weet. Bij 0% btw hoort bij elke regel een vat_code. Korting op het totaal bij meer btw-tarieven: één kortingsregel per tarief, naar rato.',
     input_schema: {
       type: 'object',
       properties: {
@@ -1681,7 +1682,7 @@ const TOOL_DEFINITIONS = [
               quantity: { type: 'number', description: 'Aantal (bijv. uren of stuks).' },
               unit_price: { type: 'number', description: "Prijs per stuk in euro's, EXCLUSIEF btw." },
               vat: { type: 'number', description: 'Btw-percentage (meestal 21, soms 9 of 0).' },
-              vat_code: { type: 'string', description: 'Optioneel: de btw-code van de regel (bijv. HOOG, LAAG, VERL_VERK, ICP_GOED, ICP_DIENST, EXPORT, VRIJ, KOR). Bij 0% hoort er altijd een code bij die zegt waarom.' },
+              vat_code: { type: 'string', description: 'De btw-code van de regel (bijv. HOOG, LAAG, VERL_VERK, ICP_GOED, ICP_DIENST, EXPORT, VRIJ, KOR, NUL). VERPLICHT bij 0%: de code zegt waarom er geen btw op staat (ICP_DIENST/ICP_GOED: ondernemer in een ander EU-land; EXPORT: goederen buiten de EU; VERL_VERK: verlegd; VRIJ: vrijgesteld; KOR; NUL: alleen het Nederlandse 0%-tarief of een dienst aan een ondernemer buiten de EU). Weet je het niet, vraag het dan.' },
             },
             required: ['description', 'quantity', 'unit_price', 'vat'],
           },
@@ -2081,7 +2082,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'list_time_entries',
-    description: 'Bekijk geregistreerde uren. Filter op periode (from/to, YYYY-MM-DD), project of klant, en optioneel alleen declarabele uren. Geeft per registratie datum, duur, omschrijving en waar hij op geboekt staat, plus het totaal. Gebruik dit vóór `propose_edit_time_entry` om het exacte id te vinden.',
+    description: 'Bekijk geregistreerde uren. Filter op periode (from/to, YYYY-MM-DD), project of klant, en optioneel alleen declarabele uren. Geeft per registratie datum, duur, omschrijving, uurtarief en waarde, en waar hij op geboekt staat, plus de totalen over de HELE selectie (ook als niet alle registraties getoond worden). Factureer uren op `billable_minutes` en `billable_value_cents`, niet op de getoonde regels. Gebruik dit vóór `propose_edit_time_entry` om het exacte id te vinden.',
     input_schema: {
       type: 'object',
       properties: {
@@ -2090,6 +2091,7 @@ const TOOL_DEFINITIONS = [
         project_id: { type: 'string', description: 'Alleen uren op dit project (uit list_projects).' },
         client_id: { type: 'string', description: 'Alleen uren op deze klant (uit search_clients).' },
         billable_only: { type: 'boolean', description: 'Alleen declarabele uren.' },
+        limit: { type: 'integer', description: 'Hoeveel registraties je wilt zien (standaard 25, max 100). De totalen (total_minutes, billable_minutes, billable_value_cents) gaan altijd over de hele selectie; `truncated` zegt of er meer registraties zijn dan getoond.' },
       },
     },
   },
@@ -3008,7 +3010,7 @@ async function runTool(ctx: GerrieContext, name: string, input: Record<string, u
     case 'list_invoices': return listInvoices(orgId, input, limit);
     case 'list_quotes': return listQuotes(orgId, input, limit);
     case 'get_financial_summary': return getFinancialSummary(ctx, input);
-    case 'list_projects': return listProjects(orgId, input, limit);
+    case 'list_projects': return listProjects(orgId, input, limit, moduleLevel(ctx, 'finance') !== 'none');
     case 'list_tickets': return listTickets(orgId, input, limit, ctx.userId);
     case 'list_time_entries': return listTimeEntries(ctx, input, limit);
     case 'list_contracts': return listContracts(orgId, input, limit);
@@ -4391,9 +4393,20 @@ function parseProposalLines(input: Record<string, unknown>): { ok: true; lines: 
     const quantity = num(raw.quantity);
     if (!(quantity > 0)) return { ok: false, error: `Ongeldig aantal voor "${description}".` };
     const code = typeof raw.vat_code === 'string' ? raw.vat_code.trim().toUpperCase() : '';
+    const validCode = /^[A-Z0-9_]{1,32}$/.test(code);
+    const vat = raw.vat == null ? 21 : num(raw.vat);
+    const unitPrice = num(raw.unit_price);
+    // 0% zonder code zegt niet waarom er geen btw op staat. Zo'n regel kwam
+    // als "BTW 0%" in het formulier zonder dat er een code werd opgeslagen, en
+    // de factuur ging de deur uit zonder vermelding, in rubriek 1e en buiten
+    // de ICP-opgaaf (controle van 22 november 2026). Een regel van € 0 (tekst)
+    // mag zonder.
+    if (vat === 0 && !validCode && unitPrice !== 0) {
+      return { ok: false, error: `Regel "${description}" heeft 0% btw: geef in vat_code de reden (ICP_DIENST of ICP_GOED voor een ondernemer in een ander EU-land, EXPORT voor goederen buiten de EU, VERL_VERK, VRIJ, KOR, of NUL voor het Nederlandse 0%-tarief of een dienst aan een ondernemer buiten de EU). Weet je het niet, vraag het de gebruiker.` };
+    }
     lines.push({
-      description: description.slice(0, 500), quantity, unit_price: num(raw.unit_price), vat: raw.vat == null ? 21 : num(raw.vat),
-      ...(/^[A-Z0-9_]{1,32}$/.test(code) ? { vat_code: code } : {}),
+      description: description.slice(0, 500), quantity, unit_price: unitPrice, vat,
+      ...(validCode ? { vat_code: code } : {}),
     });
   }
   return { ok: true, lines };
@@ -4404,10 +4417,24 @@ async function buildInvoiceProposal(ctx: GerrieContext, input: Record<string, un
   if (!client.ok) return client;
   const parsed = parseProposalLines(input);
   if (!parsed.ok) return parsed;
+  // Een factuur voor uren op een project hoort bij dat project; zonder project
+  // toonde de projectpagina "Gefactureerd —" en geen effectief uurtarief.
+  let project: { id: string; name: string } | null = null;
+  const rawProject = String(input.project_id ?? '').trim();
+  if (rawProject) {
+    if (!isUuid(rawProject)) return { ok: false, error: 'Ongeldig project_id. Zoek het project eerst met list_projects en gebruik het exacte id.' };
+    const { data, error } = await supabaseAdmin.from('projects')
+      .select('id, name, client_id').eq('organization_id', ctx.organizationId).eq('id', rawProject).maybeSingle();
+    if (error) return { ok: false, error: `Project ophalen mislukt: ${error.message}` };
+    if (!data) return { ok: false, error: 'Project niet gevonden in deze organisatie.' };
+    if (data.client_id && String(data.client_id) !== client.id) return { ok: false, error: 'Dit project hoort bij een andere klant dan de factuur.' };
+    project = { id: rawProject, name: String(data.name) };
+  }
   return {
     ok: true,
     proposal: {
-      type: 'invoice', client_id: client.id, client_name: client.name, lines: parsed.lines,
+      type: 'invoice', client_id: client.id, client_name: client.name,
+      project_id: project?.id ?? null, project_name: project?.name ?? null, lines: parsed.lines,
       notes: input.notes ? String(input.notes).slice(0, 2000) : null,
       due_date: isoDate(input.due_date), total_eur: round2(lineTotal(parsed.lines)),
     },
@@ -4551,22 +4578,85 @@ function holderLabel(names: Map<string, string>, userId: unknown): string | null
   return names.get(String(userId)) ?? 'oud-teamlid';
 }
 
+/**
+ * Alle rijen van een query, in pagina's van duizend (PostgREST geeft er per
+ * vraag hooguit duizend: `max_rows`). Eerder vroegen de lees-tools één keer met
+ * een limiet en filterden daarna in JavaScript: "welke facturen staan open?"
+ * zag zo alleen de 25 nieuwste, en een oudere onbetaalde factuur bestond voor
+ * Gerrie niet. `build` maakt per pagina een verse query, met een vaste
+ * volgorde, anders schuiven rijen tussen de pagina's.
+ */
+// deno-lint-ignore no-explicit-any
+async function fetchAllRows(build: () => any, max = 20000): Promise<{ rows: Record<string, unknown>[]; truncated: boolean }> {
+  const PAGE = 1000;
+  const rows: Record<string, unknown>[] = [];
+  for (let offset = 0; offset < max; offset += PAGE) {
+    const { data, error } = await build().range(offset, Math.min(offset + PAGE, max) - 1);
+    if (error) throw new Error(error.message);
+    const page = (data ?? []) as Record<string, unknown>[];
+    rows.push(...page);
+    if (page.length < PAGE) return { rows, truncated: false };
+  }
+  return { rows, truncated: true };
+}
+
+/**
+ * Een factuur staat open als hij de deur uit is en nog niet is afgehandeld. Een
+ * concept staat níet open: dat telde eerder mee als openstaand én te laat,
+ * terwijl het dashboard sinds 19 november (D1) alleen verstuurde facturen telt.
+ */
+function invoiceIsOpen(r: Record<string, unknown>): boolean {
+  return !['draft', 'paid', 'cancelled', 'void', 'written_off', 'refunded'].includes(String(r.status));
+}
+/** Dezelfde regel als `invoiceIsOverdue` in de app (lib/stroom.ts). */
+function invoiceIsLate(r: Record<string, unknown>, today: string): boolean {
+  if (!invoiceIsOpen(r)) return false;
+  if (String(r.status) === 'overdue') return true;
+  return !!r.due_date && String(r.due_date).slice(0, 10) < today;
+}
+
+/**
+ * Wat er per factuur nog openstaat volgens het grootboek (`report_open_items`:
+ * geboekt − betaald − gecrediteerd). Het factuurbedrag zelf trekt een
+ * deelbetaling of deelcreditnota niet af: Gerrie zei € 1.210 open bij een
+ * factuur waarvan € 400 betaald was. Een factuur die niet in het grootboek
+ * staat (verstuurd vóór de start van de boekhouding), staat er niet in; daar
+ * geldt het factuurbedrag.
+ */
+async function openCentsByInvoice(orgId: string): Promise<Map<string, number> | null> {
+  const { data, error } = await supabaseAdmin.rpc('report_open_items', { p_organization_id: orgId, p_as_of: todayIso() });
+  if (error) return null;
+  const rows = ((data as { receivables?: { rows?: Array<Record<string, unknown>> } } | null)?.receivables?.rows ?? []);
+  const map = new Map<string, number>();
+  for (const r of rows) map.set(String(r.invoice_id), Number(r.open_cents ?? 0));
+  return map;
+}
+function openEurOf(r: Record<string, unknown>, openCents: Map<string, number> | null): number {
+  if (!invoiceIsOpen(r)) return 0;
+  if (openCents && r.journal_entry_id) return round2((openCents.get(String(r.id)) ?? 0) / 100);
+  return invoiceTotal(r);
+}
+
 async function listInvoices(orgId: string, input: Record<string, unknown>, limit: number) {
-  let query = orgTable('invoices', orgId).order('date', { ascending: false }).limit(limit);
-  if (input.status) query = query.eq('status', String(input.status));
-  if (input.client_id) query = query.eq('client_id', idFilter(input, 'client_id'));
   const from = isoDate(input.from);
   const to = isoDate(input.to);
-  if (from) query = query.gte('date', from);
-  if (to) query = query.lte('date', to);
-  const { data, error } = await query;
-  if (error) throw new Error(error.message);
+  const build = () => {
+    let query = orgTable('invoices', orgId).order('date', { ascending: false }).order('id', { ascending: true });
+    if (input.status) query = query.eq('status', String(input.status));
+    if (input.client_id) query = query.eq('client_id', idFilter(input, 'client_id'));
+    if (from) query = query.gte('date', from);
+    if (to) query = query.lte('date', to);
+    if (input.overdue_only === true || input.unpaid_only === true) {
+      query = query.not('status', 'in', '(draft,paid,cancelled,void,written_off,refunded)');
+    }
+    return query;
+  };
+  // Eerst alles wat aan de filters voldoet, dán pas afkappen (zie fetchAllRows).
+  const { rows: all, truncated: scanTruncated } = await fetchAllRows(build, 5000);
   const today = todayIso();
-  let rows = (data ?? []) as Record<string, unknown>[];
-
-  const openStatuses = (r: Record<string, unknown>) => !['paid', 'cancelled', 'void', 'written_off', 'refunded'].includes(String(r.status));
-  if (input.overdue_only) rows = rows.filter((r) => openStatuses(r) && r.due_date && String(r.due_date) < today);
-  if (input.unpaid_only === true) rows = rows.filter(openStatuses);
+  let rows = all;
+  if (input.overdue_only === true) rows = rows.filter((r) => invoiceIsLate(r, today));
+  if (input.unpaid_only === true) rows = rows.filter(invoiceIsOpen);
   // `sent_at` is de enige harde maatstaf voor "is hij de deur uit"; de status kan
   // ook op 'overdue' staan zonder dat er ooit iets gemaild is.
   if (typeof input.sent === 'boolean') rows = rows.filter((r) => Boolean(r.sent_at) === input.sent);
@@ -4575,31 +4665,44 @@ async function listInvoices(orgId: string, input: Record<string, unknown>, limit
   if (min !== null) rows = rows.filter((r) => invoiceTotal(r) >= min);
   if (max !== null) rows = rows.filter((r) => invoiceTotal(r) <= max);
 
+  const openCents = rows.some(invoiceIsOpen) ? await openCentsByInvoice(orgId) : null;
+  const shown = rows.slice(0, limit);
   return {
     count: rows.length,
+    shown: shown.length,
+    truncated: scanTruncated || rows.length > shown.length,
     total_eur: round2(rows.reduce((sum, r) => sum + invoiceTotal(r), 0)),
-    invoices: rows.map((r) => ({
+    open_eur: round2(rows.reduce((sum, r) => sum + openEurOf(r, openCents), 0)),
+    note: rows.length > shown.length
+      ? `Er zijn ${rows.length} facturen die aan de vraag voldoen; hier staan de ${shown.length} nieuwste. count, total_eur en open_eur gaan over alle ${rows.length}.`
+      : undefined,
+    invoices: shown.map((r) => ({
       id: r.id, number: r.number, status: r.status, date: r.date, due_date: r.due_date,
-      total_eur: invoiceTotal(r), client_id: r.client_id, paid_at: r.paid_at,
+      total_eur: invoiceTotal(r), open_eur: openEurOf(r, openCents), client_id: r.client_id,
+      project_id: r.project_id ?? null, paid_at: r.paid_at,
       sent_at: r.sent_at, is_sent: Boolean(r.sent_at),
-      is_overdue: openStatuses(r) && !!r.due_date && String(r.due_date) < today,
+      is_overdue: invoiceIsLate(r, today),
     })),
   };
 }
 
 async function listQuotes(orgId: string, input: Record<string, unknown>, limit: number) {
-  let query = orgTable('quotes', orgId).order('date', { ascending: false }).limit(limit);
-  if (input.status) query = query.eq('status', String(input.status));
-  if (input.client_id) query = query.eq('client_id', idFilter(input, 'client_id'));
   const from = isoDate(input.from);
   const to = isoDate(input.to);
-  if (from) query = query.gte('date', from);
-  if (to) query = query.lte('date', to);
-  const { data, error } = await query;
-  if (error) throw new Error(error.message);
+  const build = () => {
+    let query = orgTable('quotes', orgId).order('date', { ascending: false }).order('id', { ascending: true });
+    if (input.status) query = query.eq('status', String(input.status));
+    if (input.client_id) query = query.eq('client_id', idFilter(input, 'client_id'));
+    if (from) query = query.gte('date', from);
+    if (to) query = query.lte('date', to);
+    return query;
+  };
+  // Net als bij facturen: eerst filteren, dan afkappen. Met de limiet vooraf
+  // viel een oudere offerte die nog op antwoord wacht weg achter 25 nieuwere.
+  const { rows: all, truncated: scanTruncated } = await fetchAllRows(build, 5000);
 
   const today = todayIso();
-  let rows = (data ?? []) as Record<string, unknown>[];
+  let rows = all;
   if (typeof input.sent === 'boolean') rows = rows.filter((r) => Boolean(r.sent_at) === input.sent);
   if (input.awaiting_response_only === true) {
     rows = rows.filter((r) => Boolean(r.sent_at) && !r.accepted_at && !['accepted', 'rejected', 'cancelled', 'expired'].includes(String(r.status)));
@@ -4612,10 +4715,16 @@ async function listQuotes(orgId: string, input: Record<string, unknown>, limit: 
   if (min !== null) rows = rows.filter((r) => lineTotal(r.lines) >= min);
   if (max !== null) rows = rows.filter((r) => lineTotal(r.lines) <= max);
 
+  const shown = rows.slice(0, limit);
   return {
     count: rows.length,
+    shown: shown.length,
+    truncated: scanTruncated || rows.length > shown.length,
     total_eur: round2(rows.reduce((sum, r) => sum + lineTotal(r.lines), 0)),
-    quotes: rows.map((r) => ({
+    note: rows.length > shown.length
+      ? `Er zijn ${rows.length} offertes die aan de vraag voldoen; hier staan de ${shown.length} nieuwste. count en total_eur gaan over alle ${rows.length}.`
+      : undefined,
+    quotes: shown.map((r) => ({
       id: r.id, number: r.number, status: r.status, date: r.date, valid_until: r.valid_until,
       total_eur: round2(lineTotal(r.lines)), client_id: r.client_id, accepted_at: r.accepted_at,
       sent_at: r.sent_at, is_sent: Boolean(r.sent_at),
@@ -4624,39 +4733,64 @@ async function listQuotes(orgId: string, input: Record<string, unknown>, limit: 
   };
 }
 
+/** Het bedrag zonder btw, zoals het in de omzet komt. */
+function invoiceSubtotal(row: Record<string, unknown>): number {
+  if (typeof row.subtotal_amount === 'number' && typeof row.total_amount === 'number' && row.total_amount > 0) return round2(row.subtotal_amount);
+  const list = Array.isArray(row.lines) ? (row.lines as Line[]) : [];
+  return list.reduce((sum, l) => sum + toCents(num(l.quantity) * num(l.unit_price)), 0) / 100;
+}
+
+/**
+ * Debiteuren en gefactureerd over een periode.
+ *
+ * Wat er eerder misging (controle 22 november): een concept telde als
+ * openstaand én te laat, een deelbetaling ging er niet af (€ 1.815 "open"
+ * tegenover € 810 in het grootboek), en "gefactureerd" was inclusief btw en
+ * concepten, terwijl de omschrijving het model hierheen stuurde voor "omzet".
+ * Nu: alleen verstuurde facturen, het openstaande bedrag uit het grootboek, en
+ * de omzet zonder btw ernaast. Voor de omzet en winst zoals Winst & verlies is
+ * er `ledger.profit_and_loss`.
+ */
 async function getFinancialSummary(ctx: GerrieContext, input: Record<string, unknown>) {
   const orgId = ctx.organizationId;
   const from = isoDate(input.from) || `${ctx.today.slice(0, 4)}-01-01`;
   const to = isoDate(input.to) || ctx.today;
-  const { data, error } = await orgTable('invoices', orgId);
-  if (error) throw new Error(error.message);
-  const rows = (data ?? []) as Record<string, unknown>[];
+  const { rows, truncated } = await fetchAllRows(() => orgTable('invoices', orgId).order('id', { ascending: true }));
   const today = todayIso();
+  const openCents = await openCentsByInvoice(orgId);
 
-  let outstanding = 0, overdue = 0, invoicedInPeriod = 0, paidInPeriod = 0;
-  let outstandingCount = 0, overdueCount = 0;
+  let outstanding = 0, overdue = 0, invoicedInPeriod = 0, invoicedExclVat = 0, paidInPeriod = 0;
+  let outstandingCount = 0, overdueCount = 0, draftsInPeriod = 0;
   for (const r of rows) {
     const status = String(r.status);
-    const total = invoiceTotal(r);
-    const open = !['paid', 'cancelled', 'void', 'written_off', 'refunded'].includes(status);
-    if (open) { outstanding += total; outstandingCount += 1; }
-    if (open && r.due_date && String(r.due_date) < today) { overdue += total; overdueCount += 1; }
+    const open = invoiceIsOpen(r);
+    const openEur = openEurOf(r, openCents);
+    if (open && openEur !== 0) { outstanding += openEur; outstandingCount += 1; }
+    if (open && openEur !== 0 && invoiceIsLate(r, today)) { overdue += openEur; overdueCount += 1; }
     const date = String(r.date || '');
-    if (date >= from && date <= to && status !== 'cancelled' && status !== 'void') invoicedInPeriod += total;
+    const inPeriod = date >= from && date <= to;
+    if (inPeriod && status === 'draft') draftsInPeriod += 1;
+    if (inPeriod && !['draft', 'cancelled', 'void'].includes(status)) {
+      invoicedInPeriod += invoiceTotal(r);
+      invoicedExclVat += invoiceSubtotal(r);
+    }
     const paidAt = r.paid_at ? String(r.paid_at).slice(0, 10) : '';
-    if (paidAt && paidAt >= from && paidAt <= to) paidInPeriod += total;
+    if (paidAt && paidAt >= from && paidAt <= to) paidInPeriod += invoiceTotal(r);
   }
   return {
     period: { from, to },
     outstanding_eur: round2(outstanding), outstanding_count: outstandingCount,
     overdue_eur: round2(overdue), overdue_count: overdueCount,
     invoiced_in_period_eur: round2(invoicedInPeriod),
+    invoiced_in_period_excl_vat_eur: round2(invoicedExclVat),
     paid_in_period_eur: round2(paidInPeriod),
-    note: 'Bedragen zijn inclusief btw, berekend uit de facturen. Dit is geen volledige grootboek-W&V.',
+    drafts_in_period: draftsInPeriod,
+    truncated,
+    note: 'Openstaand en te laat: verstuurde facturen, met wat er volgens het grootboek nog openstaat (een deelbetaling of deelcreditnota is eraf). Gefactureerd: verstuurde facturen met een factuurdatum in de periode, met en zonder btw; concepten tellen nergens mee, creditnota\'s gaan er niet af. Voor de omzet en de winst zoals Winst & verlies ze tonen: `ledger.profit_and_loss`.',
   };
 }
 
-async function listProjects(orgId: string, input: Record<string, unknown>, limit: number) {
+async function listProjects(orgId: string, input: Record<string, unknown>, limit: number, seeMoney: boolean) {
   let query = orgTable('projects', orgId).order('created_at', { ascending: false }).limit(limit);
   if (input.client_id) query = query.eq('client_id', idFilter(input, 'client_id'));
   if (!input.include_archived) query = query.eq('archived', false);
@@ -4666,6 +4800,10 @@ async function listProjects(orgId: string, input: Record<string, unknown>, limit
     count: data?.length ?? 0,
     projects: (data ?? []).map((r: Record<string, unknown>) => ({
       id: r.id, name: r.name, client_id: r.client_id, archived: r.archived, start_date: r.start_date, end_date: r.end_date,
+      // Het tarief hoort bij Financiën (zoals in `project.dashboard`). Zonder
+      // tarief rekende Gerrie bij "uren factureren" met een gok.
+      billing_type: r.billing_type ?? null,
+      hourly_rate_cents: seeMoney ? (r.hourly_rate_cents ?? null) : null,
     })),
   };
 }
@@ -4739,29 +4877,49 @@ async function listTickets(orgId: string, input: Record<string, unknown>, limit:
  * met leesrecht op de urenmodule, en die ziet in de app ook de uren van het team.
  */
 async function listTimeEntries(ctx: GerrieContext, input: Record<string, unknown>, limit: number) {
-  let query = orgTable('time_entries', ctx.organizationId).order('entry_date', { ascending: false }).limit(limit);
   const from = isoDate(input.from);
   const to = isoDate(input.to);
-  if (from) query = query.gte('entry_date', from);
-  if (to) query = query.lte('entry_date', to);
-  if (input.project_id) query = query.eq('project_id', idFilter(input, 'project_id'));
-  if (input.client_id) query = query.eq('client_id', idFilter(input, 'client_id'));
-  if (input.billable_only === true) query = query.eq('billable', true);
-  const { data, error } = await query;
-  if (error) throw new Error(error.message);
-
-  const rows = (data ?? []) as Array<Record<string, unknown>>;
-  const names = await namesFor(ctx.organizationId, rows);
+  const build = () => {
+    let query = orgTable('time_entries', ctx.organizationId).order('entry_date', { ascending: false }).order('id', { ascending: true });
+    if (from) query = query.gte('entry_date', from);
+    if (to) query = query.lte('entry_date', to);
+    if (input.project_id) query = query.eq('project_id', idFilter(input, 'project_id'));
+    if (input.client_id) query = query.eq('client_id', idFilter(input, 'client_id'));
+    if (input.billable_only === true) query = query.eq('billable', true);
+    return query;
+  };
+  // De totalen gaan over de hele periode, niet over de regels die hier
+  // passen. Eerder telde Gerrie bij "uren factureren" alleen de 25 nieuwste
+  // registraties: 27,5 van de 121 uur, € 7.947,50 te weinig op de factuur.
+  const { rows, truncated: scanTruncated } = await fetchAllRows(build);
+  const shown = rows.slice(0, limit);
+  // Tarief en waarde horen bij Financiën, net als in `project.dashboard`.
+  const seeMoney = moduleLevel(ctx, 'finance') !== 'none';
+  // Dezelfde rekenregel als `timeEntryValueCents` in de app: niet declarabel
+  // of geen tarief = geen waarde.
+  const valueCents = (r: Record<string, unknown>) => (
+    r.billable && r.hourly_rate_cents ? Math.round((Number(r.minutes || 0) / 60) * Number(r.hourly_rate_cents)) : 0
+  );
+  const names = await namesFor(ctx.organizationId, shown);
   return {
     count: rows.length,
+    shown: shown.length,
+    truncated: scanTruncated || rows.length > shown.length,
     total_minutes: rows.reduce((sum, r) => sum + Number(r.minutes || 0), 0),
     billable_minutes: rows.reduce((sum, r) => sum + (r.billable ? Number(r.minutes || 0) : 0), 0),
-    entries: rows.map((r) => ({
+    billable_value_cents: seeMoney ? rows.reduce((sum, r) => sum + valueCents(r), 0) : null,
+    entries_without_rate: rows.filter((r) => r.billable && !r.hourly_rate_cents).length,
+    note: rows.length > shown.length
+      ? `Er zijn ${rows.length} registraties in deze selectie; hier staan de ${shown.length} nieuwste. De totalen gaan over alle ${rows.length}. Factureer op de totalen, of vraag met een hogere limit of een kortere periode.`
+      : undefined,
+    entries: shown.map((r) => ({
       id: r.id,
       date: r.entry_date,
       minutes: Number(r.minutes || 0),
       description: r.description,
       billable: r.billable === true,
+      hourly_rate_cents: seeMoney ? (r.hourly_rate_cents ?? null) : null,
+      value_cents: seeMoney ? valueCents(r) : null,
       project_id: r.project_id,
       project_name: r.project_id ? names.projects.get(String(r.project_id)) ?? null : null,
       client_id: r.client_id,

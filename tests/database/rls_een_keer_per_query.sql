@@ -434,8 +434,12 @@ begin
   end loop;
   perform set_config('search_path', v_pad, true);
   raise notice 'ok: % leespolicies teruggezet naar de oude vorm', v_n;
-  if v_n <> 290 then
-    raise exception 'MISLUKT: % leespolicies teruggezet, verwacht 290 (289 en de poort op attachments)', v_n;
+  -- Minstens, niet precies: een nieuwe tabel krijgt volgens regel 5 van
+  -- supabase/migrations/README.md zijn leespolicy meteen in de snelle vorm, en
+  -- telt hier dan mee. Met "precies 290" faalde deze test op de eerste nieuwe
+  -- tabellen daarna (time_entry_invoices en sent_e_invoices, 23 november).
+  if v_n < 290 then
+    raise exception 'MISLUKT: % leespolicies teruggezet, verwacht minstens 290 (289 uit 20261122200000, de poort op attachments, en die van latere tabellen)', v_n;
   end if;
 end $$;
 

@@ -138,6 +138,12 @@ const CASES: Array<[string, string]> = [
   ['notitie verwijderen', 'note.delete'],
   ['map verwijderen', 'folder.delete'],
   ['urenregistratie verwijderen', 'time_entry.delete'],
+  // Uren factureren (november 2026): Gerrie telde zelf uren op uit een lijst
+  // die op 25 registraties was afgekapt.
+  ['uren factureren', 'invoice.from_time_entries'],
+  ['factureer de uren van oktober', 'invoice.from_time_entries'],
+  ['wat moet ik nog factureren', 'time.uninvoiced'],
+  ['openstaande facturen', 'ledger.open_items'],
   ['ticket verwijderen', 'ticket.delete'],
   ['contactpersoon verwijderen', 'client_contact.delete'],
 ];
