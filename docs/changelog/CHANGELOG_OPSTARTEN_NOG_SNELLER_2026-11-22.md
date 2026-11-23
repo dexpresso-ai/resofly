@@ -196,7 +196,13 @@ laadde hij in de test wél. Gemeten op het dashboard (telefoon, donker):
 
 De lay-out zelf is dus niet veranderd. `tests/mobile/mock/backend.mjs`
 blokkeert nu ook `/fonts/web/**`, zodat de test meet zoals hij altijd deed.
-De grens heb ik niet verruimd.
+
+Intussen had een andere sessie dezelfde 287 px gezien en de grens naar 290 px
+gezet (`acf1291`), met als verklaring het trendlabel in de omzettegel ("778%"),
+dat sinds maandag zou verschijnen. Dat label stond er zondag 22 november al
+(in de meting hierboven), en op maandag gaf de samengevoegde code met de
+letters geblokkeerd 273 px, ook op tablet en liggend. De grens staat dus weer
+op 280 px, met die uitleg in `tests/mobile/run.mjs`.
 
 ## Nog open
 
