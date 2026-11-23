@@ -211,4 +211,48 @@ als al toegepast overgeslagen. Onze elf migraties heten daarom
 
 ## Uitrol
 
-<!-- UITROL -->
+**Staging: uitgerold op 23 november 2026** (merge `0d519f8`, *Deploy Supabase
+(staging)* run 254):
+
+- de elf migraties `20261123090000` t/m `20261123142000` zijn toegepast, na
+  `20261122200000_rls_een_keer_per_query`;
+- alle 40 edge functions zijn uitgerold (o.a. `invoice-workflow`, `bank-sync`,
+  `api`, `mcp`, de handelingen van Gerrie);
+- de rooktest is geslaagd, ook "boekhouder-hek: elke organisatietabel is
+  afgeschermd" (dus ook `time_entry_invoices` en `sent_e_invoices`) en "anon
+  heeft geen rechten in public";
+- Cloudflare Pages bouwt de app bij de push naar `staging`; dat is van hieruit
+  niet te zien.
+
+Wat de migraties met bestaande gegevens op staging doen:
+
+- `20261123130000` zet drie lege kolommen op `bank_transactions`,
+  `20261123133000` één kolom op `organization_members` (standaard uit),
+  `20261123100000` twee lege kolommen op `bank_accounts`; `20261123110000` en
+  `20261123132000` maken twee lege tabellen. Geen bestaande rij verandert.
+- `20261123141000` geeft een IB-onderneming die alleen een boekjaar 2025 heeft
+  en al boekingen in 2026, het boekjaar 2026 (de trigger had dat bij de eerste
+  boeking gedaan). BV's en organisaties zonder boekjaren krijgen niets.
+- `20261123142000` zet de wettelijke rente per 1 juli 2026 (4%) in de tabel.
+- Verder vervangen ze functies en triggers: nieuwe boekingen, verzendingen en
+  overzichten volgen de nieuwe regels; bestaande boekingen, aangiftes en
+  verstuurde facturen blijven zoals ze zijn. Van e-facturen die al verstuurd
+  waren, is het origineel niet terug te halen.
+
+De staging-database zelf is niet ingezien (geen Supabase-koppeling vanuit deze
+sessie); de controle is de uitrol (de CLI breekt af bij een fout in een
+migratie), de rooktest, en dezelfde migraties op een lege en een gevulde
+lokale database.
+
+*Frontend checks* run 277 op dezelfde merge: alles groen. De migraties vanaf
+nul en de databasetests, de edge functions (deno), typecheck, unittests, de
+mobiele lay-outtest in licht en donker, laden per module, de inrichtingsstappen
+en de terugknop. (Run 276, de merge van staging ervóór, was rood op de
+mobiele test van het dashboard; zie "Schermtests".)
+
+**Let op, vanaf 15 januari 2027:** `dunning.test.ts` faalt tot de wettelijke
+rente en de handelsrente per 1 januari 2027 in een migratie staan (fix 41).
+Dat is bewust: zonder die tarieven rekent een aanmaning met een oud tarief.
+
+Voor productie: dezelfde elf migraties, in volgorde, na die van 22 november.
+Ze zijn veilig om opnieuw te draaien.
