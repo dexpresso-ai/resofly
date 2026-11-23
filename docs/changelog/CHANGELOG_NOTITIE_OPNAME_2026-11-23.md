@@ -77,8 +77,8 @@ Een opname bij een notitie valt onder **Inhoud**, niet onder Agenda.
   zonder Inhoud, zonder Agenda, een andere organisatie), de check op één
   eigenaar, een notitie van een andere organisatie, een lid dat zelf een rij
   probeert te schrijven, en de cascade bij het wissen.
-- `npm run test:mobile -- --theme=both`, `npm run test:loading` en
-  `npm run test:terugknop`.
+- `npm run test:mobile -- --theme=both` (890 pagina's, 0 met problemen),
+  `npm run test:loading` en `npm run test:terugknop` (15/15).
 - Met de hand in Chromium (nagebootste backend): een nieuwe notitie met de
   recorder en de toestemmingsvraag; een bestaande notitie met een afgeronde
   opname, waar **Notulen in de notitie** de notulen onder de tekst zet. Geen

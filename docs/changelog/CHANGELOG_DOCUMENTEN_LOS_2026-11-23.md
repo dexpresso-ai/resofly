@@ -66,8 +66,9 @@ venster, net als in de andere apps.
   `standaloneApps.test.ts`: de app Documenten bevat precies de pagina's van
   Inhoud, opent op de verkenner, ontbreekt zonder Inhoud, en het kruimelpad
   begint bij de app.
-- `npm run test:mobile -- --theme=both`: met de nieuwe pagina `app-documenten`
-  op telefoon, tablet, liggend en laptop.
+- `npm run test:mobile -- --theme=both`: 890 pagina's gemeten, 0 met
+  problemen, met de nieuwe pagina `app-documenten` op telefoon, tablet en
+  liggend, licht en donker.
 - `npm run test:loading` en `npm run test:terugknop`: alles geslaagd.
 - Met de hand in Chromium (nagebootste backend): de rail met het paneel
   Documenten in Baken, de zijbalk in Cockpit, de app op een telefoon met de
