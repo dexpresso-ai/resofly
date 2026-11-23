@@ -148,18 +148,43 @@ Ernst: **hoog** (stil foute cijfers of een doodlopende weg), **midden**,
 ## Verificatie
 
 - **De keten vanaf nul**: alle migraties op een lege database (een tweede,
-  losse stack), daarna de veertien nieuwe nog eens: schoon.
-  `npm run test:database` op die database: alle vijf bestanden geslaagd.
+  losse stack), daarna de elf nieuwe nog eens: schoon. `npm run test:database`
+  op die database: alle zes bestanden geslaagd, ook `rls_een_keer_per_query`
+  van staging (zie "Samenvoegen met staging").
 - **Lokaal** op de samengevoegde branch: `npm run typecheck` schoon,
-  `npm test` <!-- UNITTESTS -->.
-- **Stromentests**: <!-- STROMEN -->
+  `npm test` 2218/2218.
+- **Stromentests**: de volledige suite op een vanaf nul opgebouwde stack:
+  1439 stappen, 0 fout (alle scenario's, ook de vof-scenario's van staging en
+  de vier nieuwe). Een eerdere run gaf vijf fouten in `herinneringen` omdat hij
+  tussen 0:00 en 1:00 Nederlandse tijd liep (de test rekent in UTC, de code
+  sinds fix 44 met de Nederlandse dag); daarna opnieuw: 66/66.
 - **Schermtests**: <!-- SCHERM -->
-- **Deno-check**: <!-- DENO -->
+- **Deno-check** (met een importmap naar npm; esm.sh is hier geblokkeerd): de
+  37 functies uit de CI-lijst schoon; `invoice-workflow`, `quote-workflow`,
+  `invoice-public` en `bank-sync` houden hun bekende meldingen (11, 9, 4 en 1,
+  zoals vóór deze controle).
 - **Naspelen**: de vragen uit de controle opnieuw tegen de lokale stack via de
   API (oktober: 121 uur / € 10.285, te laat € 810, urencriterium 1.270,5 uur
   gehaald), de auditfile van de controle-eenmanszaak opnieuw tegen het XSD
   (2025 en 2026, eigenaar en boekhouder: geldig), de e-facturen opnieuw tegen
   de regels, de bankbestanden uit de controle opnieuw ingelezen.
+
+## Samenvoegen met staging
+
+Staging kreeg op 22 november ook `20261122100000_vof_verdeling_per_boekjaar`,
+`20261122110000_vof_bank_inkoop_prive` en `20261122200000_rls_een_keer_per_query`.
+Twee van onze migraties hadden hetzelfde versienummer; `supabase db push` had ze
+als al toegepast overgeslagen. Onze elf migraties heten daarom
+`20261123090000` t/m `20261123142000`, in dezelfde volgorde. Verder:
+
+- `close_fiscal_year` (fix 44) start van de vof-versie van staging, met alleen
+  de Nederlandse datum erbij; de oudere basis had de verdeling per boekjaar
+  weer weggehaald. Geen andere functie wordt door beide kanten vervangen.
+- De leespolicies van `time_entry_invoices` en `sent_e_invoices` zoeken de
+  rechten één keer per query op (regel 5 in `supabase/migrations/README.md`).
+  `tests/database/rls_een_keer_per_query.sql` telde precies 290 omgezette
+  leespolicies; dat is nu "minstens 290", anders breekt elke nieuwe tabel in de
+  goede vorm de test.
 
 ## Bewust open
 
