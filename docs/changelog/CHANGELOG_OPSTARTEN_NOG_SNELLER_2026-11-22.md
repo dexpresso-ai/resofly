@@ -204,6 +204,22 @@ dat sinds maandag zou verschijnen. Dat label stond er zondag 22 november al
 letters geblokkeerd 273 px, ook op tablet en liggend. De grens staat dus weer
 op 280 px, met die uitleg in `tests/mobile/run.mjs`.
 
+## Uitrol op staging
+
+- **23 november, 00:41 (`92dc1a9`):** *Deploy Supabase (staging)* run 253
+  geslaagd. De migratie `20261122200000_rls_een_keer_per_query` is toegepast
+  (de stap stopt bij elke afwijking van de 289 verwachte policies), de edge
+  functions staan erop, en de rooktest is geslaagd, met "boekhouder-hek: elke
+  organisatietabel is afgeschermd" en "anon heeft geen rechten in public".
+- ***Frontend checks* run 276:** rood op de mobiele test (zie "De mobiele test
+  en Poppins"). De rest was groen: de keten vanaf nul met de databasetests,
+  de edge functions, typecheck, CSP-hash en unit tests.
+- **23 november, 02:45 (`1ef720b`):** de correctie. *Frontend checks* run 279
+  is helemaal groen: de mobiele test, de laadtest, de inrichting, de
+  terugknop, de keten vanaf nul met de databasetests en de edge functions.
+- De app zelf bouwt Cloudflare Pages vanaf staging. Dat is vanuit de
+  cloudsessie niet te zien (staging.resofly.com was niet bereikbaar).
+
 ## Nog open
 
 - **Het dashboard op de telefoon met de echte letter.** Met Poppins staat de
