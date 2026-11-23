@@ -60,13 +60,16 @@ alter table public.time_entry_invoices enable row level security;
 
 -- Lezen hoort bij de uren: wie de module Uren niet mag lezen, ziet ook niet
 -- welke uren gefactureerd zijn.
+-- De rechten één keer per query, niet per rij: dezelfde vorm als
+-- 20261122200000_rls_een_keer_per_query (tests/database/rls_een_keer_per_query.sql
+-- weigert een nieuwe leespolicy die per rij can_read_org aanroept).
 drop policy if exists "time entry invoices read" on public.time_entry_invoices;
 create policy "time entry invoices read" on public.time_entry_invoices
-  for select using (public.can_read_org(organization_id));
+  for select using (organization_id = any ((select public.my_organization_ids())::uuid[]));
 drop policy if exists "module gate select" on public.time_entry_invoices;
 create policy "module gate select" on public.time_entry_invoices
   as restrictive for select to authenticated
-  using (public.can_read_module(organization_id, 'time'));
+  using (organization_id = any ((select public.my_module_organization_ids('time'::text))::uuid[]));
 
 -- Geen schrijfpolicy en geen schrijfrecht: anders kon iemand met de REST-API
 -- een uur losmaken van zijn factuur en het nog eens factureren.

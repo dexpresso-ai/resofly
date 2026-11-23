@@ -89,9 +89,12 @@ create trigger sent_e_invoices_immutable
 -- alleen invoice-workflow met de service-role; er is geen policy voor.
 alter table public.sent_e_invoices enable row level security;
 
+-- De rechten één keer per query, niet per rij: dezelfde vorm als
+-- 20261122200000_rls_een_keer_per_query (tests/database/rls_een_keer_per_query.sql
+-- weigert een nieuwe leespolicy die per rij can_read_org aanroept).
 drop policy if exists "sent_e_invoices read" on public.sent_e_invoices;
 create policy "sent_e_invoices read" on public.sent_e_invoices
-  for select using (public.can_read_org(organization_id));
+  for select using (organization_id = any ((select public.my_organization_ids())::uuid[]));
 
 -- Expliciet wat wie mag, los van de standaardrechten van het schema: lezen met
 -- de eigen sessie (RLS en de modulepoort beslissen wat), schrijven alleen de
