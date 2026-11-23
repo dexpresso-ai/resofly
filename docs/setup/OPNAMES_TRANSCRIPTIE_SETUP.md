@@ -1,6 +1,7 @@
 # Opnames uitschrijven via de webhook — inrichten (productie)
 
-Een opname (bij een afspraak of een telefoongesprek) gaat naar ElevenLabs Scribe.
+Een opname (bij een afspraak, een telefoongesprek of sinds 23 november een
+notitie) gaat naar ElevenLabs Scribe.
 Het transcript komt op een van twee manieren terug:
 
 - **Synchroon**, zonder `ELEVENLABS_WEBHOOK_SECRET`. `meeting-transcribe` wacht op

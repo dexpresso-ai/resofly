@@ -4262,7 +4262,8 @@ async function assertNotLockedEvidence(env: Env, key: string): Promise<void> {
  * Module per entity type / tweede sleutelsegment: spiegel van
  * public.attachment_module, aangevuld met de vaste mappen die deze Worker en de
  * edge functions aanmaken. Opnames (meeting_recording) staan er bewust niet in:
- * die hangen aan Agenda óf Klanten, en meeting-transcribe weegt dat zelf.
+ * die hangen aan Agenda, Klanten of (sinds 23 november) Inhoud, en
+ * meeting-transcribe weegt dat zelf.
  */
 const SEGMENT_MODULE: Record<string, string> = {
   client: 'clients',

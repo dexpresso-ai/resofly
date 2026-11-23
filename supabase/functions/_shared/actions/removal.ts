@@ -3,6 +3,7 @@ import {
   type ActionCtx, type ActionDef, type ActionPlan,
 } from './types.ts';
 import { assertAttachmentParentOpen } from './content.ts';
+import { agendaRecording } from './calendar.ts';
 
 /**
  * VERWIJDEREN — alles wat iets weggooit, op één plek.
@@ -433,7 +434,8 @@ export const REMOVAL_ACTIONS: ActionDef[] = [
     required: ['recording_id'],
     async plan(ctx, input) {
       const recordingId = id(input, 'recording_id');
-      const rec = await row<{ event_title_snapshot: string | null; created_at: string }>(ctx, 'meeting_recordings', recordingId, 'event_title_snapshot, created_at', 'Opname');
+      // Een opname bij een notitie valt onder Inhoud; deze handeling onder Agenda.
+      const rec = await agendaRecording(ctx, recordingId);
       return plan({
         title: `Opname "${rec.event_title_snapshot || 'zonder titel'}" verwijderen`,
         sub: `van ${String(rec.created_at).slice(0, 10)} · geluid, transcript en notulen`,

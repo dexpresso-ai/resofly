@@ -3,11 +3,12 @@ import { AlertTriangle, Check, FilePlus2, FileText, Loader2, Mail, Mic, Pause, P
 import { Button, Input, Textarea } from './Ui';
 import { NotulenToevoegen } from './NotulenToevoegen';
 import { notulenAsRichText, type ContentTarget } from '../lib/notulen';
+import { plainTextToRichText } from './RichTextEditor';
 import { getAccessToken, getWorkerBase } from '../lib/r2-api';
 import { makeSeekable } from '../lib/audioSeek';
 import {
   canStartTranscription, createRecording, deleteRecording as apiDeleteRecording, getRecording,
-  isTerminalStatus, listRecordingsForCall, listRecordingsForEvent, loadTranscriptionBudget, sendSummaryToAttendees,
+  isTerminalStatus, listRecordingsForCall, listRecordingsForEvent, listRecordingsForNote, loadTranscriptionBudget, sendSummaryToAttendees,
   startTranscription, summarizeRecording, updateRecordingText, uploadMeetingAudio,
   type TranscriptionBudget,
 } from '../lib/meeting-api';
@@ -26,6 +27,12 @@ export interface MeetingRecorderEvent {
    * component (opnemen, transcript, notulen, mailen) werkt ongewijzigd.
    */
   callId?: UUID | null;
+  /**
+   * Gevuld als de recorder bij een notitie staat (sinds 23 november). Een
+   * nieuwe notitie heeft nog geen id; dan maakt `ensureNoteId` hem aan zodra
+   * de opname begint.
+   */
+  noteId?: UUID | null;
   /** Genodigden bij deze afspraak — bij een gesprek: met wie je sprak. */
   attendees: { email: string; name: string }[];
 }
@@ -43,6 +50,14 @@ interface Props {
    */
   contentTargets?: ContentTarget[];
   onAppendToContent?: (target: ContentTarget, html: string) => Promise<void>;
+  /**
+   * Bij een notitie: sla hem op als hij nog geen id heeft, en geef het id. Een
+   * opname moet ergens aan hangen; zonder id kon er bij een nieuwe notitie niet
+   * opgenomen worden. Met deze prop is de recorder in de stand "notitie".
+   */
+  ensureNoteId?: () => Promise<UUID>;
+  /** Bij een notitie: zet opgemaakte tekst (de notulen, het transcript) onder de tekst in de editor. */
+  onInsertIntoNote?: (html: string) => void;
 }
 
 type Phase = 'idle' | 'consent' | 'recording' | 'paused' | 'processing';
@@ -60,7 +75,18 @@ function fmtClock(seconds: number): string {
   return `${m}:${s}`;
 }
 
-export function MeetingRecorder({ organizationId, canWrite, event, onSaveAsNote, contentTargets, onAppendToContent }: Props) {
+export function MeetingRecorder({ organizationId, canWrite, event, onSaveAsNote, contentTargets, onAppendToContent, ensureNoteId, onInsertIntoNote }: Props) {
+  // Bij een notitie: andere woorden, een andere poort (Inhoud) en de opnames per notitie.
+  const forNote = Boolean(ensureNoteId) || Boolean(event.noteId);
+  // finishRecording draait vanuit de onstop van de recorder, met de props van
+  // toen de opname begon. Wie intussen de titel of klant van de notitie
+  // aanpaste, kreeg die anders niet mee; daarom de laatste waarden uit een ref.
+  const latestEvent = useRef(event);
+  latestEvent.current = event;
+  const ensureNoteRef = useRef(ensureNoteId);
+  ensureNoteRef.current = ensureNoteId;
+  /** De notitie waar de lopende opname aan hangt (bij een nieuwe notitie pas bekend na het opslaan). */
+  const noteIdRef = useRef<UUID | null>(event.noteId ?? null);
   const [phase, setPhase] = useState<Phase>('idle');
   const [elapsed, setElapsed] = useState(0);
   const [recordings, setRecordings] = useState<MeetingRecording[]>([]);
@@ -86,7 +112,7 @@ export function MeetingRecorder({ organizationId, canWrite, event, onSaveAsNote,
   // Een opname hangt aan een afspraak of aan een telefoongesprek. Tot 8 november
   // keek deze component alleen naar de afspraak: bij een gesprek verscheen nooit
   // een knop om op te nemen.
-  const canAttach = Boolean(event.eventRef || event.callId);
+  const canAttach = Boolean(event.eventRef || event.callId || event.noteId || ensureNoteId);
 
   /** Opgenomen seconden, zonder de pauzes. */
   function recordedSeconds(): number {
@@ -97,15 +123,19 @@ export function MeetingRecorder({ organizationId, canWrite, event, onSaveAsNote,
   }
 
   const reload = useCallback(async () => {
-    if (!event.callId && !event.eventRef) { setRecordings([]); return; }
+    if (!event.callId && !event.eventRef && !event.noteId) { setRecordings([]); return; }
     try {
-      setRecordings(event.callId
-        ? await listRecordingsForCall(organizationId, event.callId)
-        : await listRecordingsForEvent(organizationId, event.provider ?? null, event.eventRef));
+      setRecordings(event.noteId
+        ? await listRecordingsForNote(organizationId, event.noteId)
+        : event.callId
+          ? await listRecordingsForCall(organizationId, event.callId)
+          : await listRecordingsForEvent(organizationId, event.provider ?? null, event.eventRef));
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Opnames laden mislukt.');
     }
-  }, [organizationId, event.provider, event.eventRef, event.callId]);
+  }, [organizationId, event.provider, event.eventRef, event.callId, event.noteId]);
+
+  useEffect(() => { if (event.noteId) noteIdRef.current = event.noteId; }, [event.noteId]);
 
   useEffect(() => { void reload(); }, [reload]);
 
@@ -121,7 +151,7 @@ export function MeetingRecorder({ organizationId, canWrite, event, onSaveAsNote,
   function askConsent() {
     setPhase('consent');
     setBudget(null);
-    void loadTranscriptionBudget(organizationId, event.callId ?? null).then(setBudget);
+    void loadTranscriptionBudget(organizationId, { callId: event.callId ?? null, forNote }).then(setBudget);
   }
 
   // Opruimen bij unmount.
@@ -139,6 +169,15 @@ export function MeetingRecorder({ organizationId, canWrite, event, onSaveAsNote,
         audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
       });
       streamRef.current = stream;
+      // Een nieuwe notitie eerst opslaan, vóór er iets wordt opgenomen: lukt
+      // dat niet, dan hoor je het nu, en niet pas na een uur praten, als de
+      // opname nergens heen kan. Pas na de microfoon, anders bleef er bij een
+      // geweigerde microfoon een lege notitie achter.
+      if (forNote && !noteIdRef.current) {
+        const ensure = ensureNoteRef.current;
+        if (!ensure) throw new Error('Sla de notitie eerst op.');
+        noteIdRef.current = await ensure();
+      }
       const mime = pickMimeType();
       mimeRef.current = mime || 'audio/webm';
       const recorder = new MediaRecorder(stream, { ...(mime ? { mimeType: mime } : {}), audioBitsPerSecond: 32000 });
@@ -195,11 +234,14 @@ export function MeetingRecorder({ organizationId, canWrite, event, onSaveAsNote,
       const ext = mime.includes('mp4') ? 'm4a' : mime.includes('ogg') ? 'ogg' : 'webm';
       const file = new File([blob], `meeting-${Date.now()}.${ext}`, { type: mime });
 
-      recordingId = await createRecording(organizationId, {
-        provider: event.provider, sourceId: event.sourceId, eventRef: event.eventRef,
-        eventTitle: event.eventTitle, clientId: event.clientId, projectId: event.projectId,
-        callId: event.callId ?? null,
-      });
+      const ev = latestEvent.current;
+      recordingId = await createRecording(organizationId, forNote
+        ? { eventTitle: ev.eventTitle, clientId: ev.clientId, projectId: ev.projectId, noteId: noteIdRef.current }
+        : {
+            provider: ev.provider, sourceId: ev.sourceId, eventRef: ev.eventRef,
+            eventTitle: ev.eventTitle, clientId: ev.clientId, projectId: ev.projectId,
+            callId: ev.callId ?? null,
+          });
       const storageKey = await uploadMeetingAudio(file, organizationId, recordingId);
       await startTranscription(organizationId, {
         recordingId, storageKey, mimeType: mime, sizeBytes: file.size, durationSeconds: duration,
@@ -269,7 +311,7 @@ export function MeetingRecorder({ organizationId, canWrite, event, onSaveAsNote,
 
   return (
     <section className="mr-section">
-      <div className="mr-head"><Mic size={15} /><h4>Opname &amp; notulen</h4></div>
+      <div className="mr-head"><Mic size={15} /><h4>{forNote ? 'Opname & transcriptie' : <>Opname &amp; notulen</>}</h4></div>
 
       {!canAttach && <p className="event-detail-empty">Opnemen kan zodra de afspraak is opgeslagen.</p>}
       {canAttach && !recordingSupported && <p className="event-detail-empty">Opnemen wordt niet ondersteund in deze browser.</p>}
@@ -282,7 +324,9 @@ export function MeetingRecorder({ organizationId, canWrite, event, onSaveAsNote,
 
           {phase === 'consent' && (
             <div className="mr-consent">
-              <p><AlertTriangle size={15} /><span>{event.callId ? 'Dit gesprek' : 'Deze meeting'} wordt opgenomen om er een samenvatting van te maken. Zorg dat {event.callId ? 'de ander' : 'de aanwezigen'} hiermee akkoord {event.callId ? 'is' : 'zijn'}.</span></p>
+              <p><AlertTriangle size={15} /><span>{forNote
+                ? <>Wat je inspreekt wordt opgenomen, uitgeschreven en samengevat. Neem je een gesprek op, zorg dan dat de ander hiermee akkoord is.{event.noteId ? '' : ' De notitie wordt meteen opgeslagen, zodat de opname er een plek heeft.'}</>
+                : <>{event.callId ? 'Dit gesprek' : 'Deze meeting'} wordt opgenomen om er een samenvatting van te maken. Zorg dat {event.callId ? 'de ander' : 'de aanwezigen'} hiermee akkoord {event.callId ? 'is' : 'zijn'}.</>}</span></p>
               {budget && !budget.allowed && (
                 <p className="mr-budget-note" role="status">
                   <AlertTriangle size={15} />
@@ -316,7 +360,8 @@ export function MeetingRecorder({ organizationId, canWrite, event, onSaveAsNote,
       <div className="mr-list-wrap">
         {recordings.map((rec) => (
           <RecordingCard key={rec.id} rec={rec} busy={busyId === rec.id} canWrite={canWrite}
-            organizationId={organizationId} attendees={event.attendees}
+            organizationId={organizationId} attendees={event.attendees} where={forNote ? 'notitie' : event.callId ? 'gesprek' : 'afspraak'}
+            onInsertIntoNote={onInsertIntoNote}
             onPatch={(patch) => setRecordings((prev) => prev.map((p) => (p.id === rec.id ? { ...p, ...patch } : p)))}
             onDelete={() => void onDelete(rec)} onRetrySummary={() => void onRetrySummary(rec)}
             onStartTranscription={() => void onStartTranscription(rec)} onSaveAsNote={onSaveAsNote}
@@ -326,6 +371,9 @@ export function MeetingRecorder({ organizationId, canWrite, event, onSaveAsNote,
     </section>
   );
 }
+
+/** Waar de opname bij hoort; alleen voor de woorden op de kaart. */
+type RecordingWhere = 'afspraak' | 'gesprek' | 'notitie';
 
 interface StatusView {
   text: string;
@@ -338,11 +386,11 @@ interface StatusView {
   hint?: string;
 }
 
-function statusLabel(status: MeetingRecording['status'], errorMessage: string | null): StatusView {
+function statusLabel(status: MeetingRecording['status'], errorMessage: string | null, where: RecordingWhere = 'afspraak'): StatusView {
   switch (status) {
     // Met een melding wacht de opname op AI-tegoed (zie meeting-transcribe 'start').
     case 'uploaded': return errorMessage ? { text: 'Wacht op uitschrijven', waiting: true } : { text: 'Geüpload' };
-    case 'transcribing': return { text: 'Transcriberen…', working: 'listening', hint: 'De AI luistert de opname uit. Dit loopt op de achtergrond door — je kunt rustig verder werken, het transcript verschijnt vanzelf bij deze afspraak.' };
+    case 'transcribing': return { text: 'Transcriberen…', working: 'listening', hint: `De AI luistert de opname uit. Dit loopt op de achtergrond door — je kunt rustig verder werken, het transcript verschijnt vanzelf bij ${where === 'notitie' ? 'deze notitie' : where === 'gesprek' ? 'dit gesprek' : 'deze afspraak'}.` };
     case 'transcribed': return { text: 'Transcript klaar' };
     case 'summarizing': return { text: 'Notulen maken…', working: 'thinking', hint: 'De AI schrijft de notulen. Dit loopt op de achtergrond door — je kunt rustig verder werken.' };
     case 'done': return { text: 'Klaar' };
@@ -382,9 +430,11 @@ function AiWorkingIcon({ mode }: { mode: 'listening' | 'thinking' }) {
   );
 }
 
-function RecordingCard({ rec, busy, canWrite, organizationId, attendees, onPatch, onDelete, onRetrySummary, onStartTranscription, onSaveAsNote, contentTargets, onAppendToContent }: {
+function RecordingCard({ rec, busy, canWrite, organizationId, attendees, where, onInsertIntoNote, onPatch, onDelete, onRetrySummary, onStartTranscription, onSaveAsNote, contentTargets, onAppendToContent }: {
   rec: MeetingRecording; busy: boolean; canWrite: boolean;
   organizationId: UUID; attendees: { email: string; name: string }[];
+  where: RecordingWhere;
+  onInsertIntoNote?: (html: string) => void;
   onPatch: (patch: Partial<MeetingRecording>) => void;
   onDelete: () => void; onRetrySummary: () => void; onStartTranscription: () => void;
   onSaveAsNote?: (text: string) => Promise<void>;
@@ -401,7 +451,9 @@ function RecordingCard({ rec, busy, canWrite, organizationId, attendees, onPatch
   const [savingTranscript, setSavingTranscript] = useState(false);
   // Notulen naar genodigden mailen.
   const [composing, setComposing] = useState(false);
-  const label = statusLabel(rec.status, rec.error_message);
+  const label = statusLabel(rec.status, rec.error_message, where);
+  // Bij een notitie: wat er al in de editor is gezet, zodat een tweede klik niet dubbel plakt.
+  const [inserted, setInserted] = useState<{ notulen: boolean; transcript: boolean }>({ notulen: false, transcript: false });
   const summary = rec.summary_json;
 
   useEffect(() => () => { if (audioUrl) URL.revokeObjectURL(audioUrl); }, [audioUrl]);
@@ -471,6 +523,21 @@ function RecordingCard({ rec, busy, canWrite, organizationId, attendees, onPatch
           <SummaryList title="Vervolgafspraken" items={summary.vervolgafspraken} />
 
           <div className="mr-actions">
+            {onInsertIntoNote && canWrite && (
+              <Button variant="primary" disabled={inserted.notulen} onClick={() => {
+                onInsertIntoNote(notulenAsRichText({
+                  // Niet de titel van de notitie: die staat er al boven. Met de
+                  // tijd zijn twee opnames op één dag uit elkaar te houden.
+                  title: `opname van ${new Date(rec.created_at).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })}`,
+                  date: new Date(rec.created_at).toLocaleDateString('nl-NL', { day: 'numeric', month: 'long', year: 'numeric' }),
+                  summary,
+                  fallbackText: rec.summary_text,
+                }));
+                setInserted((v) => ({ ...v, notulen: true }));
+              }}>
+                <FilePlus2 size={14} /> {inserted.notulen ? 'In de notitie gezet' : 'Notulen in de notitie'}
+              </Button>
+            )}
             <Button onClick={() => void navigator.clipboard?.writeText(summaryAsText())}>Kopieer notulen</Button>
             {onSaveAsNote && (
               <Button disabled={savedNote} onClick={async () => { await onSaveAsNote(summaryAsText()); setSavedNote(true); }}>
@@ -483,8 +550,8 @@ function RecordingCard({ rec, busy, canWrite, organizationId, attendees, onPatch
               </Button>
             )}
             {canWrite && (
-              <Button variant="primary" onClick={() => setComposing((v) => !v)}>
-                <Mail size={14} /> Verstuur naar genodigden
+              <Button variant={onInsertIntoNote ? undefined : 'primary'} onClick={() => setComposing((v) => !v)}>
+                <Mail size={14} /> {where === 'notitie' ? 'Notulen mailen' : 'Verstuur naar genodigden'}
               </Button>
             )}
           </div>
@@ -543,6 +610,14 @@ function RecordingCard({ rec, busy, canWrite, organizationId, attendees, onPatch
               <pre className="mr-transcript">{rec.transcript_text}</pre>
               {canWrite && (
                 <div className="mr-actions">
+                  {onInsertIntoNote && (
+                    <Button disabled={inserted.transcript} onClick={() => {
+                      onInsertIntoNote(`<h3>Transcript</h3>${plainTextToRichText(rec.transcript_text ?? '')}`);
+                      setInserted((v) => ({ ...v, transcript: true }));
+                    }}>
+                      <FilePlus2 size={13} /> {inserted.transcript ? 'In de notitie gezet' : 'Transcript in de notitie'}
+                    </Button>
+                  )}
                   <Button className="mr-transcript-edit" onClick={() => { setTranscriptDraft(rec.transcript_text ?? ''); setEditingTranscript(true); }}>
                     <Pencil size={13} /> Transcript bijwerken
                   </Button>
