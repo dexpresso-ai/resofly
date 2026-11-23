@@ -568,12 +568,13 @@ const FIRST_ITEM = {
   // donker gelijk; de grens ligt 20% hoger.
   'purchase-invoices': { selector: '.pi-inbox-row', maxTop: 386 },
   declaraties: { selector: '.decl-row', maxTop: 425 },
-  // 290 en niet 280: de omzettegel bovenaan krijgt een trendlabel ("778%")
-  // als er vorige maand iets binnenkwam. De testgegevens rekenen vanaf de
-  // maandag van deze week, dus of dat zo is wisselt per week. Met het label
-  // staat de eerste taak 7px lager: 287px op maandag 23 november, ook op
-  // staging zonder andere wijzigingen.
-  dashboard: { selector: '.dash-task', maxTop: 290 },
+  // 280. Op 23 november stond hier even 290, voor "287px op maandag": dat
+  // kwam niet door het trendlabel in de omzettegel (dat stond er zondag ook,
+  // bij 273px), maar door Poppins. De letters kwamen die avond in
+  // public/fonts/web, en de test laadde ze toen wél; hij is afgesteld op de
+  // vervangende letter. Nu blokkeert de mock ook /fonts/web/** en staat de
+  // eerste taak weer op 273px. Zie CHANGELOG_OPSTARTEN_NOG_SNELLER_2026-11-22.md.
+  dashboard: { selector: '.dash-task', maxTop: 280 },
   // De klantenlijst toont boven de kaarten de tabstrook "Klanten | Niet
   // gekoppeld" zodra er post in de opvangbak ligt — en dat ligt er in de seed
   // (twee berichten). Die strook telde tot 2026-09-17 nooit mee: de mock gaf
@@ -630,8 +631,8 @@ const FIRST_ITEM = {
   'app-agenda': { selector: '.tb-scroll', maxTop: 260 },
   'app-financien': { selector: '.quote-table tbody tr', maxTop: 496 },
   'app-communicatie': { selector: '.comm-row', maxTop: 185 },
-  // Zelfde dashboard, zelfde trendlabel (zie dashboard hierboven).
-  'app-werkruimte': { selector: '.dash-task', maxTop: 290 },
+  // Zelfde dashboard, zelfde grens (zie dashboard hierboven).
+  'app-werkruimte': { selector: '.dash-task', maxTop: 280 },
   suppliers: { selector: '.supplier-table tbody tr', maxTop: 356 },
   // 2026-11-12 — Gerrie → Gesprekken: kop van Gerrie, de vijf tabbladen, de
   // titel met "Nieuw gesprek" en het zoekveld gaan voor het eerste gesprek.

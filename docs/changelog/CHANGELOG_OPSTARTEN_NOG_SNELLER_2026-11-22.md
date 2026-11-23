@@ -165,17 +165,53 @@ kleiner is.
 - `npm run test:terugknop`: 15/15. Eén run vóór de merge had één mislukking
   ("en omhoog"), terwijl er tegelijk zware metingen liepen; de drie runs
   daarna, ook na de merge, 15/15.
-- `npm run test:mobile -- --theme=both`: 842 pagina's gemeten (na de merge
-  met staging), 4 met een probleem: het dashboard en de werkruimte-app op de
-  telefoon, met het eerste item op 287 px (max 280), licht en donker. Precies
-  dezelfde 4 als vóór deze wijziging; dat bestond al (zie 19 november).
+- `npm run test:mobile -- --theme=both`: zie "De mobiele test en Poppins"
+  hieronder. Na de correctie: 842 pagina's gemeten, 0 met problemen
+  (exitcode 0).
 - `node scripts/check-csp-hash.mjs`: de hash staat in beide CSP-regels.
 - Het laadscherm uit de HTML naast dat van React (JavaScript geblokkeerd
   tegen Supabase dat niet antwoordt), licht en donker: alleen de stand van
   de spinner verschilt. Niet zichtbaar op `/quote/…`, `/portal` en
   `/?chat=1`.
 
+### De mobiele test en Poppins
+
+Na de eerste uitrol naar staging werd *Frontend checks* (run 276) rood op de
+mobiele test: 4 pagina's met een probleem. Het dashboard en de werkruimte-app
+op de telefoon, licht en donker, hadden het eerste item op 287 px (max 280).
+Lokaal had ik die 4 voor bekend gehouden, omdat de changelog van 19 november
+dezelfde 287 px noemde. Op GitHub waren ze vóór deze wijziging wel groen
+(run 275). Dat had ik eerst moeten nakijken.
+
+De oorzaak: de test blokkeert de lettertypen van Google ("de test gaat over
+lay-out, niet over Poppins") en mat dus altijd met een vervangende letter.
+Daarop zijn de grenzen afgesteld. Nu Poppins uit `public/fonts/web` komt,
+laadde hij in de test wél. Gemeten op het dashboard (telefoon, donker):
+
+| | eerste item |
+| --- | --- |
+| staging vóór deze wijziging | 273 px |
+| nu, met Poppins | 287 px |
+| nu, zonder de eigen letters | 273 px |
+
+De lay-out zelf is dus niet veranderd. `tests/mobile/mock/backend.mjs`
+blokkeert nu ook `/fonts/web/**`, zodat de test meet zoals hij altijd deed.
+
+Intussen had een andere sessie dezelfde 287 px gezien en de grens naar 290 px
+gezet (`acf1291`), met als verklaring het trendlabel in de omzettegel ("778%"),
+dat sinds maandag zou verschijnen. Dat label stond er zondag 22 november al
+(in de meting hierboven), en op maandag gaf de samengevoegde code met de
+letters geblokkeerd 273 px, ook op tablet en liggend. De grens staat dus weer
+op 280 px, met die uitleg in `tests/mobile/run.mjs`.
+
 ## Nog open
+
+- **Het dashboard op de telefoon met de echte letter.** Met Poppins staat de
+  eerste taak op 287 px, 7 px onder de grens van de test. Zo zagen gebruikers
+  het al (zij kregen Poppins van Google). Nu de letters lokaal staan, kan de
+  test met Poppins meten; dan moeten de kop of de kaarten van het dashboard
+  7 px compacter, of de grens moet bewust omhoog. Dat is een keuze over het
+  ontwerp, niet over het laden.
 
 - **Starten uit de cache.** De grootste winst die overblijft voor wie de app
   elke dag opent: de vorige werkruimte meteen tonen (per gebruiker en

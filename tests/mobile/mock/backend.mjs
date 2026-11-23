@@ -1203,6 +1203,13 @@ export async function installMock(context, options = {}) {
   // test gaat over lay-out, niet over Poppins.
   await context.route('https://fonts.googleapis.com/**', r => r.abort());
   await context.route('https://fonts.gstatic.com/**', r => r.abort());
+  // Sinds 22 november staan de letters van de app in public/fonts/web en
+  // laden ze in de test wél. De grenzen in tests/mobile/run.mjs zijn op de
+  // vervangende letter afgesteld (zo mat de test altijd), en met Poppins
+  // kwam het eerste item van het dashboard op de telefoon op 287 px (max
+  // 280): de CI werd rood zonder dat de lay-out veranderde. Daarom ook deze
+  // weg, zodat de test meet zoals voorheen.
+  await context.route('**/fonts/web/**', r => r.abort());
   return { setup };
 }
 
