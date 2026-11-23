@@ -135,7 +135,9 @@ export const EXPORT_FORMAT_VERSION = 1;
 // journal_entries; geen tabellen of kolommen.
 // 20261123142000 (wettelijke rente) zet één rij in statutory_interest_rates
 // (landelijke tarieven, geen gegevens van een organisatie); geen tabellen of kolommen.
-export const EXPORT_SCHEMA_VERSION = '20261123142000';
+// 20261123150000 (opname bij een notitie) zet de kolom note_id op
+// meeting_recordings; die tabel gaat al mee, met het bestand (storage_key).
+export const EXPORT_SCHEMA_VERSION = '20261123150000';
 
 export type TableKind =
   | 'export'

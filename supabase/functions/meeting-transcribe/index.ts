@@ -1,10 +1,11 @@
 // ============================================================
 // meeting-transcribe — opname -> ElevenLabs Scribe -> Claude-notulen.
 //
-// Bedient twee soorten opnames met exact dezelfde pijplijn: een afspraak uit
-// de agenda, en sinds 18 september een telefoongesprek (client_calls). Het
-// verschil zit alleen in de modulepoort: een gespreksopname valt onder
-// Klanten, een afspraakopname onder Agenda. Zie resolveModuleKey().
+// Bedient drie soorten opnames met exact dezelfde pijplijn: een afspraak uit
+// de agenda, sinds 18 september een telefoongesprek (client_calls) en sinds
+// 23 november een notitie. Het verschil zit alleen in de modulepoort: een
+// gespreksopname valt onder Klanten, een notitie-opname onder Inhoud, een
+// afspraakopname onder Agenda. Zie resolveModuleKey().
 //
 // Acties (alle POST, Supabase JWT + org-toegang):
 //  - budget    : is er AI-tegoed om een opname te laten uitschrijven? (alleen lezen)
@@ -34,6 +35,7 @@ import {
 } from '../_shared/edgeAuth.ts';
 import { elevenlabsConfigured, requestTranscription } from '../_shared/elevenlabs.ts';
 import { completeTranscription, runSummaryForRecording } from '../_shared/meetingPipeline.ts';
+import { newRecordingModule, recordingModule, type RecordingModule } from '../_shared/recordingModule.ts';
 import { transcriptionBudget, transcriptionCostUsd, transcriptionRefusal } from '../_shared/transcriptionUsage.ts';
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
 import { EMAIL_LOGO_SLOT_LIGHT } from '../_shared/emailTemplates/layout.ts';
@@ -76,9 +78,10 @@ Deno.serve(async (req) => {
 
     const user = await requireUser(admin, req);
     const role = await requireOrganizationAccess(admin, user.id, organizationId);
-    // Een afspraakopname hangt aan Agenda, een gespreksopname aan Klanten.
-    // Alle acties hieronder schrijven (of mailen) en vragen dus schrijfrecht op
-    // die module; alleen een leesactie zou met leesrecht volstaan.
+    // Een afspraakopname hangt aan Agenda, een gespreksopname aan Klanten, een
+    // notitie-opname aan Inhoud. Alle acties hieronder schrijven (of mailen) en
+    // vragen dus schrijfrecht op die module; alleen een leesactie zou met
+    // leesrecht volstaan.
     const moduleKey = await resolveModuleKey(organizationId, action, body);
     await assertModuleAccess(admin, user.id, organizationId, moduleKey, WRITE_ACTIONS.has(action) ? 'write' : 'read');
 
@@ -122,9 +125,14 @@ async function createRecording(organizationId: string, userId: string, role: Org
   const clientId = body.clientId ? String(body.clientId) : null;
   const projectId = body.projectId ? String(body.projectId) : null;
   const callId = body.callId ? String(body.callId) : null;
+  const noteId = body.noteId ? String(body.noteId) : null;
   if (clientId && !isUuid(clientId)) throw new HttpError('Ongeldige klant-id.', 400);
   if (projectId && !isUuid(projectId)) throw new HttpError('Ongeldige project-id.', 400);
   if (callId && !isUuid(callId)) throw new HttpError('Ongeldige gesprek-id.', 400);
+  if (noteId && !isUuid(noteId)) throw new HttpError('Ongeldige notitie-id.', 400);
+  // De poort hierboven koos één module; een opname die aan twee dingen hangt,
+  // zou ook onder de andere vallen zonder dat iemand daar het recht voor had.
+  if (callId && noteId) throw new HttpError('Een opname hoort bij een gesprek of bij een notitie, niet bij allebei.', 400);
 
   // Hoort de opname bij een gesprek, dan moet dat gesprek van deze organisatie
   // zijn — anders zou een opname aan andermans dossier gehangen kunnen worden.
@@ -133,8 +141,19 @@ async function createRecording(organizationId: string, userId: string, role: Org
       .select('id').eq('id', callId).eq('organization_id', organizationId).maybeSingle();
     if (!callRow) throw new HttpError('Gesprek niet gevonden in deze organisatie.', 404);
   }
+  // Hetzelfde voor een notitie.
+  if (noteId) {
+    const { data: noteRow } = await admin.from('notes')
+      .select('id').eq('id', noteId).eq('organization_id', organizationId).maybeSingle();
+    if (!noteRow) throw new HttpError('Notitie niet gevonden in deze organisatie.', 404);
+  }
+  // Alleen een afspraakopname hangt aan de agenda. Een gesprek of notitie
+  // krijgt de agenda-velden bewust op null: anders kon iemand met alleen de
+  // module Klanten of Inhoud via eventRef een opname op andermans agenda-item
+  // zetten.
+  const forEvent = !callId && !noteId;
   // Hetzelfde voor klant, project en agenda: alleen koppelen aan rijen van deze organisatie.
-  const sourceId = !callId && body.sourceId && isUuid(String(body.sourceId)) ? String(body.sourceId) : null;
+  const sourceId = forEvent && body.sourceId && isUuid(String(body.sourceId)) ? String(body.sourceId) : null;
   if (clientId) await assertOrgRow('clients', organizationId, clientId, 'Klant');
   if (projectId) await assertOrgRow('projects', organizationId, projectId, 'Project');
   if (sourceId) await assertOrgRow('calendar_sources', organizationId, sourceId, 'Agenda');
@@ -142,17 +161,16 @@ async function createRecording(organizationId: string, userId: string, role: Org
   const { data, error } = await admin.from('meeting_recordings').insert({
     organization_id: organizationId,
     created_by: userId,
-    // Een gespreksopname hangt aan het gesprek en nergens anders aan: de
-    // agenda-velden gaan bewust op null. Zonder dit zou een teamlid met alleen
-    // de module Klanten via callId + eventRef alsnog een opname-rij op
-    // andermans agenda-item kunnen zetten.
-    provider: callId ? null : provider,
+    // Een gespreks- of notitie-opname hangt aan dat ene ding en nergens anders
+    // aan (zie forEvent hierboven, en de check meeting_recordings_note_alleen).
+    provider: forEvent ? provider : null,
     source_id: sourceId,
-    event_ref: !callId && body.eventRef ? String(body.eventRef).slice(0, 512) : null,
+    event_ref: forEvent && body.eventRef ? String(body.eventRef).slice(0, 512) : null,
     event_title_snapshot: body.eventTitle ? String(body.eventTitle).slice(0, 300) : null,
     client_id: clientId,
     project_id: projectId,
     call_id: callId,
+    note_id: noteId,
     consent_given: true,
     consent_at: new Date().toISOString(),
     status: 'uploaded',
@@ -348,11 +366,12 @@ async function deleteRecording(organizationId: string, role: Awaited<ReturnType<
 
 /**
  * Welke module bewaakt deze aanvraag? Een opname bij een telefoongesprek valt
- * onder Klanten, een opname bij een afspraak onder Agenda.
+ * onder Klanten, een opname bij een notitie onder Inhoud, een opname bij een
+ * afspraak onder Agenda.
  *
  * ALLEEN bij 'create' mag de body dit bepalen — daar bestaat de opname nog
- * niet. Bij elke andere actie beslist de opname-rij zelf, en wordt `callId` uit
- * de body genegeerd.
+ * niet. Bij elke andere actie beslist de opname-rij zelf, en worden `callId`
+ * en `noteId` uit de body genegeerd.
  *
  * Dat onderscheid is de hele poort. Zou de body ook bij 'delete' of
  * 'sendSummary' meetellen, dan stuurt iemand met alleen de module Klanten een
@@ -361,18 +380,14 @@ async function deleteRecording(organizationId: string, role: Awaited<ReturnType<
  * mailen of verwijderen. De extra lookup is de prijs van een poort die niet te
  * omzeilen is door een veld toe te voegen of weg te laten.
  */
-async function resolveModuleKey(organizationId: string, action: string, body: Record<string, unknown>): Promise<'clients' | 'calendar'> {
+async function resolveModuleKey(organizationId: string, action: string, body: Record<string, unknown>): Promise<RecordingModule> {
   const recordingId = body.recordingId ? String(body.recordingId) : '';
   if (isUuid(recordingId)) {
     const { data } = await admin.from('meeting_recordings')
-      .select('call_id').eq('id', recordingId).eq('organization_id', organizationId).maybeSingle();
-    return data?.call_id ? 'clients' : 'calendar';
+      .select('call_id, note_id').eq('id', recordingId).eq('organization_id', organizationId).maybeSingle();
+    return recordingModule(data as { call_id: string | null; note_id: string | null } | null);
   }
-  // Geen bestaande opname: alleen dan telt wat de body zegt, en alleen bij
-  // 'create' — de enige actie die zonder recordingId hoort te werken — en bij
-  // 'budget', dat vóór 'create' komt en alleen het eigen tegoed laat zien.
-  if ((action === 'create' || action === 'budget') && body.callId) return 'clients';
-  return 'calendar';
+  return newRecordingModule(action, body);
 }
 
 async function loadRecording(organizationId: string, recordingId: string) {

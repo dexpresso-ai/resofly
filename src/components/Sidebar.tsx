@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
-import { Archive, BarChart3, BookOpen, BookUser, Boxes, Calculator, Calendar, CalendarClock, CalendarRange, ChevronDown, ChevronRight, ChevronUp, Clock, FileSignature, FileText, FolderOpen, Hourglass, Inbox, Landmark, LayoutDashboard, Library, LineChart, Lock, LogOut, Megaphone, MessageSquare, Moon, Percent, Pin, PinOff, Receipt, ReceiptText, RefreshCw, Scale, Sparkles, Sun, Ticket, TrendingUp, Truck, Users, Wallet, X } from 'lucide-react';
+import { Archive, BarChart3, BookOpen, BookUser, Boxes, Calculator, Calendar, CalendarClock, CalendarRange, ChevronDown, ChevronRight, ChevronUp, Clock, FileSignature, FileText, Files, FolderOpen, Hourglass, Inbox, Landmark, LayoutDashboard, Library, LineChart, Lock, LogOut, Megaphone, MessageSquare, Moon, Percent, Pin, PinOff, Receipt, ReceiptText, RefreshCw, Scale, Sparkles, StickyNote, Sun, Ticket, TrendingUp, Truck, Users, Wallet, X } from 'lucide-react';
 import type { AppData, Organization, OrganizationRole } from '../types';
 import { GlobalSearch, type SearchResult } from './GlobalSearch';
 import { settingsMenuGroups } from './settingsMenuItems';
@@ -66,8 +66,15 @@ const navGroups = [
     ['chat', MessageSquare, 'Chat'],
     ['marketing', Megaphone, 'Marketing'],
   ] },
-  { id: 'kennis', label: 'Kennis & inzicht', items: [
-    ['content', Library, 'Inhoud'],
+  // Documenten staat sinds 23 november los, met notities en documenten elk op
+  // een eigen regel. Onder "Kennis & inzicht" was Inhoud één regel naast de
+  // rapportages, en een document vond je pas na een filter in de verkenner.
+  { id: 'documenten', label: 'Documenten', items: [
+    ['content', Library, 'Alle inhoud'],
+    ['notes', StickyNote, 'Notities'],
+    ['documents', Files, 'Documenten'],
+  ] },
+  { id: 'inzicht', label: 'Inzicht', items: [
     ['stats', BarChart3, 'Rapportages'],
   ] },
 ] as const;
@@ -86,13 +93,6 @@ function canOpenNavItem(key: string, permissions: Permissions): boolean {
 const financePages: Page[] = ['quotes', 'contracts', 'invoices', 'suppliers', 'purchase-invoices', 'ledger', 'bank', 'assets', 'prepaid', 'pnl', 'forecast', 'vat-returns', 'corporate-tax', 'income-tax', 'dga', 'shareholders', 'owners', 'fiscal-years', 'annual-accounts'];
 const calendarPages: Page[] = ['calendar', 'meeting-booking'];
 const projectPages: Page[] = ['projects', 'project', 'project-planning', 'weekplanner', 'archive'];
-/**
- * Inhoud heeft géén submenu: één klik op "Inhoud" en je staat in het overzicht.
- * Notities en documenten zijn dáár een filter ("Weergeven"), geen eigen menuregel.
- * De pagina's blijven wel bestaan — de globale zoekfunctie en Gerrie openen een
- * notitie of document rechtstreeks — en dan hoort "Inhoud" op te lichten.
- */
-const contentPages: Page[] = ['content', 'notes', 'documents'];
 /** Een rapportage van Gerrie is een eigen pagina, maar hoort onder Rapportages. */
 const reportPages: Page[] = ['stats', 'report'];
 
@@ -330,9 +330,8 @@ export function Sidebar({
         const isProjectsActive = key === 'projects' && projectPages.includes(page);
         const isCalendarActive = key === 'calendar' && calendarPages.includes(page);
         const isFinanceActive = key === 'finance' && financePages.includes(page);
-        const isContentActive = key === 'content' && contentPages.includes(page);
         const isReportsActive = key === 'stats' && reportPages.includes(page);
-        const isActive = key === page || isProjectsActive || isCalendarActive || isFinanceActive || isContentActive || isReportsActive;
+        const isActive = key === page || isProjectsActive || isCalendarActive || isFinanceActive || isReportsActive;
         const reportMenu = key === 'stats' && aiReports.length > 0 && Boolean(onOpenAiReport);
 
         return <div className="nav-item-wrap" key={key}>

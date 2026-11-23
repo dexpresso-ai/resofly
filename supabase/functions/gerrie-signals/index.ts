@@ -461,8 +461,11 @@ async function gatherFacts(kind: SignalKind, signal: SignalRow, settings: Settin
       };
     }
     case 'meeting_notes_ready': {
-      const r = await one(org, 'meeting_recordings', 'id, event_title_snapshot, client_id, project_id, status, summary_json, created_at', signal.entity_id);
+      const r = await one(org, 'meeting_recordings', 'id, event_title_snapshot, client_id, project_id, status, summary_json, created_at, note_id', signal.entity_id);
       if (!r) return { skip: 'opname niet gevonden' };
+      // Een opname bij een notitie valt onder Inhoud, niet onder de modules van
+      // deze kaart (20261123150000_opname_bij_notitie.sql).
+      if (r.note_id) return { skip: 'opname bij een notitie' };
       if (r.status !== 'done') return { skip: `opname heeft status ${r.status}` };
       const summary = (r.summary_json ?? {}) as Row;
       const actiepunten = strings(summary.actiepunten ?? p.actiepunten);
@@ -481,8 +484,10 @@ async function gatherFacts(kind: SignalKind, signal: SignalRow, settings: Settin
       };
     }
     case 'meeting_notes_unsent': {
-      const r = await one(org, 'meeting_recordings', 'id, event_title_snapshot, client_id, status, summary_sent_at, summary_text, created_at, updated_at', signal.entity_id);
+      const r = await one(org, 'meeting_recordings', 'id, event_title_snapshot, client_id, status, summary_sent_at, summary_text, created_at, updated_at, note_id', signal.entity_id);
       if (!r) return { skip: 'opname niet gevonden' };
+      // Een notitie heeft geen genodigden: "nog niet gemaild" zegt daar niets.
+      if (r.note_id) return { skip: 'opname bij een notitie' };
       if (r.status !== 'done' || !r.summary_text) return { skip: 'notulen niet klaar' };
       if (r.summary_sent_at) return { skip: 'notulen al gemaild' };
       const client = await clientOf(org, r.client_id as string | null);

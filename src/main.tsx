@@ -278,6 +278,9 @@ const OfficeEditor = lazyPage(() => import('./features/OfficeEditor'), 'OfficeEd
 const McpConsent = lazyPage(() => import('./components/McpConsent'), 'McpConsent');
 const ProjectShiftDialog = lazyPage(() => import('./components/ProjectShiftDialog'), 'ProjectShiftDialog');
 const CallLogDialog = lazyPage(() => import('./components/CallLogDialog'), 'CallLogDialog');
+// De opname bij een notitie (2026-11-23). Pas laden als een notitie opengaat:
+// de recorder zat tot dan alleen in de agenda en bij een gesprek.
+const MeetingRecorder = lazyPage(() => import('./components/MeetingRecorder'), 'MeetingRecorder');
 const CallReturnPrompt = lazyPage(() => import('./components/CallLogDialog'), 'CallReturnPrompt');
 const GerrieAanzettenPage = lazyPage(() => import('./components/GerrieAanzetten'), 'GerrieAanzettenPage');
 const ClientDetailPage = lazyPage(() => import('./features/Clients'), 'ClientDetailPage');
@@ -2576,6 +2579,29 @@ function App() {
   }
 
   /** Opslaan vanuit het bewerkformulier: valideren, wegschrijven, sluiten, verversen. */
+  /**
+   * Een nieuwe notitie opslaan zonder het venster te sluiten. Een opname bij een
+   * notitie (MeetingRecorder) moet ergens aan hangen; zonder id kon er bij een
+   * nieuwe notitie niet worden opgenomen. Daarna staat het venster op
+   * "Notitie bewerken", met alles wat je al typte, en bewaart Opslaan de rest
+   * (ook het handschrift, zie persistEdit).
+   */
+  async function createNoteNow(values: Record<string, unknown>): Promise<Note> {
+    if (!activeOrg) throw new Error('Kies eerst een organisatie.');
+    if (!orgCanWrite || !permissions.canWrite('content')) throw new Error('Je kunt hier geen notities opslaan.');
+    const current = edit;
+    if (!current || current.kind !== 'note') throw new Error('Er staat geen notitie open.');
+    if (current.item) return current.item;
+    const calLink = (values._calLink as CalendarNoteLinkInput | null) ?? current.calendarLink ?? null;
+    const { _calLink, _ink, ...noteValues } = values;
+    const saved = calLink
+      ? await createNoteWithCalendarLink(activeOrg.id, noteValues, calLink)
+      : await insertRow<Note>('notes', activeOrg.id, noteValues);
+    setEdit(prev => (prev && prev.kind === 'note' && !prev.item ? { kind: 'note', item: saved } : prev));
+    void refresh();
+    return saved;
+  }
+
   async function saveEdit(values: Record<string, unknown>) {
     if (!edit) return;
     if (!ensureCanWrite()) return;
@@ -4732,7 +4758,7 @@ function App() {
                 notify({ tone: 'ok', title: `Conceptfactuur ${invoice.number} gemaakt`, detail: 'Kijk hem na en verstuur hem. De uren staan nu als gefactureerd.' });
               }} />
           </Suspense>}
-          {tab.edit && <EditModal edit={tab.edit} data={data} dataStatus={dataGroupStatus} organizationId={activeOrg.id} currentUserId={currentUserId} teamMembers={workMembers} canWrite={canEditKind(tab.edit.kind)} readOnly={!canEditKind(tab.edit.kind)} onClose={() => setEdit(null)} onSave={saveEdit} onDelete={removeCurrent} onAttachmentsChanged={refresh} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewClientNote={(client) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id }})} onConvertToWord={convertDocumentToWord} onCreateFromOfficeFile={createDocumentFromOfficeFile} onCreateBlankOffice={createDocumentFromBlankOffice} onNoteHandwritingChanged={applyNoteHandwritingSummary} taskAgenda={{ onReserve: reserveTimeForTask, onLinkEvent: linkTaskToEvent, onUnlink: unlinkTaskEvent, onOpenDay: (dateKey) => { setEdit(null); setCalendarJump(dateKey); setPage('calendar'); } }} />}
+          {tab.edit && <EditModal edit={tab.edit} data={data} dataStatus={dataGroupStatus} organizationId={activeOrg.id} currentUserId={currentUserId} teamMembers={workMembers} canWrite={canEditKind(tab.edit.kind)} readOnly={!canEditKind(tab.edit.kind)} onClose={() => setEdit(null)} onSave={saveEdit} onDelete={removeCurrent} onAttachmentsChanged={refresh} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewClientNote={(client) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id }})} onConvertToWord={convertDocumentToWord} onCreateFromOfficeFile={createDocumentFromOfficeFile} onCreateBlankOffice={createDocumentFromBlankOffice} onNoteHandwritingChanged={applyNoteHandwritingSummary} onCreateNoteNow={createNoteNow} taskAgenda={{ onReserve: reserveTimeForTask, onLinkEvent: linkTaskToEvent, onUnlink: unlinkTaskEvent, onOpenDay: (dateKey) => { setEdit(null); setCalendarJump(dateKey); setPage('calendar'); } }} />}
           </BackScope.Provider>
         </section>
       ))}
@@ -5186,7 +5212,7 @@ function ClientFromMailNote({ fromMail }: { fromMail: ClientFromMail }) {
   </div>;
 }
 
-function EditModal({ edit, data, dataStatus, organizationId, currentUserId, teamMembers, canWrite, readOnly, onClose, onSave, onDelete, onAttachmentsChanged, onEditNote, onNewClientNote, onConvertToWord, onCreateFromOfficeFile, onCreateBlankOffice, onNoteHandwritingChanged, taskAgenda }: { edit: NonNullable<EditMode>; data: AppData; dataStatus: (group: DataGroup) => DataGroupStatus; organizationId: string; currentUserId: string | null; teamMembers: OrganizationMember[]; canWrite: boolean; readOnly: boolean; onClose: () => void; onSave: (v: Record<string, unknown>) => void; onDelete: () => void; onAttachmentsChanged: () => void; onEditNote: (note: Note) => void; onNewClientNote: (client: Client) => void; onConvertToWord: (doc: InternalDocument) => void; onCreateFromOfficeFile: (file: File, values: Record<string, unknown>) => void; onCreateBlankOffice: (docType: NewOfficeType, values: Record<string, unknown>) => void; onNoteHandwritingChanged: (noteId: string, summary: NoteHandwritingSummary | null) => void; taskAgenda: TaskAgendaHandlers }) {
+function EditModal({ edit, data, dataStatus, organizationId, currentUserId, teamMembers, canWrite, readOnly, onClose, onSave, onDelete, onAttachmentsChanged, onEditNote, onNewClientNote, onConvertToWord, onCreateFromOfficeFile, onCreateBlankOffice, onNoteHandwritingChanged, onCreateNoteNow, taskAgenda }: { edit: NonNullable<EditMode>; data: AppData; dataStatus: (group: DataGroup) => DataGroupStatus; organizationId: string; currentUserId: string | null; teamMembers: OrganizationMember[]; canWrite: boolean; readOnly: boolean; onClose: () => void; onSave: (v: Record<string, unknown>) => void; onDelete: () => void; onAttachmentsChanged: () => void; onEditNote: (note: Note) => void; onNewClientNote: (client: Client) => void; onConvertToWord: (doc: InternalDocument) => void; onCreateFromOfficeFile: (file: File, values: Record<string, unknown>) => void; onCreateBlankOffice: (docType: NewOfficeType, values: Record<string, unknown>) => void; onNoteHandwritingChanged: (noteId: string, summary: NoteHandwritingSummary | null) => void; onCreateNoteNow: (values: Record<string, unknown>) => Promise<Note>; taskAgenda: TaskAgendaHandlers }) {
   const item = 'item' in edit ? edit.item : undefined;
   const [form, setForm] = useState<Record<string, any>>(() => initialForm(edit, data));
   const set = (k: string, v: unknown) => setForm(prev => ({ ...prev, [k]: v }));
@@ -5472,6 +5498,30 @@ function EditModal({ edit, data, dataStatus, organizationId, currentUserId, team
       <Input value={form.title} onChange={e=>set('title',e.target.value)} placeholder="Titel"/>
       <Select value={form.note_type} onChange={e=>set('note_type',e.target.value)}>{Object.entries(noteTypeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select>
       <RichTextEditor value={form.content} onChange={value=>set('content', value)} placeholder="Schrijf je notitie…" disabled={disabled}/>
+      {/* Opnemen en laten uitschrijven, zoals bij een meeting (2026-11-23). Een
+          nieuwe notitie wordt opgeslagen zodra de opname begint; de notulen en
+          het transcript zet je daarna met één knop in de tekst hierboven. */}
+      {(!disabled || item) && <DialogDeferred><MeetingRecorder
+        organizationId={organizationId}
+        canWrite={!disabled}
+        event={{
+          provider: null, sourceId: null, eventRef: null,
+          eventTitle: String(form.title || '').trim() || null,
+          clientId: form.client_id || null,
+          projectId: form.project_id || null,
+          noteId: item?.id ?? null,
+          attendees: [],
+        }}
+        ensureNoteId={disabled ? undefined : async () => {
+          if (item) return item.id;
+          const saved = await onCreateNoteNow(cleanForm('note', form, data.clientFieldDefinitions, data));
+          // cleanForm geeft een notitie zonder titel er een met de datum; laat
+          // die ook in het veld zien, anders zette Opslaan hem straks opnieuw.
+          setForm(prev => (String(prev.title || '').trim() ? prev : { ...prev, title: saved.title }));
+          return saved.id;
+        }}
+        onInsertIntoNote={html => setForm(prev => ({ ...prev, content: sanitizeRichText(`${String(prev.content || '')}${html}`) }))}
+      /></DialogDeferred>}
       <NoteInkSection
         organizationId={organizationId}
         noteId={item ? item.id : null}
