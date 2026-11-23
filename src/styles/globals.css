@@ -1157,7 +1157,14 @@ html,body,#root{height:100%}body{background:var(--bg);color:var(--text);font-fam
 .tb-cell-hour{border-bottom-color:rgba(var(--sheen-rgb),calc(.085 * var(--sheen-k)))}.tb-cell-half{border-bottom-color:rgba(var(--sheen-rgb),calc(.035 * var(--sheen-k)))}.tb-cell-can:hover{background:rgba(var(--accent-rgb),.055)}
 .tb-line{border-bottom-color:rgba(var(--sheen-rgb),calc(.035 * var(--sheen-k)))}.tb-line-hour{border-bottom-color:rgba(var(--sheen-rgb),calc(.09 * var(--sheen-k)))}
 .tb-now{z-index:16}.tb-now::after{height:2px;box-shadow:0 0 18px rgba(var(--danger-rgb),.45)}.tb-now-dot{left:-5px;width:10px;height:10px;box-shadow:0 0 0 3px rgba(var(--danger-rgb),.16)}.tb-now-label{position:absolute;left:8px;top:-11px;background:var(--accent-r);color:var(--on-accent);border-radius:999px;padding:2px 6px;font-size:9px;font-weight:700;letter-spacing:.02em;box-shadow:0 6px 14px rgba(var(--shade-rgb),calc(.25 * var(--shade-k)))}
-.tb-overflow-chip{position:absolute;right:3px;background:rgba(var(--sheen-rgb),calc(.14 * var(--sheen-k)));border:1px solid var(--border2);border-radius:6px;padding:2px 6px;font-size:9px;font-weight:700;color:var(--muted2);letter-spacing:.04em;z-index:7;pointer-events:none;line-height:1.4}
+/* "+N" bij afspraken die over elkaar vallen: een knop die álle afspraken van dat
+   moment opent. Het was een losse tekst (pointer-events:none), waardoor de
+   verborgen afspraken nergens meer te openen waren. */
+.tb-overflow-chip{position:absolute;right:3px;background:var(--bg2);border:1px solid var(--border2);border-radius:6px;padding:2px 6px;font:inherit;font-size:10px;font-weight:700;color:var(--text);letter-spacing:.04em;z-index:7;cursor:pointer;line-height:1.4;box-shadow:0 2px 8px rgba(var(--shade-rgb),calc(.28 * var(--shade-k)))}
+.tb-overflow-chip:hover{background:var(--bg4);border-color:var(--accent)}
+.tb-overflow-chip:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+/* Een vinger is groter dan een muis: op aanraakschermen een tikvlak van ±28px. */
+@media(pointer:coarse){.tb-overflow-chip{min-width:28px;min-height:28px;padding:4px 8px;font-size:12px;display:inline-flex;align-items:center;justify-content:center}}
 .tb-ev{text-align:left;color:var(--text);background:linear-gradient(180deg,var(--event-bg,rgba(var(--accent-rgb),.62)),rgba(var(--sheen-rgb),calc(.06 * var(--sheen-k))));border:1px solid var(--event-border-soft,rgba(var(--accent-rgb),.72));box-shadow:0 8px 20px rgba(var(--shade-rgb),calc(.18 * var(--shade-k))),0 1px 0 rgba(var(--sheen-rgb),calc(.08 * var(--sheen-k))) inset}.tb-ev:hover{box-shadow:0 14px 32px rgba(var(--shade-rgb),calc(.38 * var(--shade-k))),0 0 0 1px var(--event-border,rgba(var(--accent-rgb),.6)) inset;transform:translateY(-1px) scale(1.006)}
 .tb-ev-time{color:rgba(var(--ink-rgb),.76)}.tb-ev-title{font-weight:700}.tb-ev-src{color:rgba(var(--ink-rgb),.66)}.tb-ev-priv{filter:saturate(.75)}.tb-hint{background:rgba(var(--shade-rgb),calc(.16 * var(--shade-k)));border-top:1px solid var(--border)}
 
@@ -7954,6 +7961,11 @@ body.pgal-shielded .pgal-shield{position:fixed;inset:0;z-index:300;display:flex;
   width:28px;height:28px;border-radius:50%;color:var(--muted);cursor:pointer;transition:background .12s,color .12s}
 .cm-daycard-close:hover{background:rgba(var(--sheen-rgb),calc(.08 * var(--sheen-k)));color:var(--text)}
 .cm-daycard-close:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+/* Kaartje in het tijdrooster: de dag is er al (geen knop), en naast de dag staat
+   hoeveel afspraken er tegelijk zijn. */
+.cm-daycard-date.is-static{cursor:default}
+.cm-daycard-date.is-static:hover{background:transparent}
+.cm-daycard-sub{flex:1 1 auto;min-width:0;align-self:center;color:var(--muted2);font-size:12px;font-weight:600}
 
 /* Eén regel per item — dezelfde taal als de chips in het rooster. */
 .cm-daylist-items{display:flex;flex-direction:column;gap:1px;overflow-y:auto;min-height:0}
@@ -7964,6 +7976,8 @@ body.pgal-shielded .pgal-shield{position:fixed;inset:0;z-index:300;display:flex;
 .cm-dayitem:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .cm-dayitem-dot{flex:0 0 auto;width:9px;height:9px;border-radius:50%;background:var(--event-color,var(--accent))}
 .cm-dayitem-time{flex:0 0 auto;min-width:54px;color:var(--muted2);font-weight:600;font-variant-numeric:tabular-nums}
+/* "10:00 – 11:00": een tijdvak is breder dan één starttijd. */
+.cm-dayitem-time.is-range{min-width:98px}
 .cm-dayitem-title{flex:1 1 auto;min-width:0;color:var(--text);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .cm-dayitem-video{flex:0 0 auto;color:var(--muted2)}
 .cm-dayitem.is-private{filter:saturate(.7)}

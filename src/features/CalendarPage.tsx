@@ -1,5 +1,6 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
 import type React from 'react';
+import { createPortal } from 'react-dom';
 import { CalendarDays, CalendarPlus, Check, CheckSquare, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Clock, Columns3, ExternalLink, LayoutList, Link2, Lock, Mail, MapPin, Pencil, PenLine, Plus, RefreshCcw, Repeat, Send, Trash2, Unplug, UserPlus, Users, Video, X } from 'lucide-react';
 import { useBackStep } from '../lib/useBackStep';
 import { useContentAppend } from '../lib/useContentAppend';
@@ -691,7 +692,17 @@ type TimedEventSegment = {
   isBackground: boolean;
 };
 
-type OverflowChip = { top: number; count: number };
+/** Eén afspraak of taak uit een drukke groep, met zijn tijdvak in de dag. */
+type OverflowItem = { block: TimedBlock; startMinute: number; endMinute: number };
+
+/**
+ * Het "+N"-chipje bij een groep afspraken die over elkaar vallen. `items` zijn
+ * álle blokken van die groep, ook de twee die wel in het rooster staan: de lijst
+ * erachter moet het hele moment laten zien, niet alleen de rest. Eerst stond hier
+ * alleen een aantal, en was het chipje een losse tekst: de verborgen afspraken
+ * waren nergens meer te openen.
+ */
+type OverflowChip = { top: number; count: number; items: OverflowItem[] };
 
 /* ── Hele-dag-rij: doorlopende balken over meerdere dagen (Google-stijl) ──
    Hele-dag-afspraken én getimede afspraken van ≥24 uur worden als één balk
@@ -862,7 +873,11 @@ function layoutTimedItemsForDay(
     const visibleCols = Math.min(Math.max(1, columnEnds.length), MAX_OVERLAP_COLS);
     const hidden = cluster.filter(s => s.column >= MAX_OVERLAP_COLS);
     if (hidden.length > 0) {
-      overflows.push({ top: hidden[0].top, count: hidden.length });
+      overflows.push({
+        top: hidden[0].top,
+        count: hidden.length,
+        items: cluster.map(({ block, startMinute, endMinute }) => ({ block, startMinute, endMinute })),
+      });
     }
     cluster.forEach(segment => { segment.columns = visibleCols; });
   });
@@ -1015,11 +1030,16 @@ export const TimeBlockGrid = forwardRef<TimeBlockGridHandle, TimeBlockGridProps>
   const [rowHeight, setRowHeight] = useState<number | null>(null);
   // Hele-dag-rij: standaard alles tonen (zoals Google); inklapbaar bij 3+ lanes.
   const [allDayExpanded, setAllDayExpanded] = useState(true);
+  // Het kaartje achter een "+N"-chipje: welke dag, welke groep (de top van het
+  // chipje is de sleutel, want groepen overlappen elkaar nooit) en waar de knop stond.
+  const [overflowCard, setOverflowCard] = useState<{ dayIndex: number; top: number; rect: CardAnchor } | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const colRefs = useRef<(HTMLDivElement | null)[]>([]);
   const canSelect = allowSelect ?? (canWrite && writeableSources.length > 0);
   const daysKey = days.map(formatISODate).join('|');
+  // Bladeren naar een andere periode: het kaartje hoorde bij een dag die weg is.
+  useEffect(() => { setOverflowCard(null); }, [daysKey]);
   // Tijdens een sleep lopen de luisteraars op `window`. Die lezen `days` en de
   // callbacks via refs, zodat de effecten niet bij élke render (dus bij elke
   // muisbeweging) opnieuw aan- en afgekoppeld worden.
@@ -2027,9 +2047,15 @@ export const TimeBlockGrid = forwardRef<TimeBlockGridHandle, TimeBlockGridProps>
                   })()}
 
                   {dayOverflows.map((ov, i) => (
-                    <div key={`ov-${di}-${i}`} className="tb-overflow-chip" style={{ top: `${ov.top}%` }}>
+                    <button type="button" key={`ov-${di}-${i}`} className="tb-overflow-chip" style={{ top: `${ov.top}%` }}
+                      onClick={e => {
+                        const r = e.currentTarget.getBoundingClientRect();
+                        setOverflowCard({ dayIndex: di, top: ov.top, rect: { left: r.left, top: r.top, width: r.width, height: r.height } });
+                      }}
+                      title="Alle afspraken op dit moment tonen"
+                      aria-label={`${ov.count} ${ov.count === 1 ? 'afspraak' : 'afspraken'} meer op dit moment — toon alles`}>
                       +{ov.count}
-                    </div>
+                    </button>
                   ))}
                 </div>
               );
@@ -2042,6 +2068,22 @@ export const TimeBlockGrid = forwardRef<TimeBlockGridHandle, TimeBlockGridProps>
         </div>
       </div>
 
+      {overflowCard && (() => {
+        const day = days[overflowCard.dayIndex];
+        if (!day) return null;
+        // Opnieuw uit de actuele afspraken, niet uit een momentopname: ververst
+        // de agenda terwijl het kaartje openstaat, dan staat er niets verouderds in.
+        const group = layoutTimedItemsForDay(day, timedItemsForDay(day, events, tasks)).overflows.find(o => o.top === overflowCard.top);
+        if (!group) return null;
+        // Naar <body>: het podium van de agenda (`cal-stage-live`) krijgt tijdens een
+        // veeg een transform, en daarin zou een vast kaartje met het rooster meeschuiven.
+        return createPortal(
+          <OverflowCard day={day} rect={overflowCard.rect} items={group.items}
+            eventColor={eventColor} taskColor={taskColorFor} onOpenDay={onOpenDay}
+            onOpenEvent={onOpenEvent} onEditTask={onEditTask} onClose={() => setOverflowCard(null)} />,
+          document.body,
+        );
+      })()}
     </div>
   );
 });
@@ -2173,16 +2215,39 @@ function layoutMonthWeek(week: Date[], events: CalendarExternalEvent[], tasks: T
    Google kapt een volle dag af met "+3 meer" en laat de rest zien in een klein
    zwevend kaartje bóven het rooster — je blijft in de maand staan. Alleen op de
    telefoon is dat te krap; daar opent een tik de dag zelf. */
+type CardAnchor = { left: number; top: number; width: number; height: number };
+
 function MonthDayCard({ day, rect, items, sourceColors, taskColor, onOpenDay, onOpenEvent, onEditTask, onClose }: {
   taskColor?: (task: Task) => string;
   day: Date;
-  rect: { left: number; top: number; width: number; height: number };
+  rect: CardAnchor;
   items: MonthDayItem[];
   sourceColors: Map<string, string>;
   onOpenDay: (day: Date) => void;
   onOpenEvent: (event: CalendarExternalEvent) => void;
   onEditTask: (task: Task) => void;
   onClose: () => void;
+}) {
+  return (
+    <FloatingDayCard day={day} rect={rect} onOpenDay={onOpenDay} onClose={onClose}>
+      <MonthDayItemList items={items} sourceColors={sourceColors} taskColor={taskColor} onOpenEvent={ev => { onClose(); onOpenEvent(ev); }} onEditTask={task => { onClose(); onEditTask(task); }} />
+    </FloatingDayCard>
+  );
+}
+
+/**
+ * Het zwevende kaartje zelf, voor de maand ("+N meer") én voor het tijdrooster
+ * (het "+N"-chipje bij afspraken die over elkaar vallen): scrim, plaatsing naast
+ * de knop, Escape, de terugknop en de kop met de dag. De inhoud is aan de
+ * aanroeper. `onOpenDay` ontbreekt in de dagweergave: je zit er al.
+ */
+function FloatingDayCard({ day, rect, subtitle, onOpenDay, onClose, children }: {
+  day: Date;
+  rect: CardAnchor;
+  subtitle?: string;
+  onOpenDay?: (day: Date) => void;
+  onClose: () => void;
+  children: ReactNode;
 }) {
   // De terugknop van de telefoon sluit de dagkaart, zoals een tik ernaast.
   useBackStep(true, onClose);
@@ -2210,13 +2275,21 @@ function MonthDayCard({ day, rect, items, sourceColors, taskColor, onOpenDay, on
     <div className="cm-daycard" ref={cardRef} role="dialog" aria-label={formatDateKey(formatISODate(day))}
       style={{ left: placed?.left ?? rect.left, top: placed?.top ?? rect.top, visibility: placed ? 'visible' : 'hidden' }}>
       <div className="cm-daycard-head">
-        <button type="button" className="cm-daycard-date" onClick={() => { onClose(); onOpenDay(day); }} title="Open dagweergave">
-          <span className="cm-daycard-name">{dayNameNl(day)}</span>
-          <span className="cm-daycard-num">{day.getDate()}</span>
-        </button>
+        {onOpenDay ? (
+          <button type="button" className="cm-daycard-date" onClick={() => { onClose(); onOpenDay(day); }} title="Open dagweergave">
+            <span className="cm-daycard-name">{dayNameNl(day)}</span>
+            <span className="cm-daycard-num">{day.getDate()}</span>
+          </button>
+        ) : (
+          <span className="cm-daycard-date is-static">
+            <span className="cm-daycard-name">{dayNameNl(day)}</span>
+            <span className="cm-daycard-num">{day.getDate()}</span>
+          </span>
+        )}
+        {subtitle && <span className="cm-daycard-sub">{subtitle}</span>}
         <button type="button" className="cm-daycard-close" onClick={onClose} aria-label="Sluiten"><X size={15} /></button>
       </div>
-      <MonthDayItemList items={items} sourceColors={sourceColors} taskColor={taskColor} onOpenEvent={ev => { onClose(); onOpenEvent(ev); }} onEditTask={task => { onClose(); onEditTask(task); }} />
+      {children}
     </div>
   </>;
 }
@@ -2262,6 +2335,59 @@ function MonthDayItemList({ items, sourceColors, taskColor, onOpenEvent, onEditT
       </button>
     ) : null)}
   </div>;
+}
+
+/** Het tijdvak van een blok als tekst, in dezelfde vorm als in het rooster. */
+function blockTimeLabel(block: TimedBlock): string {
+  if (block.kind === 'event') return `${formatTime(block.event.starts_at)} – ${formatTime(block.event.ends_at)}`;
+  const startMin = Number(block.task.planned_start_minute ?? 0);
+  const endMin = Math.min(DAY_MINUTES, startMin + taskBlockMinutes(block.task));
+  const fmt = (m: number) => formatHour(Math.floor(m / 60) % 24, Math.round(m % 60));
+  return `${fmt(startMin)} – ${fmt(endMin)}`;
+}
+
+/**
+ * Het kaartje achter het "+N"-chipje in het tijdrooster. Het rooster zet maar
+ * twee afspraken naast elkaar (meer is op een telefoon niet te lezen), dus bij
+ * drie of meer die over elkaar vallen verdwenen er afspraken uit beeld, zónder
+ * dat je ze nog kon openen. Dit kaartje zet de hele groep onder elkaar, en elke
+ * regel opent de afspraak (of taak) zoals een tik op het blok zelf.
+ */
+function OverflowCard({ day, rect, items, eventColor, taskColor, onOpenDay, onOpenEvent, onEditTask, onClose }: {
+  day: Date;
+  rect: CardAnchor;
+  items: OverflowItem[];
+  eventColor: (event: CalendarExternalEvent) => string;
+  taskColor?: (task: Task) => string | null | undefined;
+  onOpenDay?: (day: Date) => void;
+  onOpenEvent: (event: CalendarExternalEvent) => void;
+  onEditTask: (task: Task) => void;
+  onClose: () => void;
+}) {
+  const onlyEvents = items.every(item => item.block.kind === 'event');
+  return (
+    <FloatingDayCard day={day} rect={rect} onOpenDay={onOpenDay} onClose={onClose}
+      subtitle={`${items.length} ${onlyEvents ? 'afspraken' : 'items'} tegelijk`}>
+      <div className="cm-daylist-items">
+        {items.map(({ block }) => block.kind === 'event' ? (
+          <button type="button" className={`cm-dayitem${block.event.visibility === 'private' ? ' is-private' : ''}`} key={blockKey(block)}
+            style={eventColorStyle(eventColor(block.event))} onClick={() => { onClose(); onOpenEvent(block.event); }}>
+            <span className="cm-dayitem-dot" aria-hidden="true" />
+            <span className="cm-dayitem-time is-range">{blockTimeLabel(block)}</span>
+            <span className="cm-dayitem-title">{block.event.title}</span>
+            {block.event.meeting_url && <Video size={12} className="cm-dayitem-video" />}
+          </button>
+        ) : (
+          <button type="button" className="cm-dayitem is-task" key={blockKey(block)}
+            style={eventColorStyle(taskColor?.(block.task))} onClick={() => { onClose(); onEditTask(block.task); }}>
+            <span className="cm-dayitem-dot" aria-hidden="true" />
+            <span className="cm-dayitem-time is-range">{blockTimeLabel(block)}</span>
+            <span className="cm-dayitem-title">{block.task.title}</span>
+          </button>
+        ))}
+      </div>
+    </FloatingDayCard>
+  );
 }
 
 export function CalendarMonthView({ days, anchor, events, tasks, data, sourceColors, trackedMinutesFor, onEditTask, onOpenDay, onOpenEvent, isMobile = false, onCreateOnDay }: {
