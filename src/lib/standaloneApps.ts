@@ -1,6 +1,7 @@
 /**
  * Losse apps (2026-11-12): Agenda, Financiën en Communicatie elk als eigen app
- * op het beginscherm, in het dock of in de taakbalk.
+ * op het beginscherm, in het dock of in de taakbalk. Documenten kwam er op
+ * 23 november bij.
  *
  * Het is dezelfde app als de werkruimte, op een eigen adres (/app/agenda/, …)
  * met een eigen manifest. Daar opent hij meteen op de pagina van die module,
@@ -24,11 +25,11 @@
  * (/app/werkruimte/, zie WORKSPACE_APP). Eerst was zijn scope "/", heel
  * ResoFly. Android zag dan /app/agenda/ als een pagina van de al geïnstalleerde
  * ResoFly-app en zei bij Installeren "deze app is al geïnstalleerd": wie
- * ResoFly op zijn telefoon had, kon er geen tweede app bij zetten. Vier apps
+ * ResoFly op zijn telefoon had, kon er geen tweede app bij zetten. Apps
  * naast elkaar kan alleen als geen van hun adressen onder een ander valt.
  */
 
-export type StandaloneAppId = 'agenda' | 'financien' | 'communicatie';
+export type StandaloneAppId = 'agenda' | 'financien' | 'communicatie' | 'documenten';
 
 /** Wat elke app heeft die je kunt installeren, de werkruimte ook. */
 export interface InstallableApp {
@@ -120,6 +121,19 @@ export const STANDALONE_APPS: readonly StandaloneApp[] = [
     pages: ['communication', 'chat', 'marketing'],
     home: ['communication', 'chat', 'marketing'],
     dock: [{ page: 'communication', label: 'Berichten' }, { page: 'chat', label: 'Chat' }, { page: 'marketing', label: 'Marketing' }],
+  },
+  {
+    id: 'documenten',
+    path: '/app/documenten/',
+    name: 'ResoFly Documenten',
+    shortName: 'Documenten',
+    description: 'Je notities, documenten en bestanden, per klant en project in mappen.',
+    manifest: '/apps/documenten.webmanifest',
+    icon: '/icons/app-documenten-192.png',
+    pages: ['content', 'notes', 'documents'],
+    // De verkenner met alles erin: daar staan ook de bestanden en de mappen.
+    home: ['content', 'notes', 'documents'],
+    dock: [{ page: 'content', label: 'Alles' }, { page: 'notes', label: 'Notities' }, { page: 'documents', label: 'Documenten' }],
   },
 ];
 

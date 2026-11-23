@@ -2,12 +2,13 @@
 /*
  * Tekent de iconen van de werkruimte (public/icons/icon-<maat>.png, met de R
  * uit het logo), de witte R voor meldingen (badge-72.png) en die van de losse
- * apps (Agenda, Financiën, Communicatie, public/icons/app-<id>-<maat>.png)
+ * apps (Agenda, Financiën, Communicatie, Documenten,
+ * public/icons/app-<id>-<maat>.png)
  * — `node scripts/app-iconen.mjs`.
  *
- * Eén oranje tegel voor alle vier, in de kleur van het logo. De losse apps
+ * Eén oranje tegel voor allemaal, in de kleur van het logo. De losse apps
  * hebben in plaats van de R het teken van de module, uit lucide: hetzelfde
- * teken als in het menu van de app. Zo staan de vier naast elkaar op een
+ * teken als in het menu van de app. Zo staan ze naast elkaar op een
  * beginscherm als één familie, en zie je toch in één oogopslag welke welke is.
  * De kleur en de R komen uit src/components/BrandMark.tsx, zodat het icoon en
  * de tegel in de app altijd hetzelfde zijn.
@@ -48,6 +49,12 @@ const GLYPHS = {
   communicatie: [
     '<path d="M14 9a2 2 0 0 1-2 2H6l-4 4V4c0-1.1.9-2 2-2h8a2 2 0 0 1 2 2z"/>',
     '<path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1"/>',
+  ],
+  // Files: hetzelfde teken als Documenten op de rail.
+  documenten: [
+    '<path d="M20 7h-3a2 2 0 0 1-2-2V2"/>',
+    '<path d="M9 18a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h7l4 4v10a2 2 0 0 1-2 2Z"/>',
+    '<path d="M3 7.6v12.8A1.6 1.6 0 0 0 4.6 22h9.8"/>',
   ],
 };
 

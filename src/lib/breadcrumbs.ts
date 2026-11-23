@@ -54,8 +54,8 @@ const PAGE_SECTIONS: Record<string, string> = {
   // In het menu onder Financiën, ook voor wie verder niets van Financiën ziet.
   declarations: 'Financiën',
   communication: 'Communicatie', chat: 'Communicatie', marketing: 'Communicatie',
-  content: 'Kennis & inzicht', notes: 'Kennis & inzicht', documents: 'Kennis & inzicht',
-  stats: 'Kennis & inzicht', report: 'Kennis & inzicht',
+  content: 'Documenten', notes: 'Documenten', documents: 'Documenten',
+  stats: 'Inzicht', report: 'Inzicht',
 };
 
 /** De pagina één niveau hoger. Wat hier niet in staat, hangt direct onder het dashboard. */
@@ -66,8 +66,6 @@ const PAGE_PARENT: Record<string, string> = {
   weekplanner: 'projects',
   archive: 'projects',
   gallery: 'project',
-  notes: 'content',
-  documents: 'content',
   'meeting-booking': 'calendar', report: 'stats',
 };
 

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { flushSync } from 'react-dom';
-import { Archive, BarChart3, BookOpen, BookUser, Boxes, Building2, Calculator, Calendar, CalendarClock, CalendarRange, Clock, FileSignature, FileText, FolderKanban, FolderOpen, GanttChart, Hourglass, Inbox, Landmark, LayoutDashboard, Library, LineChart, Lock, LogOut, Megaphone, MessageSquare, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Percent, Plus, Receipt, ReceiptText, RefreshCw, Scale, Settings, Sparkles, Sun, SunMoon, Sunrise, Ticket, TrendingUp, Truck, Users, Wallet, X, type LucideIcon } from 'lucide-react';
+import { Archive, BarChart3, BookOpen, BookUser, Boxes, Building2, Calculator, Calendar, CalendarClock, CalendarRange, Clock, FileSignature, FileText, Files, FolderKanban, FolderOpen, GanttChart, Hourglass, Inbox, Landmark, LayoutDashboard, Library, LineChart, Lock, LogOut, Megaphone, MessageSquare, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Percent, Plus, Receipt, ReceiptText, RefreshCw, Scale, Settings, Sparkles, StickyNote, Sun, SunMoon, Sunrise, Ticket, TrendingUp, Truck, Users, Wallet, X, type LucideIcon } from 'lucide-react';
 import { Select } from './Ui';
 import { BrandMark } from './BrandMark';
 import { askGerrie } from './GerrieChat';
@@ -15,14 +15,15 @@ import { useBackStep } from '../lib/useBackStep';
 
 /**
  * De navigatie van Zenit (designvoorstel 2026-10-22): een smalle nachtrail met
- * zeven modules en daarnaast een contextpaneel met wat je ín die module kunt.
+ * acht modules (sinds 23 november met Documenten) en daarnaast een
+ * contextpaneel met wat je ín die module kunt.
  * Stroom gebruikt hem ook, en sinds 2026-11-13 Baken, de standaardlook: daar
  * zijn rail en paneel samen het donkere commandovlak (baken.css, §3).
  *
  * Zelfde gegevens en dezelfde regels als de zijbalk van Cockpit (Sidebar.tsx):
  * modulerechten, de rechtsvorm (vennootschapsbelasting, DGA, aandeelhouders,
  * jaarrekening) en de tellers. Alleen de indeling is anders: dertien regels
- * onder elkaar worden zeven plekken, en elke plek toont pas zijn submenu als je
+ * onder elkaar worden acht plekken, en elke plek toont pas zijn submenu als je
  * er bent.
  *
  * Desktop (≥761px): vastgezet staan rail en paneel naast het werkvlak; los
@@ -31,7 +32,7 @@ import { useBackStep } from '../lib/useBackStep';
  * een tik op de rail wisselt het paneel, een tik in het paneel navigeert.
  */
 
-type ModuleId = 'vandaag' | 'gerrie' | 'agenda' | 'werk' | 'geld' | 'berichten' | 'inzicht';
+type ModuleId = 'vandaag' | 'gerrie' | 'agenda' | 'werk' | 'documenten' | 'geld' | 'berichten' | 'inzicht';
 
 interface NavItem {
   page: Page;
@@ -63,9 +64,10 @@ const MODULE_PAGES: Record<ModuleId, Page[]> = {
   gerrie: ['gerrie'],
   agenda: ['calendar', 'meeting-booking', 'weekplanner', 'time'],
   werk: ['clients', 'client', 'projects', 'project', 'gallery', 'project-planning', 'tickets', 'archive'],
+  documenten: ['content', 'notes', 'documents'],
   geld: FINANCE_PAGES,
   berichten: ['communication', 'chat', 'marketing'],
-  inzicht: ['stats', 'report', 'content', 'notes', 'documents'],
+  inzicht: ['stats', 'report'],
 };
 
 function moduleOfPage(page: Page): ModuleId | null {
@@ -133,6 +135,14 @@ function buildModules({ permissions, legalForm, decisionCount, ticketUnread, pur
       { page: 'tickets', label: 'Tickets', Icon: Ticket, badge: ticketUnread, badgeTitle: ticketTitle },
       { page: 'archive', label: 'Archief', Icon: Archive },
     ]) }] },
+    // Een eigen plek sinds 23 november, net als Agenda. Tot dan stond Inhoud als
+    // één regel onder Inzicht, en een document vond je pas na een filter in de
+    // verkenner.
+    { id: 'documenten', label: 'Documenten', Icon: Files, home: ['content', 'notes', 'documents'], badge: 0, groups: [{ items: keep([
+      { page: 'content', label: 'Alle inhoud', Icon: Library },
+      { page: 'notes', label: 'Notities', Icon: StickyNote },
+      { page: 'documents', label: 'Documenten', Icon: Files },
+    ]) }] },
     { id: 'geld', label: 'Geld', Icon: Wallet, home: ['invoices', ...FINANCE_PAGES, 'declarations'], badge: purchaseInboxOpen, badgeTitle: purchaseTitle, groups: [
       { label: 'Verkoop', items: keep([
         { page: 'quotes', label: 'Offertes', Icon: FileText },
@@ -172,9 +182,8 @@ function buildModules({ permissions, legalForm, decisionCount, ticketUnread, pur
       { page: 'chat', label: 'Chat', Icon: MessageSquare, badge: chatUnread, badgeTitle: chatTitle },
       { page: 'marketing', label: 'Marketing', Icon: Megaphone },
     ]) }] },
-    { id: 'inzicht', label: 'Inzicht', Icon: BarChart3, home: ['stats', 'content'], badge: 0, groups: [{ items: keep([
+    { id: 'inzicht', label: 'Inzicht', Icon: BarChart3, home: ['stats'], badge: 0, groups: [{ items: keep([
       { page: 'stats', label: 'Rapportages', Icon: BarChart3, also: ['report'] },
-      { page: 'content', label: 'Inhoud', Icon: Library, also: ['notes', 'documents'] },
     ]) }] },
   ];
   // Een module waarvan elk onderdeel dichtstaat, verdwijnt van de rail.
