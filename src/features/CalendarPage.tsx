@@ -2,6 +2,7 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffec
 import type React from 'react';
 import { CalendarDays, CalendarPlus, Check, CheckSquare, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Clock, Columns3, ExternalLink, LayoutList, Link2, Lock, Mail, MapPin, Pencil, PenLine, Plus, RefreshCcw, Repeat, Send, Trash2, Unplug, UserPlus, Users, Video, X } from 'lucide-react';
 import { useBackStep } from '../lib/useBackStep';
+import { useContentAppend } from '../lib/useContentAppend';
 import { hasPlannedTime, taskBlockMinutes } from '../lib/planning';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { MeetingRecorder } from '../components/MeetingRecorder';
@@ -3044,7 +3045,7 @@ function detailFormFromEvent(event: CalendarExternalEvent, available: Record<Vid
   };
 }
 
-function CalendarEventDetailPanel({ event, organizationId, data, sources, videoServices, sourceColors, canWrite, editable, onNewNote, onNewDocument, onSetEventLink, onEditTask, onLogTime, onEditNote, onLinkExistingNote, onUnlinkNote, onNotesChanged, onSaveEvent, onDeleteEvent, onClose }: {
+function CalendarEventDetailPanel({ event, organizationId, data, sources, videoServices, sourceColors, canWrite, canWriteContent, editable, onNewNote, onNewDocument, onSetEventLink, onEditTask, onLogTime, onEditNote, onLinkExistingNote, onUnlinkNote, onNotesChanged, onSaveEvent, onDeleteEvent, onClose }: {
   event: CalendarExternalEvent | null;
   organizationId: UUID;
   data: AppData;
@@ -3054,6 +3055,8 @@ function CalendarEventDetailPanel({ event, organizationId, data, sources, videoS
   videoServices?: VideoServices | null;
   sourceColors: Map<string, string>;
   canWrite: boolean;
+  /** Mag de gebruiker notities en documenten wijzigen? Bepaalt of de notulen aan een bestaande notitie kunnen worden toegevoegd. */
+  canWriteContent: boolean;
   editable: boolean;
   onNewNote: (event: CalendarExternalEvent) => void;
   onNewDocument: (event: CalendarExternalEvent) => void;
@@ -3071,6 +3074,7 @@ function CalendarEventDetailPanel({ event, organizationId, data, sources, videoS
 }) {
   // De terugknop van de telefoon sluit het paneel, zoals een tik ernaast.
   useBackStep(Boolean(event), onClose);
+  const contentAppend = useContentAppend({ data, organizationId, canWriteContent, onChanged: onNotesChanged });
   const [selectedNoteId, setSelectedNoteId] = useState('');
   // Rechtstreeks vanuit de afspraak een notitie toevoegen: getypt (snelle
   // notitie) of geschreven (pen, schermvullend) — zonder het paneel te verlaten.
@@ -3585,6 +3589,7 @@ function CalendarEventDetailPanel({ event, organizationId, data, sources, videoS
               : (event.attendees ?? []).map(a => ({ email: a.email, name: a.name ?? '' })),
           }}
           onSaveAsNote={canAttachNotes ? saveSummaryAsNote : undefined}
+          {...contentAppend}
         />
 
         <div className="event-detail-actions">
@@ -4231,7 +4236,7 @@ export type CalendarDraft = {
  */
 export type CalendarLinkNotice = { tone: 'ok' | 'error'; text: string; key: number };
 
-export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, initialDraft = null, onDraftConsumed, organizationId, currentUserId, data, canWrite, canAdmin = false, onChanged, onEditTask, onMoveTask, onNewNoteForEvent, onNewDocumentForEvent, onSetEventLink, onEditNote, onLinkExistingNoteToEvent, onUnlinkNoteFromEvent }: {
+export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, initialDraft = null, onDraftConsumed, organizationId, currentUserId, data, canWrite, canWriteContent = false, canAdmin = false, onChanged, onEditTask, onMoveTask, onNewNoteForEvent, onNewDocumentForEvent, onSetEventLink, onEditNote, onLinkExistingNoteToEvent, onUnlinkNoteFromEvent }: {
   mode?: 'agenda' | 'settings';
   /** Alleen in de instellingen: de uitkomst van een koppeling, die hier blijft staan. */
   linkNotice?: CalendarLinkNotice | null;
@@ -4245,6 +4250,8 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
   initialDraft?: CalendarDraft | null;
   onDraftConsumed?: () => void;
   organizationId: UUID; currentUserId: UUID | null; data: AppData; canWrite: boolean; onEditTask: (task: Task) => void;
+  /** Schrijfrecht op de module Inhoud (notities en documenten); los van het recht op de agenda. */
+  canWriteContent?: boolean;
   /** Owner/admin: mag instellingen van de organisatie wijzigen (de Jitsi-server). */
   canAdmin?: boolean;
   onChanged: () => void | Promise<void>;
@@ -5500,7 +5507,7 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
       videoServices={integrations.videoServices} conference={editingOriginal?.conference ?? null}
       loading={loading} canWrite={canWrite} onSubmit={submitNewEvent} onClose={() => { setShowCreatePanel(false); setEditingOriginal(null); }} />}
 
-    <CalendarEventDetailPanel event={selectedEvent} organizationId={organizationId} data={data} sources={integrations.sources} videoServices={integrations.videoServices} sourceColors={sourceColors} canWrite={canWrite} editable={selectedEvent ? eventIsEditable(selectedEvent) : false} onNewNote={onNewNoteForEvent} onNewDocument={onNewDocumentForEvent} onSetEventLink={onSetEventLink} onEditTask={onEditTask} onLogTime={openLogTimeForEvent} onEditNote={onEditNote} onLinkExistingNote={onLinkExistingNoteToEvent} onUnlinkNote={onUnlinkNoteFromEvent} onNotesChanged={onChanged} onSaveEvent={saveEventEdits} onDeleteEvent={removeEvent} onClose={() => setSelectedEvent(null)} />
+    <CalendarEventDetailPanel event={selectedEvent} organizationId={organizationId} data={data} sources={integrations.sources} videoServices={integrations.videoServices} sourceColors={sourceColors} canWrite={canWrite} canWriteContent={canWriteContent} editable={selectedEvent ? eventIsEditable(selectedEvent) : false} onNewNote={onNewNoteForEvent} onNewDocument={onNewDocumentForEvent} onSetEventLink={onSetEventLink} onEditTask={onEditTask} onLogTime={openLogTimeForEvent} onEditNote={onEditNote} onLinkExistingNote={onLinkExistingNoteToEvent} onUnlinkNote={onUnlinkNoteFromEvent} onNotesChanged={onChanged} onSaveEvent={saveEventEdits} onDeleteEvent={removeEvent} onClose={() => setSelectedEvent(null)} />
 
     {showBookingSend && (
       <BookingSendDialog sources={writeableSources} clients={data.clients} draftCount={draftSlots.length} videoServices={integrations.videoServices}

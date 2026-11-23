@@ -2600,6 +2600,22 @@ body::before{
 .mr-recipient-add{display:flex;gap:8px}
 .mr-recipient-add .form-input{flex:1}
 .mr-include-transcript{margin-top:4px}
+/* Notulen toevoegen aan een notitie of document */
+.mr-append{margin-top:12px;padding:12px;border:1px solid var(--border,#303038);border-radius:12px;background:rgba(var(--sheen-rgb),calc(.03 * var(--sheen-k)));display:flex;flex-direction:column;gap:8px}
+.mr-append-head{font-size:13.5px;font-weight:600;color:var(--text)}
+.mr-append-search{display:flex;align-items:center;gap:8px;color:var(--muted2)}
+.mr-append-search .form-input{flex:1;min-width:0}
+.mr-append-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px;max-height:220px;overflow:auto}
+.mr-append-row{width:100%;display:flex;align-items:center;gap:8px;min-height:40px;padding:6px 8px;border:1px solid transparent;border-radius:9px;background:none;color:var(--text);font:inherit;font-size:13px;text-align:left;cursor:pointer}
+.mr-append-row:hover:not(:disabled){background:rgba(var(--sheen-rgb),calc(.06 * var(--sheen-k)))}
+.mr-append-row.is-on{border-color:rgba(var(--accent-rgb),.5);background:rgba(var(--accent-rgb),.1)}
+.mr-append-row svg{flex-shrink:0;color:var(--muted2)}
+.mr-append-row .mr-append-check{color:var(--accent-ink)}
+.mr-append-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mr-append-hint{flex-shrink:0;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:var(--muted)}
+.mr-append-empty,.mr-append-more{margin:0;font-size:12.5px;color:var(--muted2)}
+.mr-append-done{display:flex;align-items:flex-start;gap:7px;margin:0;font-size:13px;line-height:1.5;color:var(--accent-ink)}
+.mr-append-done svg{flex-shrink:0;margin-top:3px}
 
 @media(max-width:900px){
   .gerrie-root{right:16px;bottom:16px}
