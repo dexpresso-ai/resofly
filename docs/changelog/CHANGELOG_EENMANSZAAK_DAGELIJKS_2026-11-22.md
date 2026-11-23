@@ -244,7 +244,11 @@ sessie); de controle is de uitrol (de CLI breekt af bij een fout in een
 migratie), de rooktest, en dezelfde migraties op een lege en een gevulde
 lokale database.
 
-<!-- FRONTEND -->
+*Frontend checks* run 277 op dezelfde merge: alles groen. De migraties vanaf
+nul en de databasetests, de edge functions (deno), typecheck, unittests, de
+mobiele lay-outtest in licht en donker, laden per module, de inrichtingsstappen
+en de terugknop. (Run 276, de merge van staging ervóór, was rood op de
+mobiele test van het dashboard; zie "Schermtests".)
 
 **Let op, vanaf 15 januari 2027:** `dunning.test.ts` faalt tot de wettelijke
 rente en de handelsrente per 1 januari 2027 in een migratie staan (fix 41).
