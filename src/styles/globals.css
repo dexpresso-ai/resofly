@@ -1,3 +1,6 @@
+/* De lettertypen (@font-face) staan in een eigen bestand. Een @import moet
+   bovenaan staan; Vite neemt het bestand bij het bouwen op in deze bundel. */
+@import './lettertypen.css';
 /* Let op: het oude :root-blok dat hier stond is verwijderd. Al zijn 17 tokens
    werden verderop opnieuw gezet, dus het was dood gewicht — maar zolang het
    bestond, lekte het oude palet (#1a1a1a/#252525/#3a3a3a) door bij elk token
@@ -3219,6 +3222,76 @@ body::before{
 .bk-modal-body{display:flex;flex-direction:column;gap:8px;font-size:.9rem;color:var(--text)}
 .bk-modal-body .bk-muted{font-size:.82rem}
 .bk-modal-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}
+
+/* ── De verdeling van een boekjaar over de vennoten (PartnerSplit.tsx) ─────
+   In het afsluitvenster bij Boekjaren en op Vennoten. Het venster is ruimer
+   dan de gewone 440px: de tabel heeft vier kolommen met bedragen. */
+.bk-modal.bk-modal-split{max-width:640px;max-height:100%;overflow-y:auto;overscroll-behavior:contain}
+.bk-split{display:flex;flex-direction:column;gap:8px;border:1px solid var(--border);border-radius:14px;padding:12px 14px;background:rgba(var(--sheen-rgb),calc(.022 * var(--sheen-k)))}
+.bk-split-head{display:flex;align-items:center;justify-content:space-between;gap:8px 12px;flex-wrap:wrap}
+.bk-split-status{margin:2px 0 10px}
+.bk-split-sub{font-size:.76rem;font-weight:400}
+.bk-split .bk-note,.bk-split p{margin:0}
+.bk-split-warn{display:block;border-color:rgba(var(--danger-rgb),.35);color:var(--text)}
+.bk-split-warn svg{color:var(--accent-r);vertical-align:-2px}
+.bk-table.bk-split-table{min-width:0;font-size:.84rem}
+.bk-split-table td,.bk-split-table th{padding:8px 10px}
+.bk-split-table td:first-child{overflow-wrap:anywhere}
+.bk-split-total-row td{font-weight:700;border-top:1px solid var(--border)}
+.bk-split-prior-inline{display:none}
+.bk-split-edit{display:flex;flex-direction:column;gap:8px}
+.bk-split-row{display:grid;grid-template-columns:minmax(0,1.3fr) 92px minmax(0,1.2fr) minmax(0,1fr) 34px;gap:8px;align-items:center}
+.bk-split-row-head{font-size:.68rem;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--muted,rgba(var(--ink-rgb),.55))}
+.bk-split-name{overflow-wrap:anywhere;font-size:.86rem}
+.bk-split-field{display:grid;gap:4px;min-width:0}
+.bk-split-field>span,.bk-split-amount-label{display:none}
+.bk-split-amount{font-variant-numeric:tabular-nums;font-weight:600}
+.bk-split-foot{display:flex;align-items:center;justify-content:space-between;gap:8px 12px;flex-wrap:wrap}
+.bk-split-total{font-size:.84rem;font-weight:600;font-variant-numeric:tabular-nums}
+.bk-split-actions{flex-wrap:wrap}
+/* Instellingen: een andere rechtsvorm, met per open jaar een vinkje. */
+.legal-change{display:flex;flex-direction:column;gap:10px;font-size:.9rem}
+.legal-change p{margin:0}
+.legal-change-year{align-items:flex-start}
+.legal-change-year input{margin-top:2px;flex-shrink:0}
+.legal-change-year small{display:block;margin-top:2px}
+.bk-fy-form{display:flex;flex-direction:column;gap:8px;align-items:flex-start}
+.bk-fy-form p{margin:0}
+@media(max-width:640px){
+  /* Op de telefoon: de naam over de hele breedte, de twee velden naast
+     elkaar met hun eigen label, en het bedrag eronder. */
+  .bk-split-row-head{display:none}
+  .bk-split-row{grid-template-columns:minmax(0,1fr) minmax(0,1.4fr) 34px;align-items:end;padding:10px 0;border-top:1px solid var(--border)}
+  .bk-split-name{grid-column:1/-1}
+  .bk-split-field>span{display:block;font-size:.68rem;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--muted,rgba(var(--ink-rgb),.55))}
+  .bk-split-amount{grid-column:1/3;grid-row:3;text-align:left}
+  .bk-split-amount-label{display:inline;font-weight:400;color:var(--muted2)}
+  .bk-split-row .bk-icon-btn{grid-column:3;grid-row:2;align-self:end}
+  .bk-split-table td,.bk-split-table th{padding:8px 7px}
+  .bk-split-table .bk-split-col-prior{display:none}
+  .bk-split-prior-inline{display:block}
+}
+
+/* Een knop met alleen een icoon (aanpassen, verwijderen). Het potlood van
+   12×17px bij Vennoten was op de telefoon nauwelijks te raken. */
+.bk-icon-btn{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;flex-shrink:0;border:1px solid var(--border);border-radius:10px;background:transparent;color:var(--muted2);cursor:pointer;transition:background .15s,color .15s}
+.bk-icon-btn:hover:not(:disabled){background:var(--bg3);color:var(--text)}
+.bk-icon-btn:disabled{opacity:.45;cursor:default}
+.bk-partner-actions{display:flex;gap:6px;justify-content:flex-end}
+.bk-partners-table tr.is-reversed td{color:var(--muted2)}
+.bk-partner-status{font-weight:600}
+@media(max-width:640px){
+  /* Vennoten op de telefoon: geen veegrij. De rekeningen vallen weg (ze
+     staan in het Grootboek), teamlid en status staan onder de naam. */
+  .bk-table.bk-partners-table{min-width:0}
+  .bk-partners-table .bk-col-wide{display:none}
+  .bk-partners-table td:first-child{overflow-wrap:anywhere;width:44%}
+  .bk-partners-table th,.bk-partners-table td{padding:9px 7px}
+  .bk-partners-table th{font-size:10.5px;letter-spacing:.05em}
+  /* Aanpassen en verwijderen onder elkaar: naast elkaar drukten ze de
+     prullenbak rechts uit beeld. */
+  .bk-partners-table .bk-partner-actions{flex-direction:column;align-items:flex-end}
+}
 
 /* ── Eigen verzenddomein (instellingen → e-mail) ─────────────────────── */
 .sending-domain-card .btn-primary{margin-top:4px}
@@ -12345,7 +12418,27 @@ body.ink-sheet-open{overflow:hidden}
 .pi-inbox-head h3{margin:0 0 3px;font-size:1rem;display:inline-flex;align-items:center;gap:7px}
 .pi-inbox-head p{margin:0;font-size:.83rem}
 .pi-inbox-list{display:flex;flex-direction:column;gap:10px}
-.pi-inbox-hint{display:flex;align-items:center;gap:8px;margin-bottom:0}
+.pi-inbox-hint{display:flex;align-items:flex-start;gap:8px;margin-bottom:0}
+.pi-inbox-hint>svg{flex-shrink:0;margin-top:2px}
+.pi-private-payer{display:block;margin-top:4px;font-size:.74rem}
+/* De inkooplijst op de telefoon: geen veegrij van acht kolommen meer, waarin
+   "Privé betaald" buiten beeld stond. Per factuur twee kolommen: links
+   nummer, leverancier en datum, rechts totaal, status en de knop. Excl. en
+   btw staan in de factuur zelf. */
+@media(max-width:640px){
+  .pi-list .bk-table{min-width:0}
+  .pi-list thead{display:none}
+  .pi-list tbody tr{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:12px;row-gap:3px;padding:11px 12px;border-bottom:1px solid rgba(var(--sheen-rgb),calc(.05 * var(--sheen-k)))}
+  .pi-list tbody tr:last-child{border-bottom:0}
+  .pi-list .bk-table td{padding:0;border:0;min-width:0}
+  .pi-list td:nth-child(1){grid-column:1;grid-row:1;overflow-wrap:anywhere}
+  .pi-list td:nth-child(2){grid-column:1;grid-row:2}
+  .pi-list td:nth-child(3){grid-column:1;grid-row:3;color:var(--muted2);font-size:.8rem}
+  .pi-list td.pi-col-detail{display:none}
+  .pi-list td:nth-child(6){grid-column:2;grid-row:1}
+  .pi-list td:nth-child(7){grid-column:2;grid-row:2;text-align:right}
+  .pi-list td:nth-child(8){grid-column:2;grid-row:3;text-align:right}
+}
 .pi-inbox-row.is-busy{opacity:.8}
 .pi-inbox-total{font-variant-numeric:tabular-nums;font-weight:700;color:var(--text)}
 .pi-inbox-from{font-weight:500;color:var(--muted)}

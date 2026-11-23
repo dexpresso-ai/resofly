@@ -49,7 +49,7 @@ export function isWriterRole(role: unknown): boolean {
  * - boekhouder (gast): Financiën alleen lezen, de rest dicht. Vast; wat er in
  *   module_access staat, telt dan niet;
  *   Ook met "mag boeken" (organization_members.accountant_can_book, migratie
- *   20261122133000) blijft dit lezen. Boeken kan de boekhouder alleen met zijn
+ *   20261123133000) blijft dit lezen. Boeken kan de boekhouder alleen met zijn
  *   eigen sessie via de functies in public.accountant_booking_context; een edge
  *   function draait op de service-role en zou die lijst overslaan. Daarom
  *   opent die stand hier bewust niets: Gerrie, de agents, MCP en de API boeken

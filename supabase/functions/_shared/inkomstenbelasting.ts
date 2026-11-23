@@ -626,6 +626,23 @@ export function splitByShares(amountCents: number, shares: IbShare[]): Map<strin
   return out;
 }
 
+/**
+ * Het winstaandeel met een voorafgaande verdeling: eerst ieders vaste bedrag
+ * (arbeidsbeloning, rente over het kapitaal), het restant naar rato. Zelfde
+ * regel als fiscal_year_result_shares in de database (20261122100000). Zonder
+ * voorafgaande bedragen is dit precies splitByShares.
+ */
+export function splitWithPrior(amountCents: number, shares: Array<IbShare & { priorCents: number }>): Map<string, number> {
+  const priorTotal = shares.reduce((sum, s) => sum + Math.trunc(s.priorCents), 0);
+  const rest = splitByShares(Math.trunc(amountCents) - priorTotal, shares);
+  const out = new Map<string, number>();
+  for (const s of shares) {
+    const cents = Math.trunc(s.priorCents) + (rest.get(s.key) ?? 0);
+    out.set(s.key, cents === 0 ? 0 : cents);
+  }
+  return out;
+}
+
 // ── Prognose voor het lopende jaar ──────────────────────────────────────────
 
 const DAY_MS = 86_400_000;
@@ -651,6 +668,22 @@ export const IB_PROJECTION_MIN_DAYS = 30;
  * in ResoFly later in het jaar, dan telt het tempo vanaf die dag: anders zou
  * een start per 1 juli de winst halveren.
  */
+/**
+ * De uren doorgetrokken naar 31 december, in het tempo vanaf de eerste dag met
+ * uren in dit jaar: dezelfde som als projectHourCriterion (src/lib/hourCriterion.ts),
+ * die de teller op Eigen vermogen en Vennoten gebruikt. Zonder uren blijft het
+ * wat er staat.
+ */
+export function projectMinutesFromFirstEntry(totalMinutes: number, firstEntryDate: string | null, today: string, year: number): number {
+  const yearEnd = dayNumber(`${year}-12-31`);
+  const now = Math.min(dayNumber(today), yearEnd);
+  const daysRemaining = Math.max(0, yearEnd - now);
+  if (!firstEntryDate || totalMinutes <= 0) return totalMinutes;
+  const start = Math.max(dayNumber(firstEntryDate), dayNumber(`${year}-01-01`));
+  const elapsedDays = Math.max(1, now - start + 1);
+  return Math.round(totalMinutes + (totalMinutes / elapsedDays) * daysRemaining);
+}
+
 export function projectYearResult(input: { resultCents: number; year: number; today: string; startDate: string | null }): IbProjection | null {
   const yearStart = `${input.year}-01-01`;
   const yearEnd = `${input.year}-12-31`;
@@ -709,7 +742,18 @@ export interface IncomeTaxInputs {
   /** Kosten op rekeningen voor eten, drinken en representatie (subtype mixed_costs, 4600). */
   mixedCostsCents: number;
   overlappingFiscalYears: Array<{ id: string; label: string; periodStart: string; periodEnd: string; status: string }>;
-  partners: Array<{ id: string; name: string; partnerNumber: number; kind: 'beherend' | 'commanditair'; isActive: boolean; shareBasisPoints: number }>;
+  /**
+   * De vennoten met de verdeling van het boekjaar in dit kalenderjaar
+   * (20261122100000). `isActive`: doet mee in de verdeling van dat jaar, ook
+   * als hij inmiddels is uitgetreden; `currentlyActive`: de stand van nu.
+   * `priorShareCents`: zijn bedrag vóór de verdeling naar rato (arbeidsbeloning,
+   * rente over het kapitaal).
+   */
+  partners: Array<{ id: string; name: string; partnerNumber: number; kind: 'beherend' | 'commanditair'; isActive: boolean; shareBasisPoints: number; currentlyActive?: boolean; priorShareCents?: number; bookedShareCents?: number | null }>;
+  /** Het boekjaar in dit kalenderjaar, en of de verdeling daarvoor is vastgelegd. */
+  fiscalYearId?: string | null;
+  fiscalYearClosed?: boolean;
+  splitFixed?: boolean;
   profiles: IncomeTaxProfile[];
   corrections: Array<{ id: string; partnerId: string | null; code: IbCorrectionCode; label: string; amountCents: number }>;
   investments: Array<{ assetId: string; name: string; assetNumber: string | null; acquisitionDate: string; costCents: number; excluded: boolean }>;
@@ -722,6 +766,15 @@ export interface IncomeTaxInputs {
    * teamlid hangt (partner-id → minuten). Null zonder recht op Uren of zonder vof.
    */
   partnerMinutes: Record<string, number> | null;
+  /**
+   * De eerste dag met uren in dit jaar (eigenaar, en per vennoot). De prognose
+   * van het urencriterium rekent het tempo vanaf die dag, net als de teller op
+   * Eigen vermogen en Vennoten (projectHourCriterion). Hier rekende hij vanaf
+   * 1 januari: een vennoot die in juni toetrad, haalde het daar wel en hier
+   * niet.
+   */
+  ownerFirstHourDate?: string | null;
+  partnerFirstHourDates?: Record<string, string> | null;
 }
 
 export type IncomeTaxBasis = 'geboekt' | 'prognose';
@@ -909,17 +962,26 @@ export function buildIncomeTaxOverview(inputs: IncomeTaxInputs, options: { basis
     : [];
   const profileFor = (partnerId: string | null) => inputs.profiles.find(p => p.partnerId === partnerId) ?? null;
 
-  type Who = { key: string; partnerId: string | null; name: string; kind: IncomeTaxPerson['kind']; shareBasisPoints: number | null };
+  type Who = { key: string; partnerId: string | null; name: string; kind: IncomeTaxPerson['kind']; shareBasisPoints: number | null; priorCents: number };
   const people: Who[] = active.length > 0
-    ? active.map(p => ({ key: p.id, partnerId: p.id, name: p.name, kind: p.kind, shareBasisPoints: p.shareBasisPoints }))
-    : [{ key: 'ondernemer', partnerId: null, name: inputs.companyName?.trim() ? `Ondernemer (${inputs.companyName.trim()})` : 'Ondernemer', kind: 'ondernemer', shareBasisPoints: null }];
+    ? active.map(p => ({ key: p.id, partnerId: p.id, name: p.name, kind: p.kind, shareBasisPoints: p.shareBasisPoints, priorCents: Math.trunc(p.priorShareCents ?? 0) }))
+    : [{ key: 'ondernemer', partnerId: null, name: inputs.companyName?.trim() ? `Ondernemer (${inputs.companyName.trim()})` : 'Ondernemer', kind: 'ondernemer', shareBasisPoints: null, priorCents: 0 }];
 
   if (inputs.isPartnershipForm && active.length === 0) {
-    warnings.push('Er zijn nog geen vennoten vastgelegd. Deze raming rekent alsof één persoon de hele winst heeft; leg de vennoten en hun winstaandeel vast bij Vennoten.');
+    // Zijn er wel vennoten, maar doet er in dit jaar niemand mee (allemaal
+    // uitgetreden), dan klopte "nog geen vennoten vastgelegd" niet.
+    warnings.push(inputs.partners.length > 0
+      ? `In ${inputs.year} doet geen vennoot mee in de verdeling. Deze raming rekent alsof één persoon de hele winst heeft; leg de verdeling van het boekjaar vast bij Boekjaren → Afsluiten.`
+      : 'Er zijn nog geen vennoten vastgelegd. Deze raming rekent alsof één persoon de hele winst heeft; leg de vennoten en hun winstaandeel vast bij Vennoten.');
   }
   const shareTotal = active.reduce((sum, p) => sum + p.shareBasisPoints, 0);
   if (active.length > 0 && shareTotal !== 10000) {
     warnings.push(`De winstverdeling van de vennoten telt op tot ${(shareTotal / 100).toLocaleString('nl-NL', { maximumFractionDigits: 2 })}% in plaats van 100%. Pas de verdeling aan bij Vennoten; tot dan klopt deze raming niet.`);
+  }
+  // Een voorbij jaar zonder vastgelegde verdeling rekent met de vennoten van
+  // nu. Wie sindsdien uittrad of toetrad, telt dan verkeerd mee.
+  if (inputs.isPartnershipForm && active.length > 0 && inputs.splitFixed === false && inputs.year < Number(options.today.slice(0, 4))) {
+    warnings.push(`De verdeling van ${inputs.year} is nog niet vastgelegd: deze raming rekent met de vennoten en percentages van nu. Waren die in ${inputs.year} anders, leg de verdeling dan vast bij Boekjaren → Afsluiten.`);
   }
 
   const shares: IbShare[] = people.map(p => ({ key: p.key, basisPoints: p.shareBasisPoints ?? 10000, order: active.find(a => a.id === p.partnerId)?.partnerNumber ?? 0 }));
@@ -927,7 +989,19 @@ export function buildIncomeTaxOverview(inputs: IncomeTaxInputs, options: { basis
     ? new Map([[people[0].key, Math.trunc(amount)]])
     : splitByShares(amount, shares);
 
-  const profitShares = split(usedResultCents);
+  // Het winstaandeel met eerst ieders voorafgaande bedrag (arbeidsbeloning,
+  // rente over het kapitaal), zoals de jaarafsluiting het boekt. KIA en
+  // correcties gaan wel gewoon naar rato.
+  // Bij een afgesloten jaar op basis "geboekt": wat de jaarafsluiting per
+  // vennoot boekte, niet opnieuw gerekend. Bij een oud jaar met een klein
+  // resultaat is het percentage niet altijd terug te rekenen uit de boeking.
+  const booked = basis === 'geboekt' && inputs.fiscalYearClosed && active.length > 0
+    && active.every(p => typeof p.bookedShareCents === 'number')
+    ? new Map(active.map(p => [p.id, Math.trunc(p.bookedShareCents as number)]))
+    : null;
+  const profitShares = (people.length === 1 && people[0].partnerId === null)
+    ? split(usedResultCents)
+    : booked ?? splitWithPrior(usedResultCents, people.map((p, i) => ({ ...shares[i], priorCents: p.priorCents })));
   const kiaShares = split(kiaCents);
   // Eten, drinken en representatie op 4600: het niet-aftrekbare deel telt
   // ResoFly zelf mee, voor de hele onderneming (bij een vof naar winstaandeel).
@@ -979,8 +1053,13 @@ export function buildIncomeTaxOverview(inputs: IncomeTaxInputs, options: { basis
     // november met 1.400 uur nog steeds geen zelfstandigenaftrek.
     const stored = saved ?? defaultIncomeTaxProfile(who.partnerId);
     const hoursFromTimeTracking = stored.meetsHoursCriterion === null && registeredMinutes !== null;
+    const firstHourDate = who.partnerId === null
+      ? (inputs.ownerFirstHourDate ?? null)
+      : (inputs.partnerFirstHourDates?.[who.partnerId] ?? null);
     const projectedMinutes = hoursFromTimeTracking && registeredMinutes !== null && basis === 'prognose' && projection
-      ? mulDiv(Math.max(0, Math.trunc(registeredMinutes)), projection.totalDays, projection.elapsedDays)
+      ? (inputs.ownerFirstHourDate !== undefined || inputs.partnerFirstHourDates !== undefined
+          ? projectMinutesFromFirstEntry(Math.max(0, Math.trunc(registeredMinutes)), firstHourDate, options.today, inputs.year)
+          : mulDiv(Math.max(0, Math.trunc(registeredMinutes)), projection.totalDays, projection.elapsedDays))
       : null;
     const profile: IncomeTaxProfile = hoursFromTimeTracking && registeredMinutes !== null
       ? { ...stored, meetsHoursCriterion: (projectedMinutes ?? registeredMinutes) >= HOURS_CRITERION_MINUTES }
@@ -1025,7 +1104,12 @@ export function buildIncomeTaxOverview(inputs: IncomeTaxInputs, options: { basis
       registeredMinutes,
       projectedMinutes,
       estimate,
-      notes: personNotes(rules, { kind: who.kind, profile, estimate, hoursFromTimeTracking, registeredMinutes, projectedMinutes, investmentTotalCents }),
+      notes: [
+        ...(who.priorCents !== 0
+          ? [`Winstaandeel: eerst ${euroText(who.priorCents)} vooraf (arbeidsbeloning of rente over het kapitaal), daarna ${((who.shareBasisPoints ?? 0) / 100).toLocaleString('nl-NL', { maximumFractionDigits: 2 })}% van de rest. Zo staat het in de verdeling van het boekjaar.`]
+          : []),
+        ...personNotes(rules, { kind: who.kind, profile, estimate, hoursFromTimeTracking, registeredMinutes, projectedMinutes, investmentTotalCents }),
+      ],
     };
   });
 

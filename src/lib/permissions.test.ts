@@ -68,7 +68,7 @@ test('rolhulpjes', () => {
 });
 
 test('de boekhouder die mag boeken: alleen op de boekhoudpagina\'s, en de vaste regel blijft lezen', () => {
-  // 20261122133000: "mag boeken" opent geen module. De database staat alleen
+  // 20261123133000: "mag boeken" opent geen module. De database staat alleen
   // een lijst functies toe; de app toont de knoppen alleen op hun pagina's.
   const kijkt = buildPermissions({ role: 'accountant', accountant_can_book: false });
   const boekt = buildPermissions({ role: 'accountant', accountant_can_book: true });
@@ -91,7 +91,7 @@ test('de boekhouder die mag boeken: alleen op de boekhoudpagina\'s, en de vaste 
 test('de pagina\'s van de boekhouder passen bij de lijst in de database', () => {
   // Elke pagina heeft minstens één functie in accountant_booking_context; staat
   // die er niet meer, dan toont de app knoppen die de database weigert.
-  const sql = readFileSync(new URL('../../supabase/migrations/20261122133000_boekhouder_mag_boeken.sql', import.meta.url), 'utf8');
+  const sql = readFileSync(new URL('../../supabase/migrations/20261123133000_boekhouder_mag_boeken.sql', import.meta.url), 'utf8');
   const perPage: Record<string, string> = {
     ledger: 'post_journal_entry', prepaid: 'post_prepaid_releases', assets: 'post_asset_depreciation',
     'vat-returns': 'finalize_vat_return', 'fiscal-years': 'close_fiscal_year', 'income-tax': 'save_income_tax_profile',

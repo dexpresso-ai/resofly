@@ -36,6 +36,8 @@ import { chromium } from '@playwright/test';
 import { installMock, storageScript, seed, GALLERY_ID } from './mock/backend.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+/** Het vorige jaar, zoals de vof in de mock het heeft (tests/mobile/mock/backend.mjs). */
+const VORIG_JAAR = new Date().getUTCFullYear() - 1;
 
 const VIEWPORTS = {
   phone: { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, maxChrome: 112 },
@@ -320,7 +322,44 @@ const PAGES = {
       { selector: '.bk-balance-sub', text: 'Nog niet aan een vennoot toegewezen', label: 'de regel met vermogen op geen enkele vennoot' },
     ],
   },
-  'owners-bewerken': { page: 'owners', mock: { ledger: true, vof: true }, prepare: '.bk-cell-action .bk-line-del' },
+  // Het potlood is sinds 2026-11-22 een knop van 34px (.bk-icon-btn), naast
+  // een prullenbak; het was 12×17px en stond op de telefoon buiten beeld.
+  'owners-bewerken': { page: 'owners', mock: { ledger: true, vof: true }, prepare: '.bk-cell-action .bk-icon-btn' },
+  // 2026-11-22 — de verdeling per boekjaar. Vennoten met het vorige jaar nog
+  // open: de regel "Winst van <jaar>, nog niet verdeeld" apart van "nog niet
+  // toegewezen", en het venster Verdeling aanpassen (per vennoot het
+  // percentage en het voorafgaande bedrag). Boekjaren: het afsluitvenster van
+  // het vorige jaar met de verdeling per vennoot en de waarschuwing over privé
+  // zonder vennoot; hetzelfde venster bij Verdeling aanpassen; en met een
+  // vennoot die na het jaareinde een ander percentage kreeg (afsluiten staat
+  // dan uit tot de verdeling vastligt).
+  'owners-verdeling': {
+    page: 'owners', mock: { ledger: true, vof: true, vofOpenPrior: true },
+    prepare: '.bk-split-status button:has-text("Verdeling aanpassen")', contained: '.bk-modal',
+    mustShow: [
+      { selector: '.bk-open-prior', text: 'nog niet verdeeld', label: 'de winst van het open vorige jaar als eigen regel' },
+      { selector: '.bk-modal-split .bk-split-edit .bk-split-field input', label: 'het formulier van de verdeling' },
+    ],
+  },
+  'boekjaren-vof-afsluiten': {
+    page: 'fiscal-years', mock: { ledger: true, vof: true, vofOpenPrior: true },
+    prepare: `tr:has-text("31-12-${VORIG_JAAR}") button:has-text("Afsluiten")`, contained: '.bk-modal',
+    mustShow: [
+      { selector: '.bk-modal .bk-split-table', text: 'Anna de Vries', label: 'de verdeling per vennoot' },
+      { selector: '.bk-modal .bk-split-warn', text: 'geen vennoot', label: 'de waarschuwing over privé zonder vennoot' },
+    ],
+  },
+  'boekjaren-vof-aanpassen': {
+    page: 'fiscal-years', mock: { ledger: true, vof: true, vofOpenPrior: true },
+    prepare: [`tr:has-text("31-12-${VORIG_JAAR}") button:has-text("Afsluiten")`, '.bk-modal .bk-split-head button:has-text("Verdeling aanpassen")'],
+    contained: '.bk-modal',
+    mustShow: [{ selector: '.bk-modal .bk-split-edit .bk-split-field input', label: 'het formulier van de verdeling' }],
+  },
+  'boekjaren-vof-gewijzigd': {
+    page: 'fiscal-years', mock: { ledger: true, vof: true, vofOpenPrior: true, vofChanged: true },
+    prepare: `tr:has-text("31-12-${VORIG_JAAR}") button:has-text("Afsluiten")`, contained: '.bk-modal',
+    mustShow: [{ selector: '.bk-modal .bk-split-warn[role="alert"]', text: 'Bram Jansen', label: 'de melding over de wijziging na het jaareinde' }],
+  },
   // 2026-11-18 — inkoopfacturen van een vof: de betaalstatus in de lijst, en
   // het venster "Privé betaald" met de keuze van de vennoot.
   'inkoop-vof': {
@@ -331,6 +370,13 @@ const PAGES = {
     page: 'purchase-invoices', mock: { ledger: true, vof: true },
     prepare: 'tr:has-text("VD-1077") .bk-cell-action button:has-text("Privé betaald")',
     mustShow: [{ selector: '.modal .select-trigger', text: 'kies de vennoot', label: 'de keuze van de vennoot' }],
+  },
+  // Een creditnota die de leverancier op de rekening van een vennoot
+  // terugstortte (2026-11-22): "Privé ontvangen", met de vraag wie het geld kreeg.
+  'inkoop-vof-ontvangen': {
+    page: 'purchase-invoices', mock: { ledger: true, vof: true },
+    prepare: 'tr:has-text("CN-0031") .bk-cell-action button:has-text("Privé ontvangen")',
+    mustShow: [{ selector: '.modal', text: 'Wie kreeg het geld terug?', label: 'de vraag wie het geld terugkreeg' }],
   },
   // Een declaratie van een teamlid dat geen vennoot is: die betaal je terug via
   // de bank, en dat zegt het venster erbij.

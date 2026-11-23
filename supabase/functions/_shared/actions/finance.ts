@@ -174,7 +174,7 @@ async function bookkeepingStartDate(ctx: ActionCtx): Promise<string | null> {
 
 // ── Uren factureren ─────────────────────────────────────────────────────────
 // Eén berekening voor het scherm, Gerrie en de factuur zelf: de database-functie
-// `time_invoice_preview` (migratie 20261122110000). Gerrie telde eerder zelf uren
+// `time_invoice_preview` (migratie 20261123110000). Gerrie telde eerder zelf uren
 // op uit `list_time_entries`; die lijst was afgekapt op 25 registraties, en zo
 // kwam er € 2.337,50 op een voorstel waar € 10.285 hoorde.
 

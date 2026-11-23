@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { hoursLabel, invoicedLabel, openHoursSummary } from './timeRates.ts';
 
 // "Nog te factureren" op de pagina Uren, het project en de klant moet hetzelfde
-// zeggen als time_invoice_preview in de database (migratie 20261122110000):
+// zeggen als time_invoice_preview in de database (migratie 20261123110000):
 // declarabel, met een tarief, en nog op geen factuur.
 
 test('nog te factureren: alleen declarabel, met tarief en nog niet op een factuur', () => {

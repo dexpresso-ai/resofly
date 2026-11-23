@@ -10,7 +10,7 @@ import type { CrumbHome, CrumbTarget } from './lib/breadcrumbs';
 import { backButton } from './lib/backButton';
 import { BackScope, useBackStep } from './lib/useBackStep';
 import { TabHistory, type TabHistoryContext, type TabView } from './lib/tabHistory';
-import { applyFetch, clearFailed, emptyGroupData, EMPTY_GROUP_STATE, groupsFor, groupsToFetch, markStale, missingGroups, PAGE_DATA_GROUPS, type DataGroup, type GroupState } from './lib/dataGroups';
+import { applyFetch, clearFailed, emptyGroupData, EMPTY_GROUP_STATE, groupsFor, groupsToFetch, markStale, missingGroups, PAGE_DATA_GROUPS, type CoreData, type DataGroup, type GroupState } from './lib/dataGroups';
 import { buildPermissions, EDIT_KIND_MODULE, firstAllowedPage, isAccountantRole, isAdminRole, MODULE_LABELS, PAGE_MODULE, type ModuleAccess, type ModuleKey, type Permissions } from './lib/permissions';
 import { appHomePage, applyStandaloneAppHead, canonicalAppUrl, installableAppFromPath, isPageInApp, standaloneAppFromPath, type InstallableApp, type StandaloneApp } from './lib/standaloneApps';
 import { captureInstallPrompt } from './lib/installPrompt';
@@ -118,11 +118,9 @@ import { memberShortName, memberColor, memberInitials, memberEmail, projectTeamA
 import { uploadToR2 } from './lib/r2';
 import { listExternalCalendarEvents, createExternalCalendarEvent, updateCalendarEvent, deleteCalendarEvent, completeCalendarOAuth, takeCalendarOAuthReturn, invalidateCalendarEventsCache, type CalendarEventInput } from './lib/calendar-api';
 import { calendarOAuthErrorText } from './lib/calendarConnection';
-import { buildDocumentPdfBlob, buildDocumentDocxBlob, downloadBlob, documentFileBaseName, type DocumentExportMeta } from './lib/documentExport';
+import type { DocumentExportMeta } from './lib/documentExport';
 import { createOfficeSessionForDocument, uploadDocumentDocx, uploadOfficeDocumentFile, createBlankOfficeDocument, downloadOfficeDocument, officeFileNameForDocument, warmupOfficeEditor, OFFICE_UPLOAD_ACCEPT, NEW_OFFICE_LABEL, type OfficeSession, type NewOfficeType } from './lib/office';
 import { deleteR2Object } from './lib/r2-api';
-import { OfficeEditor } from './features/OfficeEditor';
-import { Dashboard } from './features/Dashboard';
 import { useClientEmailUnread, ClientEmailToasts } from './components/ClientEmailNotifications';
 import type { CommunicationFocus } from './features/Communication';
 import { useDecisionAlerts, DecisionToasts } from './components/DecisionNotifications';
@@ -132,12 +130,10 @@ import type { AuditTarget } from './lib/auditLog';
 import { useTicketUnread, TicketToasts } from './components/TicketNotifications';
 import { useTeamChat, TeamChatPage, TeamChatDock, TeamChatToasts } from './components/TeamChat';
 import { usePushNotifications } from './components/usePushNotifications';
-import { McpConsent } from './components/McpConsent';
 import { readAuthorizeRequest } from './lib/mcp-api';
 import { readBankReturn } from './lib/bankLink';
 import { defaultBillableForProject, resolveRateCents } from './lib/timeRates';
 import { TICKET_REOPEN_STATUS, changedTicketValues, ticketClientChangeWarning } from './lib/tickets';
-import { clientDraftFromEmail, describeFoundFields, type ClientDraftField } from './lib/clientFromEmail';
 import { TicketTimeline } from './components/TicketTimeline';
 import { RelatedNotes, noteTypeLabels } from './features/Notes';
 import { NoteInkSection, noteHandwritingSummary } from './components/NoteHandwriting';
@@ -151,7 +147,7 @@ import { creditInvoiceAmount, issueCreditNoteForRefund, issueInvoiceWithoutEmail
 import { nextPurchaseNumber, purchaseTotals } from './lib/purchaseInvoiceNumbers';
 import type { InvoiceFormSeed } from './features/Bookkeeping';
 import { clientHostInfo, portalRedirectTarget } from './lib/clientHost';
-import { PORTAL_PREVIEW_PATH } from './lib/portalPreview';
+import { PORTAL_PREVIEW_PATH } from './lib/portalPreviewPath';
 import type { SettingsTab } from './lib/settingsMenu';
 import { ProjectTemplatePicker } from './features/ProjectTemplates';
 import { NEW_REPORT_PREFIX, onReportCreated, useAiReportList } from './lib/aiReports';
@@ -160,20 +156,17 @@ import type { CalendarDraft, CalendarLinkNotice } from './features/CalendarPage'
 import { TaskAgendaSection } from './components/TaskAgenda';
 import { calendarEventLinkMatchesEvent } from './lib/calendar-links';
 import type { BookingFocus } from './features/MeetingBookingManager';
-import { ProjectShiftDialog } from './components/ProjectShiftDialog';
 import type { ProjectShift } from './components/ProjectShiftDialog';
 import { applyPeriodLocally, applyPlanningLocally, applyTimeLocally, clockLabel, mergeTaskRows, restoreTasksForDates, splitTitleAndEstimate } from './lib/planning';
 import { formatISODate, parseISODate, startOfWeek } from './lib/dates';
 import { defaultDueDate, dueDateAfterDateChange, paymentTermDays } from './lib/financeRules';
 import { AttachmentList } from './components/AttachmentList';
 import { GerrieChat, askGerrie } from './components/GerrieChat';
-import { CallLogDialog, CallReturnPrompt } from './components/CallLogDialog';
 import { watchForReturn, type FinishedCall } from './lib/callBridge';
 import type { GerrieConversationsFocus } from './features/GerrieCommandCenter';
-import { GerrieAanzettenPage, type AiConsentChange } from './components/GerrieAanzetten';
+import type { AiConsentChange } from './components/GerrieAanzetten';
 import { AI_TERMS_VERSION, consentIsActive, consentIsDeclined } from './lib/aiConsent';
 import type { GerrieActionHandlers, GerrieProposal, GerrieProposalLine } from './lib/gerrie-api';
-import { runRegistryAction } from './lib/actions';
 import { saveRoutine, setRoutineStatus, runRoutineNow } from './lib/gerrie-api';
 import { plainTextToEmailHtml, sendClientEmail } from './services/mailService';
 import { loadBillingOverview } from './services/billingService';
@@ -266,12 +259,27 @@ const OrganizationSetupPending = lazyPage(() => import('./features/OrganizationS
 const TimeInvoiceDialog = lazyPage(() => import('./features/TimeInvoiceDialog'), 'TimeInvoiceDialog');
 /*
  * De pagina's van de werkruimte laden pas als je ze opent (zie
- * components/LazyPage.tsx). Het dashboard blijft in de hoofdbundel: dat is de
- * startpagina. renderPage zet elke pagina in een Suspense en een
+ * components/LazyPage.tsx). Ook het dashboard (sinds 22 november): een losse
+ * app opent nooit op het dashboard, en haalde het toch bij elke start binnen.
+ * De pagina waarop de app opent, komt vooruit binnen, tegelijk met de
+ * gegevens (PAGE_CHUNKS hieronder). renderPage zet elke pagina in een Suspense en een
  * PageLoadBoundary per tabblad. Hulpfuncties die main.tsx zelf gebruikt, staan
  * in src/lib; een gewone import uit een pagina zou die pagina terug in de
  * hoofdbundel trekken (Vite waarschuwt dan bij het bouwen).
  */
+const Dashboard = lazyPage(() => import('./features/Dashboard'), 'Dashboard');
+/*
+ * Vensters die alleen op een bepaald moment verschijnen (een gesprek loggen,
+ * Word openen, taken verschuiven, een AI koppelen, Gerrie aanzetten). Ze
+ * zaten in de bundel die bij elke start laadt; nu pas als ze opengaan
+ * (DialogDeferred).
+ */
+const OfficeEditor = lazyPage(() => import('./features/OfficeEditor'), 'OfficeEditor');
+const McpConsent = lazyPage(() => import('./components/McpConsent'), 'McpConsent');
+const ProjectShiftDialog = lazyPage(() => import('./components/ProjectShiftDialog'), 'ProjectShiftDialog');
+const CallLogDialog = lazyPage(() => import('./components/CallLogDialog'), 'CallLogDialog');
+const CallReturnPrompt = lazyPage(() => import('./components/CallLogDialog'), 'CallReturnPrompt');
+const GerrieAanzettenPage = lazyPage(() => import('./components/GerrieAanzetten'), 'GerrieAanzettenPage');
 const ClientDetailPage = lazyPage(() => import('./features/Clients'), 'ClientDetailPage');
 const Clients = lazyPage(() => import('./features/Clients'), 'Clients');
 const CommunicationPage = lazyPage(() => import('./features/Communication'), 'CommunicationPage');
@@ -321,8 +329,8 @@ type ClientFromMail = {
   messageId: string;
   /** Voor de melding boven het formulier: "Peter de Vries (peter@nieuwbedrijf.nl)". */
   sender: string;
-  /** Wat er uit de tekst van de mail kwam (zie lib/clientFromEmail.ts). */
-  found: ClientDraftField[];
+  /** Wat er uit de tekst van de mail kwam, in woorden (describeFoundFields in lib/clientFromEmail.ts). */
+  found: string;
   /**
    * Het afzenderadres dat bij de klant onthouden mag worden, zodat volgende mail
    * vanzelf goed komt. Null bij een contactformulier, een no-reply-adres of een
@@ -434,6 +442,43 @@ if (typeof window !== 'undefined') backButton().returnToStartAfterReload();
 /** Waar een nieuw tabblad opent: het dashboard, of in een losse app zijn eerste pagina. */
 const START_PAGE: Page = (STANDALONE_APP?.home[0] as Page | undefined) ?? 'dashboard';
 
+/**
+ * Het bestand van elke pagina die los laadt. Een pagina rendert pas als zijn
+ * gegevensgroepen er zijn (renderPage); zonder vooruit laden vroeg hij zijn
+ * bestand pas daarna op. Zo kwam de beginpagina van een losse app binnen als
+ * waterval: schil, dan de groep, dan het bestand (gemeten op een telefoon:
+ * Agenda 2,7 s warm, tegen 2,2 s met vooruit laden).
+ */
+const PAGE_CHUNKS: Partial<Record<Page, { preload: () => void }>> = {
+  dashboard: Dashboard, gerrie: GerrieCommandCenter, weekplanner: WeekPlanner, calendar: CalendarPage,
+  'meeting-booking': MeetingBookingManager, time: TimeTracking, stats: Reports, report: AiReportPage,
+  content: ContentLibrary, notes: ContentLibrary, documents: ContentLibrary, clients: Clients, client: ClientDetailPage,
+  communication: CommunicationPage, projects: ProjectsListPage, 'project-planning': ProjectsPlanningPage,
+  tickets: Tickets, marketing: Marketing, quotes: Quotes, contracts: Contracts, invoices: Invoices,
+  suppliers: SuppliersPage, 'purchase-invoices': PurchaseInvoicesPage, ledger: LedgerPage, bank: BankPage,
+  assets: AssetsPage, prepaid: PrepaidPage, pnl: ProfitLossPage, forecast: ForecastPage, 'vat-returns': VatReturnsPage,
+  'corporate-tax': CorporateTaxPage, 'income-tax': IncomeTaxPage, dga: DgaPage, shareholders: ShareholdersPage,
+  owners: OwnersPage, 'fiscal-years': FiscalYearsPage, 'annual-accounts': AnnualAccountsPage,
+  declarations: DeclarationsPage, archive: Archive, settings: Settings, project: ProjectPage, gallery: GalleryTab,
+};
+
+/**
+ * De pagina waarop de app waarschijnlijk opent: het actieve tabblad van de
+ * vorige keer, anders de beginpagina. Alleen om vooruit te laden; welke pagina
+ * het echt wordt (en of je hem mag openen), beslist restoreTabsForOrganization
+ * zodra het lidmaatschap er is.
+ */
+function expectedStartPage(organizationId: string | null): Page {
+  if (hasBankReturn()) return 'bank';
+  if (!organizationId) return START_PAGE;
+  try {
+    const persisted = loadPersistedTabs(organizationId, STANDALONE_APP?.id);
+    const page = persisted?.tabs[persisted.activeIndex]?.page as Page | undefined;
+    if (page && PAGE_TITLES[page] && (!STANDALONE_APP || isPageInApp(STANDALONE_APP, page))) return page;
+  } catch { /* geen opslag (privévenster): dan de beginpagina */ }
+  return START_PAGE;
+}
+
 /** De eerste pagina van de losse app die dit teamlid mag openen; in de werkruimte null. */
 function appStartPage(permissions: Permissions): Page | null {
   return STANDALONE_APP ? (appHomePage(STANDALONE_APP, permissions.canOpenPage) as Page | null) : null;
@@ -513,6 +558,82 @@ function freshTab(page: Page = START_PAGE): WorkspaceTab {
  *  koppeling afrondt of zegt waarom het niet lukte. */
 function hasBankReturn(): boolean {
   return typeof window !== 'undefined' && readBankReturn(window.location.search) !== null;
+}
+
+/**
+ * Wat een ronde van de werkruimte meteen in gang zet: het lidmaatschap, en voor
+ * de organisatie die we verwachten (de onthouden of de gekozen) alvast de kern
+ * en de groepen van de pagina waarop de app opent. Veilig: de RLS geeft alleen
+ * gegevens van een organisatie waar je lid van bent, en kiest het lidmaatschap
+ * een andere, dan gooit runWorkspaceRound dit weg.
+ */
+interface RoundStart {
+  candidate: string | null;
+  context: Promise<OrganizationContext>;
+  early: {
+    orgId: string;
+    core: Promise<CoreData>;
+    /** De pagina waarvoor de groepen vooruit komen; alleen bij de eerste ronde voor deze organisatie. */
+    page: Page;
+    groups: DataGroup[];
+    groupLoads: Array<Promise<Partial<AppData>>>;
+  } | null;
+}
+
+function startRound(candidate: string | null, firstForOrganization: boolean): RoundStart {
+  const context = loadOrganizationContext(candidate, { includeBilling: false });
+  if (!candidate) return { candidate, context, early: null };
+  const core = loadCoreData(candidate, { organizationCreatedAt: context.then(found => found.activeOrganization?.created_at ?? null, () => null) });
+  const page = expectedStartPage(candidate);
+  // Bij een ververs staan de groepen er al; refreshOpenGroups haalt dan zelf op.
+  const groups = firstForOrganization ? groupsFor(page) : [];
+  const groupLoads = groups.map(group => loadDataGroup(candidate, group) as Promise<Partial<AppData>>);
+  if (firstForOrganization) PAGE_CHUNKS[page]?.preload();
+  // Wat we niet gebruiken, geeft geen onafgehandelde fout. Wie het wel
+  // gebruikt, krijgt de fout gewoon (dit maakt een nieuwe belofte).
+  for (const pending of [context, core, ...groupLoads]) pending.catch(() => undefined);
+  return { candidate, context, early: { orgId: candidate, core, page, groups, groupLoads } };
+}
+
+/** Een adres waar de werkruimte (of het inlogscherm) komt: geen portaal, geen klantadres, geen deellink. */
+function isWorkspaceLocation(): boolean {
+  if (typeof window === 'undefined' || !isSupabaseConfigured) return false;
+  if (clientHostInfo() !== null || isClientPortalRoute()) return false;
+  return ![
+    getPublicQuoteTokenFromLocation(), getPublicInvoiceTokenFromLocation(), getPublicContractTokenFromLocation(),
+    getPublicBookingTokenFromLocation(), getPublicGalleryTokenFromLocation(), getPublicShareTokenFromLocation(),
+    getPublicTransferTokenFromLocation(), getPublicUnsubscribeTokenFromLocation(),
+  ].some(Boolean);
+}
+
+/**
+ * De eerste ronde begint al hier, terwijl React de app nog opbouwt. Eerst
+ * begon hij in een effect na de eerste render: op een telefoon ging het eerste
+ * verzoek pas ~0,8 s nadat de JavaScript binnen was (evalueren, renderen,
+ * effecten, de sessie). Alleen met een sessie; de eerste ronde in de app
+ * neemt dit over als het dezelfde gebruiker en organisatie is
+ * (takeBootRound), anders vervalt het. De organisatie komt hier, net als in
+ * applySession, alleen als voorkeur uit de opslag: welke het wordt, beslist
+ * het lidmaatschap (loadOrganizationContext).
+ */
+const BOOT_ROUND: Promise<(RoundStart & { userId: string }) | null> | null = isWorkspaceLocation()
+  ? (() => {
+    let remembered: string | null = null;
+    try { remembered = localStorage.getItem(activeOrgStorageKey); } catch { /* geen opslag */ }
+    // Het bestand van de beginpagina hoeft niet op de sessie te wachten.
+    PAGE_CHUNKS[expectedStartPage(remembered)]?.preload();
+    return supabaseAuth.getSession().then(({ data }) => {
+      const userId = data.session?.user.id;
+      return userId ? { userId, ...startRound(remembered, true) } : null;
+    }).catch(() => null);
+  })()
+  : null;
+let bootRoundTaken = false;
+/** Eén keer: de ronde die al bij het laden begon. Daarna altijd null. */
+function takeBootRound() {
+  if (bootRoundTaken) return null;
+  bootRoundTaken = true;
+  return BOOT_ROUND;
 }
 
 /** Een pushmelding van de teamchat opent /?chat=<gesprek>. Eén keer lezen en
@@ -902,6 +1023,11 @@ function Deferred({ children }: { children: React.ReactNode }) {
   return <PageLoadBoundary resetKey=""><Suspense fallback={<BootLoading />}>{children}</Suspense></PageLoadBoundary>;
 }
 
+/** Hetzelfde voor een los geladen venster: niets tonen zolang het binnenkomt (meestal een fractie van een seconde). */
+function DialogDeferred({ children }: { children: React.ReactNode }) {
+  return <PageLoadBoundary resetKey=""><Suspense fallback={null}>{children}</Suspense></PageLoadBoundary>;
+}
+
 type DataGroupStatus = 'ready' | 'loading' | 'failed';
 
 /**
@@ -1159,10 +1285,16 @@ function App() {
       const pane = mainEl.querySelector<HTMLElement>(':scope > .content:not([hidden])');
       mainEl.classList.toggle('is-scrolled', Boolean(pane && pane.scrollTop > 4));
     };
-    update();
+    // De eerste meting in het volgende frame: scrollTop lezen dwingt een
+    // layout af, en direct na het renderen was dat een tweede volledige
+    // layout van de werkruimte (133 ms bij het opstarten op een telefoon).
+    const frame = requestAnimationFrame(update);
     // Scroll bubbelt niet, maar loopt wél langs de capture-fase van de voorouders.
     mainEl.addEventListener('scroll', update, { capture: true, passive: true });
-    return () => mainEl.removeEventListener('scroll', update, { capture: true });
+    return () => {
+      cancelAnimationFrame(frame);
+      mainEl.removeEventListener('scroll', update, { capture: true });
+    };
   }, [mainEl, activeTabId]);
   const viewKey = `${activeTab.id}:${activeTab.page}:${activeTab.projectId ?? ''}:${activeTab.clientId ?? ''}:${activeTab.galleryId ?? ''}`;
   useEffect(() => {
@@ -1488,19 +1620,17 @@ function App() {
     try {
       const tooSlow = 'Het laden duurt te lang. Controleer je verbinding en kies Ververs.';
       const candidate = target === undefined ? activeOrgIdRef.current : target;
-      const orgContextLoad = withTimeout(loadOrganizationContext(candidate, { includeBilling: false }), WORKSPACE_ROUND_TIMEOUT_MS, tooSlow);
       // De kern alvast laden voor de organisatie die we verwachten (de
       // onthouden of de gekozen), tegelijk met het lidmaatschap. Eerst wachtte
-      // hij daarop, en stond het laadscherm twee rondes achter elkaar.
-      // Veilig: de RLS geeft alleen gegevens van een organisatie waar je lid
-      // van bent, en kiest loadOrganizationContext een andere, dan gooien we
-      // dit weg en laden we de kern voor die.
-      const early = candidate
-        ? { orgId: candidate, core: loadCoreData(candidate, { organizationCreatedAt: orgContextLoad.then(context => context.activeOrganization?.created_at ?? null, () => null) }) }
-        : null;
-      // Een vooruit geladen kern die we niet gebruiken, geeft geen onafgehandelde fout.
-      early?.core.catch(() => undefined);
-      const orgContext = await orgContextLoad;
+      // hij daarop, en stond het laadscherm twee rondes achter elkaar. Bij de
+      // eerste ronde liep dat al sinds het laden van de app (BOOT_ROUND).
+      const boot = await takeBootRound();
+      if (session !== sessionEpochRef.current) return;
+      const start = boot && boot.userId === loadedForRef.current && boot.candidate === candidate
+        ? boot
+        : startRound(candidate, Boolean(candidate) && candidate !== dataOrgRef.current);
+      const early = start.early;
+      const orgContext = await withTimeout(start.context, WORKSPACE_ROUND_TIMEOUT_MS, tooSlow);
       // Intussen uitgelogd: niets van deze ronde hoort nog in beeld.
       if (session !== sessionEpochRef.current) return;
       // Het abonnementsoverzicht komt los binnen (loadBillingInBackground). Tot
@@ -1554,6 +1684,12 @@ function App() {
           const fresh: AppData = { ...loaded, ...emptyGroupData() };
           dataRef.current = fresh;
           setData(fresh);
+          // De groepen van de beginpagina kwamen tegelijk met de kern. Alleen
+          // voor de organisatie die het werd, en alleen als je die pagina mag
+          // openen: anders vervallen ze, en vraagt de pagina zelf.
+          if (early && early.orgId === orgId && early.groups.length && access.canOpenPage(early.page)) {
+            void fetchGroups(orgId, early.groups, early.groupLoads);
+          }
         }
         // Herstel de open tabbladen éénmalig per organisatie (eerste load of wissel);
         // een gewone ververs laat de tabbladen ongemoeid.
@@ -1629,11 +1765,12 @@ function App() {
    * alleen het laatst gevraagde toont, toont bij een stroom verversingen niets.
    * Mislukt een groep, dan onthoudt groupState dat met de melding.
    */
-  function fetchGroups(orgId: string, groups: readonly DataGroup[]): Promise<void> {
+  function fetchGroups(orgId: string, groups: readonly DataGroup[], started?: ReadonlyArray<Promise<Partial<AppData>>>): Promise<void> {
     const epoch = orgEpochRef.current;
     const freshness = freshnessRef.current;
     const seqs = groups.map(group => (groupSeqRef.current[group] = (groupSeqRef.current[group] ?? 0) + 1));
-    const promise = Promise.allSettled(groups.map(group => loadDataGroup(orgId, group))).then(results => {
+    // `started`: al onderweg sinds het begin van de ronde (startRound).
+    const promise = Promise.allSettled(groups.map((group, index) => started?.[index] ?? loadDataGroup(orgId, group))).then(results => {
       if (epoch !== orgEpochRef.current) return;
       const patch: Partial<AppData> = {};
       const loaded: DataGroup[] = [];
@@ -1733,6 +1870,12 @@ function App() {
     if (!dataOrgId) return;
     void ensureGroups(openGroups);
   }, [dataOrgId, openGroups, groupState]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Het bestand van de pagina tegelijk met zijn groepen. renderPage rendert de
+  // pagina pas als de groepen er zijn, en zonder dit vroeg hij zijn bestand pas
+  // daarna op: twee wachttijden na elkaar in plaats van één.
+  useEffect(() => {
+    if (permissions.canOpenPage(page)) PAGE_CHUNKS[page as Page]?.preload();
+  }, [page, permissions]);
 
   /**
    * Herlaadt de werkruimte, maar hoogstens één keer per reeks.
@@ -2176,11 +2319,11 @@ function App() {
   // controles hierboven is er een ingelogde gebruiker met een organisatie, en
   // dat is precies wat een toestemming nodig heeft.
   if (mcpAuthorizeRequest) {
-    return <McpConsent
+    return <Deferred><McpConsent
       request={mcpAuthorizeRequest}
       organizations={organizationContext.organizations.map(org => ({ id: org.id, name: org.name }))}
       defaultOrganizationId={activeOrganization.id}
-    />;
+    /></Deferred>;
   }
 
   const activeOrg = activeOrganization;
@@ -2204,9 +2347,15 @@ function App() {
    * met wat er in de mail staat (afzender, handtekening, contactformulier).
    * Er wordt nog niets opgeslagen; dat doet de gebruiker in het formulier.
    */
-  function openClientFromMail(message: InboundMessage) {
+  async function openClientFromMail(message: InboundMessage) {
     if (!ensureCanWrite()) return;
     if (!canEditKind('client')) { setError('Je hebt geen wijzigrechten voor Klanten. Vraag een owner of admin om deze module voor je open te zetten.'); return; }
+    // Het uitlezen van de mail (35 KB) pas hier laden: het zat in de bundel die
+    // bij elke start binnenkwam, voor een knop in de opvangbak.
+    let reader: typeof import('./lib/clientFromEmail');
+    try { reader = await import('./lib/clientFromEmail'); }
+    catch { setError('Het klantformulier kon niet worden geladen. Herlaad de pagina en probeer het opnieuw.'); return; }
+    const { clientDraftFromEmail, describeFoundFields } = reader;
     const settings = data.companySettings;
     const draft = clientDraftFromEmail(
       { senderEmail: message.sender_email, senderName: message.sender_name, subject: message.subject, bodyText: message.body_text, receivedAt: message.received_at },
@@ -2230,7 +2379,7 @@ function App() {
       fromMail: {
         messageId: message.id,
         sender,
-        found: draft.found,
+        found: describeFoundFields(draft.found),
         rememberAddress: draft.senderIsContact ? (message.sender_email ?? '').trim().toLowerCase() || null : null,
       },
     });
@@ -2527,6 +2676,8 @@ function App() {
         companyName: data.companySettings?.company_name ?? null,
         content: doc.content || '',
       };
+      // Pas hier laden: alleen bij omzetten naar Word (stond in de opstartbundel).
+      const { buildDocumentDocxBlob } = await import('./lib/documentExport');
       const blob = buildDocumentDocxBlob(meta);
       const up = await uploadDocumentDocx(activeOrg.id, doc.title || 'Document', blob);
       // De tekst staat vanaf nu in het Word-bestand. De oude rich text bleef eerst
@@ -4085,7 +4236,12 @@ function App() {
     onRunRegistryAction: async (p) => {
       if (!ensureCanWrite()) throw new Error('Je hebt geen schrijfrechten.');
       let label: string;
-      try { label = await runRegistryAction(p.action_id, p.payload, { organizationId: activeOrg.id, data }); }
+      // De registry pas hier laden: alleen bij goedkeuren van een voorstel, en
+      // hij woog 87 KB in de bundel die bij elke start binnenkwam.
+      try {
+        const { runRegistryAction } = await import('./lib/actions');
+        label = await runRegistryAction(p.action_id, p.payload, { organizationId: activeOrg.id, data });
+      }
       catch (e) { throw new Error(saveErrorMessage(e)); }
       await refresh();
       return label;
@@ -4539,12 +4695,12 @@ function App() {
               <CreateMenu kinds={createKinds} onCreate={createFromBar} busy={Boolean(edit)} />
             </> : undefined}
           />}
-      {projectShift && <ProjectShiftDialog
+      {projectShift && <DialogDeferred><ProjectShiftDialog
         shift={projectShift}
         busy={projectShiftBusy}
         onCancel={() => setProjectShift(null)}
         onConfirm={(taskIds, shiftDeadlines) => { void applyProjectShift(taskIds, shiftDeadlines); }}
-      />}
+      /></DialogDeferred>}
       {/* Zenit heeft geen titelbalk: de werktab draagt de naam, "Ververs" staat in
           het contextpaneel en "Alleen lezen" naast de vraagbalk. */}
       {!zenitFamily && page !== 'calendar' && page !== 'weekplanner' && page !== 'gerrie' && page !== 'communication' && page !== 'chat' && <header className="topbar"><div><div className="topbar-eyebrow">{STANDALONE_APP?.name ?? 'ResoFly workspace'}</div><div className="topbar-title">{title}</div></div><div className="topbar-actions">{pageReadOnly && <span className="status-pill readonly">Alleen lezen</span>}<Button onClick={refresh}>{loading ? 'Laden…' : 'Ververs'}</Button></div></header>}
@@ -4587,14 +4743,14 @@ function App() {
     {/* Terug uit een gesprek: één regel met de vraag of het gelogd moet worden.
         Overal in de app, want je komt terug op de pagina waar je was — niet
         per se op de pagina waar je op "bellen" tikte. */}
-    {returnedCall && !callDraft && <CallReturnPrompt
+    {returnedCall && !callDraft && <DialogDeferred><CallReturnPrompt
       name={returnedCall.counterpartName}
       phone={returnedCall.phone}
       awaySeconds={returnedCall.awaySeconds}
       onLog={() => { setCallDraft(returnedCall); setReturnedCall(null); }}
       onDismiss={() => setReturnedCall(null)}
-    />}
-    {callDraft && <CallLogDialog
+    /></DialogDeferred>}
+    {callDraft && <DialogDeferred><CallLogDialog
       organizationId={activeOrg.id}
       data={data}
       canWrite={orgCanWrite && permissions.canWrite('clients')}
@@ -4611,8 +4767,8 @@ function App() {
       }}
       onClose={() => setCallDraft(null)}
       onSaved={refresh}
-    />}
-    {officeSession && <OfficeEditor session={officeSession} onClose={() => { setOfficeSession(null); setOfficeDoc(null); refresh(); }} onDownload={officeDoc ? downloadOfficeDoc : undefined} />}
+    /></DialogDeferred>}
+    {officeSession && <DialogDeferred><OfficeEditor session={officeSession} onClose={() => { setOfficeSession(null); setOfficeDoc(null); refresh(); }} onDownload={officeDoc ? downloadOfficeDoc : undefined} /></DialogDeferred>}
     {officeOpening && !officeSession && <div style={{ position: 'fixed', bottom: 16, right: 16, zIndex: 2100, background: 'var(--panel-strong)', border: '1px solid var(--border2)', borderRadius: 10, padding: '8px 14px', fontWeight: 600 }}>Editor openen…</div>}
     {/* Zwevend teamchat-paneel — overal beschikbaar, behalve op de volledige chatpagina. */}
     <TeamChatDock api={teamChat} hidden={page === 'chat' || !permissions.canRead('chat')} onExpand={(id) => openTeamChat(id)} />
@@ -5017,7 +5173,7 @@ type TaskAgendaHandlers = {
  * vandaan komen, wat je moet nakijken en wat er na opslaan met de mail gebeurt.
  */
 function ClientFromMailNote({ fromMail }: { fromMail: ClientFromMail }) {
-  const found = describeFoundFields(fromMail.found);
+  const found = fromMail.found;
   return <div className="client-from-mail-note" role="note">
     <strong>Uit de mail van {fromMail.sender}</strong>
     <p>
@@ -5121,6 +5277,8 @@ function EditModal({ edit, data, dataStatus, organizationId, currentUserId, team
     setDocExport({ busy: 'pdf', error: null });
     try {
       const meta = buildDocumentMeta();
+      // Pas hier laden: alleen bij een PDF van een document (stond in de opstartbundel).
+      const { buildDocumentPdfBlob, documentFileBaseName, downloadBlob } = await import('./lib/documentExport');
       const filename = `${documentFileBaseName(meta.title)}.pdf`;
       const blob = await buildDocumentPdfBlob(meta);
       downloadBlob(blob, filename);

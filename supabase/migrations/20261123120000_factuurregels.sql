@@ -67,7 +67,7 @@ declare
   -- GEWIJZIGD (20261105230000): de datum in Nederland. Om 00:30 op 1 januari
   -- kreeg de factuur de datum en het nummer van het vorige jaar (UTC).
   v_today date := (now() at time zone 'Europe/Amsterdam')::date;
-  -- GEWIJZIGD (20261122120000): de vervaldatum volgt de betaaltermijn (hieronder).
+  -- GEWIJZIGD (20261123120000): de vervaldatum volgt de betaaltermijn (hieronder).
   v_due_date date;
   v_lines jsonb;
   v_notes text;
@@ -175,7 +175,7 @@ begin
     raise exception 'De geaccepteerde offerteversie bevat geen geldige regels.' using errcode = '23514';
   end if;
 
-  -- TOEGEVOEGD (20261122120000): de betaaltermijn uit de bedrijfsgegevens, met
+  -- TOEGEVOEGD (20261123120000): de betaaltermijn uit de bedrijfsgegevens, met
   -- dezelfde regel als het factuurformulier (payment_term_days). Het was
   -- vandaag + 14, ook als op de factuur "Betaling binnen 30 dagen." stond: de
   -- pdf sprak zichzelf tegen en de herinneringen begonnen 16 dagen te vroeg.

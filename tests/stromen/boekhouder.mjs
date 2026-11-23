@@ -3,7 +3,7 @@
 // Waarom dit scenario: de boekhouder (het gratis gastaccount) kon alleen lezen.
 // De controle van 22 november 2026 (bevinding 6) speelde het na: een memoriaal,
 // de btw-aangifte afsluiten, een boekjaar heropenen en het IB-profiel gaven
-// allemaal 403. Sinds 20261122133000 kan de eigenaar "mag boeken" aanzetten.
+// allemaal 403. Sinds 20261123133000 kan de eigenaar "mag boeken" aanzetten.
 // Dan mag de boekhouder corrigeren en afsluiten, en verder niets: geen
 // facturen, geen inkoop, geen bank, geen klanten, geen team, en niets
 // rechtstreeks via REST.

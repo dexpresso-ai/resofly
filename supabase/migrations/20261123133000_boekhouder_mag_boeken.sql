@@ -48,7 +48,7 @@ alter table public.organization_members
   add column if not exists accountant_can_book boolean not null default false;
 
 comment on column public.organization_members.accountant_can_book is
-  'Alleen bij de rol accountant: mag deze boekhouder boeken en afsluiten (memoriaal, btw-aangifte, boekjaar, IB)? Zet je met set_accountant_booking (20261122133000).';
+  'Alleen bij de rol accountant: mag deze boekhouder boeken en afsluiten (memoriaal, btw-aangifte, boekjaar, IB)? Zet je met set_accountant_booking (20261123133000).';
 
 alter table public.organization_members drop constraint if exists organization_members_accountant_can_book_check;
 alter table public.organization_members add constraint organization_members_accountant_can_book_check

@@ -467,7 +467,7 @@ async function syncOneAccount(acc: any, requisition: RequisitionState | null): P
  * Een periode die de bank niet meer leverde, vastgelegd op de rekening: de
  * Bankpagina toont hem tot je hem wegklikt of een afschrift over die periode
  * inleest. Een eerder gat dat nog openstaat, wordt samengevoegd. Zonder
- * migratie 20261122100000 bestaan de kolommen nog niet; dan alleen de melding
+ * migratie 20261123100000 bestaan de kolommen nog niet; dan alleen de melding
  * in het resultaat.
  */
 async function markSyncGap(acc: any, gap: { from: string; to: string }): Promise<void> {

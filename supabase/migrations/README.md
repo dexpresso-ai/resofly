@@ -56,6 +56,16 @@ ontstaat bij de eerste login.
    rechtgezet; zie hieronder.
 4. Schrijf hem zo dat hij veilig nog eens kan draaien (`if not exists`,
    `create or replace`, `drop … if exists`).
+5. Een leespolicy op een nieuwe tabel zoekt de rechten **één keer per vraag**
+   op, niet per rij (sinds `20261122200000_rls_een_keer_per_query`):
+   `using (organization_id = any ((select public.my_organization_ids())::uuid[]))`
+   in plaats van `using (public.can_read_org(organization_id))`.
+   `apply_module_gate` maakt de module gate al zo. De oude vorm riep per rij
+   een functie aan met een eigen query; bij een paar duizend rijen kostte dat
+   honderden milliseconden per vraag. `tests/database/rls_een_keer_per_query.sql`
+   faalt op een nieuwe leespolicy in de oude vorm. Schrijven (`with check`,
+   `can_write_org`, `can_write_module`) blijft zoals het was: dat raakt één
+   rij per keer.
 
 De CI-job `migrations` (`.github/workflows/frontend-checks.yml`) speelt bij
 elke pull request de hele keten af op een lege database met dezelfde images als

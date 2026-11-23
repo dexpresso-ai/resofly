@@ -9,7 +9,7 @@
 // oktober zit hier in: 110 registraties van 66 minuten à € 85.
 //
 // Alles gaat zoals de app het doet: de eigen sessie tegen REST en de RPC's
-// (migratie 20261122110000), versturen en crediteren via invoice-workflow, en
+// (migratie 20261123110000), versturen en crediteren via invoice-workflow, en
 // Gerrie/MCP via de openbare API. De uitkomst wordt nagekeken in de database.
 import { randomUUID } from 'node:crypto';
 import { API_URL } from './omgeving.mjs';

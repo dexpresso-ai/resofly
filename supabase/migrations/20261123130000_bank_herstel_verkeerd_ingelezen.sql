@@ -41,7 +41,7 @@ alter table public.bank_transactions
   add column if not exists excluded_reason text;
 
 comment on column public.bank_transactions.excluded_at is
-  'Gezet als de mutatie niet bij deze bankrekening hoort (verkeerd bestand, een regel van een andere rekening). De rij blijft staan met status ignored, maar telt niet mee in de aansluiting (20261122130000).';
+  'Gezet als de mutatie niet bij deze bankrekening hoort (verkeerd bestand, een regel van een andere rekening). De rij blijft staan met status ignored, maar telt niet mee in de aansluiting (20261123130000).';
 
 -- "Niet van deze rekening" bestaat alleen bij een genegeerde bankregel. Een
 -- handmatige mutatie verwijder je, en een open of geboekte mutatie telt mee.
@@ -399,7 +399,7 @@ begin
                            or (t.status = 'merged' and m.status in ('unmatched','suggested')))), 0) as unbooked_sum,
         count(*) filter (where not t.is_manual and (v_start is null or t.booking_date >= v_start) and t.status = 'ignored' and t.excluded_at is null) as ignored_count,
         coalesce(sum(t.amount_cents) filter (where not t.is_manual and (v_start is null or t.booking_date >= v_start) and t.status = 'ignored' and t.excluded_at is null), 0) as ignored_sum,
-        -- TOEGEVOEGD (20261122130000): niet van deze rekening. Staat niet op het
+        -- TOEGEVOEGD (20261123130000): niet van deze rekening. Staat niet op het
         -- afschrift van deze rekening en telt dus nergens in mee.
         count(*) filter (where t.excluded_at is not null) as excluded_count,
         coalesce(sum(t.amount_cents) filter (where t.excluded_at is not null), 0) as excluded_sum

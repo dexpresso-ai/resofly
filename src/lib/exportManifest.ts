@@ -105,28 +105,37 @@ export const EXPORT_FORMAT_VERSION = 1;
 // herstellen) vervangen functies en triggers; geen tabellen of kolommen.
 // 20261120100000 (briefpapier los) zet alleen de functie company_settings_core
 // erbij; geen tabellen of kolommen. Het briefpapier gaat gewoon mee in de export.
-// 20261122090000 (openstaand na deelbetaling) zet alleen de functie
+// 20261122100000 (vof: de verdeling per boekjaar) zet fiscal_year_partner_shares
+// erbij, legal_form op fiscal_years en share_changed_at op partnership_partners.
+// Alles gaat mee: hoe de winst van een jaar over de vennoten ging (met wat er
+// geboekt is) en de rechtsvorm van dat jaar horen bij de administratie; zonder
+// komt een afgesloten jaar in een andere omgeving op andere winstaandelen uit.
+// 20261122110000 (vof: bank en inkoop privé) vervangt functies; geen tabellen
+// of kolommen.
+// 20261122200000 (RLS één keer per query) zet functies erbij en herschrijft
+// leespolicies; geen tabellen of kolommen.
+// 20261123090000 (openstaand na deelbetaling) zet alleen de functie
 // list_open_invoice_amounts erbij; geen tabellen of kolommen.
-// 20261122100000 (bank inlezen) zet sync_gap_from en sync_gap_to op
+// 20261123100000 (bank inlezen) zet sync_gap_from en sync_gap_to op
 // bank_accounts: een periode die de bankkoppeling niet meer kon ophalen. Ze
 // gaan mee (bank_accounts is 'export'); geen geheim. Verder vervangt hij de
 // functie bank_purchase_match.
-// 20261122110000 (uren factureren) zet time_entry_invoices erbij: welke
+// 20261123110000 (uren factureren) zet time_entry_invoices erbij: welke
 // urenregistratie op welke verkoopfactuur staat. Dat hoort bij de administratie
 // van de klant en gaat mee.
-// 20261122120000 (factuurregels) zet functies en een trigger op invoices erbij
+// 20261123120000 (factuurregels) zet functies en een trigger op invoices erbij
 // en vervangt convert_accepted_quote_to_invoice; geen tabellen of kolommen.
-// 20261122130000 (bank herstellen) zet excluded_at/_by/_reason op
-// bank_transactions en 20261122133000 accountant_can_book op
-// organization_members; die gaan met hun tabel mee. 20261122132000 zet de
+// 20261123130000 (bank herstellen) zet excluded_at/_by/_reason op
+// bank_transactions en 20261123133000 accountant_can_book op
+// organization_members; die gaan met hun tabel mee. 20261123132000 zet de
 // tabel sent_e_invoices erbij, met het bestand (storage_key) in de export.
-// 20261122131000 vervangt alleen functies en triggers.
-// 20261122140000 (Nederlandse datum) vervangt vijf functies; geen tabellen of kolommen.
-// 20261122141000 (boekjaar opent vanzelf) zet een functie en een trigger op
+// 20261123131000 vervangt alleen functies en triggers.
+// 20261123140000 (Nederlandse datum) vervangt vijf functies; geen tabellen of kolommen.
+// 20261123141000 (boekjaar opent vanzelf) zet een functie en een trigger op
 // journal_entries; geen tabellen of kolommen.
-// 20261122142000 (wettelijke rente) zet één rij in statutory_interest_rates
+// 20261123142000 (wettelijke rente) zet één rij in statutory_interest_rates
 // (landelijke tarieven, geen gegevens van een organisatie); geen tabellen of kolommen.
-export const EXPORT_SCHEMA_VERSION = '20261122142000';
+export const EXPORT_SCHEMA_VERSION = '20261123142000';
 
 export type TableKind =
   | 'export'
@@ -313,7 +322,7 @@ export const EXPORT_MANIFEST: Readonly<Record<string, TableRule>> = {
   invoice_version_items: { kind: 'export' },
   invoice_workflow_events: { kind: 'export' },
   invoice_email_deliveries: { kind: 'export' },
-  // De e-facturen en e-creditnota's zoals ze verstuurd zijn (20261122132000).
+  // De e-facturen en e-creditnota's zoals ze verstuurd zijn (20261123132000).
   // Tot dan zat er geen enkele e-factuur in de export, alleen de pdf's.
   sent_e_invoices: { kind: 'export', files: ['storage_key'] },
   invoice_email_events: { kind: 'export' },
@@ -379,6 +388,7 @@ export const EXPORT_MANIFEST: Readonly<Record<string, TableRule>> = {
   share_transactions: { kind: 'export' },
   share_encumbrances: { kind: 'export' },
   partnership_partners: { kind: 'export' },
+  fiscal_year_partner_shares: { kind: 'export' },
   income_tax_profiles: { kind: 'export' },
   income_tax_corrections: { kind: 'export' },
   income_tax_kia_exclusions: { kind: 'export' },

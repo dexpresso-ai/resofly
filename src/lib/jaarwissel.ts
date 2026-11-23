@@ -66,7 +66,7 @@ export function vatOpening(input: { today: string; frequency: VatFrequency; next
 /**
  * Het kalenderjaar dat nog geen boekjaar heeft, terwijl het vorige jaar er wel
  * een had. Bij een eenmanszaak, vof, maatschap of cv opent de database het
- * boekjaar vanzelf bij de eerste boeking in het nieuwe jaar (20261122141000).
+ * boekjaar vanzelf bij de eerste boeking in het nieuwe jaar (20261123141000).
  * Wie in januari nog niets geboekt heeft, zag op Eigen vermogen alleen het
  * oude jaar, zonder één woord over het nieuwe. Hiermee kan de pagina het
  * zeggen en een knop tonen. Null als er niets ontbreekt, of als een mens het

@@ -63,7 +63,7 @@ export const AUDIT_ENTITY_MODULE: Readonly<Record<string, string | null>> = {
   contract_template: 'finance', corporate_tax_return: 'finance', credit_note: 'finance', dividend_distribution: 'finance',
   fiscal_year: 'finance', fiscal_year_size_input: 'finance', fixed_asset: 'finance', income_tax_correction: 'finance', income_tax_profile: 'finance',
   invoice: 'finance', journal_entry: 'finance',
-  ledger_account: 'finance', partnership_partner: 'finance', prepaid_expense: 'finance', purchase_invoice: 'finance', quote: 'finance', result_appropriation: 'finance',
+  ledger_account: 'finance', partnership_partner: 'finance', fiscal_year_partner_share: 'finance', prepaid_expense: 'finance', purchase_invoice: 'finance', quote: 'finance', result_appropriation: 'finance',
   share_transaction: 'finance', shareholder: 'finance', supplier: 'finance', vat_return: 'finance',
   calendar_event: 'calendar', calendar_event_link: 'calendar', calendar_source: 'calendar', note_calendar_link: 'calendar',
   client: 'clients', client_call: 'clients', client_contact: 'clients', client_field: 'clients',
@@ -1001,7 +1001,7 @@ export const ADMIN_ACTIONS: ActionDef[] = [
         // Voor de inkomstenbelasting is het boekjaar het kalenderjaar; de
         // database houdt de startmaand van een IB-onderneming op januari.
         if (month !== 1 && ['eenmanszaak', 'vof', 'maatschap', 'cv'].includes(String(settings.legal_form ?? 'eenmanszaak'))) {
-          throw new ActionError('Bij een eenmanszaak, vof, maatschap of cv is het boekjaar het kalenderjaar: het begint in januari. Een gebroken boekjaar kan alleen bij een BV, NV of coöperatie.');
+          throw new ActionError('Bij een eenmanszaak, vof, maatschap of cv begint het boekjaar in ResoFly in januari: de inkomstenbelasting rekent per kalenderjaar, en een gebroken boekjaar ondersteunt ResoFly bij deze rechtsvormen niet.');
         }
         if (month !== current.fiscal_year_start_month) {
           patch.fiscal_year_start_month = month;

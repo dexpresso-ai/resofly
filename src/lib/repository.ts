@@ -94,6 +94,7 @@ import type {
   ClosedPeriod,
   FiscalYear,
   FiscalYearListRow,
+  FiscalYearPartnerShare,
   Supplier,
   PurchaseInvoice,
   FixedAsset,
@@ -348,6 +349,18 @@ export async function loadOrganizationContext(activeOrganizationId?: UUID | null
   const currentEmail = sessionUser?.email?.trim().toLowerCase() ?? '';
   const nowIso = new Date().toISOString();
 
+  // De tweede ronde (team, uitnodigingen, logboek, licenties, Gerrie) alvast
+  // voor de organisatie die we verwachten, tegelijk met het lidmaatschap. Eerst
+  // wachtte hij op het lidmaatschap: twee rondgangen na elkaar in het
+  // laadscherm, gemeten 150-250 ms op een telefoon. Veilig: de RLS geeft alleen
+  // iets van een organisatie waar je lid van bent, en kiest het lidmaatschap
+  // hieronder een andere, dan vervalt dit (zie detailsLoad).
+  const early = activeOrganizationId
+    ? { organizationId: activeOrganizationId, details: loadOrganizationDetails(activeOrganizationId, nowIso, true) }
+    : null;
+  // Een vooruit gevraagde ronde die we niet gebruiken, geeft geen onafgehandelde fout.
+  early?.details.catch(() => undefined);
+
   const ensured = ensureDefaultOrganization();
   const loadMemberships = () => supabase
     .from('organization_members')
@@ -412,43 +425,21 @@ export async function loadOrganizationContext(activeOrganizationId?: UUID | null
     // in de console die naar een ontbrekende migratie wees.
     const canSeeBilling = isAdminRole(activeMembership?.role);
     const loadBilling = canSeeBilling && includeBilling;
-    // Het logboek ook (20261111140000): voor de rest geeft de database niets,
-    // dus vragen we het dan ook niet op.
+    // Het logboek ook (20261111140000): voor de rest geeft de database niets.
     const canSeeAuditLog = canSeeBilling;
-    const [{ data: teamRows, error: teamError }, { data: orgInvitationRows, error: orgInvitationError }, { data: auditRows, error: auditError }, { data: licenseRows, error: licenseError }, { data: billingRows, error: billingError }, { data: creativeRows, error: creativeError }, { data: businessRows, error: businessError }, { data: consentRows, error: consentError }] = await Promise.all([
-      supabase
-        .from('organization_members')
-        .select('*')
-        .eq('organization_id', activeOrganization.id)
-        .eq('status', 'active')
-        .order('created_at', { ascending: true }),
-      supabase
-        .from('organization_invitations')
-        .select('*')
-        .eq('organization_id', activeOrganization.id)
-        .eq('status', 'pending')
-        .or(`expires_at.is.null,expires_at.gt.${nowIso}`)
-        .order('created_at', { ascending: false }),
-      canSeeAuditLog
-        ? supabase
-          .from('audit_logs')
-          .select('*')
-          .eq('organization_id', activeOrganization.id)
-          .order('created_at', { ascending: false })
-          .limit(40)
-        : Promise.resolve({ data: [], error: null }),
-      supabase.rpc('organization_license_usage', { p_organization_id: activeOrganization.id }),
+    // De vooruit gevraagde ronde geldt alleen als het dezelfde organisatie is.
+    // Anders (de onthouden organisatie bestaat niet meer, of je bent er geen
+    // lid meer van) vervalt die, en vragen we het nu op voor de gekozen.
+    const detailsLoad = early && early.organizationId === activeOrganization.id
+      ? early.details
+      : loadOrganizationDetails(activeOrganization.id, nowIso, canSeeAuditLog);
+    const [details, { data: billingRows, error: billingError }] = await Promise.all([
+      detailsLoad,
       loadBilling
         ? supabase.rpc('organization_billing_overview', { p_organization_id: activeOrganization.id })
         : Promise.resolve({ data: null, error: null }),
-      supabase.rpc('organization_creative_status', { p_organization_id: activeOrganization.id }),
-      supabase.rpc('organization_business_status', { p_organization_id: activeOrganization.id }),
-      // Gerrie aan of uit (20261112190000). Eén vraag: de RLS geeft een teamlid
-      // alleen zijn eigen rij, en een owner of admin die van het hele team.
-      // Tegelijk met het lidmaatschap, zodat de chat niet eerst verschijnt en
-      // dan weer verdwijnt.
-      supabase.from('ai_consents').select('*').eq('organization_id', activeOrganization.id),
     ]);
+    const { team: { data: teamRows, error: teamError }, invitations: { data: orgInvitationRows, error: orgInvitationError }, audit: { data: auditRows, error: auditError }, license: { data: licenseRows, error: licenseError }, creative: { data: creativeRows, error: creativeError }, business: { data: businessRows, error: businessError }, consents: { data: consentRows, error: consentError } } = details;
     if (consentError) {
       // Migratie nog niet toegepast: dan staat Gerrie uit tot hij er is. De
       // edge functions weigeren zonder akkoord toch al.
@@ -464,12 +455,15 @@ export async function loadOrganizationContext(activeOrganizationId?: UUID | null
     if (billingError) {
       console.warn('Het abonnementsoverzicht kon niet worden geladen.', billingError);
     }
-    if (auditError) {
+    if (auditError && canSeeAuditLog) {
       console.warn('Audit-log kon niet worden geladen. Controleer of de Sprint 1 database-migratie is uitgevoerd.', auditError);
     }
     teamMembers = (teamRows ?? []) as OrganizationMember[];
     organizationInvitations = (orgInvitationRows ?? []) as OrganizationInvitation[];
-    auditLogs = auditError ? [] : (auditRows ?? []) as AuditLog[];
+    // De vooruit gevraagde ronde vroeg het logboek op voordat de rol bekend
+    // was; voor wie geen owner of admin is, telt het niet (de database gaf
+    // dan toch al niets).
+    auditLogs = auditError || !canSeeAuditLog ? [] : (auditRows ?? []) as AuditLog[];
     const firstLicenseRow = Array.isArray(licenseRows) ? licenseRows[0] : licenseRows;
     licenseUsage = (firstLicenseRow ?? null) as OrganizationLicenseUsage | null;
     const firstBillingRow = Array.isArray(billingRows) ? billingRows[0] : billingRows;
@@ -506,6 +500,58 @@ export async function loadOrganizationContext(activeOrganizationId?: UUID | null
     aiConsent,
     aiConsents,
   };
+}
+
+type QueryResult = { data: unknown; error: PostgrestErrorLike | null };
+type PostgrestErrorLike = { message: string; code?: string; details?: string; hint?: string };
+
+/**
+ * De tweede ronde van de organisatiecontext: alles wat aan één organisatie
+ * hangt. `withAuditLog` vraagt ook het logboek op; de vooruit gevraagde ronde
+ * kent de rol nog niet en vraagt het altijd (voor een teamlid geeft de RLS
+ * niets terug).
+ */
+function loadOrganizationDetails(organizationId: UUID, nowIso: string, withAuditLog: boolean) {
+  const none: QueryResult = { data: [], error: null };
+  return Promise.all([
+    supabase
+      .from('organization_members')
+      .select('*')
+      .eq('organization_id', organizationId)
+      .eq('status', 'active')
+      .order('created_at', { ascending: true }),
+    supabase
+      .from('organization_invitations')
+      .select('*')
+      .eq('organization_id', organizationId)
+      .eq('status', 'pending')
+      .or(`expires_at.is.null,expires_at.gt.${nowIso}`)
+      .order('created_at', { ascending: false }),
+    withAuditLog
+      ? supabase
+        .from('audit_logs')
+        .select('*')
+        .eq('organization_id', organizationId)
+        .order('created_at', { ascending: false })
+        .limit(40)
+      : Promise.resolve(none),
+    supabase.rpc('organization_license_usage', { p_organization_id: organizationId }),
+    supabase.rpc('organization_creative_status', { p_organization_id: organizationId }),
+    supabase.rpc('organization_business_status', { p_organization_id: organizationId }),
+    // Gerrie aan of uit (20261112190000). Eén vraag: de RLS geeft een teamlid
+    // alleen zijn eigen rij, en een owner of admin die van het hele team.
+    // Tegelijk met het lidmaatschap, zodat de chat niet eerst verschijnt en
+    // dan weer verdwijnt.
+    supabase.from('ai_consents').select('*').eq('organization_id', organizationId),
+  ] as const).then(([team, invitations, audit, license, creative, business, consents]) => ({
+    team: team as QueryResult,
+    invitations: invitations as QueryResult,
+    audit: audit as QueryResult,
+    license: license as QueryResult,
+    creative: creative as QueryResult,
+    business: business as QueryResult,
+    consents: consents as QueryResult,
+  }));
 }
 
 /**
@@ -903,7 +949,7 @@ async function countBankTransactionsToReconcile(organizationId: UUID): Promise<n
  * Wat er per verstuurde factuur nog openstaat, in centen, voor het dashboard en
  * de klantpagina. Die telden het volle factuurbedrag: een deelbetaling of een
  * deelcreditnota ging er niet af, terwijl het grootboek en Gerrie het wel
- * aftrokken. Via een RPC (migratie 20261122090000): de betalingen zelf horen
+ * aftrokken. Via een RPC (migratie 20261123090000): de betalingen zelf horen
  * bij de groepen financeHistory en bank, die de kern bewust niet laadt
  * (dataGroups.ts; tests/laden bewaakt dat). Lukt het niet (de migratie staat
  * er nog niet, of een andere fout), dan een lege lijst: dan telt weer het volle
@@ -1923,7 +1969,7 @@ const TIME_TRACKING_MIGRATION_HINT =
   'Voer de migratie 20260629000000_time_tracking.sql uit in Supabase om de urenregistratie te activeren.';
 
 const TIME_INVOICING_MIGRATION_HINT =
-  'Voer de migratie 20261122110000_uren_factureren.sql uit in Supabase om uren te kunnen factureren.';
+  'Voer de migratie 20261123110000_uren_factureren.sql uit in Supabase om uren te kunnen factureren.';
 
 /**
  * De uren, met per uur de factuur waar het op staat (`invoice_id`).
@@ -2388,17 +2434,53 @@ export async function upsertCompanySettings(organizationId: UUID, values: Compan
  * sorteerkolom gelijke waarden heeft (created_at/date zijn niet uniek).
  */
 const FETCH_PAGE_SIZE = 1000;
+/** Hoeveel pagina's tegelijk; meer helpt niet en zet de rest van de app in de rij. */
+const FETCH_PAGE_PARALLEL = 6;
 
+type PageResponse = { data: unknown; error: { message?: string; details?: string } | null; count?: number | null };
+type PageQuery = PromiseLike<PageResponse> & { setHeader?: (name: string, value: string) => PromiseLike<PageResponse> };
+
+/**
+ * De eerste pagina vraagt ook het totaal (`count=exact`); is hij vol, dan
+ * komen de pagina's daarna tegelijk binnen in plaats van na elkaar. Eerst
+ * wachtte elke pagina op de vorige: een bureau met 3.000 taken deed vier
+ * rondgangen achter elkaar, in het laadscherm (gemeten 300-500 ms op een
+ * telefoon). Is het totaal onbekend, dan gaat het pagina voor pagina tot een
+ * pagina niet vol is, zoals voorheen.
+ */
 async function fetchAllPages<T>(
-  makeQuery: () => { range: (from: number, to: number) => PromiseLike<{ data: unknown; error: { message?: string; details?: string } | null }> },
+  makeQuery: () => { range: (from: number, to: number) => PageQuery },
 ): Promise<T[]> {
-  const rows: T[] = [];
-  for (let offset = 0; ; offset += FETCH_PAGE_SIZE) {
-    const { data, error } = await makeQuery().range(offset, offset + FETCH_PAGE_SIZE - 1);
+  const fetchPage = async (offset: number, withCount = false): Promise<{ rows: T[]; count: number | null }> => {
+    const query = makeQuery().range(offset, offset + FETCH_PAGE_SIZE - 1);
+    const { data, error, count } = await (withCount && query.setHeader ? query.setHeader('Prefer', 'count=exact') : query);
     if (error) throw error;
-    const page = (data ?? []) as T[];
-    rows.push(...page);
-    if (page.length < FETCH_PAGE_SIZE) break;
+    return { rows: (data ?? []) as T[], count: typeof count === 'number' ? count : null };
+  };
+  const first = await fetchPage(0, true);
+  const rows: T[] = [...first.rows];
+  if (first.rows.length < FETCH_PAGE_SIZE) return rows;
+  let offset = FETCH_PAGE_SIZE;
+  if (first.count !== null) {
+    // Het totaal is de grens: bij precies 3.000 rijen is de derde pagina vol,
+    // en een vierde, lege pagina opvragen kostte nog een rondgang, als laatste
+    // in het laadscherm. Een rij die tijdens het ophalen bijkomt, komt bij de
+    // volgende ververs binnen, net als een rij die er net na bijkomt.
+    while (offset < first.count) {
+      const batch: number[] = [];
+      for (let next = offset; next < first.count && batch.length < FETCH_PAGE_PARALLEL; next += FETCH_PAGE_SIZE) batch.push(next);
+      const pages = await Promise.all(batch.map(next => fetchPage(next)));
+      for (const page of pages) rows.push(...page.rows);
+      offset = batch[batch.length - 1] + FETCH_PAGE_SIZE;
+      if (pages[pages.length - 1].rows.length < FETCH_PAGE_SIZE) return rows;
+    }
+    return rows;
+  }
+  // Geen totaal (een omgeving zonder telling): pagina voor pagina, zoals voorheen.
+  for (; ; offset += FETCH_PAGE_SIZE) {
+    const page = await fetchPage(offset);
+    rows.push(...page.rows);
+    if (page.rows.length < FETCH_PAGE_SIZE) break;
   }
   return rows;
 }
@@ -3242,6 +3324,60 @@ export async function savePartnershipPartner(
 }
 
 /**
+ * Haalt een vennoot weg die er nooit had moeten zijn, met zijn rekeningen. De
+ * database weigert dat zodra er iets op zijn rekeningen is geboekt of hij een
+ * winstaandeel had in een afgesloten jaar: zet hem dan op uitgetreden. De
+ * melding komt ongewijzigd mee, want die zegt wat je dan doet.
+ */
+export async function deletePartnershipPartner(organizationId: string, partnerId: string): Promise<void> {
+  const { error } = await supabase.rpc('delete_partnership_partner', {
+    p_organization_id: organizationId,
+    p_partner_id: partnerId,
+  });
+  if (error) throw bookkeepingError(error);
+}
+
+/**
+ * Legt de verdeling van één open boekjaar vast: per vennoot een percentage en
+ * een voorafgaand bedrag (arbeidsbeloning, rente over het kapitaal). Samen
+ * precies 10000 basispunten; uitgetreden vennoten mogen erin. Een lege lijst
+ * haalt de vastgelegde verdeling weg: dan geldt weer die van de actieve
+ * vennoten. Geeft de vastgelegde regels terug.
+ */
+export async function setFiscalYearPartnerShares(
+  organizationId: string,
+  fiscalYearId: string,
+  shares: Array<{ partner_id: string; share_basis_points: number; prior_share_cents: number }>,
+): Promise<FiscalYearPartnerShare[]> {
+  const { data, error } = await supabase.rpc('set_fiscal_year_partner_shares', {
+    p_organization_id: organizationId,
+    p_fiscal_year_id: fiscalYearId,
+    p_shares: shares,
+  });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data : []) as FiscalYearPartnerShare[];
+}
+
+/**
+ * De rechtsvorm van één open boekjaar. Wisselt de rechtsvorm bij Instellingen,
+ * dan volgt een vorig jaar dat nog open staat niet vanzelf; was de oude
+ * instelling fout, dan zet je dat jaar hiermee om.
+ */
+export async function setFiscalYearLegalForm(
+  organizationId: string,
+  fiscalYearId: string,
+  legalForm: 'eenmanszaak' | 'vof' | 'maatschap' | 'cv',
+): Promise<FiscalYear> {
+  const { data, error } = await supabase.rpc('set_fiscal_year_legal_form', {
+    p_organization_id: organizationId,
+    p_fiscal_year_id: fiscalYearId,
+    p_legal_form: legalForm,
+  });
+  if (error) throw bookkeepingError(error);
+  return (Array.isArray(data) ? data[0] : data) as FiscalYear;
+}
+
+/**
  * Koppelt een vennoot aan het teamlid dat hij is (of los, met `null`). Dan tellen
  * de uren van dat teamlid voor het urencriterium van de vennoot.
  */
@@ -3291,6 +3427,38 @@ export async function payPurchaseInvoicePrivately(
   });
   if (error) throw bookkeepingError(error);
   return (Array.isArray(data) ? data[0] : data) as JournalEntry;
+}
+
+/**
+ * Wie welke inkoopfactuur privé betaalde of privé ontving, uit de boekstukken
+ * van pay_purchase_invoice_privately ("Privé betaald door Anna: INK-…").
+ * Tegengeboekte betalingen tellen niet. Alleen het label, voor in de lijst.
+ */
+export async function listPurchasePrivatePayments(
+  organizationId: UUID, purchaseInvoiceIds: UUID[],
+): Promise<Array<{ purchaseInvoiceId: UUID; label: string }>> {
+  if (purchaseInvoiceIds.length === 0) return [];
+  // Privé betalen is zeldzaam: alle zulke boekstukken van de organisatie (de
+  // nieuwste duizend), in plaats van een lijst met honderden id's in de URL.
+  const wanted = new Set(purchaseInvoiceIds);
+  const { data, error } = await supabase
+    .from('journal_entries').select('source_id, description, date, reversed_by_entry_id')
+    .eq('organization_id', organizationId)
+    .eq('source_type', 'purchase_private_payment')
+    .eq('status', 'posted')
+    .order('date', { ascending: false })
+    .limit(1000);
+  if (error) throw bookkeepingError(error);
+  const out = new Map<UUID, string>();
+  for (const row of (data ?? []) as Array<{ source_id: UUID | null; description: string | null; reversed_by_entry_id: UUID | null }>) {
+    if (!row.source_id || !wanted.has(row.source_id) || row.reversed_by_entry_id || out.has(row.source_id)) continue;
+    // De omschrijving maakt de database zelf: "Privé betaald door <wie>: <nummer>".
+    const m = /^Privé (betaald|ontvangen) door (.+?): /.exec(row.description ?? '');
+    if (!m) continue;
+    const who = m[2] === 'de ondernemer' ? '' : ` door ${m[2]}`;
+    out.set(row.source_id, `privé ${m[1]}${who}`);
+  }
+  return [...out].map(([purchaseInvoiceId, label]) => ({ purchaseInvoiceId, label }));
 }
 
 /** De kapitaalvergelijking van één boekjaar: begin, resultaat, stortingen, opnamen, eind. */
@@ -6880,7 +7048,7 @@ export async function loadAttachmentRef(id: UUID, organizationId: UUID): Promise
  * Ligt een bijlage vast omdat het document waar hij aan hangt geen concept meer
  * is? Dezelfde regel als het scherm (geen Verwijderen-knop bij een verstuurde
  * offerte of factuur, of een geboekte inkoopfactuur), nu gelezen vlak voor het
- * uitvoeren. De database weigert het sinds 20261122131000 zelf ook (trigger
+ * uitvoeren. De database weigert het sinds 20261123131000 zelf ook (trigger
  * attachments_evidence_guard) en de media-worker vraagt het na; deze controle
  * blijft, omdat ze vóór het wissen van het bestand een nette melding geeft.
  * Null = vrij.

@@ -36,7 +36,7 @@ type InvoiceLike = { id: string; number: string; status: string };
 /**
  * Wat er van een rij uren nog te factureren is: declarabel, met een tarief en
  * nog op geen factuur. Dezelfde regel als time_invoice_preview in de database
- * (migratie 20261122110000); `withoutRateMinutes` zijn declarabele uren zonder
+ * (migratie 20261123110000); `withoutRateMinutes` zijn declarabele uren zonder
  * tarief, die de factuur overslaat.
  */
 export function openHoursSummary(entries: readonly EntryLike[]): { minutes: number; valueCents: number; withoutRateMinutes: number } {

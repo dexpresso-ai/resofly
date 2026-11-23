@@ -552,7 +552,7 @@ declare
   v_rate integer;
   v_billable boolean := true;
 begin
-  -- NIEUW (20261122110000): staan de uren van deze afspraak op een factuur,
+  -- NIEUW (20261123110000): staan de uren van deze afspraak op een factuur,
   -- dan liggen ze vast.
   if public.calendar_link_hours_invoiced(new.id) then
     return new;

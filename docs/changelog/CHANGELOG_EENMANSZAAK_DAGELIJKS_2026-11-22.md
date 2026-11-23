@@ -13,7 +13,7 @@ database. Deze controle keek naar wat daar niet bij zat:
 - wat de boekhouder en de Belastingdienst krijgen;
 - van uren naar factuur, met Gerrie en MCP.
 
-> **Status:** elf migraties (`20261122090000` t/m `20261122142000`),
+> **Status:** elf migraties (`20261123090000` t/m `20261123142000`),
 > aanpassingen in de schermen van Uren, Projecten, Klanten, Facturen,
 > Offertes, Inkoop, Bank, Grootboek, Omzetbelasting, Eigen vermogen,
 > Inkomstenbelasting, Boekjaren en het dashboard, in Gerrie, MCP en de API,
@@ -67,7 +67,7 @@ database. Deze controle keek naar wat daar niet bij zat:
 Ernst: **hoog** (stil foute cijfers of een doodlopende weg), **midden**,
 **laag**. Er was niets onherstelbaars.
 
-### Van uren naar factuur (migratie `20261122110000_uren_factureren`)
+### Van uren naar factuur (migratie `20261123110000_uren_factureren`)
 
 | # | Ernst | Wat er misging | Nu |
 |---|---|---|---|
@@ -81,7 +81,7 @@ Ernst: **hoog** (stil foute cijfers of een doodlopende weg), **midden**,
 |---|---|---|---|
 | 4 | hoog | **"Welke facturen staan open?" zag alleen de 25 nieuwste.** Met 26 nieuwere facturen zei Gerrie "0 open" bij € 810 open. Hetzelfde bij offertes die op antwoord wachten. | Eerst filteren, dan afkappen, in pagina's van duizend; `count` en totalen gaan over alles, met `truncated`. |
 | 5 | midden | **Urencriterium "niet gehaald" bij 1.270 uur**: de API geeft hooguit 1.000 rijen. De prognose van een starter rekende vanaf 1 januari. | Alle uren in pagina's; de prognose vanaf de eerste geregistreerde dag, zoals het scherm. Ook `project.dashboard` telt alle uren. |
-| 6 | midden | **Drie bedragen "openstaand"**: dashboard € 1.210, Gerrie € 1.815 (met een concept als open én te laat), grootboek € 810. | Een concept staat nooit open. Openstaand komt uit het grootboek: een deelbetaling of deelcreditnota is eraf, ook op het dashboard, de klantpagina, de projectpagina en in de stroom (`list_open_invoice_amounts`, migratie `20261122090000`). |
+| 6 | midden | **Drie bedragen "openstaand"**: dashboard € 1.210, Gerrie € 1.815 (met een concept als open én te laat), grootboek € 810. | Een concept staat nooit open. Openstaand komt uit het grootboek: een deelbetaling of deelcreditnota is eraf, ook op het dashboard, de klantpagina, de projectpagina en in de stroom (`list_open_invoice_amounts`, migratie `20261123090000`). |
 | 7 | midden | **Gerries "omzet" was € 3.630, Winst & verlies € 2.500**: met btw en concepten. | Gefactureerd met en zonder btw, zonder concepten; voor omzet en winst wijst Gerrie naar `ledger.profit_and_loss`. |
 | 8 | midden | `ledger.open_items` met "alleen te laat" noemde het totaal van alles. | Het totaal van wat te laat is, met het totaal van alles ernaast. |
 | 9 | laag | Gerries urenfactuur hing niet aan het project; `list_projects` gaf geen tarief. | `propose_invoice` kent een project; `list_projects` geeft tarief en factuurwijze (met leesrecht op Financiën). |
@@ -94,7 +94,7 @@ Ernst: **hoog** (stil foute cijfers of een doodlopende weg), **midden**,
 | 11 | laag | "12,95" werd 1295 in een Engelstalige browser. | De bedragvelden lezen een komma. |
 | 12 | laag | De factuurpagina van de klant toonde "PDF-snapshot … sent_to_client" en een grijze "Betaal nu" zonder Mollie; de offertemail noemde de geldigheid van de link als verloopdatum; vaktaal ("via Resend", "server-side", "Mollie records"). | Gewone woorden, geen knop zonder betaallink, geen "Geldig tot" zonder verloopdatum. |
 
-### Wat de deur uit gaat (migratie `20261122120000_factuurregels`)
+### Wat de deur uit gaat (migratie `20261123120000_factuurregels`)
 
 | # | Ernst | Wat er misging | Nu |
 |---|---|---|---|
@@ -105,7 +105,7 @@ Ernst: **hoog** (stil foute cijfers of een doodlopende weg), **midden**,
 | 17 | midden | Een voorschot- of termijnfactuur bij een offerte kon niet. | Niet gebouwd (zie Bewust open). De bevestiging bij "Maak factuur van offerte" legt de omweg uit. |
 
 
-### Bank (migraties `20261122100000_bank_inlezen` en `20261122130000_bank_herstel_verkeerd_ingelezen`)
+### Bank (migraties `20261123100000_bank_inlezen` en `20261123130000_bank_herstel_verkeerd_ingelezen`)
 
 | # | Ernst | Wat er misging | Nu |
 |---|---|---|---|
@@ -116,7 +116,7 @@ Ernst: **hoog** (stil foute cijfers of een doodlopende weg), **midden**,
 | 24 | midden | MT940 sloeg bij elk volgend afschrift vals alarm; ING brak namen en IBAN's van de tegenpartij af; Knab werd geweigerd; een CSV zonder kopregel (ASN/SNS/RegioBank, Triodos, ABN AMRO) werd geweigerd; één 403 zette de hele koppeling op verlopen; een storno had de zzp'er zelf als tegenpartij. | Hersteld per lezer. Zonder kopregel alleen als het zeker bij een bank past (kolommen, IBAN, en bij ABN AMRO en ASN een doorlopend saldo); anders een melding welke export wel werkt. |
 | 25 | laag | De saldomelding zei altijd "er ontbreken transacties"; bunq zonder IBAN van de tegenpartij; ISO-8859-1 verminkte é en ë; de reden bij een voorstel noemde een factuurnummer dat niet in de omschrijving stond. | Hersteld. |
 
-### Bewaarplicht en de boekhouder (migraties `20261122131000` t/m `133000`)
+### Bewaarplicht en de boekhouder (migraties `20261123131000` t/m `133000`)
 
 | # | Ernst | Wat er misging | Nu |
 |---|---|---|---|
@@ -127,7 +127,7 @@ Ernst: **hoog** (stil foute cijfers of een doodlopende weg), **midden**,
 | 34 | midden | E-factuur ongeldig bij ICP (geen leverdatum en land), bij een kortingsregel (negatieve prijs) en bij export (categorie); e-mail als elektronisch adres. | Leverblok, hoeveelheid en prijs omgedraaid, categorie G, een Peppol-ID uit het EU-btw-nummer. |
 | 35 | laag | Btw-aangifte per tijdvak, kapitaalvergelijking en IB-overzicht waren niet te bewaren. | Een CSV-knop, zoals bij Winst & verlies. |
 
-### De jaarwissel (migraties `20261122140000` t/m `142000`)
+### De jaarwissel (migraties `20261123140000` t/m `142000`)
 
 | # | Ernst | Wat er misging | Nu |
 |---|---|---|---|

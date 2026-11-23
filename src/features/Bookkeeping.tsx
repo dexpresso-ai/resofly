@@ -16,7 +16,7 @@ import { dateNL, euro, uid } from '../lib/format';
 import {
   bookPurchaseInvoice, createOpeningBalance, deleteRow, ensureDefaultLedgerAccounts, fetchPurchaseInvoicePaymentStatus, insertRow,
   listPartnershipPartners, loadBankLedgerAccountIds, loadInboundAlias, loadPurchaseInvoiceInbox, loadPurchaseInvoiceRemovalFacts, loadXafReferences,
-  openingBalancePlugAccount, payPurchaseInvoicePrivately,
+  listPurchasePrivatePayments, openingBalancePlugAccount, payPurchaseInvoicePrivately,
   postManualJournalEntry, reportAccountLedger, reportTrialBalance, reverseJournalEntry, updateRow, setUpBookkeeping
 } from '../lib/repository';
 import {
@@ -323,6 +323,11 @@ function PrivatePaymentModal({ invoice, organizationId, legalForm, onClose, onSa
   invoice: PurchaseInvoice; organizationId: UUID; legalForm: string; onClose: () => void; onSaved: () => void;
 }) {
   const isPartnershipForm = ['vof', 'maatschap', 'cv'].includes(legalForm);
+  // Een creditnota die de leverancier op de eigen rekening van een vennoot
+  // terugstortte ("privé ontvangen", 20261122100000): dat bleef voorgoed
+  // open, want hier stond alleen een knop voor een positief bedrag. Het geld
+  // kwam bij de vennoot, niet bij de zaak: een privé-opname van hem.
+  const refund = Number(invoice.total_cents) < 0;
   const [partners, setPartners] = useState<PartnershipPartner[]>([]);
   // Pas na het laden van de vennoten weet je of de indiener er een is; zonder
   // deze vlag stond de verwijzing naar Bank even in beeld bij een vennoot.
@@ -351,7 +356,7 @@ function PrivatePaymentModal({ invoice, organizationId, legalForm, onClose, onSa
   const { declarationByNonPartner } = receiptPayer(partners, invoice.extraction_meta);
 
   async function save() {
-    if (needsPartner && !partnerId) { setError('Kies de vennoot die de factuur betaalde.'); return; }
+    if (needsPartner && !partnerId) { setError(refund ? 'Kies de vennoot die het geld terugkreeg.' : 'Kies de vennoot die de factuur betaalde.'); return; }
     setBusy(true); setError(null);
     try {
       await payPurchaseInvoicePrivately(organizationId, invoice.id, needsPartner ? partnerId : null, date);
@@ -363,20 +368,36 @@ function PrivatePaymentModal({ invoice, organizationId, legalForm, onClose, onSa
     }
   }
 
+  // Een vof zonder vennoten: dan kwam hier de tekst van een eenmanszaak ("met
+  // je eigen geld … op 0560"), en stond de betaling op niemand.
+  const noPartners = isPartnershipForm && partnersLoaded && partners.length === 0;
+  const reference = invoice.internal_number || invoice.supplier_invoice_number || (refund ? 'creditnota' : 'inkoopfactuur');
   return (
-    <Modal title={`Privé betaald: ${invoice.internal_number || invoice.supplier_invoice_number || 'inkoopfactuur'}`} onClose={onClose}
+    <Modal title={`${refund ? 'Privé ontvangen' : 'Privé betaald'}: ${reference}`} onClose={onClose}
       footer={<div className="bk-foot">
         <span className="bk-spacer" />
         <Button onClick={onClose}>Annuleren</Button>
         <Button variant="primary" onClick={() => void save()} disabled={busy}>{busy ? 'Bezig…' : 'Vastleggen'}</Button>
       </div>}>
       <p className="bk-muted">
-        {needsPartner
-          ? `Betaalde een vennoot deze factuur met eigen geld? Dan komt wat openstaat op de privé-stortingen van ${chosen ? chosen.name : 'die vennoot'}, en staat de factuur op betaald.`
-          : 'Betaalde je deze factuur met je eigen geld? Dan komt wat openstaat op 0560 Privé-stortingen, en staat de factuur op betaald.'}
-        {' '}De btw blijft gewoon aftrekbaar. Vergist? Boek de privébetaling tegen bij Grootboek → Journaal.
+        {refund
+          ? needsPartner
+            ? `Stortte de leverancier het geld van deze creditnota terug op de eigen rekening van een vennoot? Dan komt wat openstaat op de privé-opnamen van ${chosen ? chosen.name : 'die vennoot'}: het geld ging naar hem, niet naar de zaak. De creditnota staat daarna niet meer open.`
+            : 'Kreeg je het geld van deze creditnota terug op je eigen rekening? Dan komt wat openstaat op 0550 Privé-opnamen: het geld ging naar jou, niet naar de zaak. De creditnota staat daarna niet meer open.'
+          : needsPartner
+            ? `Betaalde een vennoot deze factuur met eigen geld? Dan komt wat openstaat op de privé-stortingen van ${chosen ? chosen.name : 'die vennoot'}, en staat de factuur op betaald.`
+            : isPartnershipForm
+              ? 'Betaalde een vennoot deze factuur met eigen geld? Dan komt wat openstaat op privé-stortingen, en staat de factuur op betaald.'
+              : 'Betaalde je deze factuur met je eigen geld? Dan komt wat openstaat op 0560 Privé-stortingen, en staat de factuur op betaald.'}
+        {' '}{refund ? 'De btw-correctie blijft gewoon staan.' : 'De btw blijft gewoon aftrekbaar.'} Vergist? Boek {refund ? 'het' : 'de privébetaling'} tegen bij Grootboek → Journaal.
       </p>
-      {partnersLoaded && declarationByNonPartner && (
+      {noPartners && (
+        <div className="bk-note">
+          Er staan nog geen vennoten bij Financiën → Vennoten. Leg eerst de vennoten vast, dan komt het bij de juiste vennoot.
+          {' '}Leg je het nu vast, dan komt het op {refund ? '0550 Privé-opnamen' : '0560 Privé-stortingen'} (geen vennoot), en bij de jaarafsluiting bij geen enkele vennoot.
+        </div>
+      )}
+      {partnersLoaded && declarationByNonPartner && !refund && (
         <div className="bk-note">
           {isPartnershipForm ? 'Dit is een declaratie van een teamlid dat geen vennoot is.' : 'Dit is een declaratie van een teamlid.'}
           {' '}Die betaal je normaal terug via de bank: koppel de betaling dan op Bank.
@@ -385,14 +406,14 @@ function PrivatePaymentModal({ invoice, organizationId, legalForm, onClose, onSa
       )}
       {error && <div className="error">{error}</div>}
       {needsPartner && (
-        <Field label="Betaald door">
+        <Field label={refund ? 'Wie kreeg het geld terug?' : 'Betaald door'}>
           <Select value={partnerId} onChange={e => setPartnerId(e.target.value)}>
             <option value="">— kies de vennoot —</option>
             {partners.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
           </Select>
         </Field>
       )}
-      <Field label="Betaald op"><Input type="date" value={date} onChange={e => setDate(e.target.value)} /></Field>
+      <Field label={refund ? 'Ontvangen op' : 'Betaald op'}><Input type="date" value={date} onChange={e => setDate(e.target.value)} /></Field>
     </Modal>
   );
 }
@@ -433,8 +454,27 @@ export function PurchaseInvoicesPage({ data, organizationId, canWrite, onChanged
   const [privatePay, setPrivatePay] = useState<PurchaseInvoice | null>(null);
   // Privé betalen bestaat alleen bij een eenmanszaak, vof, maatschap of cv.
   const legalForm = data.companySettings?.legal_form ?? 'eenmanszaak';
+  // Ook een geboekte creditnota met een negatief open bedrag: "Privé
+  // ontvangen", als de leverancier het geld op de eigen rekening van een
+  // vennoot terugstortte. Hier stond `> 0`, dus zo'n creditnota bleef open.
   const canPayPrivately = (pi: PurchaseInvoice) => ['eenmanszaak', 'vof', 'maatschap', 'cv'].includes(legalForm)
-    && pi.status === 'booked' && pi.payment_status !== 'paid' && Number(pi.total_cents) > 0;
+    && pi.status === 'booked' && pi.payment_status !== 'paid' && Number(pi.total_cents) !== 0;
+  // Wie een factuur privé betaalde (of een creditnota privé ontving). Het
+  // stond alleen in het journaal; in de lijst stond "Betaald", ook als Anna
+  // hem met haar eigen pas had betaald.
+  const [privatePayers, setPrivatePayers] = useState<Map<string, string>>(new Map());
+  const paidIdsKey = data.purchaseInvoices
+    .filter(pi => pi.status === 'booked' && pi.payment_status !== 'unpaid')
+    .map(pi => pi.id).sort().join(',');
+  useEffect(() => {
+    const ids = paidIdsKey ? paidIdsKey.split(',') : [];
+    if (ids.length === 0 || !['eenmanszaak', 'vof', 'maatschap', 'cv'].includes(legalForm)) { setPrivatePayers(new Map()); return; }
+    let cancelled = false;
+    listPurchasePrivatePayments(organizationId, ids)
+      .then(rows => { if (!cancelled) setPrivatePayers(new Map(rows.map(r => [r.purchaseInvoiceId, r.label]))); })
+      .catch(() => { /* zonder deze regel blijft de lijst gewoon bruikbaar */ });
+    return () => { cancelled = true; };
+  }, [organizationId, paidIdsKey, legalForm]);
   // Een concept dat vanuit de factuur-inbox wordt geopend maar nog niet in `data`
   // zit (de verwerking liep net af): onthouden en openen zodra het geladen is.
   const [pendingOpenId, setPendingOpenId] = useState<string | null>(null);
@@ -552,23 +592,27 @@ export function PurchaseInvoicesPage({ data, organizationId, canWrite, onChanged
       />}
       {data.purchaseInvoices.length === 0
         ? <div className="empty"><div className="e-big">Nog geen inkoopfacturen</div></div>
-        : <div className="bk-table-wrap"><table className="bk-table">
-            <thead><tr><th>Nummer</th><th>Leverancier</th><th>Datum</th><th className="bk-num">Excl.</th><th className="bk-num">BTW</th><th className="bk-num">Totaal</th><th>Status</th><th></th></tr></thead>
+        : <div className="bk-table-wrap pi-list"><table className="bk-table">
+            <thead><tr><th>Nummer</th><th>Leverancier</th><th>Datum</th><th className="bk-num pi-col-detail">Excl.</th><th className="bk-num pi-col-detail">BTW</th><th className="bk-num">Totaal</th><th>Status</th><th></th></tr></thead>
             <tbody>{data.purchaseInvoices.map(pi => { const t = listTotals(pi); return (
               <tr key={pi.id} className="bk-row">
                 <td onClick={() => setEdit(pi)}><strong>{pi.internal_number || '—'}</strong>{pi.supplier_invoice_number && <small className="bk-muted"> · {pi.supplier_invoice_number}</small>}{viaEmail(pi) && <span className="bk-via-email" title="Per e-mail binnengekomen op je factuuradres"><Mail size={12} /></span>}{viaReceipt(pi) && <span className="bk-via-email" title={channelOf(pi) === 'declaration' ? 'Declaratie van een teamlid' : 'Bon, in de app gefotografeerd'}><Camera size={12} /></span>}</td>
                 <td onClick={() => setEdit(pi)}>{supplierName(pi.supplier_id)}</td>
                 <td onClick={() => setEdit(pi)}>{dateNL(pi.date)}</td>
-                <td className="bk-num">{euroCents(t.subtotal_cents)}</td>
-                <td className="bk-num">{euroCents(t.vat_cents)}{t.self_assessed_vat_cents !== 0 && <small className="bk-muted" title={kor ? 'Verlegde btw: geef je zelf aan en betaal je; met de KOR trek je hem niet af' : 'Verlegde btw: geef je zelf aan en trek je af. Zit niet in het totaal.'}><br />verlegd {euroCents(t.self_assessed_vat_cents)}</small>}</td>
+                <td className="bk-num pi-col-detail">{euroCents(t.subtotal_cents)}</td>
+                <td className="bk-num pi-col-detail">{euroCents(t.vat_cents)}{t.self_assessed_vat_cents !== 0 && <small className="bk-muted" title={kor ? 'Verlegde btw: geef je zelf aan en betaal je; met de KOR trek je hem niet af' : 'Verlegde btw: geef je zelf aan en trek je af. Zit niet in het totaal.'}><br />verlegd {euroCents(t.self_assessed_vat_cents)}</small>}</td>
                 <td className="bk-num"><strong>{euroCents(t.total_cents)}</strong></td>
-                <td><span className={`status-pill bk-status-${purchaseListStatus(pi).key}`}>{purchaseListStatus(pi).label}</span></td>
+                <td><span className={`status-pill bk-status-${purchaseListStatus(pi).key}`}>{purchaseListStatus(pi).label}</span>
+                  {privatePayers.get(pi.id) && <small className="bk-muted pi-private-payer">{privatePayers.get(pi.id)}</small>}
+                </td>
                 <td className="bk-cell-action">
                   {/* Bij een declaratie is boeken de goedkeuring die de indiener ziet. */}
                   {pi.status === 'draft'
                     ? <Button variant="primary" disabled={!canWrite || busyId === pi.id} onClick={() => book(pi)}>{busyId === pi.id ? 'Boeken…' : channelOf(pi) === 'declaration' ? 'Goedkeuren' : 'Boeken'}</Button>
                     : canWrite && canPayPrivately(pi)
-                      ? <Button onClick={() => setPrivatePay(pi)} title="Met eigen geld betaald door de ondernemer of een vennoot">Privé betaald</Button>
+                      ? Number(pi.total_cents) < 0
+                        ? <Button onClick={() => setPrivatePay(pi)} title="De leverancier stortte het geld terug op de eigen rekening van de ondernemer of een vennoot">Privé ontvangen</Button>
+                        : <Button onClick={() => setPrivatePay(pi)} title="Met eigen geld betaald door de ondernemer of een vennoot">Privé betaald</Button>
                       : <span className="bk-muted">{pi.journal_entry_id ? 'In grootboek' : ''}</span>}
                 </td>
               </tr>
@@ -661,13 +705,16 @@ function PurchaseInvoiceInboxPanel({ data, organizationId, canWrite, onChanged, 
   const { open, done } = useMemo(() => splitInboxItems(items), [items]);
 
   if (loaded && !loadError && hasAlias === false && items.length === 0) {
+    // De tekst in één <span>: de tip is een flexrij (icoon + tekst), en losse
+    // tekst en <strong>'s werden elk een eigen kolom.
     return <div className="bk-note pi-inbox-hint">
-      <Inbox size={14} /> Fotografeer een bon met <strong>Bon fotograferen</strong>, of stuur inkoopfacturen door naar je eigen factuuradres: ze staan hier automatisch klaar als concept.
-      Maak het adres aan onder <strong>Instellingen → E-mail → Inkoopfacturen per e-mail</strong>.
+      <Inbox size={14} aria-hidden="true" />
+      <span>Fotografeer een bon met <strong>Bon fotograferen</strong>, of stuur inkoopfacturen door naar je eigen factuuradres: ze staan hier automatisch klaar als concept.
+        {' '}Maak het adres aan onder <strong>Instellingen → E-mail → Inkoopfacturen per e-mail</strong>.</span>
     </div>;
   }
   if (!loaded || (items.length === 0 && !loadError)) {
-    return loaded ? <div className="bk-note pi-inbox-hint"><Inbox size={14} /> Nog niets binnengekomen. Wat je naar je factuuradres stuurt, en elke bon of declaratie uit de app, verschijnt hier.</div> : null;
+    return loaded ? <div className="bk-note pi-inbox-hint"><Inbox size={14} aria-hidden="true" /><span>Nog niets binnengekomen. Wat je naar je factuuradres stuurt, en elke bon of declaratie uit de app, verschijnt hier.</span></div> : null;
   }
 
   return <section className="pi-inbox">
@@ -2090,7 +2137,11 @@ function OpeningBalanceView({ data, organizationId, canWrite, onChanged, canWrit
     if (!canWrite || filled.length === 0) return;
     if (dateInFuture) { setError(futureMessage); return; }
     const partnerWarning = plugOnNoPartner ? ' Die staat op geen enkele vennoot; zet het kapitaal liever per vennoot op zijn kapitaalrekening.' : '';
-    if (!confirm(`Beginbalans per ${dateNL(date)} vastleggen? Het verschil van ${euroCents(Math.abs(equity))} wordt automatisch op ${plugLabel} gezet.${partnerWarning} Klopt er later iets niet, dan verbeter je hem hier met Beginbalans corrigeren.`)) return;
+    // Sluit de beginbalans zelf al (het kapitaal staat per vennoot op zijn
+    // rekening), dan is er geen sluitpost. Er stond toch "Het verschil van
+    // € 0,00 wordt … gezet".
+    const plugSentence = equity !== 0 ? ` Het verschil van ${euroCents(Math.abs(equity))} wordt automatisch op ${plugLabel} gezet.${partnerWarning}` : '';
+    if (!confirm(`Beginbalans per ${dateNL(date)} vastleggen?${plugSentence} Klopt er later iets niet, dan verbeter je hem hier met Beginbalans corrigeren.`)) return;
     setBusy(true); setError(null);
     try {
       await createOpeningBalance(organizationId, date, filled.map(l => ({

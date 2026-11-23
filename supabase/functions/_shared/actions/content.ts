@@ -639,7 +639,7 @@ function assertAttachmentWritable(ctx: ActionCtx, entityType: string): void {
  * Het bewijsstuk bij een offerte, factuur of inkoopfactuur ligt vast zodra dat
  * document geen concept meer is — dezelfde regel als het scherm (daar verdwijnt
  * de knop Verwijderen). Zonder hem verdween de PDF van een geboekte inkoopfactuur
- * na één goedgekeurde kaart (bewaarplicht, harde regel 6). Sinds 20261122131000
+ * na één goedgekeurde kaart (bewaarplicht, harde regel 6). Sinds 20261123131000
  * weigert de database het zelf ook; deze regel geeft de melding al op de kaart.
  */
 export async function assertAttachmentParentOpen(ctx: ActionCtx, entityType: string, entityId: string): Promise<void> {
@@ -653,7 +653,7 @@ export async function assertAttachmentParentOpen(ctx: ActionCtx, entityType: str
     const purchase = await row<{ status: string }>(ctx, 'purchase_invoices', entityId, 'status', 'Inkoopfactuur');
     if (purchase.status !== 'draft') throw new ActionError('Dit bestand is het bewijsstuk van een geboekte inkoopfactuur; het ligt vast (bewaarplicht).');
   } else if (entityType === 'fixed_asset') {
-    // Dezelfde regel als de database (20261122131000, attachment_parent_lock_reason).
+    // Dezelfde regel als de database (20261123131000, attachment_parent_lock_reason).
     // Ook na een geboekte afschrijving: alleen naar de aanschaf kijken liet de
     // kaart klaarstaan voor een bestand dat de database daarna toch weigerde.
     const asset = await row<{ acquisition_journal_entry_id: string | null }>(ctx, 'fixed_assets', entityId, 'acquisition_journal_entry_id', 'Activum');

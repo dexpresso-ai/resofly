@@ -204,6 +204,28 @@ schrijffuncties van 20261118150000), met het rekenhart van de app erachter. Geto
 
 Zie `docs/changelog/CHANGELOG_INKOMSTENBELASTING_RAMING_2026-11-18.md`.
 
+En `vof`: de winst van een jaar gaat naar de vennoten en de rechtsvorm van dát jaar
+(migratie 20261122100000). Getoetst:
+- een vennoot die vóór het afsluiten uittreedt: afsluiten weigert en noemt hem, de verdeling van het
+  jaar vastleggen (ook met een uitgetreden vennoot), afsluiten, Vennoten en de raming met zijn deel,
+  heropenen en opnieuw afsluiten met dezelfde verdeling;
+- een nieuwe vennoot en andere percentages per 1 januari: het afgesloten jaar blijft wat er geboekt is,
+  eind = begin van het volgende jaar;
+- een bedrag vooraf (arbeidsbeloning) in de verdeling, via het scherm en Gerrie, tot op de cent gelijk in
+  afsluiting, Vennoten en raming; wie de verdeling mag vastleggen;
+- de overstap naar een eenmanszaak met het vorige jaar nog open, de rechtsvorm per boekjaar;
+- de winst van een open vorig jaar apart, privé ontvangen bij een creditnota, een vennoot verwijderen;
+- de randen: iedereen uitgetreden, een latere wijziging na een overstap, € 0 resultaat met een bedrag
+  vooraf.
+
+Het scenario draait ook op een database van vóór die migratie, en faalt daar op de bedragen.
+
+En `vof-bank-inkoop`: privé bij de bank en de inkoop (20261122110000): geen btw op privé via een
+inkoopfactuur of leverancier, een privé betaalde factuur die de bank niet nog eens als kosten boekt, en
+de reden bij een betaling aan de Belastingdienst die bij een vof naar de vennoot wijst.
+
+Zie `docs/changelog/CHANGELOG_VOF_HERSTELWEGEN_2026-11-22.md`.
+
 `wereld.mjs` rondt de inrichting van zijn organisaties zelf af, net als de knop in de app; anders bleef
 de UI-test in de stappen staan. De uitkomst van de documenten staat in
 `docs/rapporten/TESTRAPPORT_DOCUMENTEN_2026-11-06.md`. De uitkomst van 6 november staat in

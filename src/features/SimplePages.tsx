@@ -3,7 +3,7 @@ import { Bell, BookOpen, Building2, Calculator, CalendarCog, CreditCard, Downloa
 import { PushNotificationsCard, type PushApi } from '../components/usePushNotifications';
 import { AppsSettingsPanel } from '../components/StandaloneApps';
 import { BUSINESS_LEGAL_FORMS, LEGAL_FORM_LABELS } from '../types';
-import type { AppData, BillingPlan, CompanySettings, CompanySettingsInput, EmailTemplate, LegalForm, EmailTemplateInput, EmailTemplateKey, InvoiceMollieSettingsStatus, InvoiceReminderSettings, InvoiceSendMethod, InvoiceTemplateKind, OrganizationBillingOverview, OrganizationContext, OrganizationInboundAlias, OrganizationMember, OrganizationPortalSettings, OrganizationRole, Project, PurchaseInvoiceInboxSettings, SendingDomain, SendingDomainDnsRecord, SendingDomainStatus, UserSenderIdentity } from '../types';
+import type { AppData, BillingPlan, CompanySettings, FiscalYearListRow, CompanySettingsInput, EmailTemplate, LegalForm, EmailTemplateInput, EmailTemplateKey, InvoiceMollieSettingsStatus, InvoiceReminderSettings, InvoiceSendMethod, InvoiceTemplateKind, OrganizationBillingOverview, OrganizationContext, OrganizationInboundAlias, OrganizationMember, OrganizationPortalSettings, OrganizationRole, Project, PurchaseInvoiceInboxSettings, SendingDomain, SendingDomainDnsRecord, SendingDomainStatus, UserSenderIdentity } from '../types';
 import { Button, Input, Select, Textarea } from '../components/Ui';
 import { Modal } from '../components/Modal';
 import { BrandStudio } from './BrandStudio';
@@ -11,7 +11,7 @@ import { DocumentLayoutEditor } from './DocumentLayoutEditor';
 import { parseDocumentLayouts, serializeDocumentLayouts } from '../lib/documentLayout';
 import { changeOrganizationPlan, createExtraSeatCheckout, createStorageAddonCheckout, getSelfServiceBillingPlans, loadBillingOverview, loadBillingPlans, markMockPaymentPaid, setBusinessAddon, setCreativeAddon, startSubscriptionCheckout } from '../services/billingService';
 import { sendResendTestEmail, addSendingDomain, verifySendingDomain, refreshSendingDomain, updateSendingDomain, removeSendingDomain } from '../services/mailService';
-import { deleteInvoiceMollieKey, loadInvoiceLetterhead, loadInvoiceMollieStatus, saveInvoiceMollieKey, saveInvoiceSendMethod, loadInvoiceReminderSettings, saveInvoiceReminderSettings, saveInvoiceDunningSettings, loadStatutoryInterestRates, loadEmailTemplates, upsertEmailTemplate, resetEmailTemplate, loadSendingDomains, loadMySenderIdentity, saveMySenderIdentity, clearMySenderIdentity, loadInboundAlias, ensureInboundAlias, rotateInboundAlias, setInboundAliasForwardFrom, loadPurchaseInvoiceInboxSettings, savePurchaseInvoiceInboxSettings, loadOrganizationPortalSettings, saveOrganizationPortalSettings, fetchOrganizationStorageStatus } from '../lib/repository';
+import { deleteInvoiceMollieKey, loadInvoiceLetterhead, loadInvoiceMollieStatus, saveInvoiceMollieKey, saveInvoiceSendMethod, loadInvoiceReminderSettings, saveInvoiceReminderSettings, saveInvoiceDunningSettings, loadStatutoryInterestRates, loadEmailTemplates, upsertEmailTemplate, resetEmailTemplate, loadSendingDomains, loadMySenderIdentity, saveMySenderIdentity, clearMySenderIdentity, loadInboundAlias, ensureInboundAlias, rotateInboundAlias, setInboundAliasForwardFrom, loadPurchaseInvoiceInboxSettings, savePurchaseInvoiceInboxSettings, loadOrganizationPortalSettings, saveOrganizationPortalSettings, fetchOrganizationStorageStatus, listFiscalYears, setFiscalYearLegalForm } from '../lib/repository';
 import { letterheadFieldsForSave, letterheadMissing } from '../lib/letterhead';
 import { formatBytes } from '../lib/transfers';
 import { isDutchVatIdFormat, looksLikeTaxNumberWithoutCountry } from '../lib/vatId';
@@ -1295,6 +1295,14 @@ function PortalNotificationsCard({ organizationId, canAdmin, onEditTexts }: { or
 
 type EmailTemplateForm = { subject: string; intro: string; closing: string; cta_label: string };
 
+type IbLegalForm = 'eenmanszaak' | 'vof' | 'maatschap' | 'cv';
+/** Een wissel tussen eenmanszaak en vof, maatschap of cv, met per open jaar dat al gelopen is of het voor dat jaar al geldt. */
+type LegalFormChange = {
+  from: IbLegalForm;
+  to: IbLegalForm;
+  years: Array<{ id: string; label: string; past: boolean; applies: boolean }>;
+};
+
 function formFromTemplate(meta: typeof EMAIL_TEMPLATES[number], row: EmailTemplate | undefined): EmailTemplateForm {
   // Prefill met de opgeslagen tekst; een leeg veld valt terug op de standaardtekst,
   // zodat de gebruiker altijd de huidige effectieve tekst ziet en kan bijwerken.
@@ -2053,21 +2061,74 @@ export function Settings({
     setTemplateError(null);
   };
 
+  /**
+   * Een wissel tussen eenmanszaak en vof, maatschap of cv. Dat ging hier
+   * zonder één vraag, ook met vennoten met kapitaal. De database laat de open
+   * boekjaren die nog niet voorbij zijn meelopen en laat een voorbij jaar dat
+   * nog open staat zoals het was (20261122100000). Wie in december "per
+   * 1 januari" op eenmanszaak zette, zette zo ook het lopende jaar om: dat
+   * sloot af als eenmanszaak, de hele winst naar 0500 en niets naar de
+   * vennoten. Daarom per open jaar dat al gelopen is een vinkje: geldt het
+   * voor dat jaar al?
+   */
+  const [legalChange, setLegalChange] = useState<LegalFormChange | null>(null);
+  const partnershipForms = ['vof', 'maatschap', 'cv'];
+  // In een zin: "een vof", "een maatschap", "een cv".
+  const formWord = (f: string) => (partnershipForms.includes(f) || f === 'eenmanszaak' ? f : LEGAL_FORM_LABELS[f as LegalForm] ?? f);
+
   async function save() {
     if (!canAdminOrganization) {
       setTemplateError('Alleen owners en admins kunnen bedrijfsinstellingen aanpassen.');
       return;
     }
+    const fromForm = settings?.legal_form ?? 'eenmanszaak';
+    const toForm = form.legal_form ?? 'eenmanszaak';
+    const switches = toForm !== fromForm
+      && ((partnershipForms.includes(fromForm) && toForm === 'eenmanszaak') || (fromForm === 'eenmanszaak' && partnershipForms.includes(toForm)));
+    if (switches) {
+      let years: FiscalYearListRow[] = [];
+      try { years = await listFiscalYears(organizationId); } catch { /* zonder boekjaren: alleen de uitleg */ }
+      const today = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Amsterdam' }).format(new Date());
+      setLegalChange({
+        from: fromForm as IbLegalForm, to: toForm as IbLegalForm,
+        years: years
+          .filter(y => y.status === 'open' && y.period_start <= today)
+          .sort((a, b) => a.period_start.localeCompare(b.period_start))
+          // Het lopende jaar volgt vanzelf (vinkje aan), een voorbij jaar niet (uit).
+          .map(y => ({ id: y.id, label: y.label, past: y.period_end < today, applies: y.period_end >= today })),
+      });
+      return;
+    }
+    await persist(null);
+  }
+
+  async function persist(change: LegalFormChange | null) {
+    setLegalChange(null);
     setMessage(null);
     setTemplateError(null);
     setIsSaving(true);
     try {
       await onSave(cleanSettingsInput(form));
+      // Wat je per jaar anders koos dan de database vanzelf doet, zet ResoFly
+      // hier per boekjaar om (set_fiscal_year_legal_form).
+      const failed: string[] = [];
+      for (const y of change?.years ?? []) {
+        const target = y.past ? (y.applies ? change!.to : null) : (y.applies ? null : change!.from);
+        if (!target) continue;
+        try { await setFiscalYearLegalForm(organizationId, y.id, target); }
+        catch (e) { failed.push(`${y.label}: ${e instanceof Error ? e.message : 'omzetten mislukt'}`); }
+      }
+      const perYear = (change?.years ?? []).map(y => `${y.label} sluit af als ${formWord(y.applies ? change!.to : change!.from)}`).join(', ');
       setMessage(activeTab === 'huisstijl'
         ? 'Huisstijl opgeslagen. Het klantportaal, je offerte-, factuur- en contractpagina\'s en je PDF\'s gebruiken hem direct.'
         : activeTab === 'documenten'
           ? 'Opmaak opgeslagen. Nieuwe offertes en facturen krijgen hem direct; wat al verstuurd is, blijft zoals het was.'
-          : 'Bedrijfsinstellingen opgeslagen. Nieuwe factuur-PDFs gebruiken deze gegevens direct.');
+          : change
+            ? `Bedrijfsinstellingen opgeslagen. Je administratie is nu een ${formWord(change.to)}${perYear ? `: ${perYear}` : ''}.`
+              // Naar een vof: zonder vennoten gaat de winst nergens heen. Zeg waar je ze vastlegt.
+              + (partnershipForms.includes(change.to) ? ' Leg bij Financiën → Vennoten de vennoten en hun winstaandeel vast.' : ' Het kapitaal van de vennoten blijft op hun eigen rekeningen staan.')
+            : 'Bedrijfsinstellingen opgeslagen. Nieuwe factuur-PDFs gebruiken deze gegevens direct.');
+      if (failed.length > 0) setTemplateError(`De instellingen zijn opgeslagen, maar niet elk boekjaar kon om (${failed.join('; ')}). Zet dat jaar om in het afsluitvenster bij Financiën → Boekjaren.`);
     } catch (error) {
       setTemplateError(error instanceof Error ? error.message : 'Bedrijfsinstellingen opslaan mislukt.');
     } finally {
@@ -2817,6 +2878,35 @@ export function Settings({
         onOpenBrand={() => setActiveTab('huisstijl')}
       />
     </div>}
+
+    {/* Het venster bij een andere rechtsvorm: buiten het tabblad, want Opslaan
+        staat ook op Huisstijl en Opmaak en bewaart dezelfde gegevens. */}
+    {legalChange && (
+      <Modal title={`Van ${formWord(legalChange.from)} naar ${formWord(legalChange.to)}`} onClose={() => setLegalChange(null)}
+        footer={<>
+          <Button onClick={() => setLegalChange(null)}>Annuleren</Button>
+          <Button variant="primary" disabled={isSaving} onClick={() => void persist(legalChange)}>{isSaving ? 'Opslaan…' : 'Opslaan'}</Button>
+        </>}>
+        <div className="legal-change">
+          <p>{partnershipForms.includes(legalChange.to)
+            ? `Vanaf nu wordt de winst bij het afsluiten over de vennoten verdeeld. Leg ze daarna vast bij Financiën → Vennoten.`
+            : 'Vanaf nu sluiten de boekjaren af als eenmanszaak: de winst gaat naar 0500 Eigen vermogen, niet meer naar de vennoten. Het kapitaal van de vennoten blijft op hun eigen rekeningen staan.'}</p>
+          {legalChange.years.map(y => (
+            <label key={y.id} className="bk-setting-check legal-change-year">
+              <input type="checkbox" checked={y.applies}
+                onChange={e => setLegalChange(c => (c ? { ...c, years: c.years.map(x => (x.id === y.id ? { ...x, applies: e.target.checked } : x)) } : c))} />
+              <span>
+                {y.past ? `Gold dit ook al voor ${y.label}?` : `Geldt dit al voor ${y.label}?`}
+                <small className="bk-muted"> {y.applies
+                  ? `${y.label} sluit af als ${formWord(legalChange.to)}.`
+                  : `${y.label} sluit af als ${formWord(legalChange.from)}${y.past ? '' : ' (bijvoorbeeld bij een overstap per 1 januari)'}.`}</small>
+              </span>
+            </label>
+          ))}
+          {legalChange.years.length > 0 && <p className="bk-muted">Later nog anders? In het afsluitvenster bij Financiën → Boekjaren zet je een open jaar om.</p>}
+        </div>
+      </Modal>
+    )}
 
     {activeTab === 'facturatie' && <div className="settings-tab-panel">
     <div className="settings-save-bar">

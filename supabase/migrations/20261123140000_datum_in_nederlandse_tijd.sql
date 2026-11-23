@@ -18,8 +18,9 @@
 -- `issue_credit_note`, `open_initial_fiscal_years` en de API rekenden al met
 -- `(now() at time zone 'Europe/Amsterdam')::date`. Deze vijf functies nu ook.
 -- Verder is er aan de functies niets veranderd: het zijn de laatste versies
--- (20260724100000, 20261119190000 en 20261119180000) met alleen die regels
--- anders. Zoek op "20261122140000".
+-- (20260724100000, 20261119190000 en 20261119180000; close_fiscal_year uit
+-- 20261122100000_vof_verdeling_per_boekjaar) met alleen die regels anders.
+-- Zoek op "20261123140000".
 --
 -- Bestaande boekingen blijven staan zoals ze zijn: een geboekte betaling
 -- verschuif je niet achteraf. Veilig om opnieuw te draaien.
@@ -59,7 +60,7 @@ begin
 
   perform public.ensure_default_ledger_accounts(p_organization_id);
   v_book_date := public.first_open_booking_date(
-    -- GEWIJZIGD (20261122140000): de Nederlandse dag van de betaling, niet de
+    -- GEWIJZIGD (20261123140000): de Nederlandse dag van de betaling, niet de
     -- dag in UTC. Een betaling op 1 januari om 00:30 viel anders op 31 december.
     p_organization_id, coalesce((v_pay.paid_at at time zone 'Europe/Amsterdam')::date, (now() at time zone 'Europe/Amsterdam')::date));
 
@@ -205,7 +206,7 @@ begin
     v_entry := public.post_journal_entry(
       p_organization_id,
       public.first_open_booking_date_for(p_organization_id,
-        -- GEWIJZIGD (20261122140000): de Nederlandse dag van de terugbetaling.
+        -- GEWIJZIGD (20261123140000): de Nederlandse dag van de terugbetaling.
         coalesce((v_rf.refunded_at at time zone 'Europe/Amsterdam')::date, (now() at time zone 'Europe/Amsterdam')::date), false),
       'Terugbetaling factuur ' || coalesce(v_invoice.number, ''),
       'payment', p_invoice_id, v_lines, null
@@ -269,7 +270,7 @@ begin
   -- geboekt worden. Die omzet viel zo in het verkeerde jaar (de winst voor de
   -- inkomstenbelasting) en de btw een kwartaal te laat in de aangifte. De
   -- Belastingdienst neemt de aangifte ook pas na afloop van het tijdvak aan.
-  -- GEWIJZIGD (20261122140000): "vandaag" is de Nederlandse dag. Op 1 januari
+  -- GEWIJZIGD (20261123140000): "vandaag" is de Nederlandse dag. Op 1 januari
   -- tussen 0:00 en 1:00 stond hier anders "Afsluiten kan vanaf 01-01".
   if v_expected_to >= (now() at time zone 'Europe/Amsterdam')::date then
     raise exception 'Dit tijdvak loopt nog tot en met %. Afsluiten kan vanaf %, net als de aangifte bij de Belastingdienst.',
@@ -456,6 +457,8 @@ declare
   v_open_bank integer := 0;
   v_start_date date;
   v_vat_left bigint := 0;
+  v_year_form text;
+  v_changed text;
 begin
   if auth.role() <> 'service_role' and not (public.can_write_org(p_organization_id) and public.can_write_module(p_organization_id, 'finance')) then
     raise exception 'Geen schrijfrechten voor deze organisatie.' using errcode = '42501';
@@ -477,7 +480,9 @@ begin
   end if;
   -- TOEGEVOEGD (20261104000000): een lopend boekjaar sluit je niet af; latere
   -- boekingen zouden anders naar het volgende jaar schuiven.
-  -- GEWIJZIGD (20261122140000): "vandaag" is de Nederlandse dag.
+  -- GEWIJZIGD (20261123140000): "vandaag" is de Nederlandse dag. Deze versie
+  -- start van 20261122100000_vof_verdeling_per_boekjaar (de verdeling per
+  -- boekjaar), niet van een oudere: anders viel die weer weg.
   if v_fy.period_end >= (now() at time zone 'Europe/Amsterdam')::date then
     raise exception 'Dit boekjaar loopt nog tot en met %; afsluiten kan vanaf de dag daarna.',
       to_char(v_fy.period_end, 'DD-MM-YYYY') using errcode = '23514';
@@ -682,38 +687,61 @@ begin
   -- TOEGEVOEGD (20261104070000): bij een vof, maatschap of cv met vastgelegde
   -- vennoten is de winst van de vennoten. Het resultaat gaat dan naar hun
   -- kapitaalrekeningen, volgens de winstverdeling, tot op de cent sluitend.
-  v_regime := public.org_fiscal_regime(p_organization_id);
+  -- GEWIJZIGD (20261122100000): de rechtsvorm en de vennoten van dít boekjaar,
+  -- niet die van vandaag. Wie per 1 januari van vof naar eenmanszaak ging,
+  -- sloot 2025 anders af als eenmanszaak (alles naar 0500); een vennoot die
+  -- vóór het afsluiten uittrad, kreeg niets, en een nieuwe vennoot kreeg winst
+  -- over een jaar waarin hij er niet was.
+  v_year_form := coalesce(v_fy.legal_form, public.org_legal_form(p_organization_id));
+  v_regime := case
+    when v_year_form in ('bv', 'nv', 'cooperatie') then 'vpb'
+    when v_year_form in ('stichting', 'vereniging') then 'other'
+    else 'ib'
+  end;
   v_partnership := v_regime = 'ib'
-    and public.org_legal_form(p_organization_id) in ('vof', 'maatschap', 'cv')
-    and exists (
-      select 1 from public.partnership_partners pp
-      where pp.organization_id = p_organization_id and pp.is_active
-    );
+    and v_year_form in ('vof', 'maatschap', 'cv')
+    and exists (select 1 from public.fiscal_year_partner_split(p_organization_id, p_fiscal_year_id));
+
+  -- TOEGEVOEGD (20261122100000): zijn de vennoten of hun verdeling ná het
+  -- einde van dit boekjaar gewijzigd, en ligt er voor dit jaar nog niets
+  -- vast, dan weet ResoFly niet welke verdeling gold. Afsluiten met die van
+  -- nu gaf de winst aan de verkeerde vennoot, en de melding stuurde naar
+  -- "pas de verdeling aan bij Vennoten": precies de verkeerde weg. Zie
+  -- fiscal_year_partner_changes; ook als daardoor niemand meer meedoet.
+  if v_regime = 'ib' and v_year_form in ('vof', 'maatschap', 'cv') then
+    v_changed := array_to_string(public.fiscal_year_partner_changes(p_organization_id, p_fiscal_year_id), ', ');
+    if coalesce(v_changed, '') <> '' then
+      raise exception 'De vennoten of hun winstverdeling zijn na % gewijzigd (%). Welke verdeling gold in boekjaar %? Leg die eerst vast: Boekjaren → Afsluiten → Verdeling. De verdeling van nu kan voor dit jaar niet kloppen.',
+        to_char(v_fy.period_end, 'DD-MM-YYYY'), v_changed, v_fy.label using errcode = '23514';
+    end if;
+  end if;
 
   if v_partnership then
-    select coalesce(sum(pp.profit_share_basis_points), 0)::int into v_share_total
-    from public.partnership_partners pp
-    where pp.organization_id = p_organization_id and pp.is_active;
+    select coalesce(sum(sp.share_basis_points), 0)::int into v_share_total
+    from public.fiscal_year_partner_split(p_organization_id, p_fiscal_year_id) sp;
     if v_share_total <> 10000 then
-      raise exception 'De winstverdeling van de vennoten telt op tot % procent; dat moet precies 100 procent zijn. Pas de verdeling aan bij Financiën → Vennoten.',
-        replace(rtrim(to_char(v_share_total / 100.0, 'FM990.99'), '.'), '.', ',') using errcode = '23514';
+      raise exception 'De winstverdeling voor boekjaar % telt op tot % procent; dat moet precies 100 procent zijn. Pas de verdeling voor dit boekjaar aan: Boekjaren → Afsluiten → Verdeling.',
+        v_fy.label, replace(rtrim(to_char(v_share_total / 100.0, 'FM990.99'), '.'), '.', ',') using errcode = '23514';
     end if;
 
-    if v_result_cents <> 0 then
-      for s in select * from public.partnership_result_shares(p_organization_id, v_result_cents) loop
-        if s.share_cents > 0 then
-          v_lines := v_lines || jsonb_build_array(jsonb_build_object(
-            'account_id', s.capital_account_id,
-            'description', 'Winstaandeel ' || s.name || ' boekjaar ' || v_fy.label,
-            'debit_cents', 0, 'credit_cents', s.share_cents));
-        elsif s.share_cents < 0 then
-          v_lines := v_lines || jsonb_build_array(jsonb_build_object(
-            'account_id', s.capital_account_id,
-            'description', 'Verliesaandeel ' || s.name || ' boekjaar ' || v_fy.label,
-            'debit_cents', -s.share_cents, 'credit_cents', 0));
-        end if;
-      end loop;
-    end if;
+    -- GEWIJZIGD (20261122100000): de verdeling van dit boekjaar, met eerst
+    -- ieders voorafgaande bedrag (arbeidsbeloning, rente) en daarna naar rato.
+    -- Ook bij een resultaat van € 0: met een bedrag vooraf verschuift er dan
+    -- toch iets tussen de vennoten. Eerst stond dat wel in de vastgelegde
+    -- verdeling, maar niet in het grootboek.
+    for s in select * from public.fiscal_year_result_shares(p_organization_id, p_fiscal_year_id, v_result_cents) loop
+      if s.share_cents > 0 then
+        v_lines := v_lines || jsonb_build_array(jsonb_build_object(
+          'account_id', s.capital_account_id,
+          'description', 'Winstaandeel ' || s.name || ' boekjaar ' || v_fy.label,
+          'debit_cents', 0, 'credit_cents', s.share_cents));
+      elsif s.share_cents < 0 then
+        v_lines := v_lines || jsonb_build_array(jsonb_build_object(
+          'account_id', s.capital_account_id,
+          'description', 'Verliesaandeel ' || s.name || ' boekjaar ' || v_fy.label,
+          'debit_cents', -s.share_cents, 'credit_cents', 0));
+      end if;
+    end loop;
   elsif v_result_cents <> 0 then
     v_result_account := public.bookkeeping_account_id(p_organization_id, v_result_code);
     if v_result_cents > 0 then
@@ -807,6 +835,20 @@ begin
     );
   end if;
 
+  -- TOEGEVOEGD (20261122100000): de verdeling van dit boekjaar ligt vast, met
+  -- wat er per vennoot is geboekt. Het overzicht en de raming lezen dat voor
+  -- een afgesloten jaar, en heropenen en opnieuw afsluiten gebruikt dezelfde
+  -- verdeling. Eerder rekende alles opnieuw met de vennoten van vandaag.
+  if v_partnership then
+    insert into public.fiscal_year_partner_shares
+      (organization_id, fiscal_year_id, partner_id, share_basis_points, prior_share_cents, kind, share_cents, updated_by)
+    select p_organization_id, p_fiscal_year_id, rs.partner_id, rs.share_basis_points, rs.prior_share_cents, rs.kind,
+           rs.share_cents, p_created_by
+    from public.fiscal_year_result_shares(p_organization_id, p_fiscal_year_id, v_result_cents) rs
+    on conflict (fiscal_year_id, partner_id) do update
+      set share_cents = excluded.share_cents;
+  end if;
+
   -- Vergrendel het volledige boekjaarbereik.
   insert into public.closed_periods(organization_id, period_type, year, quarter, month, period_start, period_end, closed_by)
   values (
@@ -869,7 +911,7 @@ begin
   -- TOEGEVOEGD (20261119180000): niet jaren vooruit. "Boek t/m 31-10-2062" (een tikfout)
   -- boekte in één keer alle zestig termijnen tot in 2030 en zette het activum
   -- op volledig afgeschreven: zestig losse tegenboekingen om te herstellen.
-  -- GEWIJZIGD (20261122140000): "dit jaar" is het Nederlandse jaar.
+  -- GEWIJZIGD (20261123140000): "dit jaar" is het Nederlandse jaar.
   v_year_end := make_date(extract(year from (now() at time zone 'Europe/Amsterdam')::date)::int, 12, 31);
   if p_through_date is null or p_through_date > v_year_end then
     raise exception 'Afschrijven kan tot en met het einde van dit jaar (%). Latere termijnen boek je als het zover is.',

@@ -154,7 +154,7 @@ begin
   -- bekend en noemt de omschrijving een factuur van hem, dan alleen die van hem.
   if length(coalesce(p_haystack, '')) >= 3 then
     with genoemd as (
-      -- GEWIJZIGD (20261122100000): ook wélk nummer er staat. De reden noemde
+      -- GEWIJZIGD (20261123100000): ook wélk nummer er staat. De reden noemde
       -- het label (het eigen nummer, INK-2026-0001) terwijl de omschrijving het
       -- nummer van de leverancier had (TIP-2026-883421). Nu: "Factuurnummer
       -- TIP-2026-883421 (inkoopfactuur INK-2026-0001)", en bij het kenmerk uit

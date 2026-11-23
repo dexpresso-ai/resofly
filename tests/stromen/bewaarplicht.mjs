@@ -5,10 +5,10 @@
 //   1. Het bewijsstuk van een geboekte inkoopfactuur was met de eigen sessie te
 //      wissen (DELETE op attachments) en te vervangen (PATCH van storage_key).
 //      Het scherm toonde de knop niet en Gerrie weigerde, de database niet.
-//      Migratie 20261122131000_bewijsstukken_vast.sql.
+//      Migratie 20261123131000_bewijsstukken_vast.sql.
 //   2. De e-factuur (UBL) werd niet bewaard zoals hij verstuurd was: een latere
 //      download was opnieuw opgebouwd met de gegevens van vandaag.
-//      Migratie 20261122132000_efactuur_bewaren.sql.
+//      Migratie 20261123132000_efactuur_bewaren.sql.
 //
 // Alles als de eigenaar, via REST, RPC en de echte invoice-workflow met zijn
 // eigen sessie (RLS geldt). De media-worker is nep (nepdiensten.mjs); wat de

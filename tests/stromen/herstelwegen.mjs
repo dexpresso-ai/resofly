@@ -628,7 +628,7 @@ async function vanzelfBoeken() {
 // Controle bank van 22 november 2026, bevinding 2: een afschrift met een regel
 // van de spaarrekening erin kwam op de zakelijke rekening, en die regel kreeg je
 // er niet meer af. De aansluiting bleef voorgoed € 5.000 scheef.
-// Zie supabase/migrations/20261122130000_bank_herstel_verkeerd_ingelezen.sql.
+// Zie supabase/migrations/20261123130000_bank_herstel_verkeerd_ingelezen.sql.
 
 async function verkeerdIngelezen() {
   groep('Herstelwegen — een verkeerd ingelezen regel of afschrift');

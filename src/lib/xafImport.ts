@@ -18,6 +18,8 @@
  * hij werkt in de browser én in `npm test` (geen DOMParser nodig).
  */
 
+import { splitByShares } from './inkomstenbelasting.ts';
+
 // ── XML ──────────────────────────────────────────────────────────────────────
 
 const ENTITIES: Readonly<Record<string, string>> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: '\'' };
@@ -377,7 +379,8 @@ const KEYWORDS: ReadonlyArray<{ test: RegExp; subtype: string; reason: string }>
   { test: /\bcrediteur/, subtype: 'accounts_payable', reason: 'Crediteuren' },
   // Ook een IBAN als naam, met of zonder spaties ("NL91 ABNA 0417 …").
   { test: /\b(bank|rabo|rabobank|ing|abn|amro|knab|bunq|triodos|sns|asn|revolut)\b|\bnl ?\d{2} ?[a-z]{4}\b/, subtype: 'bank', reason: 'Bank' },
-  { test: /\bcum(ulatieve)? afschrijving|\bafschrijving(en)? (op|cum)/, subtype: 'accumulated_depreciation', reason: 'Cumulatieve afschrijving' },
+  // Cumulatieve afschrijving staat niet hier maar in DEPRECIATION: die gaat
+  // vóór een activawoord als "inventaris".
   { test: /\b(inventaris|vaste activa|machines?|computers?|auto|bedrijfsauto|apparatuur|verbouwing)\b/, subtype: 'fixed_asset', reason: 'Vaste activa' },
   { test: /\b(prive opname|prive opnamen|onttrekking)/, subtype: 'private_withdrawals', reason: 'Privé-opnamen' },
   { test: /\b(prive storting|prive stortingen)/, subtype: 'private_contributions', reason: 'Privé-stortingen' },
@@ -406,6 +409,32 @@ function isNotPaymentAccount(name: string): boolean {
 
 const NOT_PAYMENT_ACCOUNT_REASON = 'Geen voorstel: een lening, krediet, lease, creditcard of spaarrekening is geen betaalrekening en hoort niet op 1100 Bank. Kies de rekening die erbij hoort, of maak hem eerst aan onder Rekeningschema.';
 
+/**
+ * Cumulatieve afschrijving, ook afgekort ("Cum. afschr. inventaris") of
+ * zonder "cum." ("Afschrijving(en) inventaris"). Tot november 2026 herkende
+ * ResoFly alleen "cumulatieve afschrijving" en "afschrijving op/cum"; daarna
+ * won het woord "inventaris", en kwamen alle drie op 0100 Vaste activa. Daar
+ * stond dan de aanschafwaarde min de afschrijving (netto € 2.100), en een
+ * activum van vóór de start koppelen aan de beginbalans werd geweigerd. Niet
+ * "afschrijvingskosten": dat is een kostenrekening.
+ */
+const DEPRECIATION = /\bafschr(ijving(en|sfonds)?)?\b|\bcum(ulatieve)? afschr/;
+
+const NO_DEPRECIATION_ACCOUNT_REASON = 'Geen voorstel: dit is afschrijving, en er is geen rekening voor cumulatieve afschrijving (in het standaardschema 0150). Op de activarekening zelf klopt de aanschafwaarde niet meer. Maak die rekening eerst aan onder Rekeningschema, of kies zelf.';
+
+/**
+ * Een rekening-courant ("Rekening-courant vennoot Van Dam", "R/C Jansen") is
+ * een schuld of vordering, geen eigen vermogen en geen privé. Tot november
+ * 2026 kreeg zo'n rekening met oud nummer 0560 via "zelfde rekeningnummer"
+ * 0560 Privé-stortingen (geen vennoot), en ging hij bij de jaarafsluiting naar
+ * 0500.
+ */
+const CURRENT_ACCOUNT = /\b(rekening courant|r c|rc)\b/;
+const PARTNER_WORD = /\b(vennoot|vennoten|firmant|firmanten)\b/;
+const PRIVATE_SUBTYPES = new Set(['private_withdrawals', 'private_contributions', 'partner_withdrawals', 'partner_contributions']);
+
+const CURRENT_ACCOUNT_REASON = 'Geen voorstel: een rekening-courant met een vennoot is een schuld of vordering, geen privé of eigen vermogen. Kies de schuld- of vorderingsrekening die erbij hoort, of maak hem eerst aan onder Rekeningschema.';
+
 /** De naam van een vennotenrekening in ResoFly, genormaliseerd, zonder de vennoot. */
 const PARTNER_PREFIX: Readonly<Record<string, string>> = {
   partner_capital: 'kapitaal ',
@@ -413,31 +442,153 @@ const PARTNER_PREFIX: Readonly<Record<string, string>> = {
   partner_contributions: 'prive stortingen ',
 };
 
+const PARTNER_KIND: Readonly<Record<string, string>> = {
+  partner_capital: 'kapitaal',
+  partner_withdrawals: 'privé-opnamen',
+  partner_contributions: 'privé-stortingen',
+};
+
+/**
+ * Tussenvoegsels. Tot november 2026 telde elk woord van drie letters als naam,
+ * dus ook "van": "Kapitaal vennoot L. van Leeuwen" werd 0502 Kapitaal Jan van
+ * Dam, en Jan stond in de beginbalans op € 10.000 in plaats van € 6.000.
+ * "t" en "d" zijn wat er van 't en d' overblijft na normalize.
+ */
+const TUSSENVOEGSELS = new Set([
+  'van', 'de', 'der', 'den', 'ter', 'ten', 'het', 'te', 't', 'd', 'in', 'op', 'aan', 'bij', 'uit', 'voor', 'onder', 'over',
+  'vd', 'vande', 'vander', 'vanden', 'la', 'le', 'du', 'des', 'del', 'della', 'di', 'da', 'dos', 'el', 'von', 'zu',
+]);
+
+/** Woorden in de naam van een kapitaal- of privérekening die geen naam van een vennoot zijn. */
+const NOT_A_NAME = new Set([
+  'kapitaal', 'eigen', 'vermogen', 'vennoot', 'vennoten', 'firmant', 'firmanten', 'prive', 'opname', 'opnamen', 'opnames',
+  'storting', 'stortingen', 'onttrekking', 'onttrekkingen', 'inbreng', 'rekening', 'courant', 'saldo', 'stand', 'per', 'begin',
+  'eind', 'boekjaar', 'jaar', 'totaal', 'algemeen', 'overig', 'overige', 'en', 'of', 'met', 'naar', 'vof', 'cv', 'maatschap',
+  'firma', 'onderneming', 'ondernemer', 'beherend', 'beherende', 'commanditair', 'commanditaire', 'stille',
+]);
+
+/**
+ * De namen in een (genormaliseerde) rekeningnaam: zonder tussenvoegsels,
+ * getallen en woorden als "kapitaal" of "vennoot". Losse letters zijn
+ * voorletters ("l" uit "L. van Leeuwen"); "v d" (v/d) is een tussenvoegsel.
+ */
+function nameParts(text: string): { words: string[]; initials: string[]; startsWithName: boolean } {
+  const tokens = text.split(' ').filter(Boolean);
+  const words: string[] = [];
+  const initials: string[] = [];
+  // Begint de naam met een woord ("Anna Jansen"), dan is dat de voornaam; met
+  // een voorletter of tussenvoegsel ("A. Jansen", "van Dam") is er geen.
+  let startsWithName = false;
+  let started = false;
+  tokens.forEach((token, index) => {
+    if (NOT_A_NAME.has(token) || /\d/.test(token)) return;
+    const tussenvoegsel = TUSSENVOEGSELS.has(token) || (token === 'v' && TUSSENVOEGSELS.has(tokens[index + 1] ?? ''));
+    if (tussenvoegsel) { started = true; return; }
+    if (token.length === 1) { initials.push(token); started = true; return; }
+    if (!started) startsWithName = true;
+    started = true;
+    words.push(token);
+  });
+  return { words, initials, startsWithName };
+}
+
+interface Partner {
+  /** "Anna Jansen", voor de uitleg. */
+  label: string;
+  /** De voornaam, als die er staat ("anna"). */
+  given: string | null;
+  /** De achternaam zonder tussenvoegsels ("dam" van "Jan van Dam"). */
+  surname: string[];
+  initials: string[];
+  accounts: TargetAccount[];
+}
+
+/**
+ * De vennoten, uit hun rekeningen 050n, 055n en 056n. Per vennootnummer (het
+ * laatste cijfer), zodat privé en kapitaal van dezelfde vennoot samen tellen:
+ * "Privé-opnamen Jansen" moet ook twijfelen als maar één Jansen al een
+ * opnamenrekening heeft.
+ */
+function partnersFrom(options: TargetAccount[]): Partner[] {
+  const byKey = new Map<string, Partner>();
+  for (const target of options) {
+    if (!target.subtype || !(target.subtype in PARTNER_PREFIX)) continue;
+    const label = target.name.trim().replace(/^\S+\s+/, '');
+    const parts = nameParts(normalize(label));
+    const key = /^05[056][1-9]$/.test(target.code) ? `n${target.code[3]}` : parts.words.join(' ');
+    const existing = byKey.get(key);
+    if (existing) {
+      existing.accounts.push(target);
+      if (target.subtype === 'partner_capital') existing.label = label;
+      continue;
+    }
+    const given = parts.startsWithName && parts.words.length >= 2 ? parts.words[0] : null;
+    byKey.set(key, { label, given, surname: given ? parts.words.slice(1) : parts.words, initials: parts.initials, accounts: [target] });
+  }
+  return [...byKey.values()];
+}
+
+const partnerWords = (p: Partner) => (p.given ? [p.given, ...p.surname] : p.surname);
+
+/** Past een voorletter uit de oude rekening bij deze vennoot? Zonder voorletters: ja. */
+function initialsFit(p: Partner, initials: string[]): boolean {
+  if (initials.length === 0) return true;
+  const letters = [...(p.given ? [p.given[0]] : []), ...p.initials];
+  return letters.length === 0 || initials.some(i => letters.includes(i));
+}
+
+const listNames = (names: string[]) => (names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} en ${names[names.length - 1]}`);
+
 /**
  * Bij een vof, maatschap of cv: het kapitaal of het privé van één vennoot,
- * herkend aan een woord uit zijn naam ("Kapitaal Jansen" → 0501 Kapitaal Anna
- * Jansen). Tot november 2026 ging zo'n rekening naar het algemene 0500 of 0550,
- * en stond het hele beginvermogen daarna op geen enkele vennoot. Twee vennoten
- * die even goed passen (dezelfde achternaam): geen voorstel, de gebruiker kiest.
+ * herkend aan zijn naam ("Kapitaal vennoot B. de Vries" → 0502 Kapitaal Bram
+ * de Vries). Tot november 2026 ging zo'n rekening naar het algemene 0500 of
+ * 0550, en stond het hele beginvermogen daarna op geen enkele vennoot.
+ *
+ * De achternaam beslist; tussenvoegsels, voorletters en woorden als
+ * "vennoot" tellen niet. Een voornaam alleen ("Privé-opnamen Anna") mag, als
+ * er verder niets in de naam staat. Noemt de rekening iemand die niet in
+ * ResoFly staat, of passen twee vennoten (Anna en Piet Jansen), dan geen
+ * voorstel. Tot november 2026 viel zo'n rekening dan terug op 0500 of 0550,
+ * met een voorstel; de changelog van 18 november beloofde er juist geen.
+ *
+ * Geeft null als de rekening geen kapitaal of privé is, er geen vennoten
+ * zijn, of er geen naam in staat: dan beslist de rest van proposeAccount.
  */
-function partnerAccount(name: string, options: TargetAccount[]): TargetAccount | null {
+function partnerProposal(name: string, partners: Partner[]): AccountProposal | null {
   const subtype = /\b(prive opname|prive opnamen|onttrekking)/.test(name) ? 'partner_withdrawals'
     : /\b(prive storting|prive stortingen)/.test(name) ? 'partner_contributions'
     : /\b(kapitaal|eigen vermogen)\b/.test(name) ? 'partner_capital'
     : null;
-  if (!subtype) return null;
-  const words = new Set(name.split(' ').filter(w => w.length >= 3));
-  let best: TargetAccount | null = null;
-  let bestScore = 0;
-  let tie = false;
-  for (const target of options) {
-    if (target.subtype !== subtype) continue;
-    const partnerName = normalize(target.name).replace(PARTNER_PREFIX[subtype], '');
-    const score = partnerName.split(' ').filter(w => w.length >= 3 && words.has(w)).length;
-    if (score > bestScore) { best = target; bestScore = score; tie = false; }
-    else if (score > 0 && score === bestScore) tie = true;
+  if (!subtype || partners.length === 0) return null;
+  const { words, initials } = nameParts(name);
+  if (words.length === 0) return null;
+
+  const explains = (p: Partner) => words.every(w => partnerWords(p).includes(w));
+  const bySurname = partners.filter(p => p.surname.some(w => words.includes(w)));
+  // Een voorletter beslist tussen twee Jansens ("A. Jansen"), en sluit uit
+  // wie niet past ("L. Jansen" is geen Anna Jansen).
+  const found = (bySurname.length > 0
+    ? bySurname.filter(explains)
+    : partners.filter(p => p.given !== null && words.includes(p.given) && explains(p))
+  ).filter(p => initialsFit(p, initials));
+
+  if (found.length === 0) {
+    // Twee vennoten in één naam ("Kapitaal Jansen en De Vries") is twijfel;
+    // een naam die bij niemand hoort ("L. van Leeuwen") is een onbekende vennoot.
+    const named = partners.filter(p => p.surname.some(w => words.includes(w)) && initialsFit(p, initials));
+    if (named.length > 1 && words.every(w => named.some(p => partnerWords(p).includes(w)))) {
+      return { targetId: null, reason: `Geen voorstel: deze naam past bij ${named.length === 2 ? 'twee' : named.length} vennoten (${listNames(named.map(p => p.label))}). Kies zelf van wie deze rekening is.` };
+    }
+    return { targetId: null, reason: 'Geen voorstel: deze rekening noemt een vennoot die niet in ResoFly staat. Leg die vennoot eerst vast bij Vennoten, of kies zelf de rekening.' };
   }
-  return bestScore > 0 && !tie ? best : null;
+  if (found.length > 1) {
+    return { targetId: null, reason: `Geen voorstel: deze naam past bij ${found.length === 2 ? 'twee' : found.length} vennoten (${listNames(found.map(p => p.label))}). Kies zelf van wie deze rekening is.` };
+  }
+  const target = found[0].accounts.find(t => t.subtype === subtype);
+  return target
+    ? { targetId: target.id, reason: 'Vennoot' }
+    : { targetId: null, reason: `Geen voorstel: ${found[0].label} heeft in ResoFly geen rekening voor ${PARTNER_KIND[subtype]}. Kies zelf de rekening.` };
 }
 
 /** Een voorstel per rekening uit de auditfile: dezelfde naam, dan een herkend woord, dan dezelfde code. */
@@ -453,8 +604,14 @@ export function proposeAccount(account: { code: string; name: string }, targets:
     const sameKind = options.find(t => t.code === account.code && t.subtype !== 'bank' && isNotPaymentAccount(normalize(t.name)));
     return sameKind ? { targetId: sameKind.id, reason: 'Zelfde rekeningnummer' } : { targetId: null, reason: NOT_PAYMENT_ACCOUNT_REASON };
   }
-  const partner = partnerAccount(name, options);
-  if (partner) return { targetId: partner.id, reason: 'Vennoot' };
+  if (DEPRECIATION.test(name)) {
+    const wanted = options.find(t => t.subtype === 'accumulated_depreciation')
+      ?? options.find(t => t.code === account.code && DEPRECIATION.test(normalize(t.name)));
+    return wanted ? { targetId: wanted.id, reason: 'Cumulatieve afschrijving' } : { targetId: null, reason: NO_DEPRECIATION_ACCOUNT_REASON };
+  }
+  const partners = partnersFrom(options);
+  const partner = partnerProposal(name, partners);
+  if (partner) return partner;
   for (const keyword of KEYWORDS) {
     if (!keyword.test.test(name)) continue;
     const wanted = keyword.subtype === 'equity'
@@ -463,7 +620,17 @@ export function proposeAccount(account: { code: string; name: string }, targets:
     if (wanted) return { targetId: wanted.id, reason: keyword.reason };
   }
   const byCode = options.find(t => t.code === account.code);
-  if (byCode) return { targetId: byCode.id, reason: 'Zelfde rekeningnummer' };
+  if (byCode) {
+    if (CURRENT_ACCOUNT.test(name) && (byCode.type === 'equity' || PRIVATE_SUBTYPES.has(byCode.subtype ?? ''))) {
+      return { targetId: null, reason: CURRENT_ACCOUNT_REASON };
+    }
+    const words = nameParts(name).words;
+    const namesPartner = PARTNER_WORD.test(name) || partners.some(p => p.surname.some(w => words.includes(w)));
+    if (namesPartner && (byCode.subtype === 'private_withdrawals' || byCode.subtype === 'private_contributions')) {
+      return { targetId: null, reason: `Geen voorstel: deze rekening noemt een vennoot, en ${byCode.code} ${byCode.name} is van geen enkele vennoot. Kies de rekening van die vennoot, of maak hem eerst aan onder Rekeningschema.` };
+    }
+    return { targetId: byCode.id, reason: 'Zelfde rekeningnummer' };
+  }
   return { targetId: null, reason: null };
 }
 
@@ -479,9 +646,14 @@ export interface OpeningLineDraft {
 /**
  * Regels voor de beginbalans: per rekening van ResoFly opgeteld, zonder nullen.
  * Een rekening zonder koppeling geeft een fout: dan zou de balans stilletjes
- * niet kloppen.
+ * niet kloppen. `extra` zijn regels die er los bij komen, zoals het resultaat
+ * per vennoot (splitResultOverPartners); ze tellen op bij dezelfde rekening.
  */
-export function openingLines(balances: XafBalance[], mapping: Readonly<Record<string, string | null | undefined>>): OpeningLineDraft[] {
+export function openingLines(
+  balances: XafBalance[],
+  mapping: Readonly<Record<string, string | null | undefined>>,
+  extra: ReadonlyArray<OpeningLineDraft> = [],
+): OpeningLineDraft[] {
   const missing = balances.filter(b => !mapping[b.code]).map(b => b.code);
   if (missing.length) throw new Error(`Kies eerst een rekening voor ${missing.join(', ')}.`);
   const sums = new Map<string, number>();
@@ -489,7 +661,58 @@ export function openingLines(balances: XafBalance[], mapping: Readonly<Record<st
     const target = mapping[b.code]!;
     sums.set(target, (sums.get(target) ?? 0) + b.cents);
   }
+  for (const line of extra) sums.set(line.account_id, (sums.get(line.account_id) ?? 0) + line.cents);
   return [...sums.entries()].filter(([, cents]) => cents !== 0).map(([account_id, cents]) => ({ account_id, cents }));
+}
+
+// ── Het resultaat tot de overstapdatum, bij een vof ──────────────────────────
+
+export interface PartnerShare {
+  /** De kapitaalrekening van de vennoot (050n). */
+  capitalAccountId: string;
+  name: string;
+  /** Het vennootnummer: bij een gelijke rest krijgt het laagste de cent. */
+  partnerNumber: number;
+  /** Winstaandeel in basispunten (5000 = 50%). */
+  basisPoints: number;
+}
+
+export interface ResultShareLine extends OpeningLineDraft {
+  name: string;
+  basisPoints: number;
+}
+
+export type ResultSplit =
+  | { kind: 'split'; lines: ResultShareLine[] }
+  | { kind: 'no_partners' }
+  | { kind: 'shares_not_100'; totalBasisPoints: number };
+
+/**
+ * Bij een vof, maatschap of cv die halverwege het jaar overstapt: het
+ * resultaat tot de overstapdatum per vennoot op zijn kapitaalrekening, naar
+ * zijn winstaandeel. Zonder dit kwam het als sluitpost op 0500: de winst van
+ * januari t/m juni (€ 12.000) stond op geen enkele vennoot en werd nooit
+ * verdeeld, en het winstaandeel bij Vennoten was alleen dat van de tweede
+ * helft.
+ *
+ * Tot op de cent sluitend, met dezelfde afronding als de jaarafsluiting
+ * (splitByShares, gelijk aan partnership_result_shares). Telt de verdeling
+ * niet op tot 100%, dan niets: die weigert de jaarafsluiting ook, en een
+ * verdeling die niet sluit zou een rest op 0500 laten.
+ *
+ * `resultCents` zoals balancesAt het geeft: credit (negatief) is winst. Een
+ * regel is dus credit bij winst en debet bij verlies.
+ */
+export function splitResultOverPartners(resultCents: number, partners: ReadonlyArray<PartnerShare>): ResultSplit {
+  if (partners.length === 0) return { kind: 'no_partners' };
+  const totalBasisPoints = partners.reduce((sum, p) => sum + p.basisPoints, 0);
+  if (totalBasisPoints !== 10000) return { kind: 'shares_not_100', totalBasisPoints };
+  const shares = splitByShares(resultCents, partners.map(p => ({ key: p.capitalAccountId, basisPoints: p.basisPoints, order: p.partnerNumber })));
+  const lines = [...partners]
+    .sort((a, b) => a.partnerNumber - b.partnerNumber)
+    .map(p => ({ account_id: p.capitalAccountId, cents: shares.get(p.capitalAccountId) ?? 0, name: p.name, basisPoints: p.basisPoints }))
+    .filter(line => line.cents !== 0);
+  return { kind: 'split', lines };
 }
 
 const euroText = (cents: number) => {
@@ -497,14 +720,21 @@ const euroText = (cents: number) => {
   return `€ ${Math.trunc(abs / 100).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')},${String(abs % 100).padStart(2, '0')}`;
 };
 
+/** De eigen-vermogensrekeningen waar samenkomen opvalt: 0500 en die van elke vennoot (050n, 055n, 056n). */
+const OWNER_SUBTYPES = new Set(['equity', 'partner_capital', 'partner_withdrawals', 'partner_contributions']);
+
 /**
- * Wat er aan de gekozen koppeling niet lijkt te kloppen, per bankrekening van
- * ResoFly (subtype bank, 1100):
- *  - meer dan één rekening uit de auditfile komt erop samen. openingLines telt
- *    ze stil op; een lening of creditcard die de gebruiker zelf op de bank zet,
- *    verdwijnt dan in één saldo;
- *  - het saldo komt credit uit. Een betaalrekening staat zelden rood: meestal
- *    zit er dan een schuld tussen.
+ * Wat er aan de gekozen koppeling niet lijkt te kloppen:
+ *  - meer dan één rekening uit de auditfile komt samen op een bankrekening
+ *    van ResoFly (subtype bank, 1100). openingLines telt ze stil op; een
+ *    lening of creditcard die de gebruiker zelf op de bank zet, verdwijnt dan
+ *    in één saldo;
+ *  - een bankrekening komt credit uit. Een betaalrekening staat zelden rood:
+ *    meestal zit er dan een schuld tussen;
+ *  - meer dan één rekening komt samen op 0500 of op een rekening van één
+ *    vennoot. Tot november 2026 kwam "Kapitaal vennoot L. van Leeuwen" zo bij
+ *    het kapitaal van Jan van Dam: Jan stond op € 10.000 in plaats van
+ *    € 6.000, zonder één woord.
  * Het scherm toont ze en vraagt een bevestiging vóór het overnemen; tot
  * november 2026 ging "Zet in de beginbalans" zonder vraag door.
  */
@@ -514,6 +744,15 @@ export function mappingWarnings(
   targets: TargetAccount[],
 ): string[] {
   const warnings: string[] = [];
+  for (const target of targets) {
+    if (!OWNER_SUBTYPES.has(target.subtype ?? '')) continue;
+    const sources = balances.filter(b => mapping[b.code] === target.id && b.cents !== 0);
+    if (sources.length < 2) continue;
+    const list = `${target.code} ${target.name}: ${sources.map(b => `${b.code} ${b.name}`).join(', ')}`;
+    warnings.push(target.subtype === 'equity'
+      ? `${sources.length} rekeningen uit de auditfile komen samen op ${list}. Ze worden één saldo, op geen enkele vennoot. Bij een eenmanszaak is dat goed. Is het kapitaal of privé van verschillende vennoten, zet het dan op de rekening van elke vennoot; een vennoot die nog niet in ResoFly staat, leg je eerst vast bij Vennoten.`
+      : `${sources.length} rekeningen uit de auditfile komen samen op ${list}. Ze worden één saldo, van één vennoot. Klopt dat niet, kies dan bij elke rekening de vennoot van wie hij is; een vennoot die nog niet in ResoFly staat, leg je eerst vast bij Vennoten.`);
+  }
   for (const target of targets) {
     if (target.subtype !== 'bank') continue;
     const sources = balances.filter(b => mapping[b.code] === target.id && b.cents !== 0);

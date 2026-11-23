@@ -11,6 +11,9 @@
   "orientation": "any",
   "background_color": "#0E0E12",
   "theme_color": "#0E0E12",
+  "launch_handler": {
+    "client_mode": ["focus-existing", "auto"]
+  },
   "icons": [
     {
       "src": "/icons/app-communicatie-192.png",

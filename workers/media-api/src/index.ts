@@ -4238,7 +4238,7 @@ const EVIDENCE_KEY_SEGMENTS = new Set(['quote', 'invoice', 'purchase_invoice', '
 
 /**
  * Ligt het bestand achter deze sleutel vast? De regel staat in de database
- * (storage_key_lock_reason, migratie 20261122131000), zodat het scherm, Gerrie,
+ * (storage_key_lock_reason, migratie 20261123131000), zodat het scherm, Gerrie,
  * de database en deze Worker hetzelfde zeggen. Lukt de vraag niet, dan wissen
  * we niet: liever een foutmelding dan een bewijsstuk kwijt.
  */

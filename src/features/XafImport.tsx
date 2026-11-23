@@ -9,21 +9,26 @@
  * pagina's (create_client_with_next_code en een gewone insert), dus met de
  * rechten van wie het doet.
  */
-import { useMemo, useRef, useState, type ChangeEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { Upload } from 'lucide-react';
-import type { Client, LedgerAccount, Supplier } from '../types';
+import type { Client, LedgerAccount, PartnershipPartner, Supplier } from '../types';
 import { Button, Input, Select } from '../components/Ui';
 import { dateNL, euro } from '../lib/format';
-import { createClientWithServerCode, insertRow } from '../lib/repository';
+import { createClientWithServerCode, insertRow, listPartnershipPartners, loadCompanySettings } from '../lib/repository';
 import {
-  addDays, balancesAt, decodeXafBytes, mappingWarnings, openingLines, parseXaf, planRelations, proposeAccount, VAT_RETURN_CODES,
-  type OpeningLineDraft, type XafFile,
+  addDays, balancesAt, decodeXafBytes, mappingWarnings, openingLines, parseXaf, planRelations, proposeAccount, splitResultOverPartners,
+  VAT_RETURN_CODES, type OpeningLineDraft, type ResultSplit, type XafFile,
 } from '../lib/xafImport';
 
 const euroCents = (cents: number) => euro(cents / 100);
 /** Alleen de eerste letter: "ResoFly" in een voorstel bleef anders niet heel. */
 const lowerFirst = (text: string) => text.charAt(0).toLowerCase() + text.slice(1);
 const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+/** 6000 basispunten → "60%", 3333 → "33,33%". */
+const percent = (basisPoints: number) => `${String(basisPoints / 100).replace('.', ',')}%`;
+
+/** Rechtsvormen met vennoten (zie Bookkeeping.tsx, de beginbalans). */
+const PARTNERSHIP_FORMS: ReadonlySet<string> = new Set(['vof', 'maatschap', 'cv']);
 
 /** Grenzen aan het bestand: een auditfile van vijf jaar is zo 200 MB, maar de browser leest hem in één keer. */
 const MAX_XAF_BYTES = 150 * 1024 * 1024;
@@ -49,7 +54,27 @@ export function XafImportPanel({
   const [choices, setChoices] = useState<Record<string, string>>({});
   const [applied, setApplied] = useState(false);
   const [relations, setRelations] = useState<{ busy: boolean; done: number; total: number; added: number; failed: string[] } | null>(null);
+  // De rechtsvorm en de actieve vennoten, voor het resultaat tot de
+  // overstapdatum. undefined: nog bezig; null: niet te laden, dan de gewone
+  // uitleg over de sluitpost. Pas na het inlezen van een bestand: wie de
+  // beginbalans alleen opent, wacht er niet op.
+  const [owners, setOwners] = useState<{ partnership: boolean; partners: PartnershipPartner[] } | null | undefined>(undefined);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!file) return;
+    let cancelled = false;
+    setOwners(undefined);
+    (async () => {
+      const settings = await loadCompanySettings(organizationId);
+      const partnership = PARTNERSHIP_FORMS.has(settings?.legal_form ?? '');
+      const partners = partnership ? (await listPartnershipPartners(organizationId)).filter(p => p.is_active) : [];
+      return { partnership, partners };
+    })()
+      .then(result => { if (!cancelled) setOwners(result); })
+      .catch(() => { if (!cancelled) setOwners(null); });
+    return () => { cancelled = true; };
+  }, [file, organizationId]);
 
   async function onFile(event: ChangeEvent<HTMLInputElement>) {
     const chosen = event.target.files?.[0];
@@ -88,14 +113,45 @@ export function XafImportPanel({
   }, [proposals, choices]);
   const accountById = useMemo(() => new Map(ledgerAccounts.map(a => [a.id, a])), [ledgerAccounts]);
   const unmapped = (balances?.balance ?? []).filter(b => !mapping[b.code]);
-  // Wat aan de koppeling niet lijkt te kloppen: meer rekeningen op de bank, of
-  // een bank die credit uitkomt (zie mappingWarnings).
-  const bankWarnings = useMemo(
+  // Wat aan de koppeling niet lijkt te kloppen: meer rekeningen op de bank of
+  // op één eigen-vermogensrekening, of een bank die credit uitkomt (zie
+  // mappingWarnings).
+  const linkWarnings = useMemo(
     () => (balances ? mappingWarnings(balances.balance, mapping, balanceAccounts) : []),
     [balances, mapping, balanceAccounts],
   );
+  // Bij een vof, maatschap of cv: het resultaat tot de overstapdatum per
+  // vennoot op zijn kapitaal. Zonder dit kwam de winst van vóór de overstap
+  // als sluitpost op 0500, en werd die nooit over de vennoten verdeeld.
+  const resultSplit = useMemo<ResultSplit | null>(() => {
+    if (!balances || !owners?.partnership) return null;
+    const shares = owners.partners
+      .filter(p => accountById.get(p.capital_account_id)?.is_active)
+      .map(p => ({ capitalAccountId: p.capital_account_id, name: p.name, partnerNumber: p.partner_number, basisPoints: p.profit_share_basis_points }));
+    return splitResultOverPartners(balances.resultCents, shares);
+  }, [balances, owners, accountById]);
+  const equityAccount = ledgerAccounts.find(a => a.subtype === 'equity' && a.is_active);
+  const equityLabel = equityAccount ? `${equityAccount.code} ${equityAccount.name}` : '0500';
   const plan = useMemo(() => (file ? planRelations(file, clients, suppliers) : null), [file, clients, suppliers]);
   const relationTotal = plan ? (canWriteClients ? plan.clients.length : 0) + plan.suppliers.length : 0;
+
+  /** Waar het resultaat tot de overstapdatum heen gaat. */
+  function resultText(resultCents: number): string {
+    if (!resultSplit || resultCents === 0) return 'Dat komt via de sluitpost op het eigen vermogen.';
+    const winst = resultCents < 0;
+    const it = winst ? 'die' : 'dat';
+    if (resultSplit.kind === 'no_partners') {
+      return `Dat komt als sluitpost op ${equityLabel}, op geen enkele vennoot. Wil je ${it} over de vennoten verdelen, leg dan eerst de vennoten vast (Financiën → Vennoten) en lees de auditfile daarna opnieuw in.`;
+    }
+    if (resultSplit.kind === 'shares_not_100') {
+      return `De winstverdeling van de vennoten telt op tot ${percent(resultSplit.totalBasisPoints)} in plaats van 100%. Daarom komt ${winst ? 'de winst' : 'het verlies'} als sluitpost op ${equityLabel}, op geen enkele vennoot. Zet de verdeling goed bij Vennoten en lees de auditfile daarna opnieuw in, of verdeel ${it} zelf in de beginbalans hieronder.`;
+    }
+    const parts = resultSplit.lines.map(line => {
+      const code = accountById.get(line.account_id)?.code;
+      return `${code ? `${code} ` : ''}${line.name} (${percent(line.basisPoints)}) ${euroCents(Math.abs(line.cents))}`;
+    });
+    return `Dit is ${winst ? 'de winst' : 'het verlies'} van vóór de overstap. ResoFly zet ${it} per vennoot op zijn kapitaalrekening, naar zijn winstaandeel: ${parts.join(', ')}. Verdelen jullie ${winst ? 'die winst' : 'dat verlies'} anders, pas de bedragen dan aan in de beginbalans hieronder.`;
+  }
 
   function apply() {
     if (!balances) return;
@@ -105,11 +161,11 @@ export function XafImportPanel({
     // die in het banksaldo was verdwenen, viel pas maanden later op.
     const doubts = [
       ...(balances.missingOpening ? ['De auditfile heeft geen beginbalans: de saldi zijn alleen de boekingen uit het bestand.'] : []),
-      ...bankWarnings,
+      ...linkWarnings,
     ];
     if (doubts.length > 0 && !window.confirm(`Kijk dit eerst na:\n\n${doubts.map(d => `• ${d}`).join('\n\n')}\n\nToch in de beginbalans zetten?`)) return;
     try {
-      onApply(switchDate, openingLines(balances.balance, mapping));
+      onApply(switchDate, openingLines(balances.balance, mapping, resultSplit?.kind === 'split' ? resultSplit.lines : []));
       setApplied(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Overnemen lukte niet.');
@@ -201,13 +257,14 @@ export function XafImportPanel({
 
       <p className="bk-muted">
         Resultaat tot de overstapdatum: {euroCents(Math.abs(balances.resultCents))} {balances.resultCents <= 0 ? 'winst' : 'verlies'}.
-        {' '}Dat komt via de sluitpost op het eigen vermogen. Ontbreekt een rekening in de lijst? Maak hem eerst aan onder Rekeningschema.
+        {' '}{resultText(balances.resultCents)} Ontbreekt een rekening in de lijst? Maak hem eerst aan onder Rekeningschema.
       </p>
 
-      {bankWarnings.map(warning => <div key={warning} className="xaf-import-warning">{warning}</div>)}
+      {linkWarnings.map(warning => <div key={warning} className="xaf-import-warning">{warning}</div>)}
 
       <div className="xaf-import-actions">
-        <Button variant="primary" onClick={apply} disabled={!canWrite || unmapped.length > 0 || balances.balance.length === 0}>Zet in de beginbalans</Button>
+        {/* Wachten op de vennoten: anders komt de winst bij een snelle klik toch op 0500. */}
+        <Button variant="primary" onClick={apply} disabled={!canWrite || unmapped.length > 0 || balances.balance.length === 0 || owners === undefined}>Zet in de beginbalans</Button>
         {unmapped.length > 0 && <span className="bk-muted">Kies nog een rekening voor {unmapped.map(b => b.code).join(', ')}.</span>}
       </div>
       {applied && <div className="success">De beginbalans hieronder is ingevuld. Kijk hem na en klik op Beginbalans vastleggen.</div>}

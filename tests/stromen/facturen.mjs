@@ -368,7 +368,7 @@ export default async function facturen() {
   });
 
   // Het dashboard, de klantpagina en de stroom lezen het openstaande bedrag uit
-  // list_open_invoice_amounts (migratie 20261122090000). Zonder Financiën of
+  // list_open_invoice_amounts (migratie 20261123090000). Zonder Financiën of
   // vanuit een andere organisatie: geen rijen en geen fout, want de kern roept
   // hem bij elk opstarten aan.
   await stap('dashboard: list_open_invoice_amounts geeft 17363 cent als lid; niets zonder Financiën of voor een andere organisatie', async () => {

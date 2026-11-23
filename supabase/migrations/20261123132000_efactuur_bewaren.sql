@@ -52,7 +52,7 @@ create index if not exists idx_sent_e_invoices_invoice on public.sent_e_invoices
 create index if not exists idx_sent_e_invoices_credit_note on public.sent_e_invoices (credit_note_id) where credit_note_id is not null;
 
 comment on table public.sent_e_invoices is
-  'Elke e-factuur en e-creditnota (UBL) die ResoFly verstuurde, met het bestand zoals het de deur uitging. Onveranderlijk (bewaarplicht); alleen invoice-workflow schrijft hier (20261122132000).';
+  'Elke e-factuur en e-creditnota (UBL) die ResoFly verstuurde, met het bestand zoals het de deur uitging. Onveranderlijk (bewaarplicht); alleen invoice-workflow schrijft hier (20261123132000).';
 
 -- Wat verstuurd is, ligt vast. Ook voor de service-role: de edge function mag
 -- een rij klaarzetten en er één keer het verzendmoment bij zetten, meer niet.

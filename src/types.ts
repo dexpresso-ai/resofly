@@ -101,7 +101,7 @@ export interface OrganizationMember {
    *  Zie src/lib/permissions.ts; genegeerd voor owners en admins. */
   module_access?: Record<string, string> | null;
   /**
-   * Alleen bij de boekhouder: mag hij boeken en afsluiten (vanaf 20261122133000)?
+   * Alleen bij de boekhouder: mag hij boeken en afsluiten (vanaf 20261123133000)?
    * Zie BOOKING_PAGES in src/lib/permissions.ts voor wat dat opent.
    */
   accountant_can_book?: boolean | null;
@@ -2003,8 +2003,23 @@ export interface FiscalYear {
   closed_by: UUID | null;
   reopened_at: string | null;
   reopened_by: UUID | null;
+  /**
+   * De rechtsvorm van dit boekjaar (20261122100000). Wisselt de rechtsvorm bij
+   * Instellingen, dan volgen alleen open jaren die nog niet voorbij zijn.
+   * Optioneel: een database van daarvóór kent hem niet.
+   */
+  legal_form?: LegalForm | null;
   created_at: string;
   updated_at: string;
+}
+
+/** Eén vennoot in de vastgelegde verdeling van een boekjaar (set_fiscal_year_partner_shares). */
+export interface FiscalYearPartnerShare {
+  partnerId: UUID;
+  shareBasisPoints: number;
+  /** Arbeidsbeloning of rente over het kapitaal, vóór de verdeling naar rato. */
+  priorShareCents: number;
+  kind: 'beherend' | 'commanditair';
 }
 
 /** Rij uit list_fiscal_years: boekjaar + server-side (her)berekend resultaat. */
@@ -2092,11 +2107,26 @@ export interface OwnersEquityRow {
   partnerId: UUID | null;
   name: string;
   partnerNumber: number | null;
+  /** De soort in dit boekjaar (een commanditaire vennoot alleen in een cv-jaar). */
   kind: 'beherend' | 'commanditair' | null;
+  /** De stand van nu: actief of uitgetreden. */
   isActive: boolean;
+  /**
+   * Doet mee in de verdeling van dit boekjaar (20261122100000). Alleen bij een
+   * vennoot; een uitgetreden vennoot kan meedoen in een jaar waarin hij er nog was.
+   */
+  inSplit?: boolean;
+  /** Het winstaandeel in dít boekjaar, 0 als hij niet meedoet. */
   shareBasisPoints: number;
+  /** Het winstaandeel van nu, bij Vennoten. Kan anders zijn dan in dit jaar. */
+  currentShareBasisPoints?: number;
+  /** Arbeidsbeloning of rente over het kapitaal, vóór de verdeling naar rato. Zit in resultShareCents. */
+  priorShareCents?: number;
   beginCents: number;
-  /** Winst (positief) of verlies (negatief) dat bij deze ondernemer of vennoot hoort. */
+  /**
+   * Winst (positief) of verlies (negatief) dat bij deze ondernemer of vennoot
+   * hoort. Bij een afgesloten jaar het bedrag dat toen is geboekt.
+   */
   resultShareCents: number;
   contributionsCents: number;
   withdrawalsCents: number;
@@ -2108,7 +2138,24 @@ export interface OwnersEquityRow {
 /** Uitkomst van owners_equity_overview: de kapitaalvergelijking van één boekjaar. */
 export interface OwnersEquityOverview {
   fiscalYear: { id: UUID; label: string; periodStart: string; periodEnd: string; status: 'open' | 'closed' };
+  /** De rechtsvorm van dít boekjaar (sinds 20261122100000; daarvoor die van nu). */
   legalForm: LegalForm;
+  /** De rechtsvorm van nu, bij Instellingen. Anders dan legalForm na een overstap. */
+  currentLegalForm?: LegalForm;
+  /** Ligt er voor dit boekjaar een verdeling vast? Zo niet, dan geldt die van de actieve vennoten. */
+  splitFixed?: boolean;
+  /**
+   * Namen van vennoten die na het einde van dit (open) jaar zijn toegevoegd,
+   * uitgetreden of een ander percentage kregen, terwijl er al vennoten waren.
+   * Dan weigert afsluiten tot de verdeling van dit jaar is vastgelegd.
+   */
+  splitChangedAfterYearEnd?: string[];
+  /**
+   * Wat er dit jaar op 0550/0560 (privé, geen vennoot) staat, debet − credit.
+   * Gaat bij afsluiten naar 0500 en komt bij geen enkele vennoot op de aangifte.
+   */
+  generalPrivateCents?: number;
+  /** Vof, maatschap of cv in dít boekjaar. */
   isPartnershipForm: boolean;
   /** Vof, maatschap of cv mét actieve vennoten: dan wordt de winst verdeeld. */
   isPartnership: boolean;
@@ -2124,8 +2171,19 @@ export interface OwnersEquityOverview {
   /** De labels van die nog open boekjaren, oudste eerst. */
   openPriorYears?: string[];
   owners: OwnersEquityRow[];
-  /** Vermogen dat op geen enkele vennoot staat (0500, 0510, 0550/0560). */
-  unassigned: { beginCents: number; movementsCents: number; endCents: number } | null;
+  /**
+   * Vermogen dat op geen enkele vennoot staat (0500, 0510, 0550/0560).
+   * `openPriorResultCents` (20261122100000) is de winst van een vorig jaar dat
+   * nog open staat: die zit niet meer in `beginCents`, wel in `endCents`
+   * (begin + openPrior + movements). Hij zat eerst in het begin, en het scherm
+   * raadde aan dat bedrag met een memoriaal te verdelen; wie dat deed en daarna
+   * het vorige jaar afsloot, gaf de vennoten die winst twee keer.
+   *
+   * `resultCents`: bij een vof zonder vennoot in de verdeling van dit jaar
+   * (alle uitgetreden, of nog niemand vastgelegd) het resultaat van het jaar,
+   * dat dan naar 0510/0500 gaat en bij niemand komt. Zit in `endCents`.
+   */
+  unassigned: { beginCents: number; openPriorResultCents?: number; resultCents?: number; movementsCents: number; endCents: number } | null;
 }
 
 export interface DgaInterestComputation {
@@ -3161,7 +3219,7 @@ export interface BankAccount extends OrgScopedRow {
   auto_book_purchase_invoices?: boolean;
   /**
    * Een periode die de bankkoppeling niet meer kon ophalen (migratie
-   * 20261122100000; ontbreekt daarvóór). Leeg = geen gat bekend.
+   * 20261123100000; ontbreekt daarvóór). Leeg = geen gat bekend.
    */
   sync_gap_from?: string | null;
   sync_gap_to?: string | null;
@@ -3249,7 +3307,7 @@ export interface BankTransaction {
   /** Met de hand ingevoerd in plaats van van de bank. Optioneel: vóór migratie 20261107110000 bestond het niet. */
   is_manual?: boolean;
   /**
-   * Niet van deze rekening (vanaf 20261122130000): de mutatie blijft bij
+   * Niet van deze rekening (vanaf 20261123130000): de mutatie blijft bij
    * Genegeerd staan, maar telt niet mee in de aansluiting.
    */
   excluded_at?: string | null;
@@ -3430,7 +3488,7 @@ export interface BankReconciliation {
   unbooked_sum_cents: number;
   ignored_count: number;
   ignored_sum_cents: number;
-  /** Mutaties die niet van deze rekening zijn; ze tellen nergens in mee (vanaf 20261122130000). */
+  /** Mutaties die niet van deze rekening zijn; ze tellen nergens in mee (vanaf 20261123130000). */
   excluded_count?: number;
   excluded_sum_cents?: number;
   booked_count: number;

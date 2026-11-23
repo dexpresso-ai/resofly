@@ -10,12 +10,12 @@
 -- gebeurt. Twee dingen zaten in de database:
 --
 --   1. Het boekjaar van het nieuwe jaar ontstond niet. Alles boekte door, maar
---      Eigen vermogen kende het jaar niet. Sinds 20261122141000 opent het
+--      Eigen vermogen kende het jaar niet. Sinds 20261123141000 opent het
 --      vanzelf bij de eerste boeking, alleen bij een eenmanszaak, vof,
 --      maatschap of cv, en alleen als het jaar ervóór een boekjaar heeft.
 --   2. De database telde in UTC: een betaling van 00:30 Nederlandse tijd viel
 --      op de dag ervoor, en afsluiten werd in het eerste uur van 1 januari
---      geweigerd (20261122140000).
+--      geweigerd (20261123140000).
 --
 -- De klok van de database kan niet vooruit. De datums staan daarom ten
 -- opzichte van vandaag: "vorig jaar" speelt het oude jaar, "dit jaar" het

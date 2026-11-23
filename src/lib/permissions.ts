@@ -152,7 +152,7 @@ export interface MembershipLike {
 
 /**
  * Pagina's waar een boekhouder met "mag boeken" kan wijzigen. Spiegel van de
- * lijst in public.accountant_booking_context (migratie 20261122133000): de
+ * lijst in public.accountant_booking_context (migratie 20261123133000): de
  * database staat hem alleen de functies toe die bij deze pagina's horen
  * (memoriaal, beginbalans, vooruitbetaald, afschrijven, btw-aangifte,
  * boekjaren, aangifte inkomstenbelasting). De vaste regel per module blijft

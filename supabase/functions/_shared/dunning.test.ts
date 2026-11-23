@@ -105,6 +105,6 @@ test('de tarieftabel is bijgewerkt voor het lopende halfjaar', () => {
     assert.equal(stale, null,
       `De ${kind === 'consumer' ? 'wettelijke rente' : 'wettelijke handelsrente'} per ${stale?.missingFrom} staat niet in statutory_interest_rates. `
       + 'Zoek het tarief op (Rijksoverheid, "Hoogte wettelijke rente"; KCBR-informatieblad) en voeg het toe met een nieuwe migratie: '
-      + 'één regel per soort per halfjaar, ook als het tarief gelijk blijft. Zie 20261122142000_wettelijke_rente_elk_halfjaar.sql.');
+      + 'één regel per soort per halfjaar, ook als het tarief gelijk blijft. Zie 20261123142000_wettelijke_rente_elk_halfjaar.sql.');
   }
 });
