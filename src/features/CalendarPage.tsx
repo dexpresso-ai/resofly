@@ -1,7 +1,7 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
 import type React from 'react';
 import { createPortal } from 'react-dom';
-import { CalendarDays, CalendarPlus, Check, CheckSquare, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Clock, Columns3, ExternalLink, LayoutList, Link2, Lock, Mail, MapPin, Pencil, PenLine, Plus, RefreshCcw, Repeat, Send, Trash2, Unplug, UserPlus, Users, Video, X } from 'lucide-react';
+import { Briefcase, CalendarDays, CalendarPlus, Check, CheckSquare, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Clock, Columns3, ExternalLink, LayoutList, Link2, Lock, Mail, MapPin, Pencil, PenLine, Plus, RefreshCcw, Repeat, Send, Trash2, Unplug, UserPlus, Users, Video, X } from 'lucide-react';
 import { useBackStep } from '../lib/useBackStep';
 import { useContentAppend } from '../lib/useContentAppend';
 import { hasPlannedTime, taskBlockMinutes } from '../lib/planning';
@@ -360,12 +360,20 @@ function calendarDaysForView(view: CalendarView, anchor: Date): Date[] {
     return Array.from({ length: dayCount }, (_, i) => addDays(gridStart, i));
   }
   const weekStart = startOfWeek(anchor);
+  // Werkweek: maandag t/m vrijdag. Wie in het weekend niet werkt, kreeg in de
+  // weekweergave twee lege kolommen die de werkdagen smaller maakten.
+  if (view === 'workweek') return Array.from({ length: WORK_WEEK_DAY_COUNT }, (_, i) => addDays(weekStart, i));
   return Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
 }
 
-/** Weergaven met een tijdrooster (dagkolommen × uren): dag, 3 dagen en week. */
+/** Weergaven met een tijdrooster (dagkolommen × uren): dag, 3 dagen, werkweek en week. */
 function isTimeGridView(view: CalendarView): boolean {
-  return view === 'day' || view === '3day' || view === 'week';
+  return view === 'day' || view === '3day' || view === 'workweek' || view === 'week';
+}
+
+/** Weergaven die op maandag beginnen en per week bladeren. */
+function isWeekView(view: CalendarView): boolean {
+  return view === 'week' || view === 'workweek';
 }
 
 function providerLabel(p: CalendarProvider): string { return p === 'google' ? 'Google' : p === 'microsoft' ? 'Microsoft' : p === 'ics' ? 'Via link' : 'ResoFly'; }
@@ -607,7 +615,8 @@ function eventOverlapsVisibleWindow(event: CalendarExternalEvent, day: Date): bo
   return eventStart < end && eventEnd > start;
 }
 
-type CalendarView = 'day' | '3day' | 'week' | 'month' | 'list';
+type CalendarView = 'day' | '3day' | 'workweek' | 'week' | 'month' | 'list';
+const WORK_WEEK_DAY_COUNT = 5;
 
 /** Lopende sleep-selectie. `dayIndex` is de dag waar je begon, `endDayIndex` de dag
  *  onder de cursor. Loopt de selectie over meer dan één dag (of begon hij in de
@@ -4489,7 +4498,7 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
     return `${shortMonth(first)} ${first.getFullYear()} – ${shortMonth(last)} ${last.getFullYear()}`;
   }, [anchor, days, view]);
   // Weeknummer-chip naast de titel (Google toont die in de weekweergave).
-  const calendarWeekNumber = view === 'week' || view === 'list' ? isoWeekNumber(days[0]) : null;
+  const calendarWeekNumber = isWeekView(view) || view === 'list' ? isoWeekNumber(days[0]) : null;
   const canManageSource = (src: CalendarSource) => Boolean(canWrite && currentUserId && src.user_id === currentUserId);
   const canManageConnection = (uid: UUID) => Boolean(canWrite && currentUserId && uid === currentUserId);
   const writeableSources = useMemo(
@@ -4601,9 +4610,9 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
     listCalendarFeedLinks(organizationId).then(rows => { if (active) setFeedLinks(rows); }).catch(() => {});
     return () => { active = false; };
   }, [mode, organizationId]);
-  // Zakt het scherm naar telefoonbreedte terwijl je in de (brede) weekweergave zit?
-  // Schakel dan naar de dagweergave, die wél op een telefoon past.
-  useEffect(() => { if (isMobile && view === 'week') changeView('day'); }, [isMobile]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Zakt het scherm naar telefoonbreedte terwijl je in de (brede) week- of
+  // werkweekweergave zit? Schakel dan naar de dagweergave, die wél op een telefoon past.
+  useEffect(() => { if (isMobile && isWeekView(view)) changeView('day'); }, [isMobile]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     const handleCalendarAnchor = (event: Event) => {
       const anchor = (event as CustomEvent<{ anchor?: string }>).detail?.anchor;
@@ -5111,7 +5120,7 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
       setAutoScrollKey(key => key + 1);
       setAnchor(prev => {
         if (nextView === 'month') return startOfMonth(prev);
-        if (nextView === 'week' || nextView === 'list') return startOfWeek(prev);
+        if (isWeekView(nextView) || nextView === 'list') return startOfWeek(prev);
         return startOfDay(prev);
       });
     });
@@ -5144,9 +5153,9 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
     });
   }
 
-  // ↑/↓ zoomt in/uit langs dag → 3 dagen → week → maand (lijst blijft via 'l').
+  // ↑/↓ zoomt in/uit langs dag → 3 dagen → werkweek → week → maand (lijst blijft via 'l').
   function cycleView(direction: -1 | 1) {
-    const order: CalendarView[] = ['day', '3day', 'week', 'month'];
+    const order: CalendarView[] = ['day', '3day', 'workweek', 'week', 'month'];
     const current = order.indexOf(view);
     const base = current === -1 ? order.indexOf('week') : current;
     const next = order[Math.min(order.length - 1, Math.max(0, base + direction))];
@@ -5180,6 +5189,7 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
         case 'd': case 'D': e.preventDefault(); changeView('day'); break;
         case '3': e.preventDefault(); changeView('3day'); break;
         case 'w': case 'W': e.preventDefault(); changeView('week'); break;
+        case '5': e.preventDefault(); changeView('workweek'); break;
         case 'm': case 'M': e.preventDefault(); changeView('month'); break;
         case 'l': case 'L': e.preventDefault(); changeView('list'); break;
         // In-/uitzoomen op het tijdrooster, zoals in een kaart of tekenprogramma.
@@ -5490,6 +5500,7 @@ export function CalendarPage({ mode = 'agenda', linkNotice = null, initialDate, 
           <div className="tb-view-tog calendar-view-tabs" aria-label="Agendaweergave">
             <button className={`tb-vbtn${view === 'day' ? ' active' : ''}`} onClick={() => changeView('day')} title="Dagweergave (D)"><CalendarDays size={14} /><span>Dag</span></button>
             <button className={`tb-vbtn${view === '3day' ? ' active' : ''}`} onClick={() => changeView('3day')} title="3-daagse weergave (3)"><Columns3 size={14} /><span>3 dagen</span></button>
+            <button className={`tb-vbtn${view === 'workweek' ? ' active' : ''}`} onClick={() => changeView('workweek')} title="Werkweek, maandag t/m vrijdag (5)"><Briefcase size={14} /><span>Werkweek</span></button>
             <button className={`tb-vbtn${view === 'week' ? ' active' : ''}`} onClick={() => changeView('week')} title="Weekweergave (W)"><Clock size={14} /><span>Week</span></button>
             <button className={`tb-vbtn${view === 'month' ? ' active' : ''}`} onClick={() => changeView('month')} title="Maandweergave (M)"><CalendarDays size={14} /><span>Maand</span></button>
             <button className={`tb-vbtn${view === 'list' ? ' active' : ''}`} onClick={() => changeView('list')} title="Lijstweergave (L)"><LayoutList size={14} /><span>Lijst</span></button>

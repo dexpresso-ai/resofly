@@ -173,6 +173,10 @@ const PAGES = {
   // zonder daglijst eronder. Die lijst nam een derde van het scherm en drukte
   // de weekrijen zo plat dat er per dag maar één regel overbleef.
   'calendar-month': { page: 'calendar', prepare: 'button.tb-vbtn[title^="Maandweergave"]' },
+  // De werkweek (2026-11-23): vijf kolommen, ma t/m vr. Op de telefoon moet het
+  // rooster even hoog beginnen als de gewone week; de extra knop mag de
+  // weergavetabs niet over twee regels duwen.
+  'calendar-workweek': { page: 'calendar', prepare: 'button.tb-vbtn[title^="Werkweek"]' },
   content: 'content', notes: 'notes', documents: 'documents', stats: 'stats',
   // Rapportages met Gerrie (2026-11-09): het overzicht, de rapportbouwer van
   // voorheen (tweede tabblad), één rapportage met het kader, en dezelfde
@@ -608,6 +612,7 @@ const FIRST_ITEM = {
   quotes: { selector: '.quote-table tbody tr', maxTop: 496 },
   weekplanner: { selector: '.wp-daystrip', maxTop: 600 },
   calendar: { selector: '.tb-scroll', maxTop: 260 },
+  'calendar-workweek': { selector: '.tb-scroll', maxTop: 260 },
   // De eerste weekrij van de maand. Gemeten 2026-11-13: 168px; de grens ligt 20% hoger.
   'calendar-month': { selector: '.cm-week', maxTop: 202 },
   time: { selector: '.tt-kpi', maxTop: 396 },
