@@ -166,7 +166,8 @@ kleiner is.
   ("en omhoog"), terwijl er tegelijk zware metingen liepen; de drie runs
   daarna, ook na de merge, 15/15.
 - `npm run test:mobile -- --theme=both`: zie "De mobiele test en Poppins"
-  hieronder. Na de correctie: MOBIEL3.
+  hieronder. Na de correctie: 842 pagina's gemeten, 0 met problemen
+  (exitcode 0).
 - `node scripts/check-csp-hash.mjs`: de hash staat in beide CSP-regels.
 - Het laadscherm uit de HTML naast dat van React (JavaScript geblokkeerd
   tegen Supabase dat niet antwoordt), licht en donker: alleen de stand van
