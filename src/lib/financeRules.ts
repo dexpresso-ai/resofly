@@ -129,3 +129,24 @@ export function defaultDueDate(invoiceDate: string, terms: string | null | undef
   due.setUTCDate(due.getUTCDate() + paymentTermDays(terms));
   return due.toISOString().slice(0, 10);
 }
+
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * De vervaldatum na het wijzigen van de factuurdatum. Hij schuift mee zolang
+ * hij nog de termijn uit de bedrijfsgegevens volgt (of leeg is); een datum die
+ * je zelf koos, blijft staan.
+ *
+ * Eerder werd de vervaldatum één keer uitgerekend, met de datum van vandaag.
+ * Een factuur van 15 september kreeg zo 6 december als vervaldatum, terwijl
+ * eronder "binnen 14 dagen" stond: herinneringen en de aanmaning kwamen
+ * maanden te laat.
+ */
+export function dueDateAfterDateChange(previousDate: string, nextDate: string, dueDate: string | null | undefined, terms: string | null | undefined): string {
+  const due = String(dueDate ?? '');
+  // Halverwege typen of leeggemaakt: niets verschuiven.
+  if (!ISO_DATE.test(nextDate)) return due;
+  if (!due) return defaultDueDate(nextDate, terms);
+  if (ISO_DATE.test(previousDate) && due === defaultDueDate(previousDate, terms)) return defaultDueDate(nextDate, terms);
+  return due;
+}

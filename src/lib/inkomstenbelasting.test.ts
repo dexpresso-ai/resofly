@@ -74,7 +74,75 @@ test('regels per jaar: vanaf 2025, daarna het laatst bekende jaar met een waarsc
   assert.equal(incomeTaxRulesFor(2025.5), null);
   assert.deepEqual(incomeTaxRulesFor(2025), { rules: R25, exact: true });
   assert.deepEqual(incomeTaxRulesFor(2026), { rules: R26, exact: true });
-  assert.deepEqual(incomeTaxRulesFor(2027), { rules: R26, exact: false });
+  // Na de laatste tabel: de tabel van 2026, met de zelfstandigenaftrek die
+  // voor 2027 en later al in de wet staat (art. 3.76 lid 2: € 900).
+  for (const year of [2027, 2028]) {
+    const later = incomeTaxRulesFor(year);
+    assert.ok(later);
+    assert.equal(later.exact, false);
+    assert.deepEqual(later.rules, { ...R26, zelfstandigenaftrekCents: E(900) }, `${year}: alleen de zelfstandigenaftrek wijkt af van 2026`);
+  }
+});
+
+test('het aangiftejaar blijft staan: 2026 rekent met zijn eigen tabel, ook als 2027 erbij komt', () => {
+  // In januari 2027 doet de zzp'er aangifte over 2026. Wat er ook voor 2027
+  // bij komt, deze bedragen mogen niet meeschuiven.
+  assert.equal(R26.zelfstandigenaftrekCents, E(1200));
+  assert.equal(R26.startersaftrekCents, E(2123));
+  assert.deepEqual(R26.brackets, [{ upToCents: E(38_883), rate: 35_750 }, { upToCents: E(78_426), rate: 37_560 }, { upToCents: null, rate: 49_500 }]);
+  const y26 = buildIncomeTaxOverview(inputs({ year: 2026, resultCents: E(40_000), profiles: [{ ...defaultIncomeTaxProfile(null), meetsHoursCriterion: true }] }), { basis: 'geboekt', today: '2027-01-02' });
+  assert.ok(y26);
+  assert.equal(y26.rulesExact, true);
+  assert.equal(y26.rulesYear, 2026);
+  assert.deepEqual(y26.warnings.filter(w => /Voorlopige raming|wetsvoorstel/.test(w)), []);
+  assert.equal(y26.persons[0].estimate.zelfstandigenaftrekCents, E(1200));
+});
+
+test('een jaar na de laatste tabel: voorlopig, met de zelfstandigenaftrek van dat jaar en een eerlijke melding', () => {
+  const base = { year: 2027, resultCents: E(40_000), overlappingFiscalYears: [], profiles: [{ ...defaultIncomeTaxProfile(null), meetsHoursCriterion: true }] };
+  const y27 = buildIncomeTaxOverview(inputs(base), { basis: 'geboekt', today: '2027-01-02' });
+  assert.ok(y27);
+  assert.equal(y27.rulesExact, false);
+  assert.equal(y27.rulesYear, 2026, 'de tarieven komen uit de tabel van 2026');
+  const e27 = y27.persons[0].estimate;
+  assert.equal(e27.zelfstandigenaftrekCents, E(900));
+  const warning = y27.warnings.find(w => /^Voorlopige raming/.test(w));
+  assert.ok(warning, y27.warnings.join(' | '));
+  assert.match(warning, /zelfstandigenaftrek van 2027 \(€ 900,00\)/);
+  assert.match(warning, /bedragen van 2026/);
+  assert.equal(y27.warnings.some(w => /wetsvoorstel/.test(w)), false, 'geen starter: geen woord over de startersaftrek');
+
+  // Dezelfde winst met de tabel van 2026: € 300 minder aftrek, dus meer belasting.
+  const y26 = buildIncomeTaxOverview(inputs({ ...base, year: 2026 }), { basis: 'geboekt', today: '2027-01-02' });
+  assert.ok(y26);
+  const e26 = y26.persons[0].estimate;
+  assert.equal(e27.entrepreneurDeductionCents, e26.entrepreneurDeductionCents - E(300));
+  assert.ok(e27.totalCents > e26.totalCents, 'minder aftrek, meer belasting');
+  // De controle van 22 november kwam op € 123 voor wie niet start:
+  // inkomstenbelasting en Zvw samen over € 300 minder aftrek.
+  assert.equal(e27.totalCents - e26.totalCents, 12_308);
+
+  // Een starter: het bedrag uit de wet, en erbij wat het scheelt als het
+  // voorstel doorgaat. Eerst stond er "een paar honderd euro"; bij € 40.000
+  // winst is het bijna € 900.
+  const starter = buildIncomeTaxOverview(inputs({ ...base, profiles: [{ ...defaultIncomeTaxProfile(null), meetsHoursCriterion: true, starter: true }] }), { basis: 'geboekt', today: '2027-01-02' });
+  assert.ok(starter);
+  const withStarter = starter.persons[0].estimate;
+  assert.equal(withStarter.startersaftrekCents, E(2123));
+  const rules27 = incomeTaxRulesFor(2027)!.rules;
+  const noStarter = estimatePerson({ ...rules27, startersaftrekCents: 0 }, person({ profitShareCents: E(40_000), starter: true }));
+  const verschil = noStarter.totalCents - withStarter.totalCents;
+  assert.ok(verschil > E(800) && verschil < E(900), `verschil ${verschil}`);
+  const note = starter.warnings.find(w => /wetsvoorstel/.test(w));
+  assert.ok(note, starter.warnings.join(' | '));
+  assert.match(note, /€ 2\.123,00/);
+  assert.ok(note.includes(`Zonder startersaftrek komt deze raming ${euroText(verschil)} hoger uit.`), note);
+  assert.doesNotMatch(note, /€ 10\b/, 'een bedrag uit een voorstel noemen we niet');
+
+  // Met de eigen tabel van 2026 geen woord over het voorstel.
+  const starter26 = buildIncomeTaxOverview(inputs({ ...base, year: 2026, profiles: [{ ...defaultIncomeTaxProfile(null), meetsHoursCriterion: true, starter: true }] }), { basis: 'geboekt', today: '2027-01-02' });
+  assert.ok(starter26);
+  assert.equal(starter26.warnings.some(w => /wetsvoorstel/.test(w)), false);
 });
 
 // ── Losse onderdelen ────────────────────────────────────────────────────────
@@ -583,7 +651,7 @@ test('prognose of geboekt, en een jaar zonder eigen tarieven', () => {
   const later = buildIncomeTaxOverview(inputs({ year: 2027, overlappingFiscalYears: [] }), { basis: 'geboekt', today: TODAY });
   assert.ok(later);
   assert.equal(later.rulesExact, false);
-  assert.ok(later.warnings.some(w => /voor 2027 staan nog niet in ResoFly/.test(w)));
+  assert.ok(later.warnings.some(w => /voor 2027 staan nog niet vast/.test(w)));
   assert.equal(buildIncomeTaxOverview(inputs({ year: 2024 }), { basis: 'geboekt', today: TODAY }), null);
 });
 

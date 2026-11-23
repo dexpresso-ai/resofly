@@ -246,3 +246,66 @@ export function calculateDunningClaim(input: {
     dueDate: input.dueDate,
   };
 }
+
+// ---------------------------------------------------------------------------
+// 3. Is de tarieftabel bij?
+// ---------------------------------------------------------------------------
+//
+// De wettelijke rente en de handelsrente kunnen elk halfjaar veranderen, per
+// 1 januari en per 1 juli. De tabel (statutory_interest_rates) wordt met een
+// migratie bijgewerkt, en het laatste tarief gold voor altijd: wie de tabel
+// vergat, liet aanmaningen stil doorrekenen met het tarief van het vorige
+// halfjaar. Dat is een bedrag in een brief aan een klant. Gezien bij de
+// controle van de jaarwissel op 22 november 2026: de tabel liep tot 1 juli
+// 2026 en niets zou op 1 januari 2027 zeggen dat hij bij moest.
+//
+// Afspraak: de tabel krijgt per soort ELK halfjaar een regel, ook als het
+// tarief gelijk blijft. De laatste regel zegt dan tot welk halfjaar de tabel
+// is nagelopen. Valt de rekendatum in een later halfjaar, dan rekent de
+// aanmaning nog steeds (met het laatst bekende tarief), maar het voorstel
+// zegt het erbij. dunning.test.ts faalt bovendien als de migraties achterlopen.
+
+/** De eerste dag van het halfjaar waarin de datum valt: 1 januari of 1 juli. */
+export function halfYearStart(isoDate: string): string {
+  if (!isIsoDate(isoDate)) throw new Error(`Ongeldige datum (verwacht YYYY-MM-DD): ${isoDate}`);
+  return `${isoDate.slice(0, 4)}-${Number(isoDate.slice(5, 7)) <= 6 ? '01' : '07'}-01`;
+}
+
+export interface StaleRate {
+  kind: InterestKind;
+  /** Het eerste halfjaar dat in de tabel ontbreekt (1 januari of 1 juli). */
+  missingFrom: string;
+  /** Het tarief waarmee vanaf die dag is gerekend: het laatst bekende. */
+  usedRateBasisPoints: number;
+  /** De ingangsdatum van dat laatst bekende tarief. */
+  lastValidFrom: string;
+}
+
+/**
+ * Null als de tabel voor deze soort bijgewerkt is tot en met het halfjaar van
+ * de rekendatum. Anders: welk halfjaar ontbreekt en met welk tarief er dus is
+ * gerekend. Zonder één tarief van deze soort ook null: dan is er geen rente
+ * berekend en valt er niets te waarschuwen.
+ */
+export function staleRate(kind: InterestKind, ratePeriods: RatePeriod[], calculationDate: string): StaleRate | null {
+  const timeline = timelineFor(kind, ratePeriods);
+  const last = timeline[timeline.length - 1];
+  if (!last) return null;
+  const lastValidFrom = isoFromDayIndex(last.fromDay);
+  if (halfYearStart(calculationDate) <= lastValidFrom) return null;
+  // Het halfjaar direct na het laatste dat erin staat.
+  const lastHalf = halfYearStart(lastValidFrom);
+  const missingFrom = lastHalf.slice(5, 7) === '01' ? `${lastHalf.slice(0, 4)}-07-01` : `${Number(lastHalf.slice(0, 4)) + 1}-01-01`;
+  return { kind, missingFrom, usedRateBasisPoints: last.rateBasisPoints, lastValidFrom };
+}
+
+const NL_MONTHS = ['januari', 'februari', 'maart', 'april', 'mei', 'juni', 'juli', 'augustus', 'september', 'oktober', 'november', 'december'];
+
+/** De waarschuwing voor in het aanmaningsvoorstel, in gewone woorden. */
+export function staleRateMessage(stale: StaleRate): string {
+  const name = stale.kind === 'consumer' ? 'wettelijke rente' : 'wettelijke handelsrente';
+  const [year, month, day] = stale.missingFrom.split('-').map(Number);
+  const rate = (stale.usedRateBasisPoints / 100).toFixed(2).replace('.', ',');
+  return `De ${name} per ${day} ${NL_MONTHS[month - 1]} ${year} staat nog niet in ResoFly. Deze aanmaning rekent vanaf die dag met het tarief van daarvoor (${rate}%). `
+    + 'Kijk het tarief na voordat je verstuurt; is het veranderd, dan klopt het rentebedrag niet.';
+}

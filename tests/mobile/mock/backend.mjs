@@ -375,6 +375,83 @@ function galleryRows() {
   return { galleries: [gallery, engaged], gallery_items: items, gallery_categories: categories, gallery_favorites: favorites, gallery_category_presets: [] };
 }
 
+/**
+ * `bankGap: true` (2026-11-22): een gekoppelde bankrekening waarvan de
+ * koppeling een periode niet meer kon ophalen (sync_gap_from/to). De
+ * Bankpagina toont dat bij de rekening, met de knop "Gezien".
+ */
+function bankGapRows() {
+  const stamp = { organization_id: seed.ids.ORG, created_by: seed.ids.USER, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-11-22T00:00:00Z' };
+  const requisition = {
+    id: 'ba9c0000-0000-4000-8000-000000000001', ...stamp, provider: 'enablebanking', institution_id: 'ING', institution_name: 'ING',
+    institution_country: 'NL', reference: 'ref', requisition_id: 'sess', link: 'https://enablebanking.com/auth', status: 'linked',
+    accounts: ['acc-1'], linked_at: '2026-11-22T00:00:00Z', expires_at: '2027-05-20T00:00:00Z', error: null,
+  };
+  return {
+    bank_requisitions: [requisition],
+    bank_accounts: [{
+      id: 'ba9c0000-0000-4000-8000-000000000002', ...stamp, name: 'Zakelijke rekening', iban: 'NL69INGB0123456789', currency: 'EUR',
+      ledger_account_id: LEDGER_ACCOUNTS.find(a => a.code === '1100').id, source: 'enablebanking', provider: 'enablebanking',
+      external_account_id: 'acc-1', bank_requisition_id: requisition.id, last_synced_at: '2026-11-22T06:00:00Z',
+      last_sync_attempt_at: '2026-11-22T06:00:00Z', last_sync_error: null, last_imported_at: null, is_active: true,
+      auto_book_purchase_invoices: true, sync_gap_from: '2026-07-08', sync_gap_to: '2026-09-22',
+    }],
+  };
+}
+
+/**
+ * `bankHerstel: true` (2026-11-22): een rekening met een ingelezen afschrift,
+ * een open mutatie en een regel die op "niet van deze rekening" staat. Zo
+ * meet de test de knop daarvoor, het label, de regel in de aansluiting en de
+ * lijst met afschriften (terugdraaien).
+ */
+function bankHerstelRows() {
+  const stamp = { organization_id: seed.ids.ORG, created_at: '2026-11-03T09:00:00Z', updated_at: '2026-11-03T09:00:00Z' };
+  const account = {
+    id: 'ba0c0000-0000-4000-8000-000000000001', ...stamp, name: 'Zakelijke rekening', iban: 'NL91ABNA0417164300', currency: 'EUR',
+    ledger_account_id: LEDGER_ACCOUNTS.find(a => a.code === '1100').id, source: 'import', provider: null, external_account_id: null,
+    bank_requisition_id: null, last_synced_at: null, last_imported_at: '2026-11-03T09:00:00Z', is_active: true,
+  };
+  const statement = {
+    id: 'ba0c0000-0000-4000-8000-0000000000a1', organization_id: seed.ids.ORG, created_by: seed.ids.USER, bank_account_id: account.id,
+    format: 'camt053', file_name: 'betaal-en-spaarrekening-november.xml', file_hash: null, period_start: '2026-11-01', period_end: '2026-11-03',
+    opening_balance_cents: 100000, closing_balance_cents: 221000, transaction_count: 2, imported_at: '2026-11-03T09:00:00Z', created_at: '2026-11-03T09:00:00Z',
+  };
+  const tx = (id, values) => ({
+    id, ...stamp, bank_account_id: account.id, statement_id: statement.id, dedup_key: id, value_date: null, currency: 'EUR',
+    counterparty_iban: null, structured_reference: null, end_to_end_id: null, bank_tx_id: null, suggested_account_id: null,
+    suggested_vat_code: null, matched_rule_id: null, match_confidence: null, matched_invoice_id: null, matched_purchase_invoice_id: null,
+    journal_entry_id: null, booked_at: null, booked_by: null, notes: null, is_manual: false, excluded_at: null, excluded_by: null, excluded_reason: null,
+    ...values,
+  });
+  return {
+    bank_accounts: [account],
+    bank_statements: [statement],
+    bank_transactions: [
+      tx('ba0c0000-0000-4000-8000-0000000000b1', { booking_date: '2026-11-02', amount_cents: 121000, counterparty_name: 'Bakkerij De Korenaar', description: 'Factuur F2026-0012', status: 'unmatched' }),
+      tx('ba0c0000-0000-4000-8000-0000000000b2', {
+        booking_date: '2026-11-03', amount_cents: 500000, counterparty_name: 'Eigen spaarrekening', description: 'Overboeking naar spaarrekening met een lange omschrijving',
+        status: 'ignored', excluded_at: '2026-11-03T10:00:00Z', excluded_by: seed.ids.USER, excluded_reason: 'Hoort niet bij deze rekening',
+      }),
+    ],
+    reconciliation: [{
+      bank_account_id: account.id, name: account.name, iban: account.iban, source: 'import', ledger_code: '1100', ledger_name: 'Bank',
+      shares_ledger_account: false, as_of: '2026-11-03', statement_id: statement.id, statement_closing_cents: 221000, ledger_balance_cents: 100000,
+      has_opening_balance: true, unbooked_count: 1, unbooked_sum_cents: 121000, ignored_count: 0, ignored_sum_cents: 0,
+      excluded_count: 1, excluded_sum_cents: 500000, booked_count: 0, manual_count: 0, timing_count: 0, timing_sum_cents: 0,
+      manual_unconfirmed_count: 0, manual_unconfirmed_sum_cents: 0, expected_cents: 221000, difference_cents: 0,
+      duplicate_suspects: 0, statement_issues: [],
+    }],
+  };
+}
+
+/** `accountant: true` (2026-11-22): er is een boekhouder, en die mag boeken. */
+const ACCOUNTANT_MEMBER = {
+  id: 'acc00000-0000-4000-8000-000000000001', organization_id: seed.ids.ORG, user_id: 'acc00000-0000-4000-8000-0000000000u1', role: 'accountant',
+  status: 'active', invited_by: seed.ids.USER, joined_at: '2026-10-01T09:00:00Z', created_at: '2026-10-01T09:00:00Z', updated_at: '2026-10-01T09:00:00Z',
+  email: 'boekhouder@administratiekantoor-voorbeeld.nl', module_access: {}, accountant_can_book: true,
+};
+
 function prepaidRows() {
   const expense = LEDGER_ACCOUNTS.find(a => a.code === '4500').id;
   const bank = LEDGER_ACCOUNTS.find(a => a.code === '1100').id;
@@ -806,11 +883,28 @@ function incomeTaxInputs(form, body) {
   };
 }
 
+function timeInvoicePreview(body) {
+  const lines = [
+    { id: 'tl-1', description: 'Uren Huisstijl en website met een lange projectnaam (3-11-2026 t/m 21-11-2026)', quantity: 7.5, unit_price: 85, vat: 21, minutes: 450, entry_count: 4 },
+    { id: 'tl-2', description: 'Uren Campagne voorjaar (17-11-2026)', quantity: 2.5, unit_price: 95, vat: 21, minutes: 150, entry_count: 1 },
+  ];
+  return {
+    client_id: body?.p_client_id ?? null, project_id: body?.p_project_id ?? null, from: body?.p_from ?? null, to: body?.p_to ?? null,
+    grouping: body?.p_grouping ?? 'project', rounding_minutes: body?.p_rounding_minutes ?? 0,
+    entry_count: 5, minutes: 600, billed_minutes: 600, subtotal_cents: 87500,
+    first_date: '2026-11-03', last_date: '2026-11-21', lines,
+    without_rate: { entry_count: 1, minutes: 90 },
+  };
+}
+
 function rpc(fn, body = null) {
   const folderResult = mailFolderRpc(fn, body);
   if (folderResult !== undefined) return folderResult;
   switch (fn) {
     case 'ensure_user_default_organization': return null;
+    // Uren factureren (2026-11-22): het voorbeeld zoals time_invoice_preview het
+    // geeft. De standaard (een lege lijst) is geen voorbeeld.
+    case 'time_invoice_preview': return timeInvoicePreview(body);
     // De prognose (2026-11-17): de cijfers per maand en de offertes.
     case 'forecast_history': return seed.forecastHistory();
     case 'forecast_cash_position': return seed.forecastCashPosition();
@@ -1013,6 +1107,7 @@ export async function installMock(context, options = {}) {
       if (options.gallery && fn === 'organization_storage_status') {
         return reply(route, [{ used_bytes: 540 * 1024 ** 2, attachments_bytes: 0, documents_bytes: 0, recordings_bytes: 0, gallery_bytes: 540 * 1024 ** 2, limit_bytes: 50 * 1024 ** 3, plan_storage_gb: 50, storage_addons: 0, storage_addon_gb: null }]);
       }
+      if (options.bankHerstel && fn === 'report_bank_reconciliation') return reply(route, bankHerstelRows().reconciliation);
       if (options.vof) {
         const vof = vofRpc(fn, rpcBody, options, vofState);
         if (vof !== undefined) return reply(route, vof);
@@ -1040,9 +1135,11 @@ export async function installMock(context, options = {}) {
       // pagina: de rest van de seed heeft bewust geen boekhouding.
       // `prepaid: true`: vooruitbetaalde kosten met de rekening 1350 erbij.
       const prepaid = options.prepaid ? prepaidRows() : null;
+      const bankGap = options.bankGap ? bankGapRows() : null;
       // De albums wél gefilterd (gallery_id=eq.…): het venster "verwijderen?"
       // telt de bestanden van één album, en kreeg anders die van allemaal.
       const gallery = options.gallery ? galleryRows() : null;
+      const bankHerstel = options.bankHerstel ? bankHerstelRows() : null;
       // `aiOff: true`: de gebruiker heeft Gerrie nog niet aangezet (2026-11-12);
       // de pagina Gerrie toont dan het scherm om hem aan te zetten.
       // `aiDeclined: true`: hij koos zelf voor geen AI (2026-11-15); Gerrie is
@@ -1057,6 +1154,10 @@ export async function installMock(context, options = {}) {
         : options.vof && table in VOF_TABLES ? VOF_TABLES[table]
         : options.ledger && table === 'ledger_accounts' ? (options.prepaid ? [...LEDGER_ACCOUNTS, PREPAID_ACCOUNT] : LEDGER_ACCOUNTS)
         : prepaid && table in prepaid ? prepaid[table]
+        : bankGap && table in bankGap ? bankGap[table]
+        : bankHerstel && table in bankHerstel ? bankHerstel[table]
+        : options.accountant && table === 'organization_members' && !(url.searchParams.get('select') ?? '').includes('organizations(')
+          ? [...restRows(table, url, setup), ACCOUNTANT_MEMBER]
         : gallery && table in gallery ? gallery[table].filter(r => [...url.searchParams.entries()].every(([k, v]) => !(k in r) || matchFilter(r[k], v)))
         : restRows(table, url, setup);
       const accept = req.headers()['accept'] ?? '';

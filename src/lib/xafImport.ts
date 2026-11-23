@@ -126,6 +126,12 @@ export interface XafFile {
   openingDate: string | null;
   opening: XafLine[];
   lines: XafLine[];
+  /**
+   * Regels in een dagboek van soort O (openingsbalans). Een pakket dat de
+   * beginbalans als boekstuk in zo'n dagboek zet in plaats van in
+   * <openingBalance>, heeft wel degelijk een beginbalans.
+   */
+  openingJournalLines?: number;
 }
 
 /** "1234.56", "-0.5", "1234,56" → centen, zonder afrondingsfouten van kommagetallen. */
@@ -168,12 +174,14 @@ export function parseXaf(xml: string): XafFile {
   const file: XafFile = {
     version: namespace?.[2] ?? null, software: null, fiscalYear: null, startDate: null, endDate: null, currency: null,
     companyName: null, kvkNumber: null, vatNumber: null, relations: [], accounts: [], openingDate: null, opening: [], lines: [],
+    openingJournalLines: 0,
   };
   let sawRoot = false;
   // Velden van het element dat nu gelezen wordt, op hun pad eronder (bijv. "streetAddress/city").
   let record: Record<string, string> = {};
   let recordDepth = -1;
   let transactionDate = '';
+  let journalType = '';
   const RECORDS = new Set(['customerSupplier', 'ledgerAccount', 'obLine', 'trLine']);
 
   walkXml(xml, {
@@ -181,6 +189,7 @@ export function parseXaf(xml: string): XafFile {
       const name = path[path.length - 1];
       if (path.length === 1) sawRoot = name === 'auditfile';
       if (name === 'transaction') transactionDate = '';
+      if (name === 'journal') journalType = '';
       if (RECORDS.has(name) && recordDepth < 0) { record = {}; recordDepth = path.length; }
     },
     close(path, text) {
@@ -220,6 +229,7 @@ export function parseXaf(xml: string): XafFile {
         } else if (name === 'trLine') {
           const date = transactionDate || (record.effDate ?? '').trim();
           file.lines.push({ account: (record.accID ?? '').trim(), date, cents: signed(record.amnt, record.amntTp), relation: empty(record.custSupID) });
+          if (journalType === 'O') file.openingJournalLines = (file.openingJournalLines ?? 0) + 1;
         }
         recordDepth = -1;
         record = {};
@@ -238,6 +248,8 @@ export function parseXaf(xml: string): XafFile {
         else if (name === 'taxRegIdent') file.vatNumber = empty(text);
       } else if (parent === 'openingBalance' && name === 'opBalDate') {
         file.openingDate = empty(text);
+      } else if (parent === 'journal' && name === 'jrnTp') {
+        journalType = text.trim().toUpperCase();
       } else if (parent === 'transaction' && name === 'trDt') {
         transactionDate = text.trim();
       }
@@ -303,7 +315,10 @@ export function balancesAt(file: XafFile, switchDate: string): XafBalances {
   // € 3.210, en geen lening, inventaris of eigen vermogen, zonder één woord
   // erbij. Voor wie in dat jaar begon klopt het wel; daarom een waarschuwing
   // en geen fout.
-  const missingOpening = file.opening.length === 0;
+  // Een dagboek van soort O (openingsbalans) telt als beginbalans. De auditfile
+  // van het eerste jaar uit ResoFly zelf had zijn beginbalans tot november 2026
+  // in zo'n dagboek, en kreeg hier dan ten onrechte de waarschuwing.
+  const missingOpening = file.opening.length === 0 && !(file.openingJournalLines ?? 0);
   if (missingOpening) {
     const since = file.startDate ? ` vanaf ${dutchDate(file.startDate)}` : '';
     warnings.push(`Deze auditfile heeft geen beginbalans: de saldi hieronder zijn alleen de boekingen${since} uit dit bestand. Bestond je administratie daarvoor al, dan ontbreekt wat er toen stond (bank, leningen, activa, eigen vermogen). Maak in je oude pakket een auditfile mét beginbalans, of vul de beginbalans hieronder zelf aan.`);

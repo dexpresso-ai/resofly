@@ -17,6 +17,7 @@ import { vatPeriodKey, vatPeriodsToFile, type VatPeriodDue } from './vatPeriods'
 import { runMatchRounds } from './bankMatch';
 import { letterheadMissing, withoutUnloadedLetterhead } from './letterhead';
 import type { IbCorrectionCode, IncomeTaxInputs, IncomeTaxProfile } from './inkomstenbelasting';
+import type { XafReferences } from './xaf';
 import type {
   AiConsent,
   AppData,
@@ -126,6 +127,8 @@ import type {
   CalendarEventLinkInput,
   TimeEntry,
   TimeEntryType,
+  TimeInvoiceGrouping,
+  TimeInvoicePreview,
   IndirectHoursCategory,
   Organization,
   OrganizationStorageStatus,
@@ -696,6 +699,17 @@ export async function setMemberModuleAccess(memberId: UUID, moduleAccess: Module
 }
 
 /**
+ * "Mag boeken" voor de boekhouder aan- of uitzetten (eigenaar of beheerder).
+ * Aan: de boekhouder mag corrigeren en afsluiten (memoriaal, btw-aangifte,
+ * boekjaar, aangifte IB). Facturen, inkoop, bank, klanten en team blijven dicht.
+ */
+export async function setAccountantBooking(memberId: UUID, enabled: boolean): Promise<OrganizationMember> {
+  const { data, error } = await supabase.rpc('set_accountant_booking', { p_member_id: memberId, p_enabled: enabled });
+  if (error) throw error;
+  return (Array.isArray(data) ? data[0] : data) as OrganizationMember;
+}
+
+/**
  * De debiteuren zoals ze op de financiële stukken staan — voor wie Financiën
  * mag lezen maar Klanten niet, zoals de boekhouder. Zonder deze lijst hebben
  * facturen geen naam en de XAF-auditfile geen debiteuren. Alleen de velden van
@@ -797,6 +811,7 @@ export async function loadCoreData(organizationId: UUID, { organizationCreatedAt
     contractProjects,
     bankTransactionsToReconcile,
     filedVatPeriods,
+    invoiceOpenCents,
   ] = await Promise.all([
     select<Client>('clients', organizationId), selectClientContacts(organizationId), selectClientFieldDefinitions(organizationId), select<Project>('projects', organizationId), select<Task>('tasks', organizationId), select<Ticket>('tickets', organizationId),
     select<Note>('notes', organizationId), selectDocuments(organizationId), selectNoteCalendarLinks(organizationId), selectNoteHandwritingSummaries(organizationId), selectCalendarEventLinks(organizationId), select<Quote>('quotes', organizationId), select<Invoice>('invoices', organizationId),
@@ -816,6 +831,7 @@ export async function loadCoreData(organizationId: UUID, { organizationCreatedAt
     selectContractProjects(organizationId),
     countBankTransactionsToReconcile(organizationId),
     selectFiledVatPeriods(organizationId),
+    selectInvoiceOpenCents(organizationId),
   ]);
   // Btw-aangiftes die nog moeten: afgelopen tijdvakken zonder aangifte (zie
   // lib/vatPeriods.ts). Alleen met een rekeningschema. Dat krijgt sinds
@@ -833,7 +849,7 @@ export async function loadCoreData(organizationId: UUID, { organizationCreatedAt
   });
   const vatReturnsToFile = vatDue.length;
   const vatReturnNextDue = vatDue[0] ?? null;
-  return { clients, clientContacts, clientFieldDefinitions, projects, projectTemplates, projectTemplateTasks, tasks, projectMembers, taskAssignees, contractProjects, tickets, notes, documents, folders, noteCalendarLinks, noteHandwriting, calendarEventLinks, quotes, invoices, ledgerAccounts, vatCodes, suppliers, purchaseInvoices, attachments, driveShares, galleries, savedReports, plannerNotes, plannerCapacity, companySettings, bankTransactionsToReconcile, vatReturnsToFile, vatReturnNextDue };
+  return { clients, clientContacts, clientFieldDefinitions, projects, projectTemplates, projectTemplateTasks, tasks, projectMembers, taskAssignees, contractProjects, tickets, notes, documents, folders, noteCalendarLinks, noteHandwriting, calendarEventLinks, quotes, invoices, ledgerAccounts, vatCodes, suppliers, purchaseInvoices, attachments, driveShares, galleries, savedReports, plannerNotes, plannerCapacity, companySettings, bankTransactionsToReconcile, invoiceOpenCents, vatReturnsToFile, vatReturnNextDue };
 }
 
 /** Per groep: welke tabellen, in welke vorm. TypeScript bewaakt dat elke groep precies zijn eigen velden teruggeeft. */
@@ -927,6 +943,30 @@ async function countBankTransactionsToReconcile(organizationId: UUID): Promise<n
   }
   console.warn('Telling van banktransacties mislukt; het dashboard toont hier nul.', error);
   return 0;
+}
+
+/**
+ * Wat er per verstuurde factuur nog openstaat, in centen, voor het dashboard en
+ * de klantpagina. Die telden het volle factuurbedrag: een deelbetaling of een
+ * deelcreditnota ging er niet af, terwijl het grootboek en Gerrie het wel
+ * aftrokken. Via een RPC (migratie 20261123090000): de betalingen zelf horen
+ * bij de groepen financeHistory en bank, die de kern bewust niet laadt
+ * (dataGroups.ts; tests/laden bewaakt dat). Lukt het niet (de migratie staat
+ * er nog niet, of een andere fout), dan een lege lijst: dan telt weer het volle
+ * bedrag, en de werkruimte opent gewoon.
+ */
+async function selectInvoiceOpenCents(organizationId: UUID): Promise<Record<UUID, number>> {
+  const { data, error } = await supabase.rpc('list_open_invoice_amounts', { p_organization_id: organizationId });
+  if (error || !Array.isArray(data)) {
+    if (error && error.code !== 'PGRST202' && error.code !== '42883') console.warn('Openstaande bedragen ophalen mislukt; het dashboard telt de volle factuurbedragen.', error);
+    return {};
+  }
+  const open: Record<UUID, number> = {};
+  for (const row of data as Array<{ invoice_id: UUID; open_cents: number | string | null }>) {
+    const cents = Number(row.open_cents);
+    if (row.invoice_id && Number.isFinite(cents)) open[row.invoice_id] = cents;
+  }
+  return open;
 }
 
 async function countOptional(table: string, organizationId: UUID, inFilters: Record<string, string[]>): Promise<number> {
@@ -1928,10 +1968,101 @@ export async function deleteCalendarEventLink(linkId: UUID, organizationId: UUID
 const TIME_TRACKING_MIGRATION_HINT =
   'Voer de migratie 20260629000000_time_tracking.sql uit in Supabase om de urenregistratie te activeren.';
 
+const TIME_INVOICING_MIGRATION_HINT =
+  'Voer de migratie 20261123110000_uren_factureren.sql uit in Supabase om uren te kunnen factureren.';
+
+/**
+ * De uren, met per uur de factuur waar het op staat (`invoice_id`).
+ *
+ * Twee losse vragen in plaats van één met een ingebedde tabel: staat de app
+ * eerder op Cloudflare dan de migratie, dan faalt een ingebedde select en
+ * waren álle uren weg. Nu ontbreekt alleen "gefactureerd".
+ */
 export async function selectTimeEntries(organizationId: UUID): Promise<TimeEntry[]> {
-  return selectOptional<TimeEntry>('time_entries', organizationId, {
-    orderBy: 'entry_date', ascending: false, hint: TIME_TRACKING_MIGRATION_HINT,
+  const [entries, links] = await Promise.all([
+    selectOptional<TimeEntry>('time_entries', organizationId, {
+      orderBy: 'entry_date', ascending: false, hint: TIME_TRACKING_MIGRATION_HINT,
+    }),
+    selectOptional<{ time_entry_id: UUID; invoice_id: UUID }>('time_entry_invoices', organizationId, {
+      orderBy: 'time_entry_id', ascending: true, hint: TIME_INVOICING_MIGRATION_HINT, columns: 'time_entry_id, invoice_id', idColumn: 'time_entry_id',
+    }),
+  ]);
+  if (links.length === 0) return entries;
+  const invoiceByEntry = new Map(links.map(link => [link.time_entry_id, link.invoice_id]));
+  return entries.map(entry => (invoiceByEntry.has(entry.id) ? { ...entry, invoice_id: invoiceByEntry.get(entry.id) } : entry));
+}
+
+/** Eén uur op een factuur, voor de urenspecificatie. */
+export interface InvoiceHourRow { entry_date: string; description: string | null; minutes: number; hourly_rate_cents: number }
+
+/**
+ * De uren die op een factuur staan, oudste eerst. Minuten en tarief komen uit
+ * de koppeling: dat is wat er gefactureerd is. Hooguit 1000 rijen (de grens
+ * van PostgREST); een factuur met meer registraties bestaat in de praktijk niet.
+ */
+export async function selectInvoiceHours(organizationId: UUID, invoiceId: UUID): Promise<InvoiceHourRow[]> {
+  const { data, error } = await supabase
+    .from('time_entry_invoices')
+    .select('minutes, hourly_rate_cents, time_entries(entry_date, description)')
+    .eq('organization_id', organizationId)
+    .eq('invoice_id', invoiceId)
+    .limit(1000);
+  if (error) throw error;
+  type Row = { minutes: number; hourly_rate_cents: number; time_entries: { entry_date: string; description: string | null } | Array<{ entry_date: string; description: string | null }> | null };
+  return ((data ?? []) as unknown as Row[])
+    .map(row => {
+      const entry = Array.isArray(row.time_entries) ? row.time_entries[0] : row.time_entries;
+      return { entry_date: entry?.entry_date ?? '', description: entry?.description ?? null, minutes: row.minutes, hourly_rate_cents: row.hourly_rate_cents };
+    })
+    .sort((a, b) => a.entry_date.localeCompare(b.entry_date));
+}
+
+export interface TimeInvoiceParams {
+  clientId: UUID | null;
+  projectId: UUID | null;
+  from: string | null;
+  to: string | null;
+  grouping: TimeInvoiceGrouping;
+  roundingMinutes: number;
+}
+
+function timeInvoiceArgs(organizationId: UUID, params: TimeInvoiceParams) {
+  return {
+    p_organization_id: organizationId,
+    p_client_id: params.clientId,
+    p_project_id: params.projectId,
+    p_from: params.from,
+    p_to: params.to,
+    p_grouping: params.grouping,
+    p_rounding_minutes: params.roundingMinutes,
+  };
+}
+
+/** Wat er voor een klant of project nog te factureren is, als factuurregels. */
+export async function previewTimeInvoice(organizationId: UUID, params: TimeInvoiceParams): Promise<TimeInvoicePreview> {
+  const { data, error } = await supabase.rpc('time_invoice_preview', timeInvoiceArgs(organizationId, params));
+  if (error) throw error;
+  return data as TimeInvoicePreview;
+}
+
+/**
+ * Maakt het concept en legt de uren eraan vast, in één transactie in de
+ * database. `expected` is wat het voorbeeld (of de goedkeurkaart van Gerrie)
+ * liet zien, in minuten en in centen: zijn de uren of het tarief intussen
+ * veranderd, dan weigert de database.
+ */
+export async function createInvoiceFromTimeEntries(
+  organizationId: UUID,
+  params: TimeInvoiceParams,
+  expected: { minutes: number | null; subtotalCents: number | null },
+): Promise<Invoice> {
+  const { data, error } = await supabase.rpc('create_invoice_from_time_entries', {
+    ...timeInvoiceArgs(organizationId, params),
+    p_expected_minutes: expected.minutes,
+    p_expected_subtotal_cents: expected.subtotalCents,
   });
+  if (error) throw error;
+  return data as Invoice;
 }
 
 const DUNNING_MIGRATION_HINT =
@@ -2384,7 +2515,7 @@ const CLIENT_FIELD_DEFINITIONS_MIGRATION_HINT =
 async function selectOptional<T>(
   table: string,
   organizationId: UUID,
-  opts: { orderBy: string; ascending: boolean; hint: string; eq?: Record<string, string>; columns?: string; thenBy?: string },
+  opts: { orderBy: string; ascending: boolean; hint: string; eq?: Record<string, string>; columns?: string; thenBy?: string; idColumn?: string },
 ): Promise<T[]> {
   try {
     return await fetchAllPages<T>(() => {
@@ -2395,7 +2526,7 @@ async function selectOptional<T>(
       for (const [column, value] of Object.entries(opts.eq ?? {})) query = query.eq(column, value);
       query = query.order(opts.orderBy, { ascending: opts.ascending });
       if (opts.thenBy) query = query.order(opts.thenBy, { ascending: true });
-      return query.order('id', { ascending: true });
+      return query.order(opts.idColumn ?? 'id', { ascending: true });
     });
   } catch (error) {
     const err = error as { message?: string; details?: string };
@@ -2573,6 +2704,25 @@ export const selectBankAllocations = (organizationId: UUID) =>
     orderBy: 'created_at', ascending: true, thenBy: 'position', columns: '*, credit_note:credit_notes(number)',
     hint: 'Voer de migratie 20261107110000_bank_handmatig_boeken.sql uit om banktransacties te kunnen verdelen.',
   });
+/**
+ * Voor de auditfile: de nummers van creditnota's en hoe bankboekingen over
+ * facturen verdeeld zijn, zodat elke boekstukregel zijn factuurnummer (invRef)
+ * krijgt. Grootboek laadt die tabellen niet; alleen de paar kolommen die de
+ * auditfile nodig heeft. Lukt het niet (geen rechten op de bank, een oude
+ * database), dan komt de auditfile er zonder die nummers.
+ */
+export async function loadXafReferences(organizationId: UUID): Promise<XafReferences> {
+  const [creditNotes, allocations] = await Promise.all([
+    selectOptional<{ id: UUID; number: string }>('credit_notes', organizationId, {
+      columns: 'id,number', orderBy: 'created_at', ascending: true, hint: 'Creditnota\'s zijn nog niet beschikbaar.',
+    }).catch(() => []),
+    selectOptional<NonNullable<XafReferences['paymentAllocations']>[number]>('bank_transaction_allocations', organizationId, {
+      columns: 'journal_entry_id,position,kind,invoice_id,credit_note_id,purchase_invoice_id,client_id,supplier_id,amount_cents',
+      orderBy: 'created_at', ascending: true, thenBy: 'position', hint: 'De bankverdeling is nog niet beschikbaar.',
+    }).catch(() => []),
+  ]);
+  return { creditNoteNumbers: new Map(creditNotes.map(c => [c.id, c.number])), paymentAllocations: allocations };
+}
 export const selectBankRules = (organizationId: UUID) =>
   selectOptional<BankRule>('bank_rules', organizationId, { orderBy: 'priority', ascending: true, hint: BANKFEED_MIGRATION_HINT });
 export const selectBankRequisitions = (organizationId: UUID) =>
@@ -2624,6 +2774,8 @@ export async function finalizeBankRequisition(
 ): Promise<{
   status: string; linked: number; imported: number; error?: string | null;
   syncErrors?: number; syncError?: string | null; alreadyLinked?: boolean;
+  /** Gekoppeld, maar de bank leverde een periode niet meer (bank-sync, syncGap). */
+  syncNotice?: string | null;
 }> {
   return invokeBankSync('finalizeRequisition', organizationId, {
     code: input.code ?? null, state: input.state, error: input.error ?? null, errorDescription: input.errorDescription ?? null,
@@ -2631,7 +2783,7 @@ export async function finalizeBankRequisition(
 }
 
 /** Haalt nieuwe transacties op voor één of alle gekoppelde rekeningen. */
-export async function syncBankAccount(organizationId: UUID, bankAccountId?: UUID): Promise<{ results: Array<{ bankAccountId: string; inserted: number; skipped: number; error?: string }>; needsReconsent: boolean }> {
+export async function syncBankAccount(organizationId: UUID, bankAccountId?: UUID): Promise<{ results: Array<{ bankAccountId: string; inserted: number; skipped: number; error?: string; notice?: string }>; needsReconsent: boolean }> {
   return invokeBankSync('sync', organizationId, { bankAccountId: bankAccountId ?? null });
 }
 
@@ -2652,12 +2804,14 @@ export async function importBankTransactions(
   /** Wat de matcher meteen deed met wat er nieuw binnenkwam (20261118190000; nullen daarvóór). */
   match: BankMatchResult;
 }> {
-  const { transactions, warnings: _warnings, ...meta } = statement;
+  // `accounts` en de eigen rekening per regel zijn voor de controle vóór het
+  // inlezen (bankImport/check.ts); de server heeft ze niet nodig.
+  const { transactions, warnings: _warnings, accounts: _accounts, ...meta } = statement;
   const { data, error } = await supabase.rpc('import_bank_transactions', {
     p_organization_id: organizationId,
     p_bank_account_id: bankAccountId,
     p_statement: meta,
-    p_transactions: transactions,
+    p_transactions: transactions.map(({ account: _account, ...t }) => t),
   });
   if (error) throw bookkeepingError(error);
   const row = (data ?? {}) as {
@@ -2905,6 +3059,53 @@ export async function deleteDuplicateBankTransaction(organizationId: UUID, trans
   const { error } = await supabase.rpc('delete_duplicate_bank_transaction', {
     p_organization_id: organizationId,
     p_transaction_id: transactionId,
+  });
+  if (error) throw bookkeepingError(error);
+}
+
+/**
+ * Een bankregel die niet bij deze rekening hoort (een regel van de
+ * spaarrekening in hetzelfde bestand, een verkeerd afschrift). Hij blijft bij
+ * Genegeerd staan, maar telt niet meer mee in de aansluiting. Negeren alleen
+ * hielp niet: een genegeerde mutatie staat op het afschrift en telt dus mee.
+ * Met `excluded = false` zet je hem terug.
+ */
+export async function setBankTransactionExcluded(organizationId: UUID, transactionId: UUID, excluded: boolean, reason?: string): Promise<void> {
+  const { error } = await supabase.rpc('set_bank_transaction_excluded', {
+    p_organization_id: organizationId,
+    p_transaction_id: transactionId,
+    p_excluded: excluded,
+    p_reason: reason ?? null,
+  });
+  if (error) throw bookkeepingError(error);
+}
+
+/**
+ * Een ingelezen afschrift terugdraaien (verkeerde rekening, verkeerd bestand).
+ * De database weigert zolang er een mutatie uit dat afschrift geboekt of
+ * samengevoegd is. Nooit geboekte regels gaan weg; een regel die ooit geboekt
+ * was blijft staan als "niet van deze rekening", bij zijn boekstukken.
+ */
+export async function undoBankStatement(organizationId: UUID, statementId: UUID): Promise<{ removed: number; keptExcluded: number }> {
+  const { data, error } = await supabase.rpc('undo_bank_statement', {
+    p_organization_id: organizationId,
+    p_statement_id: statementId,
+  });
+  if (error) throw bookkeepingError(error);
+  const row = (data ?? {}) as { removed?: number; kept_excluded?: number };
+  return { removed: Number(row.removed ?? 0), keptExcluded: Number(row.kept_excluded ?? 0) };
+}
+
+/**
+ * Een afgesloten btw-aangifte op ingediend of betaald zetten. Een functie en
+ * geen PATCH op de tabel: de boekhouder die mag boeken schrijft nergens
+ * rechtstreeks, en zo loopt het voor iedereen langs dezelfde weg.
+ */
+export async function setVatReturnStatus(organizationId: UUID, vatReturnId: UUID, status: 'filed' | 'paid'): Promise<void> {
+  const { error } = await supabase.rpc('set_vat_return_status', {
+    p_organization_id: organizationId,
+    p_vat_return_id: vatReturnId,
+    p_status: status,
   });
   if (error) throw bookkeepingError(error);
 }
@@ -5085,7 +5286,7 @@ export async function downloadQuotePdfSnapshot(organizationId: UUID, quoteId: UU
   if (!data?.ok) throw new Error(data?.error || 'Offerte-PDF downloaden mislukt');
 
   const pdf = data.pdf as { fileName?: string; mimeType?: string; base64?: string } | undefined;
-  if (!pdf?.base64) throw new Error('Geen PDF-snapshot beschikbaar voor deze offerte.');
+  if (!pdf?.base64) throw new Error('Er is nog geen pdf van deze offerte bewaard.');
 
   const binary = atob(pdf.base64);
   const bytes = new Uint8Array(binary.length);
@@ -5143,7 +5344,7 @@ export async function loadInvoicePdfSnapshot(organizationId: UUID, invoiceId: UU
   if (!data?.ok) throw new Error(data?.error || 'Factuur-PDF ophalen mislukt');
 
   const pdf = data.pdf as { fileName?: string; mimeType?: string; base64?: string } | undefined;
-  if (!pdf?.base64) throw new Error('Geen PDF-snapshot beschikbaar voor deze factuur.');
+  if (!pdf?.base64) throw new Error('Er is nog geen pdf van deze factuur bewaard.');
 
   const binary = atob(pdf.base64);
   const bytes = new Uint8Array(binary.length);
@@ -6847,9 +7048,26 @@ export async function loadAttachmentRef(id: UUID, organizationId: UUID): Promise
  * Ligt een bijlage vast omdat het document waar hij aan hangt geen concept meer
  * is? Dezelfde regel als het scherm (geen Verwijderen-knop bij een verstuurde
  * offerte of factuur, of een geboekte inkoopfactuur), nu gelezen vlak voor het
- * uitvoeren. De database bewaakt bijlagen zelf niet. Null = vrij.
+ * uitvoeren. De database weigert het sinds 20261123131000 zelf ook (trigger
+ * attachments_evidence_guard) en de media-worker vraagt het na; deze controle
+ * blijft, omdat ze vóór het wissen van het bestand een nette melding geeft.
+ * Null = vrij.
  */
 export async function attachmentLockReason(entityType: string, entityId: UUID, organizationId: UUID): Promise<string | null> {
+  if (entityType === 'fixed_asset') {
+    const { data, error } = await supabase.from('fixed_assets').select('acquisition_journal_entry_id').eq('id', entityId).eq('organization_id', organizationId).maybeSingle();
+    if (error) throw error;
+    // Ook een geboekte afschrijving legt het vast, net als in de database. Alleen
+    // naar de aanschaf kijken gaf bij een activum met alleen afschrijvingen de
+    // rauwe databasefout in plaats van deze melding.
+    const { count, error: depError } = await supabase.from('asset_depreciations').select('id', { count: 'exact', head: true })
+      .eq('organization_id', organizationId).eq('asset_id', entityId).not('journal_entry_id', 'is', null);
+    if (depError) throw depError;
+    if ((data as { acquisition_journal_entry_id?: string | null } | null)?.acquisition_journal_entry_id || Number(count ?? 0) > 0) {
+      return 'Dit bestand is het bewijsstuk van een activum waarop geboekt is; het ligt vast (bewaarplicht).';
+    }
+    return null;
+  }
   const table = entityType === 'quote' ? 'quotes' : entityType === 'invoice' ? 'invoices' : entityType === 'purchase_invoice' ? 'purchase_invoices' : null;
   if (!table) return null;
   const columns = table === 'purchase_invoices' ? 'status' : table === 'invoices' ? 'status, sent_at, journal_entry_id' : 'status, sent_at';

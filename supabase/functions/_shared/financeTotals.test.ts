@@ -69,6 +69,12 @@ test('mails noemen hetzelfde totaal als de PDF en de betaallink', async () => {
   assert.doesNotMatch(invoiceMail.text, /173,62/);
   const quoteMail = renderQuoteSentEmail({ quote: { number: 'OFF-2026-0001', valid_until: '2026-12-01', lines }, client, publicUrl: 'https://example.com/quote/x', expiresAt: '2026-12-01' } as unknown as Parameters<typeof renderQuoteSentEmail>[0]);
   assert.match(quoteMail.text, /173,63/);
+  assert.match(quoteMail.text, /Geldig tot: 1-12-2026/);
+  // Zonder verloopdatum geen "Geldig tot" met de datum van de link.
+  const zonder = renderQuoteSentEmail({ quote: { number: 'OFF-2026-0002', valid_until: null, lines }, client, publicUrl: 'https://example.com/quote/y', expiresAt: '2026-12-22' } as unknown as Parameters<typeof renderQuoteSentEmail>[0]);
+  assert.doesNotMatch(zonder.text, /Geldig tot/);
+  assert.doesNotMatch(zonder.html, /Geldig tot: /);
+  assert.match(zonder.html, /link is geldig tot 22-12-2026/);
   // Er staat precies het factuurbedrag open: dus geen "deels betaald".
   const reminder = renderInvoiceReminderEmail({ level: 1, invoice: { number: 'FAC-2026-0001', due_date: '2026-10-01', lines }, client, publicUrl: 'https://example.com/invoice/x', openAmountCents: 17363 } as Parameters<typeof renderInvoiceReminderEmail>[0]);
   assert.doesNotMatch(reminder.text, /Factuurbedrag/);

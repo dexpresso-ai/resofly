@@ -4,6 +4,7 @@ import type { AppData, Client, ClientCall, ClientEmail, ClientEmailThread, Clien
 import { holderName, matchesHolder, memberColor, memberInitials, membersWhoCanHold } from '../lib/members';
 import { activeFieldDefinitions, customFieldsSearchText, formatCustomFieldValue } from '../components/CustomFields';
 import { dateNL, euro, formatMinutes, minutesToHours, priorityLabel, total } from '../lib/format';
+import { hoursLabel, openHoursSummary } from '../lib/timeRates';
 import { TICKET_STATUS_LABELS, TICKET_WORKLIST_STATUSES, groupNotesByTicket, isTicketArchived, ticketLastActivity, ticketMatchesStatus, ticketResolvedAt } from '../lib/tickets';
 import { listTime } from '../lib/communication';
 import { callCounterpart, callDirectionLabel, callDurationLabel, callOutcomeLabel, callSubject, formatPhone, telHref } from '../lib/calls';
@@ -24,7 +25,7 @@ import { FolderLabel, MailFolderTree, useMailFolderActions, type MailTreeItem } 
 import { foldersOfClient } from '../lib/mailFolders';
 import { PageIcon } from '../components/PageIcon';
 import { ClientStream, ClientStreamBadge } from '../components/StreamRibbon';
-import { computeStream, invoiceIsOverdue } from '../lib/stroom';
+import { computeStream, invoiceIsOverdue, invoiceOpenAmount } from '../lib/stroom';
 import { useLook } from '../lib/look';
 import { createClientWithServerCode, deleteClientEmail, loadClientEmails, loadClientEmailThreads, loadClientEmailReadIds, loadInboundOpenCount, loadMySenderIdentity, loadSendingDomains, markClientEmailsRead } from '../lib/repository';
 import { resolveEffectiveSender, sendClientEmail, type EffectiveSender } from '../services/mailService';
@@ -206,7 +207,7 @@ export function Clients({
       quoteCount: getClientQuotes(data, client.id).length,
       overdueInvoiceCount: overdueInvoices.length,
       openInvoiceCount: openInvoices.length,
-      openInvoiceTotal: openInvoices.reduce((sum, invoice) => sum + total(invoice.lines).total, 0),
+      openInvoiceTotal: openInvoices.reduce((sum, invoice) => sum + openAmount(invoice, data.invoiceOpenCents), 0),
     };
   }), [data, teamMembers]);
 
@@ -479,6 +480,7 @@ export function ClientDetailPage({
   onNewQuote,
   onEditQuote,
   onNewInvoice,
+  onInvoiceHours,
   onEditInvoice,
   onOpenProject,
   onNewProject,
@@ -510,6 +512,8 @@ export function ClientDetailPage({
   onNewQuote: () => void;
   onEditQuote: (quote: Quote) => void;
   onNewInvoice: () => void;
+  /** Opent "Uren factureren". Ontbreekt bij wie geen facturen mag maken. */
+  onInvoiceHours?: (defaults: { clientId?: string | null; projectId?: string | null }) => void;
   onEditInvoice: (invoice: Invoice) => void;
   onOpenProject: (project: Project) => void;
   onNewProject: () => void;
@@ -571,8 +575,9 @@ export function ClientDetailPage({
   const overdueInvoices = invoices.filter(isInvoiceOverdue);
   const paidInvoices = invoices.filter(invoice => invoice.status === 'paid');
   const invoiceTotal = invoices.reduce((sum, invoice) => sum + total(invoice.lines).total, 0);
-  const openInvoiceTotal = openInvoices.reduce((sum, invoice) => sum + total(invoice.lines).total, 0);
-  const overdueInvoiceTotal = overdueInvoices.reduce((sum, invoice) => sum + total(invoice.lines).total, 0);
+  // Na deelbetalingen en deelcreditnota's: wat er echt nog openstaat (lib/stroom.ts).
+  const openInvoiceTotal = openInvoices.reduce((sum, invoice) => sum + openAmount(invoice, data.invoiceOpenCents), 0);
+  const overdueInvoiceTotal = overdueInvoices.reduce((sum, invoice) => sum + openAmount(invoice, data.invoiceOpenCents), 0);
   const quoteTotal = quotes.reduce((sum, quote) => sum + total(quote.lines).total, 0);
 
   // Effectief uurtarief: echte gefactureerde omzet (excl. btw, zonder concepten
@@ -585,6 +590,8 @@ export function ClientDetailPage({
     .filter(invoice => !['draft', 'cancelled', 'void'].includes(invoice.status))
     .reduce((sum, invoice) => sum + total(invoice.lines).subtotal, 0);
   const effectiveRate = clientTrackedMinutes > 0 && invoicedSubtotal > 0 ? invoicedSubtotal / (clientTrackedMinutes / 60) : null;
+  // Declarabel, met tarief en nog op geen factuur: wat "Uren factureren" oppakt.
+  const openHours = openHoursSummary(data.timeEntries.filter(entry => entry.client_id === client.id));
 
   // Zoek/filter over het volledige klantdossier (projecten, offertes, facturen
   // en notities). De KPI's en facturatie-waarschuwing blijven het totaalbeeld
@@ -657,8 +664,8 @@ export function ClientDetailPage({
   // Stroom: waar deze klant staat, van offerte tot betaald (lib/stroom.ts).
   const [look] = useLook();
   const clientStream = useMemo(() => look === 'stroom'
-    ? computeStream({ quotes: data.quotes.filter(q => q.client_id === client.id), invoices: data.invoices.filter(i => i.client_id === client.id), clients: [client], amount: lines => total(lines).total })
-    : null, [look, data.quotes, data.invoices, client]);
+    ? computeStream({ quotes: data.quotes.filter(q => q.client_id === client.id), invoices: data.invoices.filter(i => i.client_id === client.id), clients: [client], amount: lines => total(lines).total, openCents: data.invoiceOpenCents })
+    : null, [look, data.quotes, data.invoices, data.invoiceOpenCents, client]);
 
   return <div className="client-detail-page">
     <section className="client-detail-hero">
@@ -683,6 +690,7 @@ export function ClientDetailPage({
         <Button onClick={() => setSendingFiles(true)} disabled={!canWrite} title="Bestanden veilig naar deze klant sturen"><Send size={14} /> Bestanden versturen</Button>
         <Button onClick={onNewProject} disabled={!canWrite}>+ Project</Button>
         <Button onClick={onNewQuote} disabled={!canWrite}>+ Offerte</Button>
+        {onInvoiceHours && openHours.minutes > 0 && <Button onClick={() => onInvoiceHours({ clientId: client.id })} title={`${hoursLabel(openHours.minutes)} nog te factureren (${euro(openHours.valueCents / 100)} excl. btw)`}>Uren factureren · {hoursLabel(openHours.minutes)}</Button>}
         <Button variant="primary" onClick={onNewInvoice} disabled={!canWrite}>+ Factuur</Button>
       </div>
     </section>
@@ -1530,6 +1538,11 @@ function getClientDocuments(data: AppData, clientId: string) {
 // terugbetaald tellen niet mee, net als op de pagina Facturen.
 function isInvoiceOpen(invoice: Invoice) {
   return !['paid', 'cancelled', 'draft', 'void', 'written_off', 'refunded'].includes(invoice.status);
+}
+
+/** Wat er van een open factuur nog openstaat (zoals het dashboard, lib/stroom.ts). */
+function openAmount(invoice: Invoice, openCents: Readonly<Record<string, number>>) {
+  return invoiceOpenAmount(invoice, lines => total(lines).total, openCents);
 }
 
 // Dezelfde regel als het dashboard en de database (lib/stroom.ts). Eerder

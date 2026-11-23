@@ -3,6 +3,7 @@ import { parseCamt053 } from './camt053';
 import { parseMt940 } from './mt940';
 import { parseCsv } from './csv';
 import { cyrb53 } from './dedup';
+import { decodeBankBytes } from './encoding';
 
 /**
  * Leest een bankbestand in en herkent het formaat (CAMT.053 / MT940 / CSV) aan de
@@ -10,7 +11,9 @@ import { cyrb53 } from './dedup';
  * importBankTransactions rechtstreeks naar de database kan sturen.
  */
 export async function parseBankFile(file: File): Promise<ParsedBankStatement> {
-  const text = await file.text();
+  // De bytes, niet file.text(): die leest alles als UTF-8, ook een bestand in
+  // Windows-1252 (zie encoding.ts).
+  const text = decodeBankBytes(new Uint8Array(await file.arrayBuffer()));
   const name = file.name.toLowerCase();
   const head = text.slice(0, 4000);
 
@@ -33,3 +36,4 @@ export async function parseBankFile(file: File): Promise<ParsedBankStatement> {
 }
 
 export { parseCamt053, parseMt940, parseCsv };
+export { checkStatementAccount, describeStatementDifference, DUPLICATE_HINT } from './check';

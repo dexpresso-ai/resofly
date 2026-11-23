@@ -8,14 +8,14 @@ import { nextPurchaseNumber, purchaseTotals } from '../lib/purchaseInvoiceNumber
 import { Modal } from '../components/Modal';
 import { CsvImportModal } from '../components/CsvImportModal';
 import type { ImportColumn } from '../lib/csvImport';
-import { Button, Input, Select, Textarea } from '../components/Ui';
+import { Button, DecimalInput, Input, Select, Textarea } from '../components/Ui';
 import { AttachmentList } from '../components/AttachmentList';
 import { formatEmailDateTime } from '../components/ClientEmailMessage';
 import { PageIcon } from '../components/PageIcon';
 import { dateNL, euro, uid } from '../lib/format';
 import {
   bookPurchaseInvoice, createOpeningBalance, deleteRow, ensureDefaultLedgerAccounts, fetchPurchaseInvoicePaymentStatus, insertRow,
-  listPartnershipPartners, loadBankLedgerAccountIds, loadInboundAlias, loadPurchaseInvoiceInbox, loadPurchaseInvoiceRemovalFacts,
+  listPartnershipPartners, loadBankLedgerAccountIds, loadInboundAlias, loadPurchaseInvoiceInbox, loadPurchaseInvoiceRemovalFacts, loadXafReferences,
   listPurchasePrivatePayments, openingBalancePlugAccount, payPurchaseInvoicePrivately,
   postManualJournalEntry, reportAccountLedger, reportTrialBalance, reverseJournalEntry, updateRow, setUpBookkeeping
 } from '../lib/repository';
@@ -418,15 +418,27 @@ function PrivatePaymentModal({ invoice, organizationId, legalForm, onClose, onSa
   );
 }
 
-export function PurchaseInvoicesPage({ data, organizationId, canWrite, onChanged, draft, onDraftConsumed, inboxActivity = 0 }: PageProps & {
+export function PurchaseInvoicesPage({ data, organizationId, canWrite, onChanged, draft, onDraftConsumed, inboxActivity = 0, onInboxChanged }: PageProps & {
   /** Door een agent klaargezette inkoopfactuur; gebruikt hetzelfde seed-pad als de
    *  AI-factuurscan, dus het formulier hoefde er niets voor te leren. */
   draft?: InvoiceFormSeed | null;
   onDraftConsumed?: () => void;
   /** Loopt op bij elk realtime-event op de factuur-inbox (App-niveau); het paneel herlaadt dan. */
   inboxActivity?: number;
+  /** Telt de badge op het menu opnieuw (usePurchaseInvoiceInbox.refresh). */
+  onInboxChanged?: () => void;
 }) {
   const [edit, setEdit] = useState<PurchaseInvoice | 'new' | null>(null);
+  // Een bon die je hier instuurt, staat meteen op de werklijst. Eerder wachtte
+  // de lijst op het realtime-event: zonder dat event (verbinding weg, of lokaal)
+  // zei het venster "De foto staat op de werklijst", maar verscheen die pas na
+  // Ververs.
+  const [receiptTick, setReceiptTick] = useState(0);
+  const onReceiptChanged = useCallback(() => {
+    setReceiptTick(n => n + 1);
+    onInboxChanged?.();
+    onChanged();
+  }, [onChanged, onInboxChanged]);
   const [seed, setSeed] = useState<InvoiceFormSeed | null>(null);
 
   useEffect(() => {
@@ -562,7 +574,7 @@ export function PurchaseInvoicesPage({ data, organizationId, canWrite, onChanged
           {/* Een bon fotograferen: Gerrie leest hem en hij staat meteen als
               concept klaar (2026-11-18). Zie components/ReceiptCapture.tsx. */}
           <ReceiptCapture organizationId={organizationId} mode="receipt" data={data} disabled={!canWrite || notReady} compact
-            onChanged={onChanged} onOpenInvoice={openInvoice} onFillIn={fillIn} />
+            onChanged={onReceiptChanged} onOpenInvoice={openInvoice} onFillIn={fillIn} />
           <Button disabled={!canWrite || notReady} onClick={() => setScan(true)} title="Lees een factuur automatisch uit: UBL-e-facturen (XML) deterministisch, PDF/foto met AI"><Sparkles size={15} /> Factuur scannen (AI / UBL)</Button>
           <Button variant="primary" disabled={!canWrite || notReady} onClick={() => { setSeed(null); setEdit('new'); }}><Plus size={15} /> Nieuwe inkoopfactuur</Button>
         </div>
@@ -574,7 +586,7 @@ export function PurchaseInvoicesPage({ data, organizationId, canWrite, onChanged
         organizationId={organizationId}
         canWrite={canWrite}
         onChanged={onChanged}
-        activity={inboxActivity}
+        activity={inboxActivity + receiptTick}
         onOpenInvoice={openInvoice}
         onFillIn={item => fillIn(item, null)}
       />}
@@ -1159,6 +1171,15 @@ function PurchaseInvoiceForm({ data, organizationId, canWrite, invoice, seed, on
   const [error, setError] = useState<string | null>(null);
   // Waarom "Concept verwijderen" hier niet kan (er hangt iets aan dat bewaard blijft).
   const [removalNote, setRemovalNote] = useState<string | null>(null);
+  // Een leverancier die je hier aanmaakt (keuze "+ Nieuwe leverancier…"). Eerder
+  // kon dat alleen via Leveranciers: wie een bon van een nieuwe winkel invulde,
+  // moest het formulier sluiten, en was kwijt wat hij al typte.
+  const [newSupplier, setNewSupplier] = useState({ name: '', iban: '', vat_number: '' });
+  const [createdSuppliers, setCreatedSuppliers] = useState<Supplier[]>([]);
+  const supplierOptions = useMemo(
+    () => [...data.suppliers, ...createdSuppliers.filter(c => !data.suppliers.some(s => s.id === c.id))],
+    [data.suppliers, createdSuppliers],
+  );
   const set = (k: string, v: unknown) => setForm(f => ({ ...f, [k]: v }));
 
   const kor = data.companySettings?.kor_enabled ?? false;
@@ -1206,6 +1227,7 @@ function PurchaseInvoiceForm({ data, organizationId, canWrite, invoice, seed, on
   async function save() {
     if (!form.supplier_id) { setError('Kies een leverancier.'); return; }
     if (form.supplier_id === '__new__' && !seed?.newSupplier) { setError('Kies een leverancier.'); return; }
+    if (form.supplier_id === '__create__' && !newSupplier.name.trim()) { setError('Vul de naam van de nieuwe leverancier in.'); return; }
     const cleaned = lines.filter(l => String(l.description || '').trim() || Number(l.amount_cents));
     if (cleaned.length === 0) { setError('Voeg minimaal één regel toe.'); return; }
     // Dubbel? De inbox houdt een dubbele factuur tegen, de scan en het handmatige
@@ -1214,7 +1236,7 @@ function PurchaseInvoiceForm({ data, organizationId, canWrite, invoice, seed, on
     // factuurnummer (zonder spaties en hoofdletters) vraagt eerst om bevestiging.
     const norm = (v: unknown) => String(v ?? '').replace(/[\s.\-_/]/g, '').toUpperCase();
     const number = norm(form.supplier_invoice_number);
-    if (number && form.supplier_id !== '__new__') {
+    if (number && form.supplier_id !== '__new__' && form.supplier_id !== '__create__') {
       const twin = data.purchaseInvoices.find(pi => pi.id !== invoice?.id && pi.status !== 'cancelled'
         && pi.supplier_id === form.supplier_id && norm(pi.supplier_invoice_number) === number);
       if (twin && !confirm(`Er bestaat al een inkoopfactuur ${twin.supplier_invoice_number} van deze leverancier (${twin.internal_number ?? 'zonder intern nummer'}, ${twin.date}). Toch opslaan?`)) return;
@@ -1226,6 +1248,19 @@ function PurchaseInvoiceForm({ data, organizationId, canWrite, invoice, seed, on
       if (form.supplier_id === '__new__' && seed?.newSupplier) {
         const createdSupplier = await insertRow<Supplier>('suppliers', organizationId, { ...seed.newSupplier, status: 'active' });
         supplierId = createdSupplier.id;
+      }
+      if (form.supplier_id === '__create__') {
+        // Bestaat de winkel al (andere hoofdletters, spaties), dan die; geen tweede "Action".
+        const name = newSupplier.name.trim().replace(/\s+/g, ' ');
+        const existing = supplierOptions.find(sup => sup.name.trim().toLowerCase() === name.toLowerCase());
+        const createdSupplier = existing ?? await insertRow<Supplier>('suppliers', organizationId, {
+          name, iban: newSupplier.iban.replace(/\s+/g, '').toUpperCase() || null, vat_number: newSupplier.vat_number.trim() || null, status: 'active',
+        });
+        supplierId = createdSupplier.id;
+        // Mislukt hierna het opslaan, dan blijft hij gekozen: nog eens opslaan
+        // maakt geen tweede leverancier.
+        if (!existing) setCreatedSuppliers(list => [...list, createdSupplier]);
+        set('supplier_id', supplierId);
       }
       // Een btw-bedrag blijft alleen staan waar de boeking het gebruikt.
       const stored = cleanLineVat(cleaned, totalsOptions);
@@ -1338,9 +1373,17 @@ function PurchaseInvoiceForm({ data, organizationId, canWrite, invoice, seed, on
           }} disabled={readOnly}>
             <option value="">— kies —</option>
             {seed?.newSupplier && <option value="__new__">➕ Nieuwe leverancier: {seed.newSupplier.name}</option>}
-            {data.suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+            {!readOnly && <option value="__create__">+ Nieuwe leverancier…</option>}
+            {supplierOptions.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
           </Select>
         </Field>
+        {form.supplier_id === '__create__' && <>
+          <Field label="Naam nieuwe leverancier" hint="Bijvoorbeeld de naam van de winkel op de bon. Hij wordt aangemaakt als je opslaat.">
+            <Input value={newSupplier.name} onChange={e => setNewSupplier(v => ({ ...v, name: e.target.value }))} placeholder="Bijv. Action" autoFocus />
+          </Field>
+          <Field label="IBAN (mag leeg)"><Input value={newSupplier.iban} onChange={e => setNewSupplier(v => ({ ...v, iban: e.target.value }))} /></Field>
+          <Field label="Btw-nummer (mag leeg)"><Input value={newSupplier.vat_number} onChange={e => setNewSupplier(v => ({ ...v, vat_number: e.target.value }))} /></Field>
+        </>}
         <Field label="Factuurnummer leverancier"><Input value={form.supplier_invoice_number} onChange={e => set('supplier_invoice_number', e.target.value)} disabled={readOnly} /></Field>
         <Field label="Intern nummer"><Input value={form.internal_number} onChange={e => set('internal_number', e.target.value)} disabled={readOnly} /></Field>
         <Field label="Factuurdatum"><Input type="date" value={form.date} onChange={e => set('date', e.target.value)} disabled={readOnly} /></Field>
@@ -1391,8 +1434,8 @@ function PurchaseInvoiceForm({ data, organizationId, canWrite, invoice, seed, on
               {choices.map(({ code: v, misplaced: sales }) => <option key={v.id} value={v.code}>{v.label}{sales ? ' (verkoopcode)' : ''}</option>)}
               {l.vat_code && !code && <option value={l.vat_code}>{l.vat_code} (onbekende code)</option>}
             </Select>
-            <Input className="bk-num" type="number" step="0.01" value={(l.amount_cents / 100).toString()}
-              onChange={e => updateLine(l.id, { amount_cents: Math.round((parseFloat(e.target.value) || 0) * 100) })} disabled={readOnly} />
+            <DecimalInput className="bk-num" aria-label="Bedrag excl. btw" value={l.amount_cents / 100}
+              onValueChange={v => updateLine(l.id, { amount_cents: Math.round((v ?? 0) * 100) })} disabled={readOnly} />
             {!readOnly && <button className="bk-line-del" onClick={() => removeLine(l.id)} title="Regel verwijderen">×</button>}
             {/* Onder de regel, over de volle breedte: het btw-bedrag van de
                 leverancier, of waarom de btw hier niet in het totaal zit. */}
@@ -1414,11 +1457,11 @@ function PurchaseInvoiceForm({ data, organizationId, canWrite, invoice, seed, on
                       Btw-bedrag
                       {lineVat !== computedVat && <> (berekend: {euroCents(computedVat)})</>}
                     </span>
-                    <Input className="bk-num" type="number" step="0.01" style={{ width: 110 }} aria-label="Btw-bedrag volgens de factuur"
+                    <DecimalInput className="bk-num" style={{ width: 110 }} aria-label="Btw-bedrag volgens de factuur"
                       title="Het btw-bedrag zoals het op de factuur of bon staat. Wijkt het een cent af van het berekende, vul dan het bedrag van de factuur in: dan klopt het totaal met wat je betaalt."
-                      value={(lineVat / 100).toString()}
-                      onChange={e => {
-                        const value = e.target.value.trim() === '' ? null : Math.round((parseFloat(e.target.value) || 0) * 100);
+                      value={lineVat / 100}
+                      onValueChange={v => {
+                        const value = v === null ? null : Math.round(v * 100);
                         setLines(ls => ls.map(x => x.id === l.id ? withLineVat(x, value) : x));
                       }} disabled={readOnly} />
                   </label>
@@ -1472,7 +1515,15 @@ function ledgerFiscalYearBounds(startMonth: number, year: number): { start: stri
  * canWriteClients: de import van een auditfile kan ook klanten toevoegen, en
  * dat hoort bij de module Klanten, niet bij Financiën (CLAUDE.md, regel 3).
  */
-export function LedgerPage({ data, organizationId, canWrite, onChanged, canWriteClients = false }: PageProps & { canWriteClients?: boolean }) {
+export function LedgerPage({ data, organizationId, canWrite, onChanged, canWriteClients = false, canManageChart = canWrite }: PageProps & {
+  canWriteClients?: boolean;
+  /**
+   * Mag het rekeningschema worden beheerd? Standaard wie mag schrijven. De
+   * boekhouder die mag boeken niet: hij boekt en corrigeert, het schema is van
+   * de ondernemer (de database weigert het ook).
+   */
+  canManageChart?: boolean;
+}) {
   const [tab, setTab] = useState<'journal' | 'accounts' | 'trial' | 'vat' | 'opening'>('journal');
   const fiscalStartMonth = data.companySettings?.fiscal_year_start_month ?? 1;
 
@@ -1498,12 +1549,15 @@ export function LedgerPage({ data, organizationId, canWrite, onChanged, canWrite
   const xafPeriod = xafPeriods.find(p => p.key === xafKey) ?? xafPeriods[0];
 
   if (data.ledgerAccounts.length === 0) {
-    return <div className="bk-page"><SetupBanner organizationId={organizationId} canWrite={canWrite} onChanged={onChanged} /></div>;
+    return <div className="bk-page"><SetupBanner organizationId={organizationId} canWrite={canManageChart} onChanged={onChanged} /></div>;
   }
 
-  function exportXaf() {
+  async function exportXaf() {
     if (!xafPeriod) return;
-    downloadXaf({ data, fiscalYearLabel: xafPeriod.label, startDate: xafPeriod.start, endDate: xafPeriod.end });
+    // Het factuurnummer van creditnota's en bankboekingen (invRef) staat niet
+    // in wat Grootboek laadt; loadXafReferences haalt alleen die nummers op.
+    const references = await loadXafReferences(organizationId).catch(() => undefined);
+    downloadXaf({ data, fiscalYearLabel: xafPeriod.label, startDate: xafPeriod.start, endDate: xafPeriod.end, references });
   }
 
   return (
@@ -1514,7 +1568,7 @@ export function LedgerPage({ data, organizationId, canWrite, onChanged, canWrite
           <Select inline value={xafPeriod?.key ?? ''} onChange={e => setXafKey(e.target.value)}>
             {xafPeriods.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
           </Select>
-          <Button onClick={exportXaf} title="XML Auditfile Financieel 3.2 — voor je accountant of de Belastingdienst"><FileDown size={14} /> Auditfile (XAF)</Button>
+          <Button onClick={() => void exportXaf()} title="XML Auditfile Financieel 3.2 — voor je accountant of de Belastingdienst"><FileDown size={14} /> Auditfile (XAF)</Button>
         </div>
       </div>
       <div className="bk-tabs">
@@ -1525,7 +1579,7 @@ export function LedgerPage({ data, organizationId, canWrite, onChanged, canWrite
         <button className={tab === 'opening' ? 'is-active' : ''} onClick={() => setTab('opening')}><Scale size={15} /> Beginbalans</button>
       </div>
       {tab === 'journal' && <JournalView data={data} organizationId={organizationId} canWrite={canWrite} onChanged={onChanged} />}
-      {tab === 'accounts' && <AccountsView data={data} organizationId={organizationId} canWrite={canWrite} onChanged={onChanged} />}
+      {tab === 'accounts' && <AccountsView data={data} organizationId={organizationId} canWrite={canManageChart} onChanged={onChanged} />}
       {tab === 'trial' && <TrialBalanceView data={data} organizationId={organizationId} canWrite={canWrite} onChanged={onChanged} />}
       {tab === 'vat' && <VatCodesView vatCodes={data.vatCodes} />}
       {tab === 'opening' && <OpeningBalanceView data={data} organizationId={organizationId} canWrite={canWrite} onChanged={onChanged} canWriteClients={canWriteClients} />}

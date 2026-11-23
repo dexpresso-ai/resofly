@@ -95,6 +95,8 @@ test('het dashboard leest de tellingen uit de kern, niet de bank of de boekhoudi
   const dashboard = readFileSync(join(root, 'src/features/Dashboard.tsx'), 'utf8');
   assert.match(dashboard, /data\.bankTransactionsToReconcile/);
   assert.match(dashboard, /data\.vatReturnsToFile/);
+  // Openstaand na een deelbetaling: uit de kern (RPC), niet uit de betalingen.
+  assert.match(dashboard, /data\.invoiceOpenCents/);
 });
 
 // ── Wat er op het scherm staat ──────────────────────────────────────────────

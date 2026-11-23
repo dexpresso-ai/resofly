@@ -114,7 +114,28 @@ export const EXPORT_FORMAT_VERSION = 1;
 // of kolommen.
 // 20261122200000 (RLS één keer per query) zet functies erbij en herschrijft
 // leespolicies; geen tabellen of kolommen.
-export const EXPORT_SCHEMA_VERSION = '20261122200000';
+// 20261123090000 (openstaand na deelbetaling) zet alleen de functie
+// list_open_invoice_amounts erbij; geen tabellen of kolommen.
+// 20261123100000 (bank inlezen) zet sync_gap_from en sync_gap_to op
+// bank_accounts: een periode die de bankkoppeling niet meer kon ophalen. Ze
+// gaan mee (bank_accounts is 'export'); geen geheim. Verder vervangt hij de
+// functie bank_purchase_match.
+// 20261123110000 (uren factureren) zet time_entry_invoices erbij: welke
+// urenregistratie op welke verkoopfactuur staat. Dat hoort bij de administratie
+// van de klant en gaat mee.
+// 20261123120000 (factuurregels) zet functies en een trigger op invoices erbij
+// en vervangt convert_accepted_quote_to_invoice; geen tabellen of kolommen.
+// 20261123130000 (bank herstellen) zet excluded_at/_by/_reason op
+// bank_transactions en 20261123133000 accountant_can_book op
+// organization_members; die gaan met hun tabel mee. 20261123132000 zet de
+// tabel sent_e_invoices erbij, met het bestand (storage_key) in de export.
+// 20261123131000 vervangt alleen functies en triggers.
+// 20261123140000 (Nederlandse datum) vervangt vijf functies; geen tabellen of kolommen.
+// 20261123141000 (boekjaar opent vanzelf) zet een functie en een trigger op
+// journal_entries; geen tabellen of kolommen.
+// 20261123142000 (wettelijke rente) zet één rij in statutory_interest_rates
+// (landelijke tarieven, geen gegevens van een organisatie); geen tabellen of kolommen.
+export const EXPORT_SCHEMA_VERSION = '20261123142000';
 
 export type TableKind =
   | 'export'
@@ -222,6 +243,7 @@ export const EXPORT_MANIFEST: Readonly<Record<string, TableRule>> = {
   ticket_notes: { kind: 'export' },
   ticket_reads: { kind: 'intern', reason: LEESSTATUS },
   time_entries: { kind: 'export', list: 'uren' },
+  time_entry_invoices: { kind: 'export', orderBy: ['time_entry_id'] },
   planner_day_capacity: { kind: 'export' },
   planner_notes: { kind: 'export' },
 
@@ -300,6 +322,9 @@ export const EXPORT_MANIFEST: Readonly<Record<string, TableRule>> = {
   invoice_version_items: { kind: 'export' },
   invoice_workflow_events: { kind: 'export' },
   invoice_email_deliveries: { kind: 'export' },
+  // De e-facturen en e-creditnota's zoals ze verstuurd zijn (20261123132000).
+  // Tot dan zat er geen enkele e-factuur in de export, alleen de pdf's.
+  sent_e_invoices: { kind: 'export', files: ['storage_key'] },
   invoice_email_events: { kind: 'export' },
   invoice_payment_records: { kind: 'export' },
   invoice_public_links: { kind: 'export', omit: TOKEN_HASH_OMIT },
@@ -546,6 +571,7 @@ const FILE_FOLDERS: Readonly<Record<string, string>> = {
   'quote-pdfs': 'offertes-pdf',
   invoice: 'facturen',
   'invoice-pdfs': 'facturen-pdf',
+  'e-invoices': 'e-facturen',
   contract: 'contracten',
   'contract-pdfs': 'contracten-pdf',
   annual_account: 'jaarrekeningen',

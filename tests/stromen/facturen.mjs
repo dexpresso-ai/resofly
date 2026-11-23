@@ -33,6 +33,12 @@ function vandaag(plusDagen = 0) {
   return new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Amsterdam' }).format(new Date(Date.now() + plusDagen * 86_400_000));
 }
 
+/** Het openstaande bedrag van één factuur uit list_open_invoice_amounts; null als hij er niet in staat. */
+function openUitLijst(rijen, factuurId) {
+  const rij = (Array.isArray(rijen) ? rijen : []).find((r) => r.invoice_id === factuurId);
+  return rij ? Number(rij.open_cents) : null;
+}
+
 /** Stopt een stap met een duidelijke reden als een eerdere stap faalde. */
 function nodig(waarde, wat) {
   if (waarde === undefined || waarde === null) throw new Error(`overgeslagen: ${wat} ontbreekt (een eerdere stap faalde)`);
@@ -361,6 +367,17 @@ export default async function facturen() {
     gelijk(gelukt(await rpc('invoice_open_receivable_checked', { p_invoice_id: f.id }, w.zonderFinancien.token), 'zonder Financiën'), null, 'zonder Financiën');
   });
 
+  // Het dashboard, de klantpagina en de stroom lezen het openstaande bedrag uit
+  // list_open_invoice_amounts (migratie 20261123090000). Zonder Financiën of
+  // vanuit een andere organisatie: geen rijen en geen fout, want de kern roept
+  // hem bij elk opstarten aan.
+  await stap('dashboard: list_open_invoice_amounts geeft 17363 cent als lid; niets zonder Financiën of voor een andere organisatie', async () => {
+    const f = nodig(f1, 'factuur');
+    gelijk(openUitLijst(gelukt(await rpc('list_open_invoice_amounts', { p_organization_id: w.orgId }, w.medewerker.token), 'als lid'), f.id), TOTAAL_CENT, 'als lid');
+    gelijk(gelukt(await rpc('list_open_invoice_amounts', { p_organization_id: w.orgId }, w.zonderFinancien.token), 'zonder Financiën'), [], 'zonder Financiën');
+    gelijk(gelukt(await rpc('list_open_invoice_amounts', { p_organization_id: w.orgId }, w2.eigenaar.token), 'andere organisatie'), [], 'andere organisatie');
+  });
+
   await stap('de bewaarde PDF is precies de PDF uit de mail, en een lezer kan hem downloaden', async () => {
     const uit = gelukt(await wf(w, w.lezer, 'downloadInvoicePdf', { invoiceId: nodig(f1, 'factuur').id }), 'downloaden');
     const bytes = vanBase64(uit.pdf.base64);
@@ -635,6 +652,8 @@ export default async function facturen() {
     gelukt(await rpc('book_bank_transaction', { p_organization_id: w.orgId, p_transaction_id: txn.id, p_matched_invoice_id: f.id }, w.medewerker.token), 'afletteren');
     gelijk(openCent(w, f.id), TOTAAL_CENT - 5000, 'openstaand');
     gelijk(factuurRij(f.id).status, 'sent', 'status');
+    // Wat het dashboard en de klantpagina tonen: het restant, niet het volle bedrag.
+    gelijk(openUitLijst(gelukt(await rpc('list_open_invoice_amounts', { p_organization_id: w.orgId }, w.medewerker.token), 'dashboard'), f.id), TOTAAL_CENT - 5000, 'dashboard: openstaand');
   });
 
   await stap('meer afletteren dan er openstaat wordt geweigerd', async () => {
@@ -675,6 +694,7 @@ export default async function facturen() {
     gelijk([res.status, res.json?.ok], [200, true], 'webhook');
     gelijk(factuurRij(f.id).status, 'paid', 'status');
     gelijk(openCent(w, f.id), 0, 'openstaand');
+    gelijk(openUitLijst(gelukt(await rpc('list_open_invoice_amounts', { p_organization_id: w.orgId }, w.medewerker.token), 'dashboard'), f.id), null, 'dashboard: betaald staat er niet meer in');
     const betaald = betaalrijen(f.id).find((r) => r.provider_payment_id === link2.providerPaymentId);
     gelijk(som(boekingsregels(nodig(betaald?.journal_entry_id, 'boeking')), '1300', 'credit'), TOTAAL_CENT - 5000, '1300 credit');
   });

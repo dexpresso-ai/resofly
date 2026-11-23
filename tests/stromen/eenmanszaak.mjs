@@ -7,7 +7,12 @@
 // het eigen vermogen dat hij in zijn aangifte inkomstenbelasting invult.
 // Zie docs/changelog/CHANGELOG_EENMANSZAAK_CONTROLE_2026-11-18.md.
 //
-// Het jaar is 2025 (dat kan dicht), met 2026 als lopend jaar erachter.
+// Het jaar is 2025 (dat kan dicht), met 2026 erachter. Alle boekdatums staan
+// vast in die twee jaren; alleen wat de database zelf aan vandaag ophangt (de
+// boekjaren na de inrichting, het lopende btw-tijdvak) rekent hier mee met de
+// datum van vandaag. Eerst stond er "precies boekjaar 2025 en 2026": vanaf
+// 1 januari 2027 opent de inrichting ook 2027, en dan viel het hele scenario
+// om zonder dat er iets kapot was.
 // Alles gaat zoals in de app: als de eigenaar, via REST en RPC met zijn eigen
 // sessie (RLS geldt), en facturen via invoice-workflow.
 import { randomUUID } from 'node:crypto';
@@ -232,7 +237,7 @@ async function hetJaar() {
   if (!w) return;
   const t = {};
 
-  await stap('na de inrichting staat de boekhouding klaar: rekeningschema, en boekjaren 2025 en 2026', async () => {
+  await stap('na de inrichting staat de boekhouding klaar: rekeningschema, en de boekjaren van 2025 tot en met dit jaar', async () => {
     gelijk((await rekening(w, '0500')).name, 'Eigen vermogen', '0500');
     gelijk([(await rekening(w, '0550')).subtype, (await rekening(w, '0560')).subtype], ['private_withdrawals', 'private_contributions'], 'privérekeningen');
     const kosten = await rest(`ledger_accounts?select=code,subtype,report_group&organization_id=eq.${w.orgId}&type=eq.expense&order=code`, { token: w.eigenaar.token });
@@ -242,7 +247,11 @@ async function hetJaar() {
     gelijk(kosten.json.find((r) => r.code === '7000').report_group, 'inkoopwaarde', '7000 in de inkoopwaarde');
     gelijk((await rekening(w, '1000')).name, 'Kas', 'kasrekening');
     const jaren = await boekjaren(w);
-    gelijk(jaren.map((j) => [j.label, j.period_start, j.period_end, j.status]), [['2025', '2025-01-01', '2025-12-31', 'open'], ['2026', '2026-01-01', '2026-12-31', 'open']], 'boekjaren');
+    // Van de start (2025) tot en met het lopende jaar: in 2026 twee, in 2027 drie.
+    const ditJaar = Number(vandaag().slice(0, 4));
+    const verwachteJaren = [];
+    for (let jaar = 2025; jaar <= ditJaar; jaar += 1) verwachteJaren.push([String(jaar), `${jaar}-01-01`, `${jaar}-12-31`, 'open']);
+    gelijk(jaren.map((j) => [j.label, j.period_start, j.period_end, j.status]), verwachteJaren, 'boekjaren');
     [t.j2025, t.j2026] = jaren;
     t.bankGb = await rekening(w, '1100');
     t.kosten = await rekening(w, '4500');

@@ -1,4 +1,5 @@
-import type { ParsedBankStatement, ParsedBankTransaction } from '../../types';
+import type { ParsedBankAccountSection, ParsedBankStatement, ParsedBankTransaction } from '../../types';
+import { compactAccount } from './check.ts';
 import { normalizeDate } from './dedup.ts';
 
 /**
@@ -21,7 +22,20 @@ export function parseCamt053(xml: string, fileName: string): ParsedBankStatement
     Array.from(root.getElementsByTagNameNS('*', name));
   const firstLocal = (root: Element, name: string): Element | null => local(root, name)[0] ?? null;
 
-  const entries = local(doc, 'Ntry');
+  // Per afschrift (Stmt) de eigen rekening. Die gaat mee met elke regel, zodat
+  // het scherm vóór het inlezen kan zien of het bestand bij de gekozen rekening
+  // hoort (check.ts). Eerder ging een bestand met twee rekeningen in zijn geheel
+  // de gekozen rekening in, met een waarschuwing pas ná het inlezen.
+  const ibanOf = (st: Element): string => {
+    const acct = firstLocal(st, 'Acct');
+    if (!acct) return '';
+    const othr = firstLocal(acct, 'Othr');
+    return compactAccount(text(firstLocal(acct, 'IBAN')) || text(othr ? firstLocal(othr, 'Id') : null));
+  };
+  const stmts = local(doc, 'Stmt');
+  const entries: Array<{ ntry: Element; account: string }> = stmts.length > 0
+    ? stmts.flatMap(st => { const account = ibanOf(st); return local(st, 'Ntry').map(ntry => ({ ntry, account })); })
+    : local(doc, 'Ntry').map(ntry => ({ ntry, account: '' }));
   if (entries.length === 0) {
     throw new Error('Geen transacties (Ntry) gevonden in dit CAMT.053-bestand.');
   }
@@ -33,10 +47,10 @@ export function parseCamt053(xml: string, fileName: string): ParsedBankStatement
     const sts = firstLocal(ntry, 'Sts');
     return (text(sts ? firstLocal(sts, 'Cd') : null) || text(sts)).toUpperCase();
   };
-  const bookedEntries = entries.filter(ntry => { const st = entryStatus(ntry); return !st || st === 'BOOK'; });
+  const bookedEntries = entries.filter(({ ntry }) => { const st = entryStatus(ntry); return !st || st === 'BOOK'; });
   const pendingCount = entries.length - bookedEntries.length;
 
-  const transactions: ParsedBankTransaction[] = bookedEntries.map(ntry => {
+  const transactions: ParsedBankTransaction[] = bookedEntries.map(({ ntry, account }) => {
     const indicator = text(firstLocal(ntry, 'CdtDbtInd')).toUpperCase();
     const sign = indicator === 'DBIT' ? -1 : 1;
     const amtEl = firstLocal(ntry, 'Amt');
@@ -65,15 +79,34 @@ export function parseCamt053(xml: string, fileName: string): ParsedBankStatement
     const endToEnd = text(firstLocal(txDtls, 'EndToEndId')) || null;
     const structuredRef = text(firstLocal(firstLocal(txDtls, 'CdtrRefInf') ?? txDtls, 'Ref')) || null;
 
-    // Bij een bijschrijving is de tegenpartij de Debtor, bij een afschrijving de Creditor.
+    // Bij een bijschrijving is de tegenpartij de Debtor, bij een afschrijving de
+    // Creditor. Een storno (RvslInd) draait dat om: in de teruggeboekte incasso
+    // van KPN (een bijschrijving) is de Debtor de zzp'er zelf, van de
+    // oorspronkelijke incasso. Eerder stond er dan "je eigen naam en IBAN" als
+    // tegenpartij, en leek het een privéstorting terwijl KPN kosten met btw
+    // terugboekte. Wijst de gekozen kant toch naar de eigen rekening, dan nemen
+    // we de andere.
     const rltdPties = firstLocal(txDtls, 'RltdPties');
     let counterpartyName: string | null = null;
     let counterpartyIban: string | null = null;
     if (rltdPties) {
-      const party = sign > 0 ? firstLocal(rltdPties, 'Dbtr') : firstLocal(rltdPties, 'Cdtr');
-      const acct = sign > 0 ? firstLocal(rltdPties, 'DbtrAcct') : firstLocal(rltdPties, 'CdtrAcct');
-      counterpartyName = (party ? text(firstLocal(party, 'Nm')) : '') || null;
-      counterpartyIban = (acct ? text(firstLocal(acct, 'IBAN')) : '') || null;
+      const side = (debtor: boolean) => {
+        const party = firstLocal(rltdPties, debtor ? 'Dbtr' : 'Cdtr');
+        const acct = firstLocal(rltdPties, debtor ? 'DbtrAcct' : 'CdtrAcct');
+        return {
+          name: (party ? text(firstLocal(party, 'Nm')) : '') || null,
+          iban: (acct ? text(firstLocal(acct, 'IBAN')) : '') || null,
+        };
+      };
+      const reversal = text(firstLocal(ntry, 'RvslInd')).toLowerCase() === 'true';
+      const debtorSide = reversal ? sign < 0 : sign > 0;
+      let party = side(debtorSide);
+      if (account && compactAccount(party.iban) === account) {
+        const other = side(!debtorSide);
+        if (other.name || other.iban) party = other;
+      }
+      counterpartyName = party.name;
+      counterpartyIban = party.iban;
     }
 
     return {
@@ -87,15 +120,16 @@ export function parseCamt053(xml: string, fileName: string): ParsedBankStatement
       structured_reference: structuredRef,
       end_to_end_id: endToEnd,
       bank_tx_id: bankTxId,
+      account: account || null,
     };
   }).filter(t => t.booking_date && t.amount_cents !== 0);
 
-  // Periode + begin/eindsaldo uit de Stmt-blokken. Een export over meerdere
-  // dagen bevat per dag een afschrift van dezelfde rekening: dan geldt het
-  // beginsaldo van het eerste en het eindsaldo van het laatste. Eerder telden
-  // alleen de saldi en de periode van dag 1, met een onterechte melding over
-  // meerdere rekeningen.
-  const stmts = local(doc, 'Stmt');
+  // Periode + begin/eindsaldo per rekening uit de Stmt-blokken. Een export over
+  // meerdere dagen bevat per dag een afschrift van dezelfde rekening: dan geldt
+  // het beginsaldo van het eerste en het eindsaldo van het laatste. Bij twee
+  // rekeningen in één bestand neemt het scherm het blok van de gekozen
+  // rekening (check.ts); eerder telde het saldo van het eerste afschrift, ook
+  // als dat van de andere rekening was.
   const balanceOf = (st: Element | null, code: string): number | null => {
     for (const bal of st ? local(st, 'Bal') : []) {
       const cd = text(firstLocal(bal, 'Cd')).toUpperCase();
@@ -107,14 +141,30 @@ export function parseCamt053(xml: string, fileName: string): ParsedBankStatement
     }
     return null;
   };
-  const ibanOf = (st: Element): string => { const acct = firstLocal(st, 'Acct'); return text(acct ? firstLocal(acct, 'IBAN') : null).replace(/\s/g, '').toUpperCase(); };
+  // Beginsaldo: OPBD, of anders PRCD (het eindsaldo van het vorige afschrift,
+  // dus hetzelfde bedrag). Een afschrift met alleen PRCD gaf eerder beginsaldo
+  // null, en dan was er geen afschriftcontrole.
+  const openingOf = (st: Element): number | null => balanceOf(st, 'OPBD') ?? balanceOf(st, 'PRCD');
   const fromOf = (st: Element): string => { const f = firstLocal(st, 'FrToDt'); return f ? text(firstLocal(f, 'FrDtTm')).slice(0, 10) : ''; };
   const toOf = (st: Element): string => { const f = firstLocal(st, 'FrToDt'); return f ? text(firstLocal(f, 'ToDtTm')).slice(0, 10) : ''; };
-  const ibans = [...new Set(stmts.map(ibanOf).filter(Boolean))];
-  const sameAccount = ibans.length <= 1;
-  const ordered = sameAccount ? [...stmts].sort((a, b) => (fromOf(a) || toOf(a)).localeCompare(fromOf(b) || toOf(b))) : stmts;
-  const firstStmt = ordered[0] ?? null;
-  const lastStmt = sameAccount ? (ordered[ordered.length - 1] ?? null) : firstStmt;
+  const byAccount = new Map<string, Element[]>();
+  for (const st of stmts) {
+    const key = ibanOf(st);
+    byAccount.set(key, [...(byAccount.get(key) ?? []), st]);
+  }
+  const accounts: ParsedBankAccountSection[] = [...byAccount.entries()].map(([account, group]) => {
+    const ordered = [...group].sort((a, b) => (fromOf(a) || toOf(a)).localeCompare(fromOf(b) || toOf(b)));
+    const first = ordered[0];
+    const last = ordered[ordered.length - 1];
+    return {
+      account,
+      period_start: fromOf(first) ? normalizeDate(fromOf(first)) : null,
+      period_end: toOf(last) ? normalizeDate(toOf(last)) : null,
+      opening_balance_cents: openingOf(first),
+      closing_balance_cents: balanceOf(last, 'CLBD'),
+    };
+  });
+  const main = accounts[0] ?? null;
 
   const warnings: string[] = [];
   const skipped = bookedEntries.length - transactions.length;
@@ -124,23 +174,17 @@ export function parseCamt053(xml: string, fileName: string): ParsedBankStatement
   if (skipped > 0) {
     warnings.push(`${skipped} regel(s) overgeslagen: geen leesbare boekdatum of een bedrag van € 0,00.`);
   }
-  // Meerdere Stmt-blokken = meerdere rekeningen in één bestand. We lezen álle
-  // entries in, maar begin-/eindsaldo komen uit het eerste blok — dan klopt de
-  // saldo-aansluiting niet en moet de gebruiker per rekening exporteren.
-  const stmtCount = stmts.length;
-  if (stmtCount > 1 && !sameAccount) {
-    warnings.push(`Dit bestand bevat ${stmtCount} afschriften (meerdere rekeningen). Alle transacties komen op deze ene bankrekening binnen en het begin-/eindsaldo is dat van het eerste afschrift. Exporteer bij voorkeur per rekening.`);
-  }
 
   return {
     format: 'camt053',
     file_name: fileName,
     file_hash: null,
-    period_start: firstStmt && fromOf(firstStmt) ? normalizeDate(fromOf(firstStmt)) : null,
-    period_end: lastStmt && toOf(lastStmt) ? normalizeDate(toOf(lastStmt)) : null,
-    opening_balance_cents: balanceOf(firstStmt, 'OPBD'),
-    closing_balance_cents: balanceOf(lastStmt, 'CLBD'),
+    period_start: main?.period_start ?? null,
+    period_end: main?.period_end ?? null,
+    opening_balance_cents: main?.opening_balance_cents ?? null,
+    closing_balance_cents: main?.closing_balance_cents ?? null,
     warnings,
     transactions,
+    accounts: accounts.filter(a => a.account),
   };
 }

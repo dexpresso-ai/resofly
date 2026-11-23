@@ -484,6 +484,11 @@ async function handleUserDelete(
   // zending zelf (intrekken of verwijderen), zodat het logboek klopt.
   if (segment === 'transfer') throw new HttpError(403, 'Bestanden van een zending verwijder je via de zending zelf.');
   await requireModuleLevel(env, organizationId, userId, moduleForSegment(segment), 'write');
+  // Het bewijsstuk van een geboekte inkoopfactuur (of een bijlage van een
+  // verstuurde factuur of offerte) was hier te wissen door iedereen met
+  // Financiën bewerken: het scherm toont de knop niet, maar de route vroeg er
+  // niet naar. De app wist het bestand vóór de rij, dus de database kwam te laat.
+  await assertNotLockedEvidence(env, key);
 
   await env.MEDIA_BUCKET.delete(key);
   return jsonResponse({ ok: true }, 200, context);
@@ -543,6 +548,10 @@ async function handleInternalDelete(
   if (IMMUTABLE_KEY_SEGMENTS.has(keySegment(key))) {
     throw new HttpError(403, 'Een vastgelegd bewijsstuk kan niet worden verwijderd.');
   }
+  // Een origineel uit de factuur-inbox dat aan een geboekte inkoopfactuur hangt,
+  // is het bewijsstuk van die boeking. De opruimronde raakt alleen items zonder
+  // inkoopfactuur; deze controle houdt dat ook zo als een aanroeper zich vergist.
+  if (EVIDENCE_KEY_SEGMENTS.has(keySegment(key))) await assertNotLockedEvidence(env, key);
   await env.MEDIA_BUCKET.delete(key);
   return jsonResponse({ ok: true, key }, 200, context);
 }
@@ -3514,6 +3523,9 @@ async function fetchOfficeTarget(env: Env, kind: OfficeKind, id: string): Promis
     mime_type: att.mime_type,
     size_bytes: att.size_bytes,
     edit_version: att.edit_version ?? 1,
+    // Een Word- of Excel-bijlage van een geboekt of verstuurd document: openen
+    // mag, opslaan niet. PutFile overschreef anders het bewijsstuk in R2.
+    locked: (await storageKeyLockReason(env, att.storage_key)) !== null,
     module: moduleForSegment(att.entity_type),
   };
 }
@@ -4036,7 +4048,11 @@ async function handleWopiPutFile(request: Request, env: Env, context: RouteConte
   // Het edit-token leeft 10 uur; de status kan sinds de sessie-uitgifte veranderd
   // zijn (contract verstuurd, getekend of ingetrokken). Opnieuw controleren vóór
   // we R2 overschrijven — daarna is het origineel weg.
-  if (target.locked) throw new HttpError(409, 'Dit contract is definitief en kan niet meer worden gewijzigd.');
+  if (target.locked) {
+    throw new HttpError(409, kind === 'c'
+      ? 'Dit contract is definitief en kan niet meer worden gewijzigd.'
+      : 'Dit bestand hoort bij een document dat geboekt of verstuurd is; het ligt vast (bewaarplicht).');
+  }
   // Zelfde reden: is de bewerker intussen uit het team gehaald, teruggezet naar
   // lezen of zijn modulerecht kwijt, dan schrijft een open sessie niet meer.
   const role = await membershipRole(env, token.org, token.uid);
@@ -4211,9 +4227,36 @@ function assertInternalKeyOrg(request: Request, key: string): void {
   if (organizationId) assertKeyInOrg(key, organizationId);
 }
 
-/** Bewijsstukken (factuur-, offerte-, contract- en jaarrekening-PDF's) zijn
- *  onveranderlijk en dus nooit via de app te verwijderen. */
-const IMMUTABLE_KEY_SEGMENTS = new Set(['invoice-pdfs', 'quote-pdfs', 'contract-pdfs', 'annual-account-pdfs']);
+/** Bewijsstukken (factuur-, offerte-, contract- en jaarrekening-PDF's, en de
+ *  e-facturen zoals ze verstuurd zijn) zijn onveranderlijk en dus nooit via de
+ *  app te verwijderen. */
+const IMMUTABLE_KEY_SEGMENTS = new Set(['invoice-pdfs', 'quote-pdfs', 'contract-pdfs', 'annual-account-pdfs', 'e-invoices']);
+
+/** Mappen waarin een bewijsstuk van de boekhouding kan staan dat pas vastligt
+ *  als zijn document geboekt of verstuurd is. Of dat zo is, weet de database. */
+const EVIDENCE_KEY_SEGMENTS = new Set(['quote', 'invoice', 'purchase_invoice', 'fixed_asset', 'purchase_invoice_inbox']);
+
+/**
+ * Ligt het bestand achter deze sleutel vast? De regel staat in de database
+ * (storage_key_lock_reason, migratie 20261123131000), zodat het scherm, Gerrie,
+ * de database en deze Worker hetzelfde zeggen. Lukt de vraag niet, dan wissen
+ * we niet: liever een foutmelding dan een bewijsstuk kwijt.
+ */
+async function storageKeyLockReason(env: Env, key: string): Promise<string | null> {
+  const res = await fetch(`${supabaseBase(env)}/rest/v1/rpc/storage_key_lock_reason`, {
+    method: 'POST',
+    headers: serviceHeaders(env, { 'content-type': 'application/json' }),
+    body: JSON.stringify({ p_organization_id: organizationFromKey(key), p_storage_key: key }),
+  });
+  if (!res.ok) throw new HttpError(502, 'Kon niet nagaan of dit bestand vastligt. Probeer het opnieuw.');
+  const reason = await res.json() as unknown;
+  return typeof reason === 'string' && reason ? reason : null;
+}
+
+async function assertNotLockedEvidence(env: Env, key: string): Promise<void> {
+  const reason = await storageKeyLockReason(env, key);
+  if (reason) throw new HttpError(403, reason);
+}
 
 /**
  * Module per entity type / tweede sleutelsegment: spiegel van
@@ -4229,7 +4272,7 @@ const SEGMENT_MODULE: Record<string, string> = {
   quote: 'finance', invoice: 'finance', supplier: 'finance', purchase_invoice: 'finance',
   fixed_asset: 'finance', annual_account: 'finance', contract: 'finance',
   'invoice-pdfs': 'finance', 'quote-pdfs': 'finance', 'contract-pdfs': 'finance',
-  'annual-account-pdfs': 'finance', purchase_invoice_inbox: 'finance',
+  'annual-account-pdfs': 'finance', purchase_invoice_inbox: 'finance', 'e-invoices': 'finance',
   chat_message: 'chat',
 };
 

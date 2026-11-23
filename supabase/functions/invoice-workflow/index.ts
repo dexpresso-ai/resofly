@@ -7,7 +7,7 @@ import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
 import { getModuleLevel } from '../_shared/edgeAuth.ts';
 import { renderEmailTemplate, type EmailTemplateContent, type EmailTemplateContentKey } from '../_shared/emailTemplates/index.ts';
 import { loadEmailBrand, withEmailBrand } from '../_shared/emailBrand.ts';
-import { calculateDunningClaim, type DunningClaim, type InterestKind, type RatePeriod } from '../_shared/dunning.ts';
+import { calculateDunningClaim, staleRate, staleRateMessage, type DunningClaim, type InterestKind, type RatePeriod } from '../_shared/dunning.ts';
 import { encryptionKeyConfigured, encryptSecret, mollieKeySuffix, readMollieProfile, validateMollieApiKey, type MollieKeyMode, type MollieProfile } from '../_shared/mollieSecrets.ts';
 import { loadInvoiceMollieKey, type InvoiceMollieKey } from '../_shared/invoiceMollieKey.ts';
 import { buildUblXml, deriveSalesLineCategory, validateUblInput, type UblDocumentInput, type UblLine, type VatKindRef } from '../_shared/ubl.ts';
@@ -15,6 +15,7 @@ import { clientWantsEInvoice, defaultInvoiceRecipient, embeddedPdf, invoiceDeliv
 import { loadMollieInvoicingAllowed, SEND_METHOD_EMAIL_NO_PAYMENT_LINK } from '../_shared/invoiceSendMethod.ts';
 import { invoiceVatGroups, splitRefundOverVatGroups, type VatGroup } from '../_shared/creditNoteSplit.ts';
 import { invoiceVatNotes } from '../_shared/invoiceVatNotes.ts';
+import { zeroVatIssues, zeroVatRefusal } from '../_shared/invoiceZeroVat.ts';
 import { loadVatCodeInfo } from '../_shared/vatCodeInfo.ts';
 import { loadDocumentDesign, renderCreditNotePdf, renderDunningLetterPdf, renderSalesDocumentPdf } from '../_shared/documentPdf.ts';
 import {
@@ -34,7 +35,7 @@ type InvoiceRow = {
   number: string; date: string; due_date: string | null; lines: InvoiceLine[]; status: string; notes: string | null;
   public_token_hash?: string | null; public_token_expires_at?: string | null;
   reminder_level?: number | null; last_reminder_at?: string | null; reminders_paused?: boolean | null; currency?: string | null;
-  journal_entry_id?: string | null;
+  journal_entry_id?: string | null; sent_at?: string | null;
 };
 type ClientRow = {
   id: string; name: string; contact_name: string | null; email: string | null;
@@ -198,13 +199,19 @@ serve(async (req) => {
       return json(req, { ok: true, ...(await downloadCreditNotePdf(organizationId, body)) });
     }
 
-    // E-factuur (UBL 2.1 / Peppol BIS 3.0) genereren is niet-muterend: de XML
-    // wordt live opgebouwd uit factuur + klant + bedrijfsgegevens, dus elke
-    // actieve member (ook viewer) mag downloaden — net als de PDF-snapshot.
-    // De PDF gaat erin mee, zodat wie de XML inleest de factuur ook ziet.
+    // E-factuur (UBL 2.1 / Peppol BIS 3.0) downloaden is niet-muterend, dus elke
+    // actieve member (ook viewer) mag het — net als de PDF-snapshot.
+    // Is de factuur als e-factuur verstuurd, dan komt precies dat bestand terug
+    // (sent_e_invoices). Tot 22 november 2026 werd de XML bij elke download
+    // opnieuw opgebouwd: na een verhuizing van de klant of een nieuw IBAN was
+    // dat een ander document dan de klant kreeg, en voor een gecrediteerde
+    // factuur kwam er geen meer. Alleen een factuur die nooit als e-factuur weg
+    // is, wordt nog live opgebouwd, met de PDF erin.
     if (action === 'downloadInvoiceUbl') {
       if (!isUuid(invoiceId)) throw new WorkflowHttpError('Ongeldige factuur.', 400);
       const invoice = await loadInvoice(organizationId, invoiceId);
+      const sent = await loadSentEInvoice(organizationId, { invoiceId, creditNoteId: null });
+      if (sent) return json(req, { ok: true, ubl: sent });
       // Geen officiële e-factuur genereren voor een geannuleerde/ongeldige factuur:
       // die zou naar buiten kunnen als geldig document terwijl hij dat niet is.
       if (['cancelled', 'void'].includes(invoice.status)) throw new WorkflowHttpError('Voor een geannuleerde of ongeldig gemaakte factuur kan geen e-factuur worden gemaakt.', 409);
@@ -219,17 +226,27 @@ serve(async (req) => {
       await assertInvoiceUblPossible(organizationId, invoice, { client, company, vatKinds });
       const pdf = await invoicePdfForEInvoice(organizationId, invoice, { client, company });
       const ubl = await createInvoiceUblAttachment(organizationId, invoice, { client, company, vatKinds, pdf });
-      return json(req, { ok: true, ubl });
+      // Eerlijk zeggen wat dit bestand is: het is nu gemaakt. Is de factuur al
+      // weg, dan staan hier de klant- en bedrijfsgegevens van vandaag in.
+      if (invoice.sent_at || invoice.status !== 'draft') {
+        ubl.warnings.push(await hadUnstoredEInvoice(organizationId, invoiceId)
+          ? 'Dit is niet het bestand dat je klant kreeg. Deze e-factuur is verstuurd voordat ResoFly het bestand zelf bewaarde; dit bestand is nu opnieuw opgebouwd, met de klant- en bedrijfsgegevens van vandaag.'
+          : 'Deze factuur is niet als e-factuur verstuurd. Dit bestand is nu gemaakt, met de klant- en bedrijfsgegevens van vandaag. De PDF erin is wel de PDF die je klant kreeg.');
+      }
+      return json(req, { ok: true, ubl: { ...ubl, stored: false } });
     }
     if (action === 'downloadCreditNoteUbl') {
       const creditNoteId = String(body.creditNoteId || '');
       if (!isUuid(creditNoteId)) throw new WorkflowHttpError('Ongeldige creditfactuur.', 400);
       const creditNote = await loadCreditNote(organizationId, creditNoteId);
       if (!creditNote) throw new WorkflowHttpError('Creditfactuur niet gevonden.', 404);
+      // De e-creditnota die de klant kreeg, ook als hij later is ingetrokken.
+      const sentCredit = await loadSentEInvoice(organizationId, { invoiceId: String(creditNote.invoice_id), creditNoteId });
+      if (sentCredit) return json(req, { ok: true, ubl: sentCredit });
       if (creditNote.status === 'void') throw new WorkflowHttpError('Voor een ingetrokken creditfactuur kan geen e-creditnota worden gemaakt.', 409);
       const invoice = await loadInvoice(organizationId, String(creditNote.invoice_id));
       const ubl = await createCreditNoteUblAttachment(organizationId, creditNote, invoice, { pdf: await creditNotePdfForEInvoice(creditNote) });
-      return json(req, { ok: true, ubl });
+      return json(req, { ok: true, ubl: { ...ubl, stored: false } });
     }
 
     // E-factuur via Mollie: de status bij Mollie ophalen (Peppol-aflevering,
@@ -268,6 +285,8 @@ serve(async (req) => {
       case 'previewInvoiceCredit': return json(req, { ok: true, ...(await previewInvoiceCredit(organizationId, invoiceId)) });
       // Weten vóór je verstuurt: op welke datum komt deze factuur in de boeken (leest alleen).
       case 'previewInvoiceSend': return json(req, { ok: true, ...(await previewInvoiceSend(organizationId, invoiceId)) });
+      // Uitgeven zonder mail (zelf mailen of printen): dezelfde controles, de pdf vastgelegd.
+      case 'issueInvoiceWithoutEmail': return json(req, { ok: true, ...(await issueInvoiceWithoutEmail(user.id, organizationId, invoiceId)) });
       case 'issueRefundCreditNote': return json(req, { ok: true, ...(await issueRefundCreditNote(user.id, organizationId, role, body)) });
       case 'sendCreditNoteEmail': return json(req, { ok: true, ...(await sendCreditNoteEmail(user.id, organizationId, body)) });
       case 'markMockInvoicePaymentPaid': return json(req, { ok: true, payment: await markMockInvoicePaymentPaid(organizationId, String(body.providerPaymentId || '')) });
@@ -322,16 +341,7 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
   // staan: een verkoopfactuur letter je alleen af met geld dat binnenkomt, en
   // "op betaald zetten" liet de openstaande posten scheef. Alleen een concept:
   // wat al de deur uit is, mag nog opnieuw gemaild worden.
-  if (invoice.status === 'draft') {
-    const draftTotalCents = calculateTotals(invoice.lines).totalCents;
-    if (draftTotalCents < 0) {
-      throw new WorkflowHttpError(`Factuur ${invoice.number} komt uit op een negatief bedrag (${formatEuro(draftTotalCents / 100)}). Geld terug aan de klant factureer je niet met een negatieve factuur: die kun je daarna niet afletteren. Open de factuur waar dit over gaat en kies "Crediteren" (daar kun je ook een deel van het bedrag crediteren); is die factuur al betaald, kies dan "Terugbetaling".`, 422);
-    }
-    // Het btw-tarief hoort bij de btw-code (de database weigert het uitgeven
-    // ook, enforce_invoice_lines_numeric). Hier al, vóór er een mail ontstaat:
-    // de status gaat pas ná het mailen op verstuurd.
-    await assertLineVatMatchesCode(organizationId, invoice);
-  }
+  if (invoice.status === 'draft') await assertDraftLinesIssuable(organizationId, invoice);
   // Komt de boeking niet op de factuurdatum (afgesloten tijdvak, toekomst), of
   // komt de factuur helemaal niet in de boeken (vóór de startdatum)? Vóór het
   // versturen bepaald, want daarna is hij geboekt. Het antwoord draagt de
@@ -350,13 +360,11 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
     loadMollieInvoicingAllowed(supabaseAdmin, organizationId),
   ]);
 
-  // KOR: een factuur rekent dan geen btw (de database weigert het uitgeven;
-  // enforce_invoice_kor_no_vat). Hier al controleren, vóór er een betaallink,
-  // Mollie-factuur of mail ontstaat: anders ging de mail de deur uit en liep pas
-  // het afronden vast.
-  if (company?.kor_enabled && (Array.isArray(invoice.lines) ? invoice.lines : []).some((line) => Number(line.vat || 0) !== 0)) {
-    throw new WorkflowHttpError('Je gebruikt de kleineondernemersregeling (KOR): een factuur rekent dan geen btw. Zet de btw van elke regel op 0% (code KOR) en verstuur opnieuw.', 422);
-  }
+  // Vóór er een betaallink, Mollie-factuur of mail ontstaat.
+  assertKorAllowsInvoice(company, invoice);
+  // 0% met een reden die past bij het land van de klant; alleen bij uitgeven
+  // (een verstuurde factuur opnieuw mailen verandert er niets meer aan).
+  if (invoice.status === 'draft') await assertZeroVatExplained(organizationId, invoice, client, company);
 
   // E-facturatie staat per klant aan of uit. Aan: de e-factuur (UBL met de PDF
   // erin) is verplicht en gaat naar het e-factuuradres van de klant. Uit: de
@@ -473,6 +481,21 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
     attachmentStorageKey: storedPdf.key ?? undefined,
   });
   if (ublAttachment) await markDeliveryAsEInvoice(prepared.deliveryId, organizationId, userId, ublAttachment);
+  // Het bestand zelf bewaren vóór de mail weggaat, net als de PDF: lukt dat
+  // niet, dan gaat er niets weg. Anders had de klant een e-factuur die wij niet
+  // meer kunnen laten zien.
+  let sentEInvoiceId: string | null = null;
+  if (ublAttachment) {
+    try {
+      sentEInvoiceId = await storeSentEInvoice({
+        organizationId, invoiceId, creditNoteId: null, deliveryId: prepared.deliveryId, docType: 'invoice',
+        documentNumber: invoice.number, recipientEmail, userId, ubl: ublAttachment,
+      });
+    } catch (storeError) {
+      await failInvoiceEmailSend(prepared.deliveryId, organizationId, userId, `E-factuur kon niet worden bewaard: ${describeError(storeError)}`);
+      throw new WorkflowHttpError('De e-factuur kon niet worden bewaard; er is niets verstuurd. Probeer het opnieuw.', 502);
+    }
+  }
 
   const senderIdentity = await resolveSenderIdentity(supabaseAdmin, organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO);
   // Met het logo van de organisatie bovenaan (ingesloten, zie _shared/emailBrand.ts),
@@ -528,6 +551,7 @@ async function sendInvoiceEmail(userId: string, organizationId: string, invoiceI
   }
 
   const finalized = await completeInvoiceEmailSend(prepared.deliveryId, organizationId, userId, providerEmailId);
+  if (sentEInvoiceId) await markSentEInvoiceSent(sentEInvoiceId);
   if (ublAttachment) await recordEInvoiceSent({ organizationId, invoiceId, userId, deliveryId: prepared.deliveryId, recipientEmail, ubl: ublAttachment });
   return {
     delivery: finalized.delivery, version: finalized.version, publicUrl, providerEmailId, recipientEmail, deliveryChannel,
@@ -616,6 +640,114 @@ async function invoiceBookingNotice(organizationId: string, invoice: InvoiceRow)
     };
   }
   return null;
+}
+
+// ------------------------------------------------------------
+// Wat er vóór het uitgeven moet kloppen
+// ------------------------------------------------------------
+// Versturen per mail, via Mollie en uitgeven zonder mail lopen allemaal langs
+// deze controles. Tot 22 november 2026 stonden ze alleen in de verzendroute,
+// en kon een concept via het statusveld of Gerrie toch worden uitgegeven: een
+// ICP-factuur zonder btw-nummer van de klant kwam zo in de ICP-opgaaf met een
+// leeg nummer. Nu geeft alleen deze server een concept uit
+// (enforce_invoice_issue_via_server).
+
+/** Geen negatief totaal, en het btw-tarief past bij de code. Alleen voor een concept. */
+async function assertDraftLinesIssuable(organizationId: string, invoice: InvoiceRow): Promise<void> {
+  const draftTotalCents = calculateTotals(invoice.lines).totalCents;
+  if (draftTotalCents < 0) {
+    throw new WorkflowHttpError(`Factuur ${invoice.number} komt uit op een negatief bedrag (${formatEuro(draftTotalCents / 100)}). Geld terug aan de klant factureer je niet met een negatieve factuur: die kun je daarna niet afletteren. Open de factuur waar dit over gaat en kies "Crediteren" (daar kun je ook een deel van het bedrag crediteren); is die factuur al betaald, kies dan "Terugbetaling".`, 422);
+  }
+  // Het btw-tarief hoort bij de btw-code (de database weigert het uitgeven
+  // ook, enforce_invoice_lines_numeric). Hier al, vóór er een mail ontstaat:
+  // de status gaat pas ná het mailen op verstuurd.
+  await assertLineVatMatchesCode(organizationId, invoice);
+}
+
+// KOR: een factuur rekent dan geen btw (de database weigert het uitgeven;
+// enforce_invoice_kor_no_vat). Hier al controleren, vóór er een betaallink,
+// Mollie-factuur of mail ontstaat: anders ging de mail de deur uit en liep pas
+// het afronden vast.
+function assertKorAllowsInvoice(company: CompanySettingsRow | null, invoice: InvoiceRow): void {
+  if (company?.kor_enabled && (Array.isArray(invoice.lines) ? invoice.lines : []).some((line) => Number(line.vat || 0) !== 0)) {
+    throw new WorkflowHttpError('Je gebruikt de kleineondernemersregeling (KOR): een factuur rekent dan geen btw. Zet de btw van elke regel op 0% (code KOR) en verstuur opnieuw.', 422);
+  }
+}
+
+/**
+ * 0% btw: staat erbij waarom, en past dat bij het land van de klant? Zie
+ * _shared/invoiceZeroVat.ts. Een regel met 0% zonder code ging de deur uit
+ * zonder vermelding en zonder controle op het btw-nummer, in rubriek 1e in
+ * plaats van 3b en buiten de ICP-opgaaf (bevinding 11, 22 november 2026).
+ */
+async function assertZeroVatExplained(organizationId: string, invoice: InvoiceRow, client: ClientRow, company: CompanySettingsRow | null): Promise<void> {
+  // Zelf laden, met een fout als het niet lukt: loadVatCodeInfo geeft dan een
+  // lege lijst, en daarmee zou elke 0%-regel "zonder reden" lijken (of, zonder
+  // codes, niets gecontroleerd worden).
+  const { data, error } = await supabaseAdmin.from('vat_codes').select('code,kind,sales_box').eq('organization_id', organizationId);
+  if (error) throwSupabaseError('btw-codes laden', error);
+  const codes = Object.fromEntries(((data ?? []) as Array<{ code: string; kind: string; sales_box: string | null }>)
+    .map((row) => [String(row.code), { kind: String(row.kind), salesBox: row.sales_box ?? null }]));
+  const refusal = zeroVatRefusal(zeroVatIssues(invoice.lines, codes, client, { korEnabled: Boolean(company?.kor_enabled) }));
+  if (refusal) throw new WorkflowHttpError(refusal, 422);
+}
+
+/**
+ * Uitgeven zonder mail: voor wie de pdf zelf mailt, print of in een portaal
+ * zet. Tot 22 november 2026 ging dat met "Verzonden" in het statusveld; dan
+ * werd er niets gecontroleerd en geen pdf bewaard. Nu dezelfde controles als
+ * versturen, de pdf wordt gemaakt en vastgelegd als de verzonden versie, en
+ * de factuur wordt geboekt en vergrendeld. Het antwoord bevat de pdf, zodat
+ * het scherm hem meteen kan downloaden.
+ */
+async function issueInvoiceWithoutEmail(userId: string, organizationId: string, invoiceId: string) {
+  if (!isUuid(invoiceId)) throw new WorkflowHttpError('Ongeldige factuur.', 400);
+  const invoice = await loadInvoice(organizationId, invoiceId);
+  if (invoice.status !== 'draft') throw new WorkflowHttpError(`Factuur ${invoice.number} is al uitgegeven. Download de verzonden pdf bij de factuur.`, 409);
+  if (!invoice.client_id) throw new WorkflowHttpError('Deze factuur heeft geen klant gekoppeld.', 422);
+  if (!invoiceHasContent(invoice.lines)) {
+    throw new WorkflowHttpError(`Factuur ${invoice.number} heeft nog geen regels. Zet erin wat je factureert voordat je hem uitgeeft.`, 422);
+  }
+  await assertDraftLinesIssuable(organizationId, invoice);
+  const bookingNotice = await invoiceBookingNotice(organizationId, invoice);
+  const [client, project, quote, company] = await Promise.all([
+    loadClient(organizationId, invoice.client_id),
+    invoice.project_id ? loadProject(organizationId, invoice.project_id) : Promise.resolve(null),
+    invoice.quote_id ? loadQuote(organizationId, invoice.quote_id) : Promise.resolve(null),
+    loadCompanySettings(organizationId),
+  ]);
+  assertKorAllowsInvoice(company, invoice);
+  await assertZeroVatExplained(organizationId, invoice, client, company);
+  // Al bij Mollie in de maak of uitgegeven: dan heeft de klant hem (straks) al.
+  const atMollie = activeMollieDelivery(await loadMollieDeliveries(organizationId, invoice.id));
+  if (atMollie) throw new WorkflowHttpError('Deze factuur is al via Mollie uitgegeven, of dat loopt nog. Klik bij de factuur op "Ververs bij Mollie" om de stand op te halen.', 409);
+
+  // Zonder publieke link: er gaat geen mail, dus ook geen link om te openen.
+  // De controle op het btw-nummer bij ICP en verlegd zit in de pdf zelf.
+  const pdf = await createInvoicePdfAttachment({ invoice, client, project, quote, company, publicUrl: '' });
+  validateInvoicePdfAttachment(pdf);
+  const stored = await storeInvoicePdfSnapshot(organizationId, invoiceId, pdf);
+  const { data, error } = await supabaseAdmin.rpc('issue_invoice_without_email', {
+    p_invoice_id: invoiceId,
+    p_organization_id: organizationId,
+    p_actor_user_id: userId,
+    p_pdf_file_name: pdf.fileName,
+    p_pdf_mime_type: pdf.mimeType,
+    p_pdf_size_bytes: pdf.sizeBytes,
+    p_pdf_sha256: pdf.sha256,
+    p_pdf_data_base64: stored.shouldStoreBase64InDatabase ? pdf.base64 : null,
+    p_pdf_storage_provider: stored.provider,
+    p_pdf_storage_key: stored.key,
+  });
+  if (error) throwRpcError('issue_invoice_without_email', error);
+  const result = (data ?? {}) as { invoice?: Record<string, unknown>; version?: Record<string, unknown> };
+  return {
+    invoice: result.invoice ?? null,
+    version: result.version ?? null,
+    // null: de factuur is gewoon op zijn factuurdatum geboekt.
+    bookingNotice,
+    pdf: { fileName: pdf.fileName, mimeType: pdf.mimeType, base64: pdf.base64, sizeBytes: pdf.sizeBytes, sha256: pdf.sha256 },
+  };
 }
 
 async function previewInvoiceSend(organizationId: string, invoiceId: string): Promise<{ bookingNotice: BookingNotice | null }> {
@@ -1031,7 +1163,7 @@ async function loadDunningNotice(organizationId: string, noticeId: string): Prom
   return data as DunningNoticeRow;
 }
 
-function buildRateSnapshot(claim: DunningClaim, interestKind: InterestKind): Record<string, unknown> {
+function buildRateSnapshot(claim: DunningClaim, interestKind: InterestKind, rateWarning: string | null = null): Record<string, unknown> {
   const currentRateBasisPoints = claim.interest.segments.length ? claim.interest.segments[claim.interest.segments.length - 1].rateBasisPoints : 0;
   return {
     interestKind,
@@ -1039,13 +1171,17 @@ function buildRateSnapshot(claim: DunningClaim, interestKind: InterestKind): Rec
     dailyInterestCents: claim.interest.dailyRateCentsAtEnd,
     currentRateBasisPoints,
     segments: claim.interest.segments,
+    // Loopt de tarieftabel achter op het halfjaar van de rekendatum, dan staat
+    // dat in het voorstel (het scherm toont het). Eerst rekende een aanmaning
+    // na 1 januari stil door met het tarief van het vorige halfjaar.
+    ...(rateWarning ? { rateWarning } : {}),
   };
 }
 
 // Bereken de vordering (hoofdsom + rente + WIK-kosten) op een peildatum. De hoofdsom
 // is het factuurtotaal incl. btw; de rentesoort volgt het klanttype (consument →
 // wettelijke rente, zakelijk → handelsrente).
-async function computeDunningClaim(organizationId: string, invoice: InvoiceRow, calcDate: string): Promise<{ clientKind: ClientKind; interestKind: InterestKind; claim: DunningClaim }> {
+async function computeDunningClaim(organizationId: string, invoice: InvoiceRow, calcDate: string): Promise<{ clientKind: ClientKind; interestKind: InterestKind; claim: DunningClaim; rateWarning: string | null }> {
   if (!invoice.client_id) throw new WorkflowHttpError('Deze factuur heeft geen klant gekoppeld.', 422);
   if (!invoice.due_date) throw new WorkflowHttpError('Deze factuur heeft geen vervaldatum; een aanmaning is niet mogelijk.', 422);
   const [clientKind, ratePeriods, settings] = await Promise.all([
@@ -1069,7 +1205,8 @@ async function computeDunningClaim(organizationId: string, invoice: InvoiceRow, 
     ratePeriods,
     collectionCostsVatRateBasisPoints: costsVatBp,
   });
-  return { clientKind, interestKind, claim };
+  const stale = claim.interestCents > 0 ? staleRate(interestKind, ratePeriods, calcDate) : null;
+  return { clientKind, interestKind, claim, rateWarning: stale ? staleRateMessage(stale) : null };
 }
 
 // Cron: stelt aanmaningen VOOR (status 'proposed'). Verstuurt nooit zelf.
@@ -1096,9 +1233,9 @@ async function runDunningBatch(): Promise<{ candidates: number; proposed: number
     try {
       const invoice = await loadInvoice(candidate.organization_id, candidate.invoice_id);
       if (['paid', 'cancelled', 'void', 'written_off', 'refunded'].includes(invoice.status)) continue;
-      const { clientKind, interestKind, claim } = await computeDunningClaim(candidate.organization_id, invoice, calcDate);
+      const { clientKind, interestKind, claim, rateWarning } = await computeDunningClaim(candidate.organization_id, invoice, calcDate);
       if (claim.principalCents <= 0) continue;
-      await beginDunningNoticeRpc({ organizationId: candidate.organization_id, invoiceId: candidate.invoice_id, actorUserId: null, clientKind, interestKind, claim });
+      await beginDunningNoticeRpc({ organizationId: candidate.organization_id, invoiceId: candidate.invoice_id, actorUserId: null, clientKind, interestKind, claim, rateWarning });
       proposed += 1;
     } catch (error) {
       failed += 1;
@@ -1119,9 +1256,9 @@ async function proposeDunningNotice(userId: string, organizationId: string, invo
   const { data: existing } = await supabaseAdmin.from('invoice_dunning_notices').select('id,status').eq('organization_id', organizationId).eq('invoice_id', invoiceId).neq('status', 'cancelled').maybeSingle();
   if (existing) throw new WorkflowHttpError('Er bestaat al een aanmaning voor deze factuur.', 409);
   const calcDate = todayIsoDate();
-  const { clientKind, interestKind, claim } = await computeDunningClaim(organizationId, invoice, calcDate);
+  const { clientKind, interestKind, claim, rateWarning } = await computeDunningClaim(organizationId, invoice, calcDate);
   if (claim.principalCents <= 0) throw new WorkflowHttpError('Deze factuur heeft geen openstaand bedrag om aan te manen.', 422);
-  return await beginDunningNoticeRpc({ organizationId, invoiceId, actorUserId: userId, clientKind, interestKind, claim });
+  return await beginDunningNoticeRpc({ organizationId, invoiceId, actorUserId: userId, clientKind, interestKind, claim, rateWarning });
 }
 
 // Aanmaning bevestigen én versturen: rente wordt op de VERZENDDATUM herberekend
@@ -1153,7 +1290,7 @@ async function sendDunningNotice(userId: string, organizationId: string, body: R
     loadEmailTemplateContent(organizationId, 'invoice.dunning.wik14'),
     loadDunningSettings(organizationId),
   ]);
-  const { clientKind, interestKind, claim } = computed;
+  const { clientKind, interestKind, claim, rateWarning } = computed;
   if (claim.principalCents <= 0) throw new WorkflowHttpError('Deze factuur heeft geen openstaand bedrag.', 422);
 
   const recipientEmail = String(body.recipientEmail || client.email || '').trim().toLowerCase();
@@ -1213,7 +1350,7 @@ async function sendDunningNotice(userId: string, organizationId: string, body: R
   await takeEmailQuota(supabaseAdmin, organizationId, 1, (message, status) => new WorkflowHttpError(message, status));
   let resendResponse: Response;
   const prepared = await beginDunningSend({
-    noticeId, organizationId, userId, claim, deadlineDate, interestKind, clientKind,
+    noticeId, organizationId, userId, claim, deadlineDate, interestKind, clientKind, rateWarning,
     tokenHash, expiresAt, recipientEmail, recipientName, subject, publicUrl,
     attachmentFileName: attachment.fileName, attachmentMimeType: attachment.mimeType, attachmentSizeBytes: attachment.sizeBytes, attachmentSha256: attachment.sha256,
   });
@@ -1279,7 +1416,7 @@ async function findDueDunningCandidates(limit: number): Promise<Array<{ organiza
   }));
 }
 
-async function beginDunningNoticeRpc(input: { organizationId: string; invoiceId: string; actorUserId: string | null; clientKind: ClientKind; interestKind: InterestKind; claim: DunningClaim }): Promise<{ noticeId: string }> {
+async function beginDunningNoticeRpc(input: { organizationId: string; invoiceId: string; actorUserId: string | null; clientKind: ClientKind; interestKind: InterestKind; claim: DunningClaim; rateWarning?: string | null }): Promise<{ noticeId: string }> {
   const { claim } = input;
   const { data, error } = await supabaseAdmin.rpc('begin_dunning_notice', {
     p_organization_id: input.organizationId,
@@ -1296,7 +1433,7 @@ async function beginDunningNoticeRpc(input: { organizationId: string; invoiceId:
     p_total_claim_cents: claim.totalClaimCents,
     p_calculation_date: claim.calculationDate,
     p_due_date: claim.dueDate,
-    p_rate_snapshot: buildRateSnapshot(claim, input.interestKind),
+    p_rate_snapshot: buildRateSnapshot(claim, input.interestKind, input.rateWarning ?? null),
   });
   if (error) throwRpcError('begin_dunning_notice', error);
   const payload = data as { noticeId?: string } | null;
@@ -1305,7 +1442,7 @@ async function beginDunningNoticeRpc(input: { organizationId: string; invoiceId:
 }
 
 async function beginDunningSend(input: {
-  noticeId: string; organizationId: string; userId: string | null; claim: DunningClaim; deadlineDate: string; interestKind: InterestKind; clientKind: ClientKind;
+  noticeId: string; organizationId: string; userId: string | null; claim: DunningClaim; deadlineDate: string; interestKind: InterestKind; clientKind: ClientKind; rateWarning?: string | null;
   tokenHash: string; expiresAt: string; recipientEmail: string; recipientName: string; subject: string; publicUrl: string;
   attachmentFileName: string; attachmentMimeType: string; attachmentSizeBytes: number; attachmentSha256: string;
 }): Promise<{ deliveryId: string }> {
@@ -1328,7 +1465,7 @@ async function beginDunningSend(input: {
     p_total_claim_cents: claim.totalClaimCents,
     p_calculation_date: claim.calculationDate,
     p_deadline_date: input.deadlineDate,
-    p_rate_snapshot: buildRateSnapshot(claim, input.interestKind),
+    p_rate_snapshot: buildRateSnapshot(claim, input.interestKind, input.rateWarning ?? null),
     p_token_hash: input.tokenHash,
     p_token_expires_at: input.expiresAt,
     p_recipient_email: input.recipientEmail,
@@ -2331,6 +2468,17 @@ async function deliverCreditNoteEmail(input: { organizationId: string; userId: s
       client: input.client, company: input.company, endpointEmail: recipientEmail, pdf: { fileName, base64 },
     })
     : null;
+  // De e-creditnota bewaren zoals hij weggaat (zie storeSentEInvoice). Lukt dat
+  // niet, dan gaat de mail niet weg; de knop 'Mail' kan het opnieuw proberen.
+  const sentEInvoiceId = creditUbl
+    ? await storeSentEInvoice({
+      organizationId: input.organizationId, invoiceId: input.invoice.id, creditNoteId: String(input.creditNote.id), deliveryId: null,
+      docType: 'credit_note', documentNumber: creditNoteNumber, recipientEmail, userId: input.userId, ubl: creditUbl,
+    }).catch((storeError) => {
+      console.error('E-creditnota bewaren mislukt', describeError(storeError));
+      throw new WorkflowHttpError('De e-creditnota kon niet worden bewaard; er is niets verstuurd. Probeer het opnieuw.', 502);
+    })
+    : null;
   const recipientName = input.recipientName?.trim() || input.client.contact_name || input.client.name || null;
   const content = await loadEmailTemplateContent(input.organizationId, 'creditNote.sent');
 
@@ -2389,6 +2537,7 @@ async function deliverCreditNoteEmail(input: { organizationId: string; userId: s
     throw new WorkflowHttpError(`Resend kon de creditfactuur niet versturen: ${message}`, 502);
   }
   const providerEmailId = String(payload.id || payload.email_id || '').trim();
+  if (sentEInvoiceId) await markSentEInvoiceSent(sentEInvoiceId);
 
   // Event + audit (best-effort: een log-fout mag de geslaagde verzending niet ongedaan maken).
   // Een Supabase-query heeft geen .catch(): een fout komt terug als { error }.
@@ -3243,6 +3392,140 @@ async function markDeliveryAsEInvoice(deliveryId: string, organizationId: string
     await failInvoiceEmailSend(deliveryId, organizationId, userId, `E-factuur kon niet worden vastgelegd: ${error.message}`);
     throw new WorkflowHttpError('De e-factuur kon niet worden vastgelegd; er is niets verstuurd. Probeer het opnieuw.', 500);
   }
+}
+
+/**
+ * Bewaart de e-factuur of e-creditnota precies zoals hij de deur uitgaat: het
+ * bestand in R2 (map e-invoices, die de media-worker niet wist of overschrijft)
+ * of, zonder R2, in de rij zelf; de rij in sent_e_invoices. Zelfde tweedeling
+ * als de PDF-snapshot. De rij ligt daarna vast (trigger); alleen het moment van
+ * versturen komt er nog bij (markSentEInvoiceSent).
+ */
+async function storeSentEInvoice(input: {
+  organizationId: string; invoiceId: string; creditNoteId: string | null; deliveryId: string | null;
+  docType: 'invoice' | 'credit_note'; documentNumber: string; recipientEmail: string; userId: string | null; ubl: UblAttachment;
+}): Promise<string> {
+  const storageConfigured = Boolean(INVOICE_PDF_STORAGE_WORKER_URL && INVOICE_PDF_STORAGE_SECRET);
+  let storageKey: string | null = null;
+  if (storageConfigured) {
+    const safeName = `${sanitizeFileName(input.ubl.fileName.replace(/\.xml$/i, ''))}.xml`;
+    storageKey = `${input.organizationId}/e-invoices/${input.invoiceId}/${crypto.randomUUID()}-${safeName}`;
+    const response = await fetch(`${INVOICE_PDF_STORAGE_WORKER_URL}/internal/invoice-snapshot`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${INVOICE_PDF_STORAGE_SECRET}`,
+        'Content-Type': input.ubl.mimeType,
+        'X-Storage-Key': storageKey,
+        'X-Organization-Id': input.organizationId,
+        'X-SHA256': input.ubl.sha256,
+        'X-Size-Bytes': String(input.ubl.sizeBytes),
+      },
+      body: base64ToBytes(input.ubl.base64),
+    });
+    if (!response.ok) {
+      const message = await response.text().catch(() => response.statusText);
+      throw new Error(`opslag gaf ${response.status}: ${message || response.statusText}`);
+    }
+  }
+  const { data, error } = await supabaseAdmin.from('sent_e_invoices').insert({
+    organization_id: input.organizationId,
+    invoice_id: input.invoiceId,
+    credit_note_id: input.creditNoteId,
+    delivery_id: input.deliveryId,
+    doc_type: input.docType,
+    document_number: input.documentNumber,
+    recipient_email: input.recipientEmail,
+    file_name: input.ubl.fileName,
+    mime_type: input.ubl.mimeType,
+    size_bytes: input.ubl.sizeBytes,
+    sha256: input.ubl.sha256,
+    storage_provider: storageKey ? 'r2' : 'database',
+    storage_key: storageKey,
+    data_base64: storageKey ? null : input.ubl.base64,
+    created_by: input.userId,
+  }).select('id').single();
+  if (error || !data) throw new Error(error?.message || 'geen rij terug');
+  return String((data as { id: string }).id);
+}
+
+/** De mail is weg: zet het moment erbij. Best-effort, want de mail is al de deur uit. */
+async function markSentEInvoiceSent(id: string): Promise<void> {
+  const { error } = await supabaseAdmin.from('sent_e_invoices').update({ sent_at: new Date().toISOString() }).eq('id', id);
+  if (error) console.warn('sent_e_invoices: verzendmoment vastleggen mislukte', error.message);
+}
+
+/**
+ * De e-factuur (of e-creditnota) zoals hij het laatst verstuurd is, byte voor
+ * byte. Null als er geen bewaard is. Een rij zonder verzendmoment telt alleen
+ * als zijn verzending toch geslaagd is (het vastleggen van het moment is
+ * best-effort); een mislukte verzending is nooit bij de klant geweest.
+ */
+async function loadSentEInvoice(organizationId: string, ref: { invoiceId: string; creditNoteId: string | null }): Promise<(UblAttachment & { stored: true; sentAt: string | null; recipientEmail: string }) | null> {
+  let query = supabaseAdmin
+    .from('sent_e_invoices')
+    .select('id,file_name,mime_type,size_bytes,sha256,storage_provider,storage_key,data_base64,sent_at,created_at,recipient_email,delivery:invoice_email_deliveries(status)')
+    .eq('organization_id', organizationId)
+    .eq('invoice_id', ref.invoiceId)
+    .order('created_at', { ascending: false })
+    .limit(20);
+  query = ref.creditNoteId ? query.eq('credit_note_id', ref.creditNoteId) : query.eq('doc_type', 'invoice');
+  const { data, error } = await query;
+  if (error) throw new WorkflowHttpError(`De bewaarde e-factuur kon niet worden opgezocht: ${error.message}`, 500);
+  type Row = {
+    file_name: string; mime_type: string; size_bytes: number; sha256: string; storage_provider: string; storage_key: string | null;
+    data_base64: string | null; sent_at: string | null; created_at: string; recipient_email: string;
+    delivery: { status?: string | null } | Array<{ status?: string | null }> | null;
+  };
+  const row = ((data ?? []) as unknown as Row[]).find((candidate) => {
+    if (candidate.sent_at) return true;
+    const delivery = Array.isArray(candidate.delivery) ? candidate.delivery[0] : candidate.delivery;
+    return Boolean(delivery?.status) && !['queued', 'failed'].includes(String(delivery?.status));
+  });
+  if (!row) return null;
+
+  let base64 = String(row.data_base64 || '').trim();
+  if (!base64 && row.storage_provider === 'r2' && row.storage_key) {
+    if (!INVOICE_PDF_STORAGE_WORKER_URL || !INVOICE_PDF_STORAGE_SECRET) {
+      throw new WorkflowHttpError('De e-factuur staat in private storage, maar de storage-koppeling ontbreekt in de Edge Function secrets.', 500);
+    }
+    const response = await fetch(
+      `${INVOICE_PDF_STORAGE_WORKER_URL}/internal/invoice-snapshot/${encodeURIComponent(row.storage_key)}`,
+      { headers: { Authorization: `Bearer ${INVOICE_PDF_STORAGE_SECRET}`, 'X-Organization-Id': organizationId } },
+    );
+    if (!response.ok) throw new WorkflowHttpError('De bewaarde e-factuur kon niet uit private storage worden opgehaald. Probeer het later opnieuw.', 502);
+    base64 = bytesToBase64(new Uint8Array(await response.arrayBuffer()));
+  }
+  if (!base64) throw new WorkflowHttpError('De bewaarde e-factuur is niet beschikbaar.', 404);
+  // Liever een fout dan een ander bestand: dit is het bewijs van wat er verstuurd is.
+  if ((await sha256HexBytes(base64ToBytes(base64))) !== row.sha256) {
+    throw new WorkflowHttpError('De bewaarde e-factuur komt niet overeen met wat er is vastgelegd bij het versturen. Neem contact op met support.', 500);
+  }
+  return {
+    fileName: row.file_name,
+    mimeType: 'application/xml',
+    base64,
+    sizeBytes: row.size_bytes,
+    sha256: row.sha256,
+    warnings: [],
+    pdfEmbedded: true,
+    stored: true,
+    sentAt: row.sent_at ?? row.created_at,
+    recipientEmail: row.recipient_email,
+  };
+}
+
+/** Is deze factuur ooit als e-factuur per mail verstuurd, vóór we het bestand bewaarden? */
+async function hadUnstoredEInvoice(organizationId: string, invoiceId: string): Promise<boolean> {
+  const { data } = await supabaseAdmin
+    .from('invoice_email_deliveries')
+    .select('id')
+    .eq('organization_id', organizationId)
+    .eq('invoice_id', invoiceId)
+    .eq('delivery_channel', 'e_invoice_email')
+    .not('e_invoice_sha256', 'is', null)
+    .not('status', 'in', '(queued,failed)')
+    .limit(1);
+  return Array.isArray(data) && data.length > 0;
 }
 
 /** Tijdlijn: de e-factuur is weg. Best-effort — de verzending zelf is al vastgelegd. */
@@ -4683,6 +4966,7 @@ function formatEuro(value: number): string { return new Intl.NumberFormat('nl-NL
 function sanitizeFileName(value: string): string { return value.replace(/[^a-z0-9_-]+/gi, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'factuur'; }
 function sanitizeTagValue(value: unknown): string { return String(value ?? '').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 256) || 'invoice'; }
 function sanitizeIdempotencyKey(value: string): string { return value.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 256) || crypto.randomUUID(); }
+function base64ToBytes(base64: string): Uint8Array<ArrayBuffer> { const binary = atob(base64); const bytes = new Uint8Array(binary.length); for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i); return bytes; }
 function bytesToBase64(bytes: Uint8Array): string { let binary = ''; const chunkSize = 0x8000; for (let i = 0; i < bytes.length; i += chunkSize) binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize)); return btoa(binary); }
 async function sha256HexBytes(bytes: Uint8Array): Promise<string> { const digest = await crypto.subtle.digest('SHA-256', bytes); return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join(''); }
 async function sha256Hex(value: string): Promise<string> { const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)); return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join(''); }

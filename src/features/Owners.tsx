@@ -1,18 +1,23 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, Pencil, Plus, Save, Trash2, X } from 'lucide-react';
+import { AlertTriangle, Download, Pencil, Plus, Save, Trash2, X } from 'lucide-react';
 import type { AppData, FiscalYearListRow, OrganizationMember, OwnersEquityOverview, PartnershipPartner, PartnershipPartnerHours, UUID } from '../types';
 import { Button, Input, Select, Skeleton } from '../components/Ui';
 import { PageIcon } from '../components/PageIcon';
 import { euro, minutesToHours } from '../lib/format';
 import { formatISODate } from '../lib/dates';
+import { missingFiscalYear } from '../lib/jaarwissel';
+import { downloadCsv } from '../lib/csv';
+import {
+  EQUITY_CSV_HEADER, INCOME_TAX_SUMMARY_CSV_HEADER, equityCsvRows, incomeTaxSummaryCsvRows, type IncomeTaxSummaryLine,
+} from '../lib/financeCsv';
 import { HOUR_CRITERION_MINUTES, projectHourCriterion } from '../lib/hourCriterion';
 import { memberName } from '../lib/members';
 import { useBackStep } from '../lib/useBackStep';
 import {
-  IB_CORRECTION_LABELS, IB_RULES, buildIncomeTaxOverview, formatRate, incomeTaxRulesFor, type IncomeTaxInputs,
+  IB_CORRECTION_LABELS, buildIncomeTaxOverview, formatRate, incomeTaxRulesFor, type IncomeTaxInputs,
 } from '../lib/inkomstenbelasting';
 import {
-  deletePartnershipPartner, listFiscalYears, listPartnershipPartners, loadIncomeTaxInputs, loadOwnersEquityOverview, loadPartnershipPartnerHours,
+  deletePartnershipPartner, listFiscalYears, listPartnershipPartners, loadIncomeTaxInputs, loadOwnersEquityOverview, loadPartnershipPartnerHours, openFiscalYear,
   savePartnershipPartner, setPartnershipPartnerMember, setUpBookkeeping,
 } from '../lib/repository';
 import { YearSplitPanel, changedAfterYearEnd, legalFormWord, parsePercent, pct, splitSourceLabel } from './PartnerSplit';
@@ -106,6 +111,21 @@ export function OwnersPage({ data, organizationId, canWrite, onChanged, canReadH
   const selectedYear = years.find(y => y.id === fiscalYearId) ?? null;
   const hoursYear = selectedYear ? Number(selectedYear.period_start.slice(0, 4)) : Number(today.slice(0, 4));
   const showHours = isPartnershipForm && canReadHours;
+  // Na de jaarwissel: het nieuwe boekjaar opent vanzelf bij de eerste boeking.
+  // Tot dan stond hier alleen het oude jaar, zonder uitleg.
+  const yearToOpen = missingFiscalYear({ today, calendarYearOnly: isIb, years });
+  const openMissingYear = async () => {
+    if (yearToOpen === null) return;
+    setBusy(true); setError(null); setMessage(null);
+    try {
+      const opened = await openFiscalYear(organizationId, { periodStart: `${yearToOpen}-01-01`, periodEnd: `${yearToOpen}-12-31` });
+      await loadBase();
+      setFiscalYearId(opened.id);
+      setMessage(`Boekjaar ${yearToOpen} is geopend.`);
+      onChanged();
+    } catch (e) { setError(e instanceof Error ? e.message : 'Boekjaar openen mislukt'); }
+    finally { setBusy(false); }
+  };
   const anyLinked = partners.some(p => p.user_id);
   // Welke vennoot aan welk teamlid hangt. Het effect hieronder hing alleen aan
   // "is er iemand gekoppeld": wie een tweede vennoot koppelde, zag bij hem "—"
@@ -281,6 +301,12 @@ export function OwnersPage({ data, organizationId, canWrite, onChanged, canReadH
 
       {error && <div className="error">{error}</div>}
       {message && <p className="bk-note">{message}</p>}
+      {yearToOpen !== null && (
+        <p className="bk-note">
+          Er is nog geen boekjaar {yearToOpen}. Het komt er vanzelf bij je eerste boeking in {yearToOpen}.
+          {canWrite && <>{' '}<button type="button" className="bk-link-button" disabled={busy} onClick={() => void openMissingYear()}>Boekjaar {yearToOpen} nu openen</button></>}
+        </p>
+      )}
 
       {/* ── Vennoten ── */}
       {isPartnershipForm && (
@@ -433,6 +459,10 @@ export function OwnersPage({ data, organizationId, canWrite, onChanged, canReadH
             <span className={`status-pill ${overview.fiscalYear.status === 'closed' ? 'bk-je-posted' : 'bk-status-draft'}`}>
               {overview.fiscalYear.status === 'closed' ? 'Afgesloten' : 'Voorlopig'}
             </span>
+            {/* Voor de boekhouder: hij nam de kapitaalvergelijking over van het scherm. */}
+            <Button onClick={() => downloadCsv(`kapitaalvergelijking-${overview.fiscalYear.label.replace(/[^0-9A-Za-z-]+/g, '-')}.csv`, EQUITY_CSV_HEADER, equityCsvRows(overview))}>
+              <Download size={14} /> CSV
+            </Button>
           </div>
 
           {/* De verdeling van dit boekjaar: vastgelegd, of die van de vennoten
@@ -657,7 +687,9 @@ function IncomeTaxSection({ data, organizationId, overview, onOpenIncomeTax }: {
   }
   if (!loaded) return <div className="bk-report-loading"><Skeleton lines={4} /></div>;
   const person = ib?.persons[0] ?? null;
-  const rules = ib ? IB_RULES[ib.rulesYear] ?? null : null;
+  // De regels waarmee de raming rekende (voor een jaar na de laatste tabel
+  // met de zelfstandigenaftrek van dat jaar), niet de kale tabel van rulesYear.
+  const rules = ib ? incomeTaxRulesFor(ib.year)?.rules ?? null : null;
   if (!ib || !person || !rules) {
     return (
       <div className="bk-report">
@@ -680,6 +712,19 @@ function IncomeTaxSection({ data, organizationId, overview, onOpenIncomeTax }: {
     : !meets ? '(urencriterium niet gehaald)'
     : profile.aowStatus === 'heel_jaar' ? '(de helft, AOW-leeftijd)'
     : e.zelfstandigenaftrekUnusedCents > 0 ? '(niet hoger dan de winst)' : '';
+  // Dezelfde regels als de tabel hieronder, om te bewaren of door te sturen.
+  const csvLines: IncomeTaxSummaryLine[] = [
+    { label: 'Winst volgens je boekhouding', cents: e.profitShareCents },
+    ...person.corrections.map(c => ({ label: c.label, cents: Math.abs(c.amountCents), sign: (c.amountCents < 0 ? '−' : '+') as IncomeTaxSummaryLine['sign'] })),
+    ...(e.kiaCents > 0 ? [{ label: 'Investeringsaftrek (KIA)', cents: e.kiaCents, sign: '−' as const }] : []),
+    { label: 'Winst uit onderneming', cents: e.profitCents, sign: '=' },
+    { label: `Zelfstandigenaftrek ${zaHint}`.trim(), cents: e.zelfstandigenaftrekCents, sign: '−' },
+    ...(profile.starter || e.startersaftrekCents > 0 ? [{ label: 'Startersaftrek', cents: e.startersaftrekCents, sign: '−' as const }] : []),
+    ...(e.otherEntrepreneurDeductionCents > 0 ? [{ label: 'Overige ondernemersaftrek', cents: e.otherEntrepreneurDeductionCents, sign: '−' as const }] : []),
+    { label: `Mkb-winstvrijstelling (${formatRate(rules.mkbExemptionRate)})`, cents: Math.abs(e.mkbExemptionCents), sign: e.mkbExemptionCents < 0 ? '+' : '−' },
+    { label: 'Belastbare winst uit onderneming', cents: e.taxableProfitCents, sign: '=' },
+  ];
+  const exportCsv = () => downloadCsv(`aangifte-ib-${year}.csv`, INCOME_TAX_SUMMARY_CSV_HEADER, incomeTaxSummaryCsvRows(csvLines));
 
   return (
     <div className="bk-report">
@@ -689,6 +734,7 @@ function IncomeTaxSection({ data, organizationId, overview, onOpenIncomeTax }: {
           <div><span>Urencriterium {year}</span>{/* De uren alleen als het urencriterium ze volgt: "200 / 1.225 uur" in het groen naast een zelf gekozen ja las als een fout. */}
             <strong className={meets ? 'bk-pos' : ''}>{person.hoursFromTimeTracking && hours !== null ? `${hours} / 1.225 uur` : meets === null ? '—' : meets ? 'Ja, zelf gekozen' : 'Nee, zelf gekozen'}</strong></div>
         </div>
+        <Button onClick={exportCsv}><Download size={14} /> CSV</Button>
         {where}
       </div>
 

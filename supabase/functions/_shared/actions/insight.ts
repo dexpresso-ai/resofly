@@ -608,7 +608,7 @@ export const INSIGHT_ACTIONS: ActionDef[] = [
       'Geeft per factuur en per inkoopfactuur wat er op de peildatum nog openstaat: geboekt − betaald − gecrediteerd, gerekend uit het GROOTBOEK (rekening 1300 debiteuren en 1600 crediteuren). ' +
       'Dit is de harde openstaande-postenlijst: alleen wat werkelijk geboekt is telt mee, dus hij kan afwijken van de factuurstatussen. ' +
       '`gl_balance_cents` is het grootboeksaldo en `unmatched_cents` de beweging die niet aan een factuur is toe te rekenen (beginbalans, vrije boekingen) — is dat niet nul, dan sluit de lijst niet aan op het grootboek en is dat het eerste om uit te zoeken.',
-    keywords: ['openstaand', 'openstaande posten', 'debiteuren', 'crediteuren', 'ouderdom', 'nog te ontvangen', 'nog te betalen', 'saldo', 'aansluiting', '1300', '1600'],
+    keywords: ['openstaand', 'openstaande posten', 'openstaande facturen', 'debiteuren', 'crediteuren', 'ouderdom', 'nog te ontvangen', 'nog te betalen', 'saldo', 'aansluiting', '1300', '1600'],
     input: {
       as_of: { type: 'string', description: 'Peildatum JJJJ-MM-DD. Standaard vandaag.' },
       side: { type: 'string', enum: ['receivables', 'payables', 'both'], description: 'receivables = debiteuren, payables = crediteuren. Standaard both.' },
@@ -630,17 +630,24 @@ export const INSIGHT_ACTIONS: ActionDef[] = [
           const due = typeof r.due_date === 'string' ? r.due_date : null;
           return due !== null && due < asOf;
         });
+        // Bij "alleen te laat" is het totaal dat van de gefilterde posten. Eerder
+        // kwam het totaal van álle posten mee, en las Gerrie "debiteuren
+        // € 3.971,10 (1)" voor terwijl er € 810 te laat was.
+        const allOpen = Number(s.open_total_cents ?? 0);
+        const shownOpen = overdueOnly ? rows.reduce((sum, r) => sum + Number(r.open_cents ?? 0), 0) : allOpen;
         return {
           rows: rows.slice(0, limit),
           row_count: rows.length,
           truncated: rows.length > limit,
-          open_total_cents: Number(s.open_total_cents ?? 0),
+          open_total_cents: shownOpen,
+          all_open_total_cents: allOpen,
           gl_balance_cents: Number(s.gl_balance_cents ?? 0),
           unmatched_cents: Number(s.unmatched_cents ?? 0),
         };
       };
       const receivables = side === 'payables' ? null : shape(report?.receivables);
       const payables = side === 'receivables' ? null : shape(report?.payables);
+      const lateWord = overdueOnly ? ' te laat' : '';
 
       return {
         as_of: asOf,
@@ -648,8 +655,8 @@ export const INSIGHT_ACTIONS: ActionDef[] = [
         receivables,
         payables,
         summary: joinShort([
-          receivables ? `debiteuren ${euroCents(receivables.open_total_cents)} (${receivables.row_count})` : null,
-          payables ? `crediteuren ${euroCents(payables.open_total_cents)} (${payables.row_count})` : null,
+          receivables ? `debiteuren${lateWord} ${euroCents(receivables.open_total_cents)} (${receivables.row_count})` : null,
+          payables ? `crediteuren${lateWord} ${euroCents(payables.open_total_cents)} (${payables.row_count})` : null,
           receivables && receivables.unmatched_cents !== 0 ? `niet-gekoppeld op 1300: ${euroCents(receivables.unmatched_cents)}` : null,
           payables && payables.unmatched_cents !== 0 ? `niet-gekoppeld op 1600: ${euroCents(payables.unmatched_cents)}` : null,
         ], 220),
