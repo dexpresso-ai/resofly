@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { AlertTriangle, Check, FileText, Loader2, Mail, Mic, Pause, Pencil, Play, Send, Square, Trash2, Users, X } from 'lucide-react';
+import { AlertTriangle, Check, FilePlus2, FileText, Loader2, Mail, Mic, Pause, Pencil, Play, Send, Square, Trash2, Users, X } from 'lucide-react';
 import { Button, Input, Textarea } from './Ui';
+import { NotulenToevoegen } from './NotulenToevoegen';
+import { notulenAsRichText, type ContentTarget } from '../lib/notulen';
 import { getAccessToken, getWorkerBase } from '../lib/r2-api';
+import { makeSeekable } from '../lib/audioSeek';
 import {
   canStartTranscription, createRecording, deleteRecording as apiDeleteRecording, getRecording,
   isTerminalStatus, listRecordingsForCall, listRecordingsForEvent, loadTranscriptionBudget, sendSummaryToAttendees,
@@ -33,6 +36,13 @@ interface Props {
   event: MeetingRecorderEvent;
   /** Wordt getoond als "Opslaan als notitie" wanneer aanwezig (alleen bij gedeelde items). */
   onSaveAsNote?: (text: string) => Promise<void>;
+  /**
+   * Notities en documenten waaraan de notulen kunnen worden toegevoegd, en wat
+   * er dan gebeurt. Alleen meegeven als de gebruiker Inhoud mag wijzigen: zonder
+   * deze twee ontbreekt de knop. Zie useContentAppend.
+   */
+  contentTargets?: ContentTarget[];
+  onAppendToContent?: (target: ContentTarget, html: string) => Promise<void>;
 }
 
 type Phase = 'idle' | 'consent' | 'recording' | 'paused' | 'processing';
@@ -50,7 +60,7 @@ function fmtClock(seconds: number): string {
   return `${m}:${s}`;
 }
 
-export function MeetingRecorder({ organizationId, canWrite, event, onSaveAsNote }: Props) {
+export function MeetingRecorder({ organizationId, canWrite, event, onSaveAsNote, contentTargets, onAppendToContent }: Props) {
   const [phase, setPhase] = useState<Phase>('idle');
   const [elapsed, setElapsed] = useState(0);
   const [recordings, setRecordings] = useState<MeetingRecording[]>([]);
@@ -309,7 +319,8 @@ export function MeetingRecorder({ organizationId, canWrite, event, onSaveAsNote 
             organizationId={organizationId} attendees={event.attendees}
             onPatch={(patch) => setRecordings((prev) => prev.map((p) => (p.id === rec.id ? { ...p, ...patch } : p)))}
             onDelete={() => void onDelete(rec)} onRetrySummary={() => void onRetrySummary(rec)}
-            onStartTranscription={() => void onStartTranscription(rec)} onSaveAsNote={onSaveAsNote} />
+            onStartTranscription={() => void onStartTranscription(rec)} onSaveAsNote={onSaveAsNote}
+            contentTargets={contentTargets} onAppendToContent={onAppendToContent} />
         ))}
       </div>
     </section>
@@ -371,14 +382,17 @@ function AiWorkingIcon({ mode }: { mode: 'listening' | 'thinking' }) {
   );
 }
 
-function RecordingCard({ rec, busy, canWrite, organizationId, attendees, onPatch, onDelete, onRetrySummary, onStartTranscription, onSaveAsNote }: {
+function RecordingCard({ rec, busy, canWrite, organizationId, attendees, onPatch, onDelete, onRetrySummary, onStartTranscription, onSaveAsNote, contentTargets, onAppendToContent }: {
   rec: MeetingRecording; busy: boolean; canWrite: boolean;
   organizationId: UUID; attendees: { email: string; name: string }[];
   onPatch: (patch: Partial<MeetingRecording>) => void;
   onDelete: () => void; onRetrySummary: () => void; onStartTranscription: () => void;
   onSaveAsNote?: (text: string) => Promise<void>;
+  contentTargets?: ContentTarget[];
+  onAppendToContent?: (target: ContentTarget, html: string) => Promise<void>;
 }) {
   const [showTranscript, setShowTranscript] = useState(false);
+  const [appending, setAppending] = useState(false);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [savedNote, setSavedNote] = useState(false);
   // Transcriptie bewerken.
@@ -463,12 +477,30 @@ function RecordingCard({ rec, busy, canWrite, organizationId, attendees, onPatch
                 <FileText size={14} /> {savedNote ? 'Opgeslagen als notitie' : 'Opslaan als notitie'}
               </Button>
             )}
+            {onAppendToContent && contentTargets && contentTargets.length > 0 && (
+              <Button aria-expanded={appending} onClick={() => setAppending((v) => !v)}>
+                <FilePlus2 size={14} /> Toevoegen aan notitie of document
+              </Button>
+            )}
             {canWrite && (
               <Button variant="primary" onClick={() => setComposing((v) => !v)}>
                 <Mail size={14} /> Verstuur naar genodigden
               </Button>
             )}
           </div>
+
+          {appending && onAppendToContent && contentTargets && (
+            <NotulenToevoegen
+              targets={contentTargets}
+              onAppend={(target) => onAppendToContent(target, notulenAsRichText({
+                title: rec.event_title_snapshot || '',
+                date: new Date(rec.created_at).toLocaleDateString('nl-NL', { day: 'numeric', month: 'long', year: 'numeric' }),
+                summary,
+                fallbackText: rec.summary_text,
+              }))}
+              onClose={() => setAppending(false)}
+            />
+          )}
 
           {sentAt && !composing && (
             <p className="mr-sent-note">
@@ -543,7 +575,9 @@ function RecordingCard({ rec, busy, canWrite, organizationId, attendees, onPatch
       {rec.storage_key && (
         <div className="mr-audio">
           {audioUrl
-            ? <audio controls src={audioUrl} />
+            // Zonder dit blijft de tijdlijn dood: een opname uit de browser heeft geen
+            // duur, en dan kon je niet naar een stuk van de vergadering springen.
+            ? <audio controls preload="metadata" src={audioUrl} onLoadedMetadata={(e) => { void makeSeekable(e.currentTarget); }} />
             : <Button onClick={() => void loadAudio()}><Play size={14} /> Beluister opname</Button>}
         </div>
       )}

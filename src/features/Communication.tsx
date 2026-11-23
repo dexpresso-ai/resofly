@@ -31,6 +31,7 @@ import { callConversation, callCounterpart, callDirectionLabel, callDurationLabe
 import { rememberCall } from '../lib/callBridge';
 import { CallLogDialog } from '../components/CallLogDialog';
 import { MeetingRecorder } from '../components/MeetingRecorder';
+import { useContentAppend } from '../lib/useContentAppend';
 import { dateNL } from '../lib/format';
 import { useNarrowViewport } from '../lib/useNarrowViewport';
 import { NotMigratedError } from '../lib/postgrestErrors';
@@ -109,6 +110,7 @@ export function CommunicationPage({
   currentUserId,
   canReadTickets,
   canWriteTickets,
+  canWriteContent = false,
   onUnreadChanged,
   onInboxChanged,
   onTicketUnreadChanged,
@@ -133,6 +135,8 @@ export function CommunicationPage({
   canReadTickets: boolean;
   /** Mag er op de tijdlijn van een ticket geschreven worden? */
   canWriteTickets: boolean;
+  /** Mag er in notities en documenten geschreven worden? Dan kunnen de notulen van een gesprek aan een bestaande notitie of document worden toegevoegd. */
+  canWriteContent?: boolean;
   /** Ongelezen-tellers (badge in het menu, klantenlijst) opnieuw laten tellen. */
   onUnreadChanged: () => void;
   /** Teller van de opvangbak opnieuw laten tellen. */
@@ -150,6 +154,7 @@ export function CommunicationPage({
   inboxRefreshKey?: number;
 }) {
   const narrow = useNarrowViewport();
+  const contentAppend = useContentAppend({ data, organizationId, canWriteContent, onChanged });
   const [tab, setTab] = useState<CommunicationTab>('all');
   const [threads, setThreads] = useState<ClientEmailThreadOverview[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -814,6 +819,7 @@ export function CommunicationPage({
               client={selected.clientId ? clientById.get(selected.clientId) ?? null : null}
               organizationId={organizationId}
               canWrite={canWrite}
+              contentAppend={contentAppend}
               singlePane={singlePane}
               onBack={closeDetail}
               onOpenClient={selected.clientId ? () => onOpenClient(selected.clientId as string) : null}
@@ -1288,11 +1294,13 @@ function TicketPane({ data, item, client, organizationId, currentUserId, canWrit
  * recorder, precies dezelfde component als bij een meeting. Die toont een
  * bestaande opname met transcript en samenvatting, en laat een nieuwe maken.
  */
-function CallPane({ item, client, organizationId, canWrite, singlePane, onBack, onOpenClient, onEdit }: {
+function CallPane({ item, client, organizationId, canWrite, contentAppend, singlePane, onBack, onOpenClient, onEdit }: {
   item: CallConversation;
   client: Client | null;
   organizationId: string;
   canWrite: boolean;
+  /** De knop 'Toevoegen aan notitie of document' bij de notulen; leeg zonder schrijfrecht op Inhoud. */
+  contentAppend: ReturnType<typeof useContentAppend>;
   singlePane: boolean;
   onBack: () => void;
   onOpenClient: (() => void) | null;
@@ -1374,6 +1382,7 @@ function CallPane({ item, client, organizationId, canWrite, singlePane, onBack, 
             callId: call.id,
             attendees: [],
           }}
+          {...contentAppend}
         />
       </article>
     </div>
