@@ -158,7 +158,16 @@ Ernst: **hoog** (stil foute cijfers of een doodlopende weg), **midden**,
   de vier nieuwe). Een eerdere run gaf vijf fouten in `herinneringen` omdat hij
   tussen 0:00 en 1:00 Nederlandse tijd liep (de test rekent in UTC, de code
   sinds fix 44 met de Nederlandse dag); daarna opnieuw: 66/66.
-- **Schermtests**: <!-- SCHERM -->
+- **Schermtests**: `npm run test:mobile -- --theme=both`: 884 pagina's; vier
+  gaven "eerste item op 287px > 280px" op het dashboard en de app-werkruimte
+  (telefoon). Dat bleek de week: de testgegevens rekenen vanaf de maandag van
+  deze week, en sinds maandag 23 november toont de omzettegel een trendlabel.
+  Op staging zonder deze wijzigingen precies hetzelfde. De grens is nu 290px,
+  met uitleg; daarna 0 problemen. `test:loading`, `test:inrichten` en
+  `test:terugknop` geslaagd. UI-stromen in Chromium (`tests/stromen/ui.mjs`):
+  factuur, bank en vooruitbetaald geslaagd; `inrichten` faalt op vier stappen,
+  op staging net zo: de test kent de stap "Wil je AI gebruiken?" (15 november)
+  nog niet. Dat staat los van deze controle.
 - **Deno-check** (met een importmap naar npm; esm.sh is hier geblokkeerd): de
   37 functies uit de CI-lijst schoon; `invoice-workflow`, `quote-workflow`,
   `invoice-public` en `bank-sync` houden hun bekende meldingen (11, 9, 4 en 1,
