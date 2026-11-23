@@ -41,7 +41,11 @@ instellingen als de app:
   hij was; een opname met duur blijft ongemoeid; wie al luistert gaat verder waar
   hij was; mislukt het meten, dan blijft hij niet hangen.
 - Echte Chromium met een echte `MediaRecorder`-opname (zie de tabel hierboven).
-- `npm run typecheck`, `npm test`, `npm run test:mobile -- --theme=both`.
+- `npm run typecheck`, `npm test` (2229 tests), `npm run test:loading` en `npm run test:terugknop` (15 gelukt, 0 mislukt).
+- `npm run test:mobile -- --theme=both` alleen voor de pagina's die deze wijziging raken (agenda, afspraakpaneel, taak,
+  maand en Communicatie; donker en licht, telefoon, tablet en liggend): 30 pagina's gemeten, 0 met problemen.
+  De volledige run over alle 35 pagina's liep na 30 minuten tegen de tijdslimiet van de sessie en is **niet
+  afgemaakt**; er is dus geen uitslag voor de pagina's die deze wijziging niet raakt.
 
 ## Niet gedaan
 
