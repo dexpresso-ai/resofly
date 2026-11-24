@@ -27,6 +27,19 @@ export interface CreateRecordingInput {
    * afspraak en geen gesprek.
    */
   noteId?: UUID | null;
+  /**
+   * Alleen bij een afspraak (sinds 24 november): zet de meeting vanzelf in
+   * Inhoud zodra het transcript er is, in de map Meetings bij de klant. De
+   * server doet dat, ook als dit venster dan al dicht is; daarom gaan de dag
+   * en de tijd van de afspraak nu al mee. Alleen meegeven bij een gedeelde
+   * afspraak, voor wie Inhoud mag wijzigen.
+   */
+  saveToContent?: boolean;
+  /** De dag van de afspraak (JJJJ-MM-DD), voor de titel van de notitie. */
+  meetingDate?: string | null;
+  /** Begin en eind van de afspraak, om de notitie ook onder Notities bij de afspraak te hangen. */
+  eventStartsAt?: string | null;
+  eventEndsAt?: string | null;
 }
 
 /** Waar een opname bij hoort, voor de vraag naar het AI-tegoed: dat bepaalt de module. */
@@ -142,13 +155,17 @@ export interface SavedInContent {
 }
 
 /**
- * Zet een meeting uit de agenda in Inhoud: bij de klant van de afspraak (of
- * onder Geen klant) in de map Meetings, als notitie "<titel> — <datum>". De
- * server maakt de map als die er nog niet is. `meetingDate` is de dag van de
- * afspraak (JJJJ-MM-DD); zonder wordt het de dag van de opname.
+ * De knop "Opslaan in Inhoud": zet een meeting uit de agenda in Inhoud, bij de
+ * klant van de afspraak (of onder Geen klant) in de map Meetings, als notitie
+ * "<titel> — <datum>", en hangt hem onder Notities bij de afspraak. Gewoonlijk
+ * doet de server dat al vanzelf na het transcriberen; de knop is er voor een
+ * opname van vóór 24 november, of als de notitie is gewist. De dag en de tijd
+ * van de afspraak zijn voor zo'n oude opname, die ze zelf niet kent.
  */
-export async function saveRecordingToContent(organizationId: UUID, recordingId: UUID, meetingDate: string | null): Promise<SavedInContent> {
-  return invoke<SavedInContent>(organizationId, { action: 'saveToContent', recordingId, meetingDate });
+export async function saveRecordingToContent(organizationId: UUID, recordingId: UUID, event: {
+  meetingDate: string | null; eventStartsAt: string | null; eventEndsAt: string | null;
+}): Promise<SavedInContent> {
+  return invoke<SavedInContent>(organizationId, { action: 'saveToContent', recordingId, ...event });
 }
 
 /**

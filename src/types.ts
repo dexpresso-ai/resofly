@@ -3781,6 +3781,17 @@ export interface MeetingRecording extends OrgScopedRow {
    * Inhoud kan lezen, ziet hem dan ook.
    */
   content_note_id?: UUID | null;
+  /**
+   * Zet de server deze meeting vanzelf in Inhoud zodra het transcript er is
+   * (sinds 2026-11-24)? De app vraagt het bij het opnemen van een gedeelde
+   * afspraak, voor wie Agenda én Inhoud mag wijzigen.
+   */
+  save_to_content?: boolean;
+  /** De dag van de afspraak (JJJJ-MM-DD), voor de titel van de notitie in Inhoud. */
+  meeting_date?: string | null;
+  /** Begin en eind van de afspraak, voor de koppeling onder Notities. */
+  event_starts_at?: string | null;
+  event_ends_at?: string | null;
   storage_key: string | null;
   mime_type: string | null;
   size_bytes: number | null;

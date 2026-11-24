@@ -17,6 +17,7 @@ import { ai, gesprek, NOTULEN, onderteken, scribeWebhook } from './nep-ai.mjs';
 import { maakGebruiker, rest, sql, sqlRij, sqlRijen, uniek } from './supabase.mjs';
 import { gelijk, gelukt, geweigerd, groep, stap, verwacht } from './toets.mjs';
 import { maakWereld } from './wereld.mjs';
+import { meetingNoteContent, NOTULEN_VOLGEN } from '../../supabase/functions/_shared/meetingNote.ts';
 
 function q(waarde) {
   return `'${String(waarde).replace(/'/g, "''")}'`;
@@ -97,6 +98,7 @@ export default async function notulenScenario() {
     await tegoedOp();
     await webhookRoute();
     await gesprekEnRechten();
+    await vanzelfInInhoud();
   } finally {
     for (const [naam, waarde] of Object.entries(bewaard)) {
       if (waarde === undefined) delete process.env[naam]; else process.env[naam] = waarde;
@@ -435,5 +437,216 @@ async function gesprekEnRechten() {
     gelijk([medewerker.status, medewerker.json], [200, []], 'medewerker');
     const eigenaar = await rest(`ai_usage?select=model,transcribed_recording_id&organization_id=eq.${w.orgId}&transcribed_recording_id=eq.${id}`, { token: w.eigenaar.token });
     gelijk(eigenaar.json, [{ model: 'elevenlabs/scribe_v1', transcribed_recording_id: id }], 'eigenaar');
+  });
+}
+
+// ── 5. De meeting komt vanzelf in Inhoud (sinds 24 november) ─────────────────
+// Zodra het transcript er is, zet de server een meeting uit de agenda in de
+// map Meetings van de klant (of onder Geen klant). Eerst vroeg de opnamekaart
+// erom; die vraag kwam alleen als je de afspraak open had toen het transcript
+// binnenkwam. Getoetst wordt wat de recorder meestuurt bij 'create', en wat er
+// daarna zonder browser gebeurt: synchroon, via de webhook, met het tegoed op,
+// en voor wie het niet mag.
+
+/** De notitie in Inhoud van een opname, met de map, en de koppeling(en) onder Notities. */
+function inInhoud(opnameId) {
+  const rij = sqlRij(`select r.save_to_content, r.content_note_id, n.title, n.content, n.note_type, n.client_id, n.project_id,
+                             n.created_by, f.id as map_id, f.name as map, f.client_id as map_klant, f.parent_id as map_ouder, f.project_id as map_project
+                        from public.meeting_recordings r
+                        left join public.notes n on n.id = r.content_note_id
+                        left join public.content_folders f on f.id = n.folder_id
+                       where r.id = ${q(opnameId)}`);
+  const koppelingen = rij?.content_note_id
+    ? sqlRijen(`select provider, calendar_source_id, provider_event_id, event_starts_at, event_ends_at, visibility_snapshot
+                  from public.note_calendar_links where note_id = ${q(rij.content_note_id)}`)
+    : [];
+  return { ...rij, koppelingen };
+}
+
+/** Mappen "Meetings" bovenin bij een klant (of bij geen klant). */
+function meetingsMappen(orgId, klantId) {
+  return sqlRij(`select count(*)::int as n from public.content_folders
+                  where organization_id = ${q(orgId)} and parent_id is null and project_id is null
+                    and ${klantId ? `client_id = ${q(klantId)}` : 'client_id is null'} and lower(name) = 'meetings'`).n;
+}
+
+const NOTULEN_HTML = meetingNoteContent(NOTULEN);
+const tijd = (waarde) => new Date(waarde).toISOString();
+
+async function vanzelfInInhoud() {
+  groep('Notulen: de meeting komt vanzelf in Inhoud');
+  delete process.env.ELEVENLABS_WEBHOOK_SECRET;
+  zetBudget({ gebruiker: 5, organisatie: 250 });
+  const w = await stap('wereld maken', () => maakWereld('notulen-inhoud'));
+  if (!w) return;
+
+  const gedeeld = sql(`insert into public.calendar_sources (organization_id, user_id, provider, provider_calendar_id, name, visibility)
+                       values (${q(w.orgId)}, ${q(w.eigenaar.id)}, 'native', gen_random_uuid()::text, 'Team', 'organization') returning id`).split('\n')[0];
+  const prive = sql(`insert into public.calendar_sources (organization_id, user_id, provider, provider_calendar_id, name, visibility)
+                     values (${q(w.orgId)}, ${q(w.medewerker.id)}, 'native', gen_random_uuid()::text, 'Privé', 'private') returning id`).split('\n')[0];
+
+  /** Zoals de recorder bij een gedeelde afspraak: met de vraag om Inhoud en de dag en tijd van de afspraak. */
+  const afspraak = (extra = {}) => ({
+    sourceId: gedeeld, saveToContent: true, meetingDate: '2026-11-20',
+    eventStartsAt: '2026-11-20T09:00:00+01:00', eventEndsAt: '2026-11-20T10:00:00+01:00', ...extra,
+  });
+  /** Opname maken, uploaden en uitschrijven, zoals "Stop & verwerk". */
+  async function opnemen(gebruiker, extra = {}) {
+    const eventRef = uniek('afspraak');
+    const res = gelukt(await opnameActie(gebruiker.token, {
+      action: 'create', organizationId: w.orgId, consentGiven: true,
+      provider: 'native', eventRef, eventTitle: 'Kick-off website', clientId: w.klantA.id, ...extra,
+    }), 'opname aanmaken');
+    const start_ = await start(gebruiker, w, res.id, upload(w, res.id), 0);
+    return { id: res.id, eventRef, gevraagd: res.saveToContent, start: start_ };
+  }
+
+  let eerste = null;
+  await stap('na het uitschrijven staat de meeting vanzelf bij klant A in de map Meetings, met de notulen', async () => {
+    const opname_ = await opnemen(w.medewerker, afspraak());
+    gelijk(opname_.gevraagd, true, 'de server onthoudt de vraag');
+    gelijk(gelukt(opname_.start, 'uitschrijven').status, 'done', 'antwoord');
+    const n = inInhoud(opname_.id);
+    verwacht(n.content_note_id, 'geen notitie in Inhoud');
+    gelijk([n.title, n.note_type, n.client_id, n.project_id, n.created_by],
+      ['Kick-off website — 20 november 2026', 'meeting', w.klantA.id, null, w.medewerker.id], 'de notitie');
+    gelijk([n.map, n.map_klant, n.map_ouder, n.map_project], ['Meetings', w.klantA.id, null, null], 'de map');
+    // Eerst "notulen volgen", daarna vulde de pijplijn de notulen in.
+    gelijk(n.content, NOTULEN_HTML, 'de notulen in de notitie');
+    eerste = { ...opname_, map: n.map_id };
+  });
+
+  await stap('de notitie hangt ook onder Notities bij de afspraak', async () => {
+    if (!eerste) throw new Error('geen eerste meeting');
+    const { koppelingen } = inInhoud(eerste.id);
+    gelijk(koppelingen.map((k) => [k.provider, k.calendar_source_id, k.provider_event_id, tijd(k.event_starts_at), tijd(k.event_ends_at), k.visibility_snapshot]),
+      [['native', gedeeld, eerste.eventRef, '2026-11-20T08:00:00.000Z', '2026-11-20T09:00:00.000Z', 'organization']], 'koppeling');
+  });
+
+  await stap('een tweede meeting met klant A gaat in dezelfde map', async () => {
+    if (!eerste) throw new Error('geen eerste meeting');
+    // Iemand noemde de map intussen "meetings": het blijft dezelfde.
+    sql(`update public.content_folders set name = 'meetings' where id = ${q(eerste.map)}`);
+    const tweede = await opnemen(w.beheerder, afspraak({ meetingDate: '2026-11-21', eventTitle: 'Voortgang' }));
+    const n = inInhoud(tweede.id);
+    gelijk([n.map_id, n.title, n.created_by], [eerste.map, 'Voortgang — 21 november 2026', w.beheerder.id], 'notitie');
+    gelijk(meetingsMappen(w.orgId, w.klantA.id), 1, 'mappen Meetings bij klant A');
+  });
+
+  await stap('zonder klant: in de map Meetings onder Geen klant', async () => {
+    const opname_ = await opnemen(w.medewerker, afspraak({ clientId: null, eventTitle: 'Teamoverleg' }));
+    const n = inInhoud(opname_.id);
+    gelijk([n.title, n.client_id, n.map, n.map_klant], ['Teamoverleg — 20 november 2026', null, 'Meetings', null], 'notitie en map');
+    gelijk(meetingsMappen(w.orgId, null), 1, 'mappen Meetings onder Geen klant');
+  });
+
+  await stap('zonder dag van de afspraak: de dag van de opname, op Nederlandse tijd', async () => {
+    const opname_ = await opnemen(w.medewerker, afspraak({ meetingDate: null, eventStartsAt: null, eventEndsAt: null }));
+    const n = inInhoud(opname_.id);
+    const vandaag = new Intl.DateTimeFormat('nl-NL', { timeZone: 'Europe/Amsterdam', day: 'numeric', month: 'long', year: 'numeric' }).format(new Date());
+    gelijk(n.title, `Kick-off website — ${vandaag}`, 'titel');
+    // Zonder begintijd is er geen afspraak om aan te hangen; in Inhoud staat hij wel.
+    gelijk(n.koppelingen.length, 0, 'koppelingen');
+  });
+
+  await stap('een afspraak uit een privé-agenda komt niet vanzelf in de gedeelde Inhoud', async () => {
+    const opname_ = await opnemen(w.medewerker, afspraak({ sourceId: prive }));
+    gelijk(gelukt(opname_.start, 'uitschrijven').status, 'done', 'de opname zelf lukt');
+    gelijk(inInhoud(opname_.id).content_note_id, null, 'geen notitie');
+  });
+
+  await stap('wie Inhoud niet mag wijzigen: de opname lukt, de meeting komt niet in Inhoud', async () => {
+    const zonderInhoud = await maakGebruiker('notulen-zonder-inhoud');
+    sql(`insert into public.organization_members (organization_id, user_id, email, role, status, module_access)
+         values (${q(w.orgId)}, ${q(zonderInhoud.id)}, ${q(zonderInhoud.email)}, 'member', 'active', '{"content":"read"}'::jsonb)`);
+    const opname_ = await opnemen(zonderInhoud, afspraak());
+    gelijk(opname_.gevraagd, false, 'de server zet de vraag niet aan');
+    gelijk(gelukt(opname_.start, 'uitschrijven').status, 'done', 'de opname zelf lukt');
+    const n = inInhoud(opname_.id);
+    gelijk([n.save_to_content, n.content_note_id], [false, null], 'opname');
+    geweigerd(await opnameActie(zonderInhoud.token, { action: 'saveToContent', organizationId: w.orgId, recordingId: opname_.id }), 'de knop', [403]);
+  });
+
+  await stap('rechten die tussen opnemen en uitschrijven dichtgaan: dan ook niet', async () => {
+    const lid = await maakGebruiker('notulen-later-zonder');
+    sql(`insert into public.organization_members (organization_id, user_id, email, role, status, module_access)
+         values (${q(w.orgId)}, ${q(lid.id)}, ${q(lid.email)}, 'member', 'active', '{}'::jsonb)`);
+    const res = gelukt(await opnameActie(lid.token, {
+      action: 'create', organizationId: w.orgId, consentGiven: true,
+      provider: 'native', eventRef: uniek('afspraak'), eventTitle: 'Later dicht', clientId: w.klantA.id, ...afspraak(),
+    }), 'opname aanmaken');
+    gelijk(res.saveToContent, true, 'eerst mocht het');
+    sql(`update public.organization_members set module_access = '{"content":"read"}'::jsonb
+          where organization_id = ${q(w.orgId)} and user_id = ${q(lid.id)}`);
+    gelukt(await start(lid, w, res.id, upload(w, res.id), 0), 'uitschrijven');
+    gelijk(inInhoud(res.id).content_note_id, null, 'geen notitie');
+  });
+
+  await stap('een telefoongesprek of een notitie vraagt niets: die gaan niet naar de map Meetings', async () => {
+    const notitie = sql(`insert into public.notes (organization_id, created_by, title) values (${q(w.orgId)}, ${q(w.medewerker.id)}, 'Losse notitie') returning id`).split('\n')[0];
+    const opname_ = await opnemen(w.medewerker, { noteId: notitie, provider: null, eventRef: null, saveToContent: true, sourceId: gedeeld });
+    gelijk(opname_.gevraagd, false, 'notitie-opname');
+    gelijk(inInhoud(opname_.id).content_note_id, null, 'geen tweede notitie');
+  });
+
+  await stap('een opname zonder de vraag (van vóór vandaag): niet vanzelf, maar de knop zet hem er alsnog in', async () => {
+    const opname_ = await opnemen(w.medewerker, { sourceId: gedeeld });
+    gelijk(opname_.gevraagd, false, 'niet gevraagd');
+    gelijk(inInhoud(opname_.id).content_note_id, null, 'niet vanzelf');
+    const knop = gelukt(await opnameActie(w.medewerker.token, {
+      action: 'saveToContent', organizationId: w.orgId, recordingId: opname_.id,
+      meetingDate: '2026-11-18', eventStartsAt: '2026-11-18T14:00:00Z', eventEndsAt: '2026-11-18T15:00:00Z',
+    }), 'de knop');
+    gelijk(knop.alreadySaved, false, 'nieuw');
+    const n = inInhoud(opname_.id);
+    gelijk([n.content_note_id, n.title, n.content], [knop.noteId, 'Kick-off website — 18 november 2026', NOTULEN_HTML], 'notitie');
+    gelijk(n.koppelingen.map((k) => tijd(k.event_starts_at)), ['2026-11-18T14:00:00.000Z'], 'koppeling');
+    const nogEens = gelukt(await opnameActie(w.medewerker.token, { action: 'saveToContent', organizationId: w.orgId, recordingId: opname_.id }), 'nog eens');
+    gelijk([nogEens.noteId, nogEens.alreadySaved], [knop.noteId, true], 'dezelfde notitie');
+  });
+
+  await stap('notitie in Inhoud gewist: de knop zet hem er opnieuw in', async () => {
+    if (!eerste) throw new Error('geen eerste meeting');
+    const oud = inInhoud(eerste.id).content_note_id;
+    sql(`delete from public.notes where id = ${q(oud)}`);
+    gelijk(inInhoud(eerste.id).content_note_id, null, 'de opname blijft, zonder notitie');
+    const knop = gelukt(await opnameActie(w.medewerker.token, { action: 'saveToContent', organizationId: w.orgId, recordingId: eerste.id }), 'de knop');
+    const n = inInhoud(eerste.id);
+    gelijk([n.content_note_id, n.title, n.map_id], [knop.noteId, 'Kick-off website — 20 november 2026', eerste.map], 'weer in dezelfde map, met de dag van de afspraak');
+    gelijk(n.koppelingen.length, 1, 'weer onder de afspraak');
+  });
+
+  await stap('het tegoed is op na het transcript: de meeting staat er toch, de notulen volgen later vanzelf', async () => {
+    const nu = maandTotaal(w.medewerker.id, w.orgId).gebruiker * 0.92;
+    zetBudget({ gebruiker: Math.round((nu + 0.1) * 10000) / 10000, organisatie: 250 });
+    ai.woorden = gesprek(3600);
+    let opname_;
+    try { opname_ = await opnemen(w.medewerker, afspraak()); } finally { ai.woorden = null; }
+    gelijk(gelukt(opname_.start, 'uitschrijven').status, 'transcribed', 'antwoord');
+    gelijk(inInhoud(opname_.id).content, NOTULEN_VOLGEN, 'nog geen notulen');
+    zetBudget({ gebruiker: 25, organisatie: 250 });
+    gelukt(await opnameActie(w.medewerker.token, { action: 'summarize', organizationId: w.orgId, recordingId: opname_.id }), 'notulen maken');
+    gelijk(inInhoud(opname_.id).content, NOTULEN_HTML, 'de notulen staan er nu');
+  });
+
+  await stap('via de webhook (het venster is allang dicht): ook dan vanzelf in Inhoud', async () => {
+    process.env.ELEVENLABS_WEBHOOK_SECRET = WEBHOOK_GEHEIM;
+    try {
+      const opname_ = await opnemen(w.medewerker, afspraak({ eventTitle: 'Webhook-meeting' }));
+      gelijk(gelukt(opname_.start, 'start').status, 'transcribing', 'antwoord');
+      gelijk(inInhoud(opname_.id).content_note_id, null, 'nog niet: er is nog geen transcript');
+      const rid = opname(opname_.id).elevenlabs_request_id;
+      const res = await scribeWebhook(rid);
+      gelijk([res.status, res.json?.ok], [200, true], 'antwoord aan ElevenLabs');
+      const n = inInhoud(opname_.id);
+      gelijk([n.title, n.map, n.map_klant, n.content, n.koppelingen.length],
+        ['Webhook-meeting — 20 november 2026', 'meetings', w.klantA.id, NOTULEN_HTML, 1], 'notitie');
+    } finally {
+      delete process.env.ELEVENLABS_WEBHOOK_SECRET;
+    }
+  });
+
+  await stap('alle meetings van klant A staan in één map', async () => {
+    gelijk(meetingsMappen(w.orgId, w.klantA.id), 1, 'mappen Meetings bij klant A');
   });
 }

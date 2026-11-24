@@ -2,7 +2,8 @@
 // Gedeelde notulen-pijplijn voor een meeting_recordings-rij.
 //
 // completeTranscription(): slaat een binnengekomen transcript op, rekent de
-// transcriptie af in ai_usage (transcriptionUsage.ts) en maakt de notulen.
+// transcriptie af in ai_usage (transcriptionUsage.ts), zet een meeting uit de
+// agenda in Inhoud (meetingInhoud.ts) en maakt de notulen.
 // runSummaryForRecording(): laadt het transcript, controleert het AI-budget van
 // de eigenaar, vraagt Claude om gestructureerde notulen, slaat die op en logt
 // het tokenverbruik in ai_usage.
@@ -11,21 +12,27 @@
 
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { recordAiUsage, summarizeTranscript, userHasBudget } from './claudeSummary.ts';
+import { autoSaveMeetingToContent, type AutoSaveOutcome } from './meetingInhoud.ts';
 import { meetingNoteContent, NOTULEN_VOLGEN, type MeetingSummaryLike } from './meetingNote.ts';
 import type { NormalizedTranscript } from './scribeTranscript.ts';
 import { recordTranscriptionUsage, type RecordingForUsage } from './transcriptionUsage.ts';
 
 export interface SummaryOutcome { summarized: boolean; reason?: 'no_transcript' | 'budget' | 'error' | 'busy'; message?: string }
 
-export interface TranscriptionOutcome { stored: boolean; summary?: SummaryOutcome }
+export interface TranscriptionOutcome { stored: boolean; content?: AutoSaveOutcome; summary?: SummaryOutcome }
 
 /**
  * Een transcript is binnen (synchroon of via de webhook): opslaan, afrekenen,
- * notulen maken. Alleen als de opname nog op haar transcript wacht (status
- * 'transcribing'): bij twee gelijktijdige leveringen wint er één, en een
- * nagekomen webhook overschrijft geen transcript dat al verwerkt (en misschien
- * al gecorrigeerd) is. De kosten gaan vóór de notulen in ai_usage, zodat de
- * budgetcontrole van de notulen ze al meetelt.
+ * in Inhoud zetten, notulen maken. Alleen als de opname nog op haar transcript
+ * wacht (status 'transcribing'): bij twee gelijktijdige leveringen wint er
+ * één, en een nagekomen webhook overschrijft geen transcript dat al verwerkt
+ * (en misschien al gecorrigeerd) is. De kosten gaan vóór de notulen in
+ * ai_usage, zodat de budgetcontrole van de notulen ze al meetelt.
+ *
+ * Inhoud komt vóór de notulen: de meeting staat er dan zodra het transcript
+ * er is, ook als de notulen moeten wachten (tegoed op) of de functie tijdens
+ * het samenvatten stopt. De notitie zegt dan "De notulen zijn nog niet
+ * gemaakt", en runSummaryForRecording vult ze in zodra ze er zijn.
  */
 export async function completeTranscription(admin: SupabaseClient, recordingId: string, transcript: NormalizedTranscript): Promise<TranscriptionOutcome> {
   const { data: claimed, error } = await admin.from('meeting_recordings').update({
@@ -40,7 +47,8 @@ export async function completeTranscription(admin: SupabaseClient, recordingId: 
   if (!rec) return { stored: false };
 
   await recordTranscriptionUsage(admin, rec, transcript.segments);
-  return { stored: true, summary: await runSummaryForRecording(admin, recordingId) };
+  const content = await autoSaveMeetingToContent(admin, recordingId);
+  return { stored: true, content, summary: await runSummaryForRecording(admin, recordingId) };
 }
 
 /**

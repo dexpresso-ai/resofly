@@ -11,7 +11,7 @@ import { RichTextExcerpt, plainTextToRichText } from '../components/RichTextEdit
 import { InkComposer, InkThumbnail, handwritingLabel, noteHandwritingSummary } from '../components/NoteHandwriting';
 import type { InkDocument } from '../lib/ink';
 import { inkSizeIssue } from '../lib/ink';
-import { createNoteCalendarLink, createNoteWithCalendarLink, saveJitsiServer, saveNoteHandwriting } from '../lib/repository';
+import { createNoteWithCalendarLink, saveJitsiServer, saveNoteHandwriting } from '../lib/repository';
 import { addDays, DAY_NAMES_NL, formatISODate, isoWeekNumber, isSameDay, parseISODate, startOfWeek } from '../lib/dates';
 import { dateNL, formatMinutes } from '../lib/format';
 import {
@@ -3325,25 +3325,25 @@ function CalendarEventDetailPanel({ event, organizationId, data, sources, videoS
     };
   }
 
-  // Na het transcriberen vraagt de opnamekaart of de meeting ook in Inhoud
-  // moet: bij de klant van de afspraak in de map Meetings. Dit vervangt de
-  // knop "Opslaan als notitie"; die zette de notulen los bij de klant, zonder
-  // map, zonder datum in de titel en zonder transcript, en een meeting was
-  // daardoor later lastig terug te vinden.
-  // Net als die knop alleen bij een gedeelde afspraak (canAttachNotes): de
-  // notulen van een privé-afspraak horen niet ongemerkt in de gedeelde Inhoud.
+  // Zodra het transcript er is, zet de server de meeting vanzelf in Inhoud:
+  // bij de klant van de afspraak (of onder Geen klant) in de map Meetings, en
+  // onder Notities bij deze afspraak. Dit vervangt de knop "Opslaan als
+  // notitie" (die zette de notulen los bij de klant, zonder map, datum of
+  // transcript) en daarna de vraag op de opnamekaart (die kwam alleen als je
+  // de afspraak open had toen het transcript binnenkwam).
+  // Alleen bij een gedeelde afspraak (canAttachNotes): de notulen van een
+  // privé-afspraak horen niet ongemerkt in de gedeelde Inhoud.
   const saveToContent: SaveToContentOptions | undefined = canWriteContent && canAttachNotes ? {
-    placeLabel: linkedClient ? `bij ${linkedClient.name}` : 'onder Geen klant',
     // De dag zoals jij hem in de agenda ziet. dateKeyFromValue nam bij een
     // tijdstip in UTC de UTC-datum: een meeting om half één 's nachts kwam
     // dan op de dag ervoor.
     meetingDate: event.all_day ? dateKeyFromValue(event.starts_at) : formatISODate(new Date(event.starts_at)),
-    onSaved: async (noteId) => {
-      // Ook onder Notities bij deze afspraak, zoals de oude knop deed. Lukt
-      // dat niet, dan staat hij toch in Inhoud.
-      await createNoteCalendarLink(organizationId, noteId, noteLinkInput()).catch(() => undefined);
-      await onNotesChanged();
-    },
+    eventStartsAt: event.starts_at,
+    eventEndsAt: event.ends_at ?? null,
+    isNoteLoaded: (noteId) => data.notes.some(n => n.id === noteId),
+    // De server hing de notitie al onder deze afspraak; de werkruimte moet
+    // hem alleen nog kennen.
+    onSaved: async () => { await onNotesChanged(); },
     onOpenNote: (noteId) => {
       const note = data.notes.find(n => n.id === noteId);
       if (note) { onClose(); onEditNote(note); }
