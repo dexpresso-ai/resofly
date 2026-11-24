@@ -257,6 +257,11 @@ Op **Vennoten** staat bovenaan de verdeling van het boekjaar ("vastgelegd voor d
 
 ## Bewust open
 
+> **24 november:** de eerste vier punten zijn gebouwd: automatisch splitsen bij
+> in- of uittreden, het kapitaal van een uittreder als schuld, de verliesgrens
+> van de commanditaire vennoot en een rekening-courant per vennoot. Zie
+> `CHANGELOG_VOF_TIJDLIJN_2026-11-24.md`.
+
 | Punt | Waarom nog niet |
 |---|---|
 | Een tussentijdse resultaatbepaling bij in- of uittreden of een rechtsvormwissel halverwege het jaar | Nu leg je de verdeling van dat jaar vast, met een bedrag vooraf voor wat iemand tot de wisseldatum toekomt (bijvoorbeeld de eenmanszaakwinst tot 1 juli). Automatisch splitsen op een datum vraagt een tussenbalans; de afspraak tussen de vennoten beslist. |

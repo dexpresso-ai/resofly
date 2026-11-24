@@ -226,6 +226,20 @@ async function grenzen() {
     geweigerd(res, 'uittreden in een afgesloten jaar');
     verwacht(/afgesloten/.test(res.tekst), `melding: ${res.tekst}`);
     gelukt(await wijzig(w, 'Bram', 5000, { actief: false, per: '2026-01-01' }), 'per 1 januari 2026 mag');
+    // Ook een nieuwe vennoot: eerst kwam die met een datum in 2025 stil in het
+    // afgesloten jaar, en verdeelde heropenen en opnieuw afsluiten 2025 anders.
+    const nieuw = await rpc('save_partnership_partner', {
+      p_organization_id: w.orgId, p_partner_id: null, p_name: 'Chris', p_profit_share_basis_points: 0, p_effective_date: '2025-07-01',
+    }, w.eigenaar.token);
+    geweigerd(nieuw, 'een nieuwe vennoot in een afgesloten jaar');
+    verwacht(/afgesloten/.test(nieuw.tekst), `melding: ${nieuw.tekst}`);
+    const chris = gelukt(await rpc('save_partnership_partner', {
+      p_organization_id: w.orgId, p_partner_id: null, p_name: 'Chris', p_profit_share_basis_points: 5000, p_effective_date: '2026-01-01',
+    }, w.eigenaar.token), 'Chris per 1 januari 2026');
+    // Een wijziging na het afgesloten jaar weghalen kan gewoon.
+    const brams = sqlRij(`select id from public.partnership_partner_timeline where partner_id = ${q(w.vennoten.Bram.id)} and valid_from = '2026-01-01'`);
+    gelukt(await rpc('delete_partnership_partner_change', { p_organization_id: w.orgId, p_change_id: brams.id }, w.eigenaar.token), 'de uittreding per 2026 weghalen mag');
+    gelijk(Number(sql(`select count(*) from public.partnership_partner_timeline where partner_id = ${q(chris.id)} and valid_from <= '2025-12-31'`)), 0, 'Chris niet in 2025');
   });
 
   await stap('een wijziging van vóór de tijdlijn, na het jaareinde: afsluiten weigert nog, tot de verdeling vastligt', async () => {

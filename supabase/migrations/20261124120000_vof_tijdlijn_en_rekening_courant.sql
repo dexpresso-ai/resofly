@@ -602,8 +602,12 @@ grant execute on function public.fiscal_year_partner_changes(uuid, uuid) to serv
 --   - Een ander percentage of soort met een datum is een nieuwe stand vanaf
 --     die dag. Zonder datum is het een correctie van de stand die nu geldt
 --     (een tikfout herstel je zo zonder een nieuwe periode).
---   - Een datum in een afgesloten boekjaar wordt geweigerd: dat jaar is met
---     de verdeling van toen geboekt.
+--   - Een datum op of vóór het einde van het laatste afgesloten boekjaar
+--     wordt geweigerd: dat jaar is met de verdeling van toen geboekt, en een
+--     stand van eerder loopt erdoorheen. Zonder datum schuift de stand naar de
+--     dag erna (een nieuwe vennoot, of een correctie). Eerst kon een nieuwe
+--     vennoot met een datum in een afgesloten jaar terechtkomen, en
+--     verdeelde heropenen en opnieuw afsluiten dat jaar dan anders.
 drop function if exists public.save_partnership_partner(uuid, uuid, text, integer, text, boolean);
 create or replace function public.save_partnership_partner(
   p_organization_id uuid, p_partner_id uuid, p_name text, p_profit_share_basis_points integer,
@@ -627,6 +631,7 @@ declare
   v_from date;
   v_latest public.partnership_partner_timeline;
   v_closed text;
+  v_last_closed date;
 begin
   if auth.role() <> 'service_role'
      and not (public.can_write_org(p_organization_id) and public.can_write_module(p_organization_id, 'finance')) then
@@ -661,6 +666,17 @@ begin
   perform pg_advisory_xact_lock(hashtext(p_organization_id::text || ':fyclose'));
   perform public.ensure_default_ledger_accounts(p_organization_id);
 
+  -- Het laatste afgesloten boekjaar: daarvóór verandert de tijdlijn niet meer.
+  select f.label, f.period_end into v_closed, v_last_closed
+  from public.fiscal_years f
+  where f.organization_id = p_organization_id and f.status = 'closed'
+  order by f.period_end desc
+  limit 1;
+  if p_effective_date is not null and p_effective_date <= v_last_closed then
+    raise exception 'Boekjaar % is afgesloten, met de verdeling die toen gold; een ingangsdatum op of vóór % verandert die. Kies een datum na dat jaar, of heropen het eerst.',
+      v_closed, to_char(v_last_closed, 'DD-MM-YYYY') using errcode = '23514';
+  end if;
+
   if p_partner_id is null then
     select g.n into v_n
     from generate_series(1, 9) as g(n)
@@ -689,6 +705,10 @@ begin
                       coalesce((select cs.bookkeeping_start_date from public.company_settings cs where cs.organization_id = p_organization_id), v_today),
                       coalesce((select min(f.period_start) from public.fiscal_years f where f.organization_id = p_organization_id), v_today))
       end);
+    -- Zonder datum nooit in een afgesloten jaar: dan vanaf de dag erna.
+    if v_from <= v_last_closed then
+      v_from := v_last_closed + 1;
+    end if;
 
     insert into public.ledger_accounts (organization_id, code, name, type, subtype, default_vat_code, is_system, report_group)
     values (p_organization_id, '050' || v_n, 'Kapitaal ' || v_name, 'equity', 'partner_capital', null, true, 'eigen_vermogen')
@@ -747,26 +767,21 @@ begin
                        case when v_latest.id is null or v_latest.is_active is distinct from v_active then v_today end);
 
     if v_from is not null then
-      select f.label into v_closed from public.fiscal_years f
-      where f.organization_id = p_organization_id and f.status = 'closed'
-        and v_from between f.period_start and f.period_end
-      limit 1;
-      if v_closed is not null then
-        raise exception 'Boekjaar % is afgesloten, met de verdeling die toen gold. Kies een ingangsdatum na dat jaar, of heropen het eerst.', v_closed
-          using errcode = '23514';
+      -- Een datum op of vóór het laatste afgesloten jaar is hierboven al
+      -- geweigerd; "per vandaag" in een afgesloten jaar schuift naar de dag erna.
+      if v_from <= v_last_closed then
+        v_from := v_last_closed + 1;
       end if;
       insert into public.partnership_partner_timeline (organization_id, partner_id, valid_from, share_basis_points, kind, is_active)
       values (p_organization_id, v_row.id, v_from, p_profit_share_basis_points, v_kind, v_active)
       on conflict (partner_id, valid_from) do update
         set share_basis_points = excluded.share_basis_points, kind = excluded.kind, is_active = excluded.is_active;
-    elsif v_latest.valid_from <= coalesce((select max(f.period_end) from public.fiscal_years f
-                                            where f.organization_id = p_organization_id and f.status = 'closed'), '1900-01-01'::date) then
+    elsif v_latest.valid_from <= v_last_closed then
       -- Een correctie raakt geen afgesloten jaar: dan geldt hij vanaf de eerste
       -- dag na het laatste afgesloten boekjaar. Anders verdeelde heropenen en
       -- opnieuw afsluiten dat jaar met de gecorrigeerde percentages.
       insert into public.partnership_partner_timeline (organization_id, partner_id, valid_from, share_basis_points, kind, is_active)
-      values (p_organization_id, v_row.id,
-              (select max(f.period_end) + 1 from public.fiscal_years f where f.organization_id = p_organization_id and f.status = 'closed'),
+      values (p_organization_id, v_row.id, v_last_closed + 1,
               p_profit_share_basis_points, v_kind, v_latest.is_active)
       on conflict (partner_id, valid_from) do update
         set share_basis_points = excluded.share_basis_points, kind = excluded.kind;
@@ -809,7 +824,8 @@ revoke all on function public.save_partnership_partner(uuid, uuid, text, integer
 grant execute on function public.save_partnership_partner(uuid, uuid, text, integer, text, boolean, date) to authenticated, service_role;
 
 -- Een regel van de tijdlijn weghalen (een verkeerde ingangsdatum). Niet de
--- eerste stand, en niet in een afgesloten boekjaar.
+-- eerste stand, en niet op of vóór het einde van het laatste afgesloten
+-- boekjaar: de stand ervoor zou dan in dat jaar doorlopen.
 create or replace function public.delete_partnership_partner_change(p_organization_id uuid, p_change_id uuid)
 returns void
 language plpgsql
@@ -841,7 +857,8 @@ begin
   end if;
   select f.label into v_closed from public.fiscal_years f
   where f.organization_id = p_organization_id and f.status = 'closed'
-    and v_row.valid_from between f.period_start and f.period_end
+    and v_row.valid_from <= f.period_end
+  order by f.period_end desc
   limit 1;
   if v_closed is not null then
     raise exception 'Boekjaar % is afgesloten, met deze wijziging erin. Heropen het eerst.', v_closed using errcode = '23514';

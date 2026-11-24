@@ -3359,8 +3359,12 @@ body::before{
   .bk-table.bk-partners-table{min-width:0}
   .bk-partners-table .bk-col-wide{display:none}
   .bk-partners-table td:first-child{overflow-wrap:anywhere;width:44%}
-  .bk-partners-table th,.bk-partners-table td{padding:9px 7px}
-  .bk-partners-table th{font-size:10.5px;letter-spacing:.05em}
+  /* Met .bk-table ervoor: de algemene regels voor .bk-table verderop in dit
+     bestand (padding 10px 11px, koppen 12px) wonnen anders, en de kolom met de
+     naam werd 80px smal. Met "uitgetreden per 1 jul 2026" eronder (2026-11-24)
+     brak dat midden in de woorden. */
+  .bk-table.bk-partners-table th,.bk-table.bk-partners-table td{padding:9px 7px}
+  .bk-table.bk-partners-table th{font-size:10.5px;letter-spacing:.05em}
   /* Aanpassen en verwijderen onder elkaar: naast elkaar drukten ze de
      prullenbak rechts uit beeld. */
   .bk-partners-table .bk-partner-actions{flex-direction:column;align-items:flex-end}

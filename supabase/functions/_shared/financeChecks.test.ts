@@ -347,6 +347,11 @@ test('vennoot vastleggen via Gerrie: alleen bij een vof, met de verdeling op de 
   assert.equal(per.payload.effective_date, '2026-07-01');
   const uitPer = await save.plan!(ctx(rows), { partner_id: 'c0000000-0000-4000-8000-000000000002', is_active: false, effective_date: '2026-02-01' });
   assert.match(uitPer.sub, /uitgetreden per 2026-02-01/);
+  // Een ingangsdatum op of vóór het einde van een afgesloten jaar: geen kaart.
+  const dicht = { ...rows, fiscal_years: [{ id: ID, label: '2025', period_end: '2025-12-31', status: 'closed' }] };
+  await assert.rejects(save.plan!(ctx(dicht), { name: 'Anna', profit_share_percent: 60, effective_date: '2025-07-01' }),
+    (error: unknown) => error instanceof ActionError && /Boekjaar 2025 is afgesloten/.test(error.message));
+  assert.match((await save.plan!(ctx(dicht), { name: 'Anna', profit_share_percent: 60, effective_date: '2026-01-01' })).sub, /vennoot sinds 2026-01-01/);
   // Na de overstap van cv naar vof: een commanditaire vennoot laten uittreden
   // gaf een 422; nu wordt hij beherend.
   const vroegerCv = { ...rows, partnership_partners: [{ ...rows.partnership_partners[0], kind: 'commanditair' }] };

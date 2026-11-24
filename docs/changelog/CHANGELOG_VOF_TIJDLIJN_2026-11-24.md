@@ -46,9 +46,13 @@ vennoot is.
     vóór het laatste afgesloten boekjaar, dan geldt de correctie vanaf de dag
     erna. Anders gaf heropenen en opnieuw afsluiten dat jaar de nieuwe
     percentages.
-- Een ingangsdatum in een afgesloten boekjaar wordt geweigerd: heropen dat jaar
-  eerst.
-- Een verkeerde stand haal je weg; de eerste stand van een vennoot niet.
+- Een ingangsdatum op of vóór het einde van het laatste afgesloten boekjaar
+  wordt geweigerd: heropen dat jaar eerst. Ook voor een nieuwe vennoot. Een
+  stand van vóór dat jaar loopt er namelijk doorheen. Zonder datum schuift een
+  nieuwe vennoot naar de dag na dat jaar.
+- Een verkeerde stand haal je weg (de prullenbak in het venster); de eerste
+  stand van een vennoot niet, en geen stand op of vóór het laatste afgesloten
+  jaar.
 
 **Het jaar valt uiteen in perioden**, op elke ingangsdatum die erin valt. Per
 periode telt het resultaat van de boekingen in die periode: een tussentijdse
@@ -124,6 +128,40 @@ vennoot, 1412 voor de tweede, …), een kortlopende schuld op zijn naam.
   ander pakket komt op de rekening-courant van die vennoot. Eerst ging die
   naar niets, of naar privé.
 
+## De schermen
+
+- **Vennoten, de tabel:** onder de naam "sinds 1 jan 2025", "uitgetreden per
+  1 jul 2026" of wat er nog komt ("treedt uit per …"). *Winstaandeel nu* is de
+  stand van vandaag; de rekening-courant staat bij de rekeningen.
+- **Het vennootvenster** (eerst een formulier onder de tabel; nu een venster
+  dat met de terugknop dichtgaat):
+  - een datumveld dat zegt wat het doet: *Vennoot sinds*, *Uitgetreden per*
+    (standaard vandaag), *Weer vennoot per* of *Met ingang van*;
+  - eronder wat er gebeurt ("Tot en met 30 jun 2026 50%, vanaf 1 jul 2026
+    100%"), en bij een correctie zonder datum na een afgesloten jaar "vanaf
+    1 jan 2026";
+  - een datum op of vóór het laatste afgesloten jaar zet Opslaan uit, met de
+    uitleg erbij;
+  - de standen onder elkaar, met een prullenbak bij elke latere stand.
+- **De kapitaalvergelijking:**
+  - de perioden met hun resultaat en wie wat kreeg;
+  - een melding als een periode niet op 100% uitkomt;
+  - de kolom *Naar rekening-courant* (bij een open jaar "bij afsluiten");
+  - het blok *Rekening-courant eind …* ("nu vordering op Bram € 3.000; na het
+    afsluiten schuld aan Bram € 12.000");
+  - de zin over de verliesgrens;
+  - uitleg over een lening, de uitbetaling aan een uittreder en rente.
+- **De verdeling (venster):**
+  - de perioden onder elkaar, en "50% → 30%" als een percentage in het jaar
+    verandert;
+  - het totaal wordt per periode gecontroleerd. Bij Bram eruit en Chris erin
+    telde het eerst op tot 150%, en stond afsluiten uit.
+- **Boekjaren → Afsluiten:** de perioden, de regel over de rekening-courant, en
+  een blokkade die de periode noemt.
+- **CSV van Vennoten:** een kolom *Naar rekening-courant*.
+- **Telefoon:** de naamkolom van de vennotentabel was 80 px en brak midden in
+  woorden (de telefoonregels werden overschreven); nu 104 px.
+
 ## Gerrie, API en MCP
 
 - `owners.save_partner`: nieuw veld `effective_date`. De kaart zegt wat er
@@ -152,7 +190,36 @@ met de rechten van wie goedkeurt.
 
 ## Verificatie
 
-Zie onderaan, bij de uitrol.
+Op een lokale stack met alle migraties, als de eigenaar met zijn eigen sessie
+(RLS geldt):
+
+- **De keten vanaf nul** (`supabase db reset`) en de nieuwe migratie daarna
+  nog een keer: zonder fouten.
+- **Databasetests** (`npm run test:database`): alles geslaagd, ook de
+  bijgewerkte `vennoten_jaarafsluiting.sql`, met een uittreden per datum.
+- **Stromentests:** de hele reeks, 1461 stappen, 0 fout. Daarin:
+  - `vof-tijdlijn`, nieuw: elk van de vier punten, met Gerrie;
+  - `vof`, bijgewerkt: wat eerst weigerde, gaat nu goed.
+- **Zonder de nieuwe migratie** falen 25 van de 50 stappen van `vof-tijdlijn`
+  en `vof`, waaronder elke nieuwe functie.
+- **Unittests** (`npm test`): 2256 geslaagd. Daarin:
+  - de rekenkern: perioden, prognose, restcent en verliesgrens;
+  - de auditfile: een rekening-courant per vennoot;
+  - de kaarten van Gerrie;
+  - de CSV.
+- **`deno check`** van de CI-lijst: schoon.
+- **Schermen:** zie onderaan.
+
+## Bewust open
+
+| Punt | Waarom nog niet |
+|---|---|
+| Splitsen naar tijd (naar dagen) in plaats van naar de boekingen per periode | De wet schrijft het niet voor; de afspraak tussen de vennoten beslist. Wie naar tijd wil, legt de verdeling van het jaar vast, met een bedrag vooraf. |
+| Een rechtsvormwissel halverwege het jaar (eenmanszaak wordt vof per 1 juli) | Een boekjaar heeft één rechtsvorm. Nu als vof, met de eenmanszaakwinst tot 1 juli als bedrag vooraf in de vastgelegde verdeling. |
+| Stakingswinst, goodwill en de waardering bij uittreden | Het kapitaal gaat naar de rekening-courant; de waardering hoort bij de adviseur. |
+| Een toegezegde inbreng die nog niet gestort is, in de verliesgrens | De wet telt hem mee, ResoFly alleen wat er geboekt is. Boek hem als vordering op de vennoot. |
+| Rente over de rekening-courant | Niet automatisch. Fiscaal is het winstverdeling: leg hem vast als bedrag vooraf. |
+| Verdeling aanpassen begint met de percentages van de laatste periode | Niet met wat ieder over het hele jaar kreeg. Het venster zegt dat de perioden dan vervallen. |
 
 ## Uitrol
 

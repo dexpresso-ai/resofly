@@ -1139,7 +1139,7 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
       kind: { type: 'string', enum: ['beherend', 'commanditair'], description: 'Alleen bij een cv. Standaard beherend.' },
       is_active: { type: 'boolean', description: 'false = uitgetreden.' },
       user_id: { type: 'string', description: 'Het teamlid dat de vennoot is (voor het urencriterium); lege tekst koppelt los.' },
-      effective_date: { type: 'string', description: 'Ingangsdatum (JJJJ-MM-DD): de eerste dag waarop de wijziging geldt. Bij een nieuwe vennoot "vennoot sinds", bij uittreden "uitgetreden per" (de eerste dag dat hij geen vennoot meer is), bij een ander percentage "met ingang van". Leeg bij een ander percentage = een correctie van de stand van nu; leeg bij uittreden = vandaag.' },
+      effective_date: { type: 'string', description: 'Ingangsdatum (JJJJ-MM-DD): de eerste dag waarop de wijziging geldt. Bij een nieuwe vennoot "vennoot sinds", bij uittreden "uitgetreden per" (de eerste dag dat hij geen vennoot meer is), bij een ander percentage "met ingang van". Leeg bij een ander percentage = een correctie van de stand van nu (in een afgesloten boekjaar: vanaf de dag erna); leeg bij uittreden = vandaag. Niet op of vóór het einde van het laatste afgesloten boekjaar.' },
     },
     async plan(ctx, input) {
       const { data: settings, error: settingsError } = await orgQuery(ctx, 'company_settings', 'legal_form').maybeSingle();
@@ -1203,6 +1203,17 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
       // Een wijziging hier zou dan stil ook dat jaar raken; sinds 20261122100000
       // weigert de jaarafsluiting dat, en de kaart zegt het vooraf.
       const changesSplit = !current || basisPoints !== current.profit_share_basis_points || isActive !== current.is_active || kind !== current.kind;
+      // Niet op of vóór het einde van het laatste afgesloten boekjaar, zoals
+      // save_partnership_partner (20261124120000). Anders kwam er een kaart
+      // die pas bij het uitvoeren werd geweigerd.
+      if (effectiveDate) {
+        const { data: closedYears } = await orgQuery(ctx, 'fiscal_years', 'label, period_end, status').eq('status', 'closed');
+        const lastClosed = ((closedYears ?? []) as Array<{ label: string; period_end: string }>)
+          .reduce<{ label: string; period_end: string } | null>((last, y) => (!last || y.period_end > last.period_end ? y : last), null);
+        if (lastClosed && effectiveDate <= lastClosed.period_end) {
+          throw new ActionError(`Boekjaar ${lastClosed.label} is afgesloten, met de verdeling die toen gold; een ingangsdatum op of vóór ${lastClosed.period_end} verandert die. Kies een datum na dat jaar, of heropen het eerst (Boekjaren, eigenaar of beheerder).`);
+        }
+      }
       let openPast: string | null = null;
       if (changesSplit) {
         const { data: years } = await orgQuery(ctx, 'fiscal_years', 'id, label, period_end, status').eq('status', 'open');
@@ -1221,9 +1232,9 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
           current ? null : 'met eigen kapitaal- en privérekeningen',
           effectiveDate
             ? `${!current ? 'vennoot sinds' : !isActive && current.is_active ? 'uitgetreden per' : 'met ingang van'} ${effectiveDate}`
-            : !current ? 'zonder ingangsdatum: bij de eerste vennoten vanaf het begin van de boekhouding, anders vanaf vandaag'
+            : !current ? 'zonder ingangsdatum: bij de eerste vennoten vanaf het begin van de boekhouding, anders vanaf vandaag (nooit in een afgesloten boekjaar)'
             : current.is_active !== isActive ? `${isActive ? 'weer vennoot' : 'uitgetreden'} per vandaag`
-            : changesSplit ? 'correctie van de stand van nu (zonder ingangsdatum)' : null,
+            : changesSplit ? 'correctie van de stand van nu (zonder ingangsdatum; ligt die in een afgesloten boekjaar, dan vanaf de dag erna)' : null,
           !effectiveDate && openPast && current && current.is_active === isActive ? `${openPast} staat nog open: een correctie geldt ook daar; een wijziging per een datum geef je met effective_date` : null,
         ], 420),
         kind: 'money',

@@ -429,10 +429,10 @@ export function OwnersPage({ data, organizationId, canWrite, onChanged, canReadH
                       <td><strong>{p.name}</strong>
                         <div className="bk-muted bk-partner-member">
                           {p.user_id ? linkedLabel(p.user_id) : 'Geen teamlid gekoppeld'}
-                          {dates
-                            ? <> · <span className={now.active ? 'bk-partner-dates' : 'bk-partner-status'}>{dates}</span></>
-                            : !now.active && <> · <span className="bk-partner-status">uitgetreden</span></>}
+                          {!dates && !now.active && <> · <span className="bk-partner-status">uitgetreden</span></>}
                         </div>
+                        {/* Op een eigen regel: achter het teamlid brak het op de telefoon midden in de woorden. */}
+                        {dates && <div className={`bk-muted bk-partner-member${now.active ? '' : ' bk-partner-status'}`}>{dates}</div>}
                       </td>
                       {/* Een uitgetreden vennoot heeft nu geen winstaandeel; zijn
                           percentage van toen staat in het venster bij zijn standen. */}
@@ -847,16 +847,17 @@ function PartnerDialog({ organizationId, legalForm, partner, partners, changes, 
 
   // De dag waarop de nieuwe stand ingaat, als die er komt.
   const effective = form.date || (action === 'uittreden' || action === 'terug' ? today : null);
-  const closedYear = effective && action !== 'geen'
-    ? years.find(y => y.status === 'closed' && effective >= y.period_start && effective <= y.period_end) ?? null
-    : null;
-  const closedYearOf = (day: string) => years.find(y => y.status === 'closed' && day >= y.period_start && day <= y.period_end) ?? null;
+  const lastClosed = years.filter(y => y.status === 'closed').reduce<FiscalYearListRow | null>((last, y) => (!last || y.period_end > last.period_end ? y : last), null);
+  // Op of vóór het einde van het laatste afgesloten jaar verandert de tijdlijn
+  // niet meer, net als in save_partnership_partner: een stand van eerder loopt
+  // door dat jaar heen. Eerst blokkeerde alleen een datum ín een afgesloten jaar.
+  const closedYearOf = (day: string) => (lastClosed && day <= lastClosed.period_end ? lastClosed : null);
+  const closedYear = effective && action !== 'geen' ? closedYearOf(effective) : null;
   const maxDate = addDays(today, 366);
   // Een correctie zonder datum: ligt zijn laatste stand in of vóór het laatste
   // afgesloten boekjaar, dan wordt het een nieuwe stand vanaf de dag na dat
   // jaar (save_partnership_partner). Eerst corrigeerde hij de stand zelf, en
   // veranderde zo stil de verdeling van een jaar dat al geboekt was.
-  const lastClosed = years.filter(y => y.status === 'closed').reduce<FiscalYearListRow | null>((last, y) => (!last || y.period_end > last.period_end ? y : last), null);
   const latestStand = changes.length > 0 ? changes[changes.length - 1] : null;
   const correctionFrom = lastClosed && latestStand && latestStand.valid_from <= lastClosed.period_end
     ? { from: addDays(lastClosed.period_end, 1), label: lastClosed.label }

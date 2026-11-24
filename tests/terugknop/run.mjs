@@ -75,6 +75,8 @@ async function where(t) {
     page: document.querySelector('section.content:not([hidden])')?.dataset.page ?? null,
     tabs: document.querySelectorAll('section.content').length,
     modal: Boolean(document.querySelector('.modal-bg')),
+    // De vensters van de boekhouding (Vennoten, Boekjaren) zijn een .bk-modal.
+    bkModal: Boolean(document.querySelector('.bk-modal')),
     menu: Boolean(document.querySelector('.znav.is-open')),
     gerrie: Boolean(document.querySelector('.gerrie-panel')),
     commThread: Boolean(document.querySelector('.comm-shell.is-single .comm-back')),
@@ -302,6 +304,19 @@ for (const [name, spec, mock] of [
     await expectState(t, 'nog eens terug: het dashboard', { page: 'dashboard', modal: false, steps: 0 });
   }, PHONE, mock);
 }
+
+// Vennoten (2026-11-24): het potlood opent het venster van een vennoot, met
+// zijn standen en de ingangsdatum. Het stond eerst onder de tabel; als venster
+// moet terug het sluiten, en pas daarna de pagina verlaten.
+await scenario('Vennoten: terug sluit het venster van een vennoot', 'owners', async (t) => {
+  await expectState(t, 'start', { page: 'owners', bkModal: false, steps: 0 });
+  await tap(t, 'tr:has-text("Bram Jansen") .bk-cell-action .bk-icon-btn[aria-label$="aanpassen"]');
+  await expectState(t, 'venster open', { page: 'owners', bkModal: true, steps: 2 });
+  await back(t);
+  await expectState(t, 'terug: venster dicht', { page: 'owners', bkModal: false, steps: 1 });
+  await back(t);
+  await expectState(t, 'nog eens terug: het dashboard', { page: 'dashboard', bkModal: false, steps: 0 });
+}, PHONE, { ledger: true, vof: true });
 
 // Op een computer is de terugknop die van de browser (of de muis). Een menu
 // dat sluit bij het indrukken van de muis en een klik die daarna een pagina
