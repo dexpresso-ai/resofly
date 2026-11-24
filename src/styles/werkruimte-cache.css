@@ -1,0 +1,28 @@
+/* De melding "Bijwerken…" als de werkruimte uit de cache van de vorige keer
+   komt (lib/workspaceCache.ts). Vast onderin, in elke look en op elk formaat:
+   de plekken van "Alleen lezen" verschillen per look en ontbreken op de
+   telefoon en op pagina's zonder titelbalk (Agenda, Berichten). Op de
+   telefoon boven de duimbalk. */
+.cache-badge {
+  position: fixed;
+  left: 50%;
+  bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  z-index: 90;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--bg2);
+  border: 1px solid var(--border2);
+  color: var(--muted2);
+  font-size: 12px;
+  font-weight: 600;
+  box-shadow: 0 6px 24px rgba(var(--shade-rgb), calc(.35 * var(--shade-k)));
+  pointer-events: none;
+}
+.cache-badge .boot-spinner { width: 12px; height: 12px; border-width: 2px; }
+@media (max-width: 760px) {
+  .cache-badge { bottom: calc(84px + env(safe-area-inset-bottom, 0px)); }
+}

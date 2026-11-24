@@ -1,5 +1,6 @@
 import { supabaseAuth } from './supabase';
 import { disablePush } from './push-api';
+import { clearWorkspaceCache } from './workspaceCache';
 
 // Werkgegevens die de app per gebruiker in deze browser bewaart. Voorkeuren
 // (thema, zoom, weergave) blijven staan; dit hoort bij de persoon die uitlogt.
@@ -12,6 +13,7 @@ const USER_DATA_KEY_PREFIXES = [
   'resofly.chat.drafts.',           // nog niet verstuurde chatberichten
   'resofly.gerrie.decision-outbox', // besluiten van Gerrie die nog op de server moeten komen
   'resofly.onboarding.',            // waar je was in het inrichten van een organisatie
+  'resofly.opstartverzoeken.',      // de leesverzoeken van de vorige start (lib/opstartverzoeken.ts)
 ];
 
 /**
@@ -31,5 +33,8 @@ export async function signOutOnThisDevice(): Promise<void> {
   } catch {
     // Opslag geblokkeerd (privévenster e.d.): dan staat er ook niets.
   }
+  // De werkruimte van de vorige keer (lib/workspaceCache.ts) staat in
+  // IndexedDB, niet in localStorage: die apart weg.
+  await clearWorkspaceCache();
   await supabaseAuth.signOut();
 }
