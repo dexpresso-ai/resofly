@@ -387,7 +387,11 @@
     opacity:0;visibility:hidden;transform:translateX(-8px);
     transition:opacity var(--t-2) var(--ease),transform var(--t-2) var(--ease),visibility 0s linear var(--t-2);
   }
-  :root:is([data-look="zenit"],[data-look="baken"]) .app:not(.sidebar-pinned) .znav:is(:hover,:focus-within) .zpanel{
+  /* Na een keuze krijgt de navigatie .is-shut (ZenitNav): dan klapt het paneel
+     in, ook al staat de muis er nog op. Zonder dat bleef het hangen over de
+     pagina die je net opende, en op een tablet bleef het staan tot je ernaast
+     tikte. Opnieuw de rail aanwijzen of aantikken haalt .is-shut weg. */
+  :root:is([data-look="zenit"],[data-look="baken"]) .app:not(.sidebar-pinned) .znav:is(:hover,:focus-within):not(.is-shut) .zpanel{
     opacity:1;visibility:visible;transform:none;
     transition:opacity var(--t-2) var(--ease) 60ms,transform var(--t-2) var(--ease) 60ms,visibility 0s linear 60ms;
   }

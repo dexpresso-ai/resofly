@@ -28,8 +28,9 @@ import { useBackStep } from '../lib/useBackStep';
  *
  * Desktop (≥761px): vastgezet staan rail en paneel naast het werkvlak; los
  * staat alleen de rail en schuift het paneel bij hover of focus over het
- * werkvlak. Telefoon: één uitschuifmenu met de rail links en het paneel rechts;
- * een tik op de rail wisselt het paneel, een tik in het paneel navigeert.
+ * werkvlak, en klapt het na een keuze weer in (sinds 2026-11-24). Telefoon:
+ * één uitschuifmenu met de rail links en het paneel rechts; een tik op de rail
+ * wisselt het paneel, een tik in het paneel navigeert.
  */
 
 type ModuleId = 'vandaag' | 'gerrie' | 'agenda' | 'werk' | 'documenten' | 'geld' | 'berichten' | 'inzicht';
@@ -326,6 +327,29 @@ export function ZenitNav({
   const [look, setLook] = useLook();
   const view = usePopover();
   const account = usePopover();
+  const navRef = useRef<HTMLElement>(null);
+
+  // Los (desktop, niet vastgezet) zweeft het paneel over het werkvlak en staat
+  // het open zolang de muis erop staat. Na een keuze bleef het daardoor hangen
+  // over de pagina die je net opende, tot je de muis weghaalde; op een tablet
+  // bleef de aanraking "plakken" en ging het helemaal niet meer weg. Nu klapt
+  // het na een keuze meteen in (`is-shut`). Het gaat weer open zodra je de rail
+  // opnieuw aanwijst, aantikt of er met Tab in komt.
+  const floating = !pinned && !narrow;
+  const [shut, setShut] = useState(false);
+  useEffect(() => {
+    if (!floating) return;
+    // Een tik naast het menu klapt het ook in. Met de muis is het dan al dicht;
+    // op een tablet blijft de aanraking anders op de rail staan. Het lijstje
+    // van de organisatiekeuze hangt buiten het paneel (portal) maar hoort erbij.
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target instanceof Element ? event.target : null;
+      if (!target || navRef.current?.contains(target) || target.closest('.select-menu')) return;
+      setShut(true);
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    return () => document.removeEventListener('pointerdown', onPointerDown);
+  }, [floating]);
 
   const modules = useMemo(() => buildModules({
     permissions,
@@ -378,10 +402,15 @@ export function ZenitNav({
     onPage(target);
   }
 
-  // Na een klik in het paneel de focus loslaten, net als bij navigeren (main.tsx):
-  // anders houdt :focus-within het losse paneel open nadat je al verder bent.
+  // Na een keuze in het paneel de focus loslaten, net als bij navigeren
+  // (main.tsx): anders houdt :focus-within het losse paneel open nadat je al
+  // verder bent. En het losse paneel inklappen, ook al staat de muis er nog op.
+  function shutPanel() {
+    if (floating) setShut(true);
+  }
   function letGo() {
     if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+    shutPanel();
   }
 
   function openModule(module: ModuleDef) {
@@ -442,7 +471,7 @@ export function ZenitNav({
               key={item.page}
               className={`zpnav-item${active ? ' is-on' : ''}`}
               aria-current={active ? 'page' : undefined}
-              onClick={() => go(item.page)}
+              onClick={() => { go(item.page); letGo(); }}
             >
               <item.Icon size={16} aria-hidden="true"/>
               <span className="zpnav-l">{item.label}</span>
@@ -520,10 +549,14 @@ export function ZenitNav({
   // zonder die klasse kreeg het donkere paneel op Dag het amber (#855800) en
   // de grijze inkt (#5E5E6B) van het lichte werkvlak, donker op donker.
   return <aside
-    className={`znav${look === 'baken' ? ' cmd-scope' : ''}${mobileOpen ? ' is-open' : ''}${view.open || account.open ? ' has-pop' : ''}`}
+    ref={navRef}
+    className={`znav${look === 'baken' ? ' cmd-scope' : ''}${mobileOpen ? ' is-open' : ''}${view.open || account.open ? ' has-pop' : ''}${shut ? ' is-shut' : ''}`}
     aria-label="Navigatie"
   >
-    <nav className="zrail cmd-scope" aria-label="Modules">
+    {/* De rail is de greep van het losse paneel: wie hem aanwijst, aantikt of
+        er met Tab in komt, wil het menu weer zien. Een klik op een module
+        klapt het paneel dus niet in: dan toont het wat er in die module zit. */}
+    <nav className="zrail cmd-scope" aria-label="Modules" onPointerEnter={() => setShut(false)} onFocus={() => setShut(false)}>
       {/* In een losse app is er geen Vandaag: het merk brengt je naar het begin van de app. */}
       {standaloneApp
         ? <button type="button" className="zrail-logo" onClick={() => go((standaloneApp.home.find(target => permissions.canOpenPage(target)) ?? standaloneApp.home[0]) as Page)} aria-label={`${standaloneApp.name}, naar het begin`} title={standaloneApp.name}><BrandMark /></button>
@@ -588,7 +621,7 @@ export function ZenitNav({
           <div className="zorg-n">
             <Select
               value={activeOrganizationId ?? ''}
-              onChange={event => onOrganization(event.target.value)}
+              onChange={event => { onOrganization(event.target.value); if (floating) letGo(); }}
               aria-label={hasEntities ? 'Administratie' : 'Organisatie'}
               menuMinWidth={240}
             >
@@ -604,7 +637,10 @@ export function ZenitNav({
         <h2>{panelTitle}</h2>
         <div className="zmod-acts">
           {onRefresh && <button type="button" className={`zicon-btn${refreshing ? ' is-busy' : ''}`} onClick={onRefresh} disabled={refreshing} aria-label="Gegevens verversen" title="Verversen"><RefreshCw size={15}/></button>}
-          {onTogglePin && <button type="button" className="zicon-btn zpin" onClick={event => { onTogglePin(); if (event.detail > 0) event.currentTarget.blur(); }} aria-pressed={pinned} aria-label={pinned ? 'Paneel inklappen' : 'Paneel vastzetten'} title={pinned ? 'Paneel inklappen' : 'Paneel vastzetten'}>{pinned ? <PanelLeftClose size={16}/> : <PanelLeftOpen size={16}/>}</button>}
+          {/* Inklappen met de muis: meteen dicht, ook al staat de muis er nog op.
+              Met het toetsenbord blijft het open: anders staat de focus in een
+              paneel dat je niet ziet. */}
+          {onTogglePin && <button type="button" className="zicon-btn zpin" onClick={event => { setShut(pinned && event.detail > 0); onTogglePin(); if (event.detail > 0) event.currentTarget.blur(); }} aria-pressed={pinned} aria-label={pinned ? 'Paneel inklappen' : 'Paneel vastzetten'} title={pinned ? 'Paneel inklappen' : 'Paneel vastzetten'}>{pinned ? <PanelLeftClose size={16}/> : <PanelLeftOpen size={16}/>}</button>}
         </div>
       </div>
       {/* Op de telefoon is er geen tabrij met "Alleen lezen"; dan staat het hier. */}
@@ -612,7 +648,7 @@ export function ZenitNav({
 
       <nav className="zpanel-scroll" aria-label={panelTitle}>{panelBody}</nav>
 
-      {showGerrieCard && <button type="button" className="zpanel-foot" onClick={() => go('gerrie')}>
+      {showGerrieCard && <button type="button" className="zpanel-foot" onClick={() => { go('gerrie'); letGo(); }}>
         <span className="zorb sm live" aria-hidden="true"/>
         <b>{decisionCount > 0 ? plural(decisionCount, 'voorstel wacht', 'voorstellen wachten') : 'Gerrie waakt'}</b>
         <span className="zpanel-foot-t">{decisionCount > 0 ? 'Bekijk en beslis in één klik' : 'Niets dat op je wacht'}</span>
@@ -672,7 +708,7 @@ export function ZenitNav({
           role="menuitem"
           className={`zpop-item zpop-group${openSettingsTab && group.tabs.some(tab => tab.id === openSettingsTab) ? ' is-current' : ''}`}
           data-settings-group={group.id}
-          onClick={() => { account.setOpen(false); onOpenSettings(group.tabs[0].id); }}
+          onClick={() => { account.setOpen(false); shutPanel(); onOpenSettings(group.tabs[0].id); }}
         >
           <group.Icon size={15} aria-hidden="true"/>
           <span className="zpop-group-t">
@@ -682,8 +718,8 @@ export function ZenitNav({
         </button>)}
       </div>
       <div className="zpop-sep" aria-hidden="true"/>
-      {onNewEntity && <button type="button" role="menuitem" className="zpop-item" onClick={() => { account.setOpen(false); onNewEntity(); }}><Plus size={15} aria-hidden="true"/><span>Nieuwe administratie</span></button>}
-      <button type="button" role="menuitem" className="zpop-item" onClick={() => { account.setOpen(false); onNewOrganization(); }}><Plus size={15} aria-hidden="true"/><span>Nieuwe organisatie</span></button>
+      {onNewEntity && <button type="button" role="menuitem" className="zpop-item" onClick={() => { account.setOpen(false); shutPanel(); onNewEntity(); }}><Plus size={15} aria-hidden="true"/><span>Nieuwe administratie</span></button>}
+      <button type="button" role="menuitem" className="zpop-item" onClick={() => { account.setOpen(false); shutPanel(); onNewOrganization(); }}><Plus size={15} aria-hidden="true"/><span>Nieuwe organisatie</span></button>
       <div className="zpop-sep" aria-hidden="true"/>
       <button type="button" role="menuitem" className="zpop-item danger" onClick={() => { account.setOpen(false); onSignOut(); }}><LogOut size={15} aria-hidden="true"/><span>Uitloggen</span></button>
     </div>}
