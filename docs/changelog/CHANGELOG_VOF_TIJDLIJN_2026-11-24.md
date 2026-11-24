@@ -249,3 +249,28 @@ Wat ze met bestaande gegevens doet:
 - **Er verandert geen boeking.**
 
 Ook de edge functions gaan mee: de handelingen van Gerrie, MCP en de API.
+
+**Staging: uitgerold op 24 november 2026** (merge `bd7b877`):
+
+- *Deploy Supabase (staging)* run 257:
+  - de migratie is toegepast ("Push database migrations" in 4 seconden; de
+    CLI breekt af bij een fout in een migratie);
+  - alle 40 edge functions zijn uitgerold, met de handelingen van Gerrie, MCP
+    en de API;
+  - de rooktest is geslaagd (Postgres 17.11). Daarin ook "boekhouder-hek: elke
+    organisatietabel is afgeschermd" (de tijdlijn valt eronder) en "anon heeft
+    geen rechten in public".
+- *Frontend checks* run 287: alles groen.
+  - De keten vanaf nul op een lege database, elk migratiebestand toegepast, en
+    de databasetests.
+  - `deno check` op de edge functions.
+  - Typecheck, de unit tests, en de mobiele lay-outtest in licht en donker.
+  - Laden per module, de inrichtingsstappen en de terugknop.
+- Cloudflare Pages bouwt de app bij de push naar `staging`; dat is van hieruit
+  niet te zien.
+
+De staging-database zelf is niet ingezien: Supabase is in deze sessie niet als
+koppeling verbonden. De controle is de uitrol, de rooktest, en dezelfde
+migratie op een lege en een gevulde lokale database.
+
+Voor productie: dezelfde migratie, na `20261124100000_meeting_in_inhoud`.
