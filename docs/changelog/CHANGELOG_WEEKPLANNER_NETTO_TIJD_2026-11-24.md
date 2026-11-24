@@ -131,6 +131,12 @@ Geen migratie. Een rij met 0 minuten in `planner_day_capacity` betekende
   De getallen kloppen met de hand nagerekend: maandag 8u − 1u30 = 6u30
   netto, 4u30 taken, 2u vrij; dinsdag 8u − 3u = 5u netto, 5u45 taken, 45m te
   veel; de week 40u − 9u30 = 30u30 netto, 18u15 taken, 12u15 vrij.
+- `npm run test:mobile -- --theme=both`: 920 pagina's gemeten, 0 met
+  problemen. De weekplanner op de telefoon heeft de dagstrip op 325px (max
+  600).
+- `npm run test:loading`: alle controles geslaagd.
+- `npm run test:terugknop`: 17 gelukt, 0 mislukt.
+- `npm run build` slaagt.
 - `deno check` kon niet in de cloudsessie draaien: esm.sh is daar niet
   bereikbaar. De wijziging in de edge function is alleen tekst. De workflow op
   GitHub draait de check.

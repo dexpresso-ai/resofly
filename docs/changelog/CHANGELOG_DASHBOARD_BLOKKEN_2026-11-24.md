@@ -114,3 +114,18 @@ Geen migratie, geen edge function.
   - op de telefoon past het indelen zonder zijwaarts scrollen;
   - de eerste taak staat op 273px, net als voorheen.
 - `npm run test:terugknop`: 17 gelukt, 0 mislukt.
+- `npm run test:mobile -- --theme=both`: 920 pagina's gemeten, 0 met
+  problemen. Daarin ook `dashboard-indelen` op telefoon, tablet en liggend,
+  in licht en donker. Het dashboard op de telefoon staat op 273px (max 280).
+- `npm run test:loading`: alle controles geslaagd.
+- `npm run build` slaagt.
+
+## Nog open
+
+- De indeling staat in de browser, net als Mijn/Team en Geld/Week. Op een
+  ander apparaat begin je opnieuw met de standaard. Moet hij meereizen, dan
+  is daar een tabel met persoonlijke voorkeuren voor nodig.
+- Op de telefoon scrolt de lijst niet vanzelf mee als je een balk naar de
+  rand sleept. De lijst is kort (hooguit tien balken), en de pijltjes werken
+  altijd.
+- E2e met echte login op staging (de gebruikelijke restpost).
