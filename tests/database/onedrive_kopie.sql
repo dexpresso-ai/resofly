@@ -8,9 +8,12 @@
 --   3. Per item één taak: een tweede wijziging vervangt de eerste.
 --   4. Hernoemen van klant, project en map, en verwijderen (ook via een
 --      cascade) komen erin.
---   5. Wie wat ziet: de stand van de kopie voor wie Inhoud leest; de tokens,
---      de wachtrij en de koppeltabel voor niemand in de app.
---   6. Oppakken gaat met gewone wijzigingen vóór het verwijderen.
+--   5. Wie wat ziet: óf er een kopie is voor wie Inhoud leest, maar niet het
+--      account van de eigenaar; de tokens, de wachtrij en de koppeltabel voor
+--      niemand in de app.
+--   6. Per organisatie één ronde tegelijk. Oppakken gaat met gewone
+--      wijzigingen vóór het verwijderen, en een klant, project of map gaat pas
+--      weg als er geen wijziging meer wacht.
 --   7. Vertrekt de eigenaar die koppelde, dan gaat de kopie uit.
 -- ============================================================
 
@@ -154,7 +157,10 @@ select pg_temp.gelijk(pg_temp.taken(:'org_b'), 0, 'een andere organisatie zonder
 
 select pg_temp.als(:'lid');
 set local role authenticated;
-select pg_temp.gelijk((select count(*) from public.onedrive_mirrors)::int, 1, 'wie Inhoud leest, ziet dat er een kopie is');
+select pg_temp.gelijk((select count(*) from public.onedrive_mirrors where enabled)::int, 1, 'wie Inhoud leest, ziet dat er een kopie is');
+select pg_temp.gelijk((select root_web_url from public.onedrive_mirrors), null::text, 'en de link naar de map (hier nog leeg)');
+select pg_temp.weigert('select account_email from public.onedrive_mirrors', 'permission denied', 'maar niet het Microsoft-account van de eigenaar');
+select pg_temp.weigert('select * from public.onedrive_mirrors', 'permission denied', 'ook niet via de hele rij');
 select pg_temp.weigert('select count(*) from public.onedrive_mirror_tokens', 'permission denied', 'de tokens nooit');
 select pg_temp.weigert('select count(*) from public.onedrive_sync_jobs', 'permission denied', 'de wachtrij niet');
 select pg_temp.weigert('select count(*) from public.onedrive_sync_items', 'permission denied', 'de koppeltabel niet');
@@ -164,6 +170,8 @@ select pg_temp.weigert(format($q$select public.onedrive_enqueue(%L, 'attachment'
   'permission denied', 'zelf een taak klaarzetten kan niet');
 select pg_temp.weigert(format($q$select * from public.onedrive_claim_jobs(%L, 10)$q$, :'org_a'),
   'permission denied', 'taken oppakken kan niet');
+select pg_temp.weigert(format($q$select public.onedrive_lock_org(%L)$q$, :'org_a'),
+  'permission denied', 'een organisatie vastpakken ook niet');
 select pg_temp.weigert(format($q$select public.onedrive_queue_full_sync(%L)$q$, :'org_a'),
   'permission denied', 'alles opnieuw klaarzetten kan alleen de edge function');
 reset role;
@@ -179,12 +187,34 @@ select pg_temp.gelijk((select count(*) from public.onedrive_mirrors)::int, 0, 'e
 reset role;
 select pg_temp.beheer();
 
--- ── 6. Oppakken: gewone wijzigingen vóór het verwijderen ─────────────────
+-- ── 6. Eén ronde per organisatie; wat blijft gaat vóór wat weg moet ──────
+
+select public.onedrive_lock_org(:'org_a') as greep \gset
+select pg_temp.gelijk(:'greep'::uuid, :'org_a'::uuid, 'een ronde pakt de organisatie vast');
+select pg_temp.gelijk(public.onedrive_lock_org(:'org_a'), null::uuid, 'een tweede ronde krijgt hem niet zolang de eerste loopt');
+select pg_temp.gelijk(public.onedrive_lock_org(null), null::uuid, 'ook niet als hij zelf een organisatie zoekt');
+select public.onedrive_unlock_org(:'org_a');
+select pg_temp.gelijk(public.onedrive_lock_org(null, 900, array[:'org_a'::uuid]), null::uuid, 'een organisatie die al aan de beurt was, slaat hij over');
+select pg_temp.gelijk(public.onedrive_lock_org(null), :'org_a'::uuid, 'losgelaten: de volgende ronde krijgt hem');
+select public.onedrive_unlock_org(:'org_a');
+select pg_temp.gelijk(public.onedrive_claim_jobs(null, 10) is null, true, 'zonder organisatie pakt niemand iets op');
 
 select kind as eerste from public.onedrive_claim_jobs(:'org_a', 1) \gset
 select pg_temp.gelijk(:'eerste', 'sync', 'eerst wat blijft, dan wat weg moet');
+select count(*)::int as mappen_weg from public.onedrive_sync_jobs
+ where organization_id = :'org_a' and kind = 'delete' and item_type in ('client', 'project', 'folder') \gset
+select pg_temp.gelijk(:'mappen_weg'::int, 1, 'er wacht een verwijderde map');
 select pg_temp.gelijk((select count(*) from public.onedrive_claim_jobs(:'org_a', 200))::int,
-  pg_temp.taken(:'org_a') - 1, 'een opgepakte taak pakt een tweede ronde niet nog eens');
+  pg_temp.taken(:'org_a') - 1 - :'mappen_weg'::int,
+  'een opgepakte taak gaat niet nog eens mee, en de map wacht zolang er wijzigingen wachten');
+select pg_temp.gelijk((select count(*) from public.onedrive_claim_jobs(:'org_a', 200))::int, 0, 'opgepakt is opgepakt');
+
+-- De wijzigingen zijn klaar (zoals de edge function ze weghaalt): nu mag de map weg.
+delete from public.onedrive_sync_jobs where organization_id = :'org_a' and kind = 'sync';
+update public.onedrive_sync_jobs set claimed_until = null where organization_id = :'org_a';
+select pg_temp.gelijk(
+  (select count(*) from public.onedrive_claim_jobs(:'org_a', 200) c where c.kind = 'delete' and c.item_type = 'folder')::int,
+  1, 'zonder wachtende wijzigingen gaat de map naar de prullenbak');
 
 -- Uit: niets meer erbij, en alles opnieuw klaarzetten doet niets.
 update public.onedrive_mirrors set enabled = false where organization_id = :'org_a';

@@ -2895,16 +2895,18 @@ async function handleInternalOneDrivePush(request: Request, env: Env, context: R
     const { start, end } = chunks[i];
     const part = await env.MEDIA_BUCKET.get(key, { range: { offset: start, length: end - start + 1 }, onlyIf: { etagMatches: head.etag } });
     if (!part || !('body' in part)) {
-      await fetch(uploadUrl, { method: 'DELETE' }).catch(() => undefined);
+      await fetch(uploadUrl, { method: 'DELETE', redirect: 'manual' }).catch(() => undefined);
       return jsonResponse({ ok: false, status: 409, changed: true, error: 'Het bestand veranderde tijdens het kopiëren.' }, 200, context);
     }
     const bytes = await part.arrayBuffer();
     // Geen Authorization-header: het uploadadres draagt de toegang al, en
-    // OneDrive voor bedrijven weigert een upload mét token.
+    // OneDrive voor bedrijven weigert een upload mét token. Geen
+    // doorverwijzing volgen: het adres is getoetst, een doorverwijzing niet.
     const res = await fetch(uploadUrl, {
       method: 'PUT',
       headers: { 'Content-Range': `bytes ${start}-${end}/${head.size}` },
       body: bytes,
+      redirect: 'manual',
     });
     if (i < chunks.length - 1 && res.status === 202) {
       await res.body?.cancel().catch(() => undefined);
@@ -2918,7 +2920,7 @@ async function handleInternalOneDrivePush(request: Request, env: Env, context: R
       if (!item) return jsonResponse({ ok: false, status: 502, error: 'OneDrive gaf geen bestand terug.' }, 200, context);
       return jsonResponse({ ok: true, item }, 200, context);
     }
-    await fetch(uploadUrl, { method: 'DELETE' }).catch(() => undefined);
+    await fetch(uploadUrl, { method: 'DELETE', redirect: 'manual' }).catch(() => undefined);
     return jsonResponse({
       ok: false,
       status: res.status,

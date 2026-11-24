@@ -211,6 +211,21 @@ async function must<T>(query: PromiseLike<{ data: T; error: unknown }>): Promise
   return data;
 }
 
+/**
+ * Een leesvraag tijdens het afwerken. Mislukt hij, dan later opnieuw. Eerst
+ * telde een mislukte vraag (time-out, storing) als "de rij is weg", en dan
+ * ging een bestand dat in ResoFly gewoon bestond in OneDrive naar de
+ * prullenbak (review van 24 november).
+ */
+async function read<T>(query: PromiseLike<{ data: T; error: unknown }>): Promise<T> {
+  const { data, error } = await query;
+  if (error) {
+    console.warn('onedrive-sync: lezen mislukt', (error as { message?: string }).message ?? error);
+    throw new RetryLater('De database gaf even geen antwoord.');
+  }
+  return data;
+}
+
 // ── De ingang ─────────────────────────────────────────────────────────
 
 Deno.serve(async (req) => {
@@ -542,13 +557,25 @@ async function retryFailed(organizationId: string): Promise<void> {
 async function accessTokenFor(mirror: MirrorRow): Promise<string> {
   const token = (await must(admin.from('onedrive_mirror_tokens').select('*').eq('organization_id', mirror.organization_id).maybeSingle())) as TokenRow | null;
   if (!token) throw new TokenError('De koppeling met OneDrive staat uit. De eigenaar moet OneDrive opnieuw koppelen.', 'ingetrokken');
+  // Een token dat niet meer te lezen is (de sleutel veranderde): opnieuw
+  // koppelen, en dat ziet de eigenaar. Eerst bleef de kopie dan stil hangen op
+  // "wijzigingen gaan nu naar OneDrive" (review van 24 november).
+  const unreadable = async () => {
+    const message = 'De opgeslagen toegang tot OneDrive is niet meer te lezen. De eigenaar moet OneDrive opnieuw koppelen.';
+    await admin.from('onedrive_mirrors').update({ status: 'expired', last_error: message }).eq('organization_id', mirror.organization_id);
+    return new TokenError(message, 'ingetrokken');
+  };
   const expires = token.expires_at ? Date.parse(token.expires_at) : 0;
-  if (expires && expires - Date.now() > 120_000) return await decryptToken(token.access_token_encrypted, TOKEN_KEY);
+  if (expires && expires - Date.now() > 120_000) {
+    try { return await decryptToken(token.access_token_encrypted, TOKEN_KEY); } catch { throw await unreadable(); }
+  }
   if (!token.refresh_token_encrypted) throw new TokenError('OneDrive geeft ResoFly geen toegang meer (verlopen). De eigenaar moet OneDrive opnieuw koppelen.', 'ingetrokken');
+  let refreshToken: string;
+  try { refreshToken = await decryptToken(token.refresh_token_encrypted, TOKEN_KEY); } catch { throw await unreadable(); }
 
   const params = new URLSearchParams({
     grant_type: 'refresh_token',
-    refresh_token: await decryptToken(token.refresh_token_encrypted, TOKEN_KEY),
+    refresh_token: refreshToken,
     client_id: CLIENT_ID,
     client_secret: CLIENT_SECRET,
     scope: onedriveRefreshScopes(token.scopes).join(' '),
@@ -665,66 +692,88 @@ async function orgContext(mirror: MirrorRow): Promise<OrgCtx> {
   } catch (err) {
     if (err instanceof TokenError && err.failure !== 'tijdelijk') throw new MirrorPaused(err.message);
     if (err instanceof TokenError) throw new RetryLater(err.message);
-    throw err;
+    if (err instanceof RetryLater || err instanceof MirrorPaused) throw err;
+    // Iets onverwachts: niet stil laten hangen, maar zichtbaar maken.
+    const message = `De koppeling met OneDrive gaf een fout: ${err instanceof Error ? err.message : String(err)}`;
+    console.error('onedrive-sync: koppeling niet bruikbaar', err);
+    await admin.from('onedrive_mirrors').update({ last_error: message.slice(0, 300) }).eq('organization_id', mirror.organization_id);
+    throw new RetryLater(message);
   }
   return { orgId: mirror.organization_id, mirror, driveId: mirror.drive_id, token, problem: null, synced: 0 };
 }
 
+/**
+ * De wachtrij afwerken: per organisatie één ronde tegelijk (onedrive_lock_org).
+ * Twee rondes tegelijk maakten in OneDrive dubbele mappen (review van
+ * 24 november). Met een organisatie (de app, het scherm) alleen die; zonder
+ * (de geplande taak) de ene na de andere, tot de tijd op is.
+ */
 async function processDue(filter: { organizationId?: string; limit: number; budgetMs: number }) {
   const deadline = Date.now() + filter.budgetMs;
   const counts = { done: 0, retry: 0, failed: 0, paused: 0 };
-  const { data, error } = await admin.rpc('onedrive_claim_jobs', { p_org: filter.organizationId ?? null, p_limit: filter.limit, p_lease_seconds: 300 });
-  if (error) throw error;
-  const jobs = (data ?? []) as JobRow[];
-  const contexts = new Map<string, OrgCtx | Error>();
-
-  for (const job of jobs) {
-    if (Date.now() > deadline) {
-      await releaseClaim(job);
-      continue;
+  const seen: string[] = [];
+  while (Date.now() < deadline) {
+    const { data: locked, error } = await admin.rpc('onedrive_lock_org', {
+      p_org: filter.organizationId ?? null, p_lease_seconds: 900, p_exclude: seen,
+    });
+    if (error) throw error;
+    const orgId = typeof locked === 'string' ? locked : null;
+    if (!orgId) break;
+    seen.push(orgId);
+    try {
+      await processOrganization(orgId, filter.limit, deadline, counts);
+    } finally {
+      await admin.rpc('onedrive_unlock_org', { p_org: orgId });
     }
-    let ctx = contexts.get(job.organization_id);
-    if (!ctx) {
-      try {
-        const mirror = await loadMirror(job.organization_id);
-        if (!mirror?.enabled) {
-          await admin.from('onedrive_sync_jobs').delete().eq('id', job.id);
-          continue;
-        }
-        ctx = await orgContext(mirror);
-      } catch (err) {
-        ctx = err instanceof Error ? err : new Error(String(err));
-      }
-      contexts.set(job.organization_id, ctx);
-    }
-    if (ctx instanceof Error) {
-      await finishJob(job, ctx instanceof RetryLater ? { kind: 'retry', message: ctx.message, seconds: ctx.seconds } : { kind: 'paused' });
-      counts[ctx instanceof RetryLater ? 'retry' : 'paused'] += 1;
-      continue;
-    }
-    const outcome = await runJob(ctx, job);
-    await finishJob(job, outcome);
-    if (outcome.kind === 'done') { counts.done += 1; ctx.synced += 1; }
-    else if (outcome.kind === 'retry') counts.retry += 1;
-    else if (outcome.kind === 'failed') counts.failed += 1;
-    else {
-      counts.paused += 1;
-      contexts.set(job.organization_id, new MirrorPaused('Gepauzeerd'));
-    }
-  }
-
-  for (const ctx of contexts.values()) {
-    if (ctx instanceof Error) continue;
-    const patch: Record<string, unknown> = {};
-    if (ctx.synced > 0) patch.last_synced_at = new Date().toISOString();
-    if (ctx.problem) patch.last_error = ctx.problem;
-    else if (ctx.synced > 0 && ctx.mirror.last_error) patch.last_error = null;
-    if (Object.keys(patch).length) await admin.from('onedrive_mirrors').update(patch).eq('organization_id', ctx.orgId).eq('status', 'active');
+    if (filter.organizationId) break;
   }
 
   const pendingFilter = admin.from('onedrive_sync_jobs').select('id', { count: 'exact', head: true }).eq('status', 'pending');
   const { count: pending } = filter.organizationId ? await pendingFilter.eq('organization_id', filter.organizationId) : await pendingFilter;
   return { ...counts, pending: pending ?? 0 };
+}
+
+async function processOrganization(orgId: string, limit: number, deadline: number, counts: { done: number; retry: number; failed: number; paused: number }) {
+  const mirror = await loadMirror(orgId);
+  if (!mirror?.enabled) return;
+  let ctx: OrgCtx;
+  try {
+    ctx = await orgContext(mirror);
+  } catch (err) {
+    // De taken blijven staan: bij een verlopen koppeling tot er opnieuw
+    // gekoppeld is, bij een storing tot de volgende ronde.
+    if (err instanceof MirrorPaused) { counts.paused += 1; return; }
+    if (err instanceof RetryLater) { counts.retry += 1; return; }
+    throw err;
+  }
+
+  // Meer rondes binnen dezelfde greep: een klant, project of map gaat pas weg
+  // als de gewone wijzigingen klaar zijn, en die komen in de ronde ervoor.
+  let stop = false;
+  while (!stop && Date.now() < deadline) {
+    const { data, error } = await admin.rpc('onedrive_claim_jobs', { p_org: orgId, p_limit: limit, p_lease_seconds: 900 });
+    if (error) throw error;
+    const jobs = (data ?? []) as JobRow[];
+    if (!jobs.length) break;
+    for (const job of jobs) {
+      if (stop || Date.now() > deadline) {
+        await releaseClaim(job);
+        continue;
+      }
+      const outcome = await runJob(ctx, job);
+      await finishJob(job, outcome);
+      if (outcome.kind === 'done') { counts.done += 1; ctx.synced += 1; }
+      else if (outcome.kind === 'retry') counts.retry += 1;
+      else if (outcome.kind === 'failed') counts.failed += 1;
+      else { counts.paused += 1; stop = true; }
+    }
+  }
+
+  const patch: Record<string, unknown> = {};
+  if (ctx.synced > 0) patch.last_synced_at = new Date().toISOString();
+  if (ctx.problem) patch.last_error = ctx.problem;
+  else if (ctx.synced > 0 && ctx.mirror.last_error) patch.last_error = null;
+  if (Object.keys(patch).length) await admin.from('onedrive_mirrors').update(patch).eq('organization_id', ctx.orgId).eq('status', 'active');
 }
 
 type JobOutcome =
@@ -802,7 +851,7 @@ async function finishJob(job: JobRow, outcome: JobOutcome): Promise<void> {
 // ── Koppelingen tussen ResoFly en OneDrive ────────────────────────────
 
 async function getMap(ctx: OrgCtx, type: ItemType, id: string): Promise<MapRow | null> {
-  return (await must(admin.from('onedrive_sync_items').select('*')
+  return (await read(admin.from('onedrive_sync_items').select('*')
     .eq('organization_id', ctx.orgId).eq('item_type', type).eq('item_id', id).maybeSingle())) as MapRow | null;
 }
 
@@ -850,7 +899,15 @@ async function moveRename(ctx: OrgCtx, itemId: string, desired: string, parentId
     const name = n === 1 ? desired : numberedName(desired, n);
     const res = await graph(ctx.token, 'PATCH', `/drives/${ctx.driveId}/items/${itemId}`, { name, parentReference: { id: parentId } });
     if (res.status === 200) return { name: driveItemOf(res.body)?.name || name };
-    if (res.status === 404) return 'gone';
+    if (res.status === 404) {
+      // Weg is het item zelf, of de map waar het heen moet. Is het item er
+      // nog, dan ontbreekt de doelmap: die keten opnieuw nalopen. Eerst gaf
+      // dat een tweede kopie, met de oude op de oude plek (review van 24 november).
+      const probe = await graph(ctx.token, 'GET', `/drives/${ctx.driveId}/items/${itemId}?$select=id`);
+      if (probe.status === 200) throw new ParentGone('De map waar het heen moet, ontbreekt in OneDrive.');
+      if (probe.status === 404) return 'gone';
+      await raiseFor(ctx, probe);
+    }
     if (res.status === 409) continue;
     await raiseFor(ctx, res);
   }
@@ -900,14 +957,14 @@ async function ensurePath(ctx: OrgCtx, nodes: ContainerNode[], verify: boolean):
 /** Klant en project boven een bestand, of "Zonder klant". Een project hoort bij de klant van dat project. */
 async function containerNodes(ctx: OrgCtx, clientId: string | null, projectId: string | null): Promise<ContainerNode[]> {
   if (projectId) {
-    const { data: project } = await admin.from('projects').select('id,name,client_id').eq('id', projectId).eq('organization_id', ctx.orgId).maybeSingle();
+    const project = await read(admin.from('projects').select('id,name,client_id').eq('id', projectId).eq('organization_id', ctx.orgId).maybeSingle());
     if (project) {
       const p = project as { id: string; name: string; client_id: string | null };
       return [...(await containerNodes(ctx, p.client_id, null)), { type: 'project', id: p.id, name: p.name }];
     }
   }
   if (clientId) {
-    const { data: client } = await admin.from('clients').select('id,name').eq('id', clientId).eq('organization_id', ctx.orgId).maybeSingle();
+    const client = await read(admin.from('clients').select('id,name').eq('id', clientId).eq('organization_id', ctx.orgId).maybeSingle());
     if (client) {
       const c = client as { id: string; name: string };
       return [{ type: 'client', id: c.id, name: c.name }];
@@ -921,7 +978,7 @@ async function folderChain(ctx: OrgCtx, folderId: string): Promise<ContainerNode
   const rows: Array<{ id: string; name: string; parent_id: string | null; client_id: string | null; project_id: string | null }> = [];
   let id: string | null = folderId;
   for (let depth = 0; id && depth < 25; depth++) {
-    const { data } = await admin.from('content_folders').select('id,name,parent_id,client_id,project_id').eq('id', id).eq('organization_id', ctx.orgId).maybeSingle();
+    const data = await read(admin.from('content_folders').select('id,name,parent_id,client_id,project_id').eq('id', id).eq('organization_id', ctx.orgId).maybeSingle());
     if (!data) return null;
     const row = data as { id: string; name: string; parent_id: string | null; client_id: string | null; project_id: string | null };
     if (rows.some(r => r.id === row.id)) break;
@@ -938,8 +995,8 @@ async function folderChain(ctx: OrgCtx, folderId: string): Promise<ContainerNode
 async function syncItem(ctx: OrgCtx, job: JobRow, verify: boolean): Promise<void> {
   const id = job.item_id;
   if (job.item_type === 'attachment') {
-    const { data } = await admin.from('attachments').select('id,name,entity_type,entity_id,storage_key,size_bytes,edit_version')
-      .eq('id', id).eq('organization_id', ctx.orgId).maybeSingle();
+    const data = await read(admin.from('attachments').select('id,name,entity_type,entity_id,storage_key,size_bytes,edit_version')
+      .eq('id', id).eq('organization_id', ctx.orgId).maybeSingle());
     const row = data as { id: string; name: string; entity_type: string; entity_id: string; storage_key: string | null; size_bytes: number | null; edit_version: number | null } | null;
     if (!row || row.entity_type !== 'folder' || !row.storage_key) return await deleteMapped(ctx, 'attachment', id);
     const nodes = await folderChain(ctx, row.entity_id);
@@ -947,8 +1004,8 @@ async function syncItem(ctx: OrgCtx, job: JobRow, verify: boolean): Promise<void
     return await syncFile(ctx, 'attachment', id, nodes, safeDriveName(row.name, 'Bestand'), row.storage_key, row.size_bytes, contentVersion(row), verify);
   }
   if (job.item_type === 'document') {
-    const { data } = await admin.from('documents').select('id,title,storage_key,mime_type,size_bytes,edit_version,client_id,project_id,folder_id')
-      .eq('id', id).eq('organization_id', ctx.orgId).maybeSingle();
+    const data = await read(admin.from('documents').select('id,title,storage_key,mime_type,size_bytes,edit_version,client_id,project_id,folder_id')
+      .eq('id', id).eq('organization_id', ctx.orgId).maybeSingle());
     const row = data as { id: string; title: string | null; storage_key: string | null; mime_type: string | null; size_bytes: number | null; edit_version: number | null; client_id: string | null; project_id: string | null; folder_id: string | null } | null;
     if (!row || !row.storage_key) return await deleteMapped(ctx, 'document', id);
     const nodes = (row.folder_id ? await folderChain(ctx, row.folder_id) : null) ?? await containerNodes(ctx, row.client_id, row.project_id);
@@ -960,10 +1017,10 @@ async function syncItem(ctx: OrgCtx, job: JobRow, verify: boolean): Promise<void
   if (!map) return;
   let nodes: ContainerNode[] | null;
   if (job.item_type === 'client') {
-    const { data } = await admin.from('clients').select('id,name').eq('id', id).eq('organization_id', ctx.orgId).maybeSingle();
+    const data = await read(admin.from('clients').select('id,name').eq('id', id).eq('organization_id', ctx.orgId).maybeSingle());
     nodes = data ? [{ type: 'client', id, name: (data as { name: string }).name }] : null;
   } else if (job.item_type === 'project') {
-    const { data } = await admin.from('projects').select('id').eq('id', id).eq('organization_id', ctx.orgId).maybeSingle();
+    const data = await read(admin.from('projects').select('id').eq('id', id).eq('organization_id', ctx.orgId).maybeSingle());
     nodes = data ? await containerNodes(ctx, null, id) : null;
   } else {
     nodes = await folderChain(ctx, id);

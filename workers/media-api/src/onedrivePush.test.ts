@@ -9,6 +9,8 @@ test('alleen uploadadressen van OneDrive', () => {
   assert.equal(isMicrosoftUploadUrl('https://contoso-my.sharepoint.com/personal/x/_api/v2.0/drives/b!a/items/01X/uploadSession?guid=1'), true);
   assert.equal(isMicrosoftUploadUrl('https://api.onedrive.com/rup/abc'), true);
   assert.equal(isMicrosoftUploadUrl('https://sn3302.up.1drv.com/up/fe6987415ace7X4e1eF866337'), true);
+  assert.equal(isMicrosoftUploadUrl('https://my.microsoftpersonalcontent.com/personal/abc/_api/v2.0/uploadSession'), true);
+  assert.equal(isMicrosoftUploadUrl('https://microsoftpersonalcontent.com.evil.example/x'), false);
   assert.equal(isMicrosoftUploadUrl('http://contoso-my.sharepoint.com/x'), false, 'alleen https');
   assert.equal(isMicrosoftUploadUrl('https://sharepoint.com.evil.example/x'), false);
   assert.equal(isMicrosoftUploadUrl('https://evil.example/?u=https://x.sharepoint.com'), false);

@@ -25,7 +25,9 @@ export const ONEDRIVE_PUSH_SEGMENTS: ReadonlySet<string> = new Set(['folder', 'd
 /**
  * Een uploadadres van OneDrive. Zakelijk: {tenant}-my.sharepoint.com. Privé:
  * api.onedrive.com of *.up.1drv.com (de voorbeelden in de documentatie van
- * Microsoft Graph). Alleen https, zonder gebruikersnaam in het adres.
+ * Microsoft Graph), en het domein waar Microsoft privé-bestanden sinds kort
+ * vandaan haalt (microsoftpersonalcontent.com). Alleen https, zonder
+ * gebruikersnaam of eigen poort. De route volgt geen doorverwijzing.
  */
 export function isMicrosoftUploadUrl(raw: unknown): boolean {
   if (typeof raw !== 'string' || !raw || raw.length > 4096) return false;
@@ -40,7 +42,9 @@ export function isMicrosoftUploadUrl(raw: unknown): boolean {
   return host.endsWith('.sharepoint.com')
     || host === 'api.onedrive.com'
     || host.endsWith('.onedrive.com')
-    || host.endsWith('.1drv.com');
+    || host.endsWith('.1drv.com')
+    || host === 'microsoftpersonalcontent.com'
+    || host.endsWith('.microsoftpersonalcontent.com');
 }
 
 /** De stukken van een bestand: [begin, eind] (eind inbegrepen), zoals Content-Range ze noemt. */

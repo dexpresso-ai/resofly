@@ -80,6 +80,21 @@ verwijderen in OneDrive. Plan met de keuzes van 24 november:
 - **De eigenaar vertrekt**: de kopie gaat uit en het token weg, net als bij de
   agenda. Wat er in OneDrive staat, blijft.
 
+## Na de review (24 november)
+
+Een tweede blik op de code vond zeven punten. Geen ervan liet een andere
+organisatie bij de bestanden, of financiële stukken in OneDrive komen. Wel:
+
+| # | Wat er mis kon gaan | Nu |
+| --- | --- | --- |
+| 1 | Een mislukte leesvraag aan de database (time-out) telde als "de rij is weg": een bestand dat in ResoFly gewoon bestond, ging in OneDrive naar de prullenbak | Een mislukte leesvraag is "later opnieuw" (`read()` in `onedrive-sync`) |
+| 2 | Verhuisde een submap uit een map die daarna werd verwijderd, en moest die verhuizing even wachten, dan ging de submap met de map mee naar de prullenbak | Een klant, project of map gaat pas weg als er voor de organisatie geen wijziging meer wacht (`onedrive_claim_jobs`) |
+| 3 | Twee rondes tegelijk (de app, het scherm, de geplande taak) maakten dubbele mappen: "Acme" en "Acme 1" | Per organisatie één ronde tegelijk (`onedrive_lock_org`, `onedrive_unlock_org`, kolom `processing_until`) |
+| 4 | Een token dat niet meer te lezen was (sleutel veranderd), liet de kopie stil hangen | De koppeling gaat op "opnieuw koppelen", met uitleg voor de eigenaar |
+| 5 | Verplaatsen naar een map die in OneDrive weg was, gaf een tweede kopie, met de oude op de oude plek | Eerst kijken of het bestand er nog is; zo ja, de doelmap opnieuw maken en dan verplaatsen |
+| 6 | Elk teamlid met Inhoud kon het Microsoft-account van de eigenaar lezen | Kolomrechten: alleen `organization_id`, `enabled`, `status` en `root_web_url` |
+| 7 | De worker volgde een doorverwijzing van het uploadadres | `redirect: 'manual'`; ook het domein voor privé-bestanden van Microsoft (`microsoftpersonalcontent.com`) staat erbij |
+
 ## Bewust niet gebouwd
 
 - SharePoint en wat anderen delen (keuze C; fase 2).
@@ -99,10 +114,12 @@ verwijderen in OneDrive. Plan met de keuzes van 24 november:
   met de echte imports.
 - `supabase db reset` (de keten vanaf nul, met de migraties van staging erbij)
   en `npm run test:database`: alle acht bestanden geslaagd, met de nieuwe
-  `tests/database/onedrive_kopie.sql` (35 controles: wat er wel en niet in de
-  wachtrij komt, per item één taak, cascades, wie wat ziet, oppakken in de
-  goede volgorde, aan/uit, *Alles opnieuw kopiëren*, vertrek van de eigenaar,
-  opruimen). De migratie draait ook een tweede keer schoon.
+  `tests/database/onedrive_kopie.sql` (47 controles: wat er wel en niet in de
+  wachtrij komt, per item één taak, cascades, wie wat ziet (ook: niet het
+  account van de eigenaar), één ronde per organisatie, oppakken in de goede
+  volgorde, een map pas weg als er niets meer wacht, aan/uit, *Alles opnieuw
+  kopiëren*, vertrek van de eigenaar, opruimen). De migratie draait ook een
+  tweede keer schoon.
 - `npm run test:mobile -- --theme=both` voor de geraakte pagina's (30
   metingen, geen problemen), met twee nieuwe scenario's (`settings-onedrive`,
   `settings-onedrive-koppelen`) en de verkenner met het OneDrive-icoon. De

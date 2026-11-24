@@ -65,10 +65,15 @@ create table if not exists public.onedrive_mirrors (
   last_error text,
   last_synced_at timestamptz,
   enabled_at timestamptz,
+  -- Wie de wachtrij van deze organisatie nu afwerkt, tot wanneer (zie
+  -- onedrive_lock_org). Eén ronde tegelijk per organisatie.
+  processing_until timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   constraint onedrive_mirrors_enabled_has_root check (not enabled or (drive_id is not null and root_item_id is not null))
 );
+
+alter table public.onedrive_mirrors add column if not exists processing_until timestamptz;
 
 drop trigger if exists onedrive_mirrors_updated on public.onedrive_mirrors;
 create trigger onedrive_mirrors_updated
@@ -93,14 +98,20 @@ create trigger onedrive_mirror_tokens_updated
 alter table public.onedrive_mirrors enable row level security;
 alter table public.onedrive_mirror_tokens enable row level security;
 
--- Wie Inhoud mag lezen, ziet of er een kopie in OneDrive staat (de verkenner
--- zegt het, en de bevestiging bij verwijderen). Schrijven doet de edge function.
+-- Wie Inhoud mag lezen, ziet óf er een kopie in OneDrive staat (de verkenner
+-- zegt het, en de bevestiging bij verwijderen), en de link naar de map. Niet
+-- welk Microsoft-account de eigenaar koppelde, of wat er misging: dat is voor
+-- de eigenaar, en die leest het via de edge function. Daarom kolomrechten:
+-- eerst kon elk teamlid met Inhoud, ook een kijker, de hele rij lezen, met het
+-- adres en de id's van het account van de eigenaar (review van 24 november).
+-- Schrijven doet de edge function.
 drop policy if exists "onedrive mirrors read" on public.onedrive_mirrors;
 create policy "onedrive mirrors read" on public.onedrive_mirrors
   for select to authenticated
   using (organization_id = any ((select public.my_module_organization_ids('content'))::uuid[]));
 
-revoke insert, update, delete on table public.onedrive_mirrors from anon, authenticated;
+revoke all on table public.onedrive_mirrors from anon, authenticated;
+grant select (organization_id, enabled, status, root_web_url) on public.onedrive_mirrors to authenticated;
 revoke all on table public.onedrive_mirror_tokens from anon, authenticated;
 select public.apply_accountant_fence('onedrive_mirrors');
 select public.apply_accountant_fence('onedrive_mirror_tokens');
@@ -435,35 +446,104 @@ grant execute on function public.onedrive_queue_full_sync(uuid) to service_role;
 
 -- ── 7. Taken oppakken en opruimen (alleen de edge function) ───────────────
 --
--- Oppakken in één stap, met "skip locked": de app (na een wijziging) en de
--- geplande taak kunnen tegelijk lopen, en dan pakt elk andere taken. Wat
--- gewone wijzigingen zijn, gaat vóór het verwijderen: een document dat uit een
--- verwijderde map naar de klantmap schuift, staat dan al veilig voordat de map
--- in OneDrive naar de prullenbak gaat. Alleen voor een kopie die aanstaat en
--- werkt; bij een verlopen koppeling wachten de taken.
-create or replace function public.onedrive_claim_jobs(p_org uuid, p_limit integer, p_lease_seconds integer default 300)
+-- Eén ronde tegelijk per organisatie. De app (na een wijziging), het scherm
+-- Instellingen → OneDrive en de geplande taak kunnen tegelijk lopen. Twee
+-- rondes die elk een ontbrekende klantmap aanmaakten, gaven in OneDrive
+-- "Acme" én "Acme 1", met de helft van de bestanden in elk (review van
+-- 24 november). Daarom pakt een ronde eerst de organisatie (processing_until),
+-- en laat hij hem los als hij klaar is. Valt hij halverwege om, dan verloopt
+-- de greep vanzelf.
+create or replace function public.onedrive_lock_org(p_org uuid, p_lease_seconds integer default 900, p_exclude uuid[] default '{}')
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_org uuid;
+begin
+  select m.organization_id into v_org
+    from public.onedrive_mirrors m
+   where m.enabled
+     and m.status = 'active'
+     and (m.processing_until is null or m.processing_until < now())
+     and (p_org is null or m.organization_id = p_org)
+     and not (m.organization_id = any (coalesce(p_exclude, '{}')))
+     and exists (
+       select 1 from public.onedrive_sync_jobs j
+        where j.organization_id = m.organization_id
+          and j.status = 'pending'
+          and j.next_attempt_at <= now()
+          and (j.claimed_until is null or j.claimed_until < now()))
+   order by m.last_synced_at nulls first
+   limit 1
+   for update of m skip locked;
+  if v_org is null then
+    return null;
+  end if;
+  update public.onedrive_mirrors
+     set processing_until = now() + make_interval(secs => greatest(60, least(coalesce(p_lease_seconds, 900), 1800)))
+   where organization_id = v_org;
+  return v_org;
+end;
+$$;
+
+revoke all on function public.onedrive_lock_org(uuid, integer, uuid[]) from public, anon, authenticated;
+grant execute on function public.onedrive_lock_org(uuid, integer, uuid[]) to service_role;
+
+create or replace function public.onedrive_unlock_org(p_org uuid)
+returns void
+language sql
+security definer
+set search_path = public
+as $$
+  update public.onedrive_mirrors set processing_until = null where organization_id = p_org;
+$$;
+
+revoke all on function public.onedrive_unlock_org(uuid) from public, anon, authenticated;
+grant execute on function public.onedrive_unlock_org(uuid) to service_role;
+
+-- De taken van één organisatie oppakken (de ronde heeft die organisatie al
+-- vast). Wat gewone wijzigingen zijn, gaat vóór het verwijderen. Een klant,
+-- project of map gaat pas weg als er voor deze organisatie geen enkele
+-- wijziging meer wacht: verhuisde er net een submap uit een map die daarna
+-- werd verwijderd, en moest die verhuizing even wachten (Microsoft vroeg om
+-- geduld), dan ging de submap anders met de map mee naar de prullenbak
+-- (review van 24 november). Losse bestanden wachten niet: die nemen niets mee.
+create or replace function public.onedrive_claim_jobs(p_org uuid, p_limit integer, p_lease_seconds integer default 900)
 returns setof public.onedrive_sync_jobs
 language plpgsql
 security definer
 set search_path = public
 as $$
 begin
+  if p_org is null then
+    return;
+  end if;
   return query
   with due as (
     select j.id
       from public.onedrive_sync_jobs j
       join public.onedrive_mirrors m
         on m.organization_id = j.organization_id and m.enabled and m.status = 'active'
-     where j.status = 'pending'
+     where j.organization_id = p_org
+       and j.status = 'pending'
        and j.next_attempt_at <= now()
        and (j.claimed_until is null or j.claimed_until < now())
-       and (p_org is null or j.organization_id = p_org)
+       and not (
+         j.kind = 'delete'
+         and j.item_type in ('client', 'project', 'folder')
+         and exists (
+           select 1 from public.onedrive_sync_jobs s
+            where s.organization_id = j.organization_id
+              and s.kind = 'sync'
+              and s.status = 'pending'))
      order by (j.kind = 'delete'), j.next_attempt_at
      limit greatest(1, least(coalesce(p_limit, 25), 200))
      for update of j skip locked
   )
   update public.onedrive_sync_jobs j
-     set claimed_until = now() + make_interval(secs => greatest(30, least(coalesce(p_lease_seconds, 300), 900)))
+     set claimed_until = now() + make_interval(secs => greatest(60, least(coalesce(p_lease_seconds, 900), 1800)))
     from due
    where j.id = due.id
   returning j.*;

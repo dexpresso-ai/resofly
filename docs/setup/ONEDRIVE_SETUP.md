@@ -124,6 +124,11 @@ prullenbak".
 - **Modulerechten gelden in OneDrive niet** (harde regel 3). Wie bij de map
   kan, ziet alle bestanden. Het scherm zegt dat bij het aanzetten; de eigenaar
   beslist met wie hij de map deelt.
+- **Wat je verwijdert terwijl de kopie uitstaat**, blijft in OneDrive staan. Uit
+  is uit: ResoFly houdt dan niets bij, ook niet wat er weg moet.
+- **Een klant, project of map** gaat pas naar de prullenbak als er geen andere
+  wijziging meer wacht. Zo schuift een submap die er net uit verhuisde eerst
+  naar zijn nieuwe plek.
 - **De eigenaar vertrekt of is geen eigenaar meer**: de kopie gaat uit, het
   token gaat weg. Een andere eigenaar kan opnieuw koppelen.
 - **Een ander Microsoft-account koppelen**: ResoFly begint opnieuw, met een
@@ -142,4 +147,5 @@ prullenbak".
 | Taken blijven wachten met "De bestandsopslag gaf een fout" | de media-worker is niet opnieuw uitgerold (§1), of `MEDIA_WORKER_URL` / `INTERNAL_UPLOAD_SECRET` ontbreekt |
 | "De OneDrive van de eigenaar is vol" | ruimte maken in OneDrive; de kopie gaat daarna vanzelf verder (elk uur een poging) |
 | "OneDrive geeft ResoFly geen toegang meer" | wachtwoord gewijzigd of toestemming ingetrokken: *Opnieuw koppelen* |
+| "De opgeslagen toegang tot OneDrive is niet meer te lezen" | de sleutel voor de tokens is veranderd (§2): *Opnieuw koppelen* |
 | Niets gebeurt na een wijziging buiten Inhoud | de geplande taak staat niet (§4) |
