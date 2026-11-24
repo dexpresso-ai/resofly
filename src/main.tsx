@@ -232,6 +232,8 @@ import './styles/prognose.css';
 // CSS in globals.css spraken elkaar tegen, dit blok bepaalt de opbouw.
 import './styles/werkruimte-cache.css';
 import './styles/weekplanner.css';
+// Dashboardblokken: inklappen en indelen (2026-11-24).
+import './styles/dashboard-blocks.css';
 import type { SetupNext } from './features/OrganizationSetup';
 import { installChunkReload } from './lib/chunkReload';
 import { clearOpstartLijsten, saveOpstartLijst } from './lib/opstartverzoeken';

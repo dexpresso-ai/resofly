@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { AlertTriangle, ArrowDownRight, ArrowUpRight, BadgeEuro, BarChart3, BellRing, CalendarDays, CalendarRange, CheckCircle2, ChevronRight, Clock, FileText, FolderOpen, Hammer, Landmark, ListTodo, MessagesSquare, Percent, Pin, Receipt, Ticket as TicketIcon, type LucideIcon } from 'lucide-react';
+import { AlertTriangle, ArrowDownRight, ArrowUpRight, BadgeEuro, BarChart3, BellRing, CalendarDays, CalendarRange, CheckCircle2, ChevronRight, ClipboardCheck, Clock, FileText, FolderOpen, Gauge, Hammer, History, Landmark, LayoutDashboard, ListTodo, MessagesSquare, Percent, Pin, Receipt, Settings2, Sparkles, Ticket as TicketIcon, type LucideIcon } from 'lucide-react';
 import type { AppData, CalendarExternalEvent, Invoice, OrganizationContext, OrganizationMember, SavedReport, Task, TaskStatus, UUID } from '../types';
 import { coversDay, isOverdue, scopeTasks, taskDayKey, taskLastDayKey } from '../lib/workweek';
 import { dateNL, euro, formatMinutes, total } from '../lib/format';
@@ -23,6 +23,7 @@ import { AttentionList, DayAgenda, MoreFold, ProjectGlance, WeekStrip } from './
 import { StreamPanel, StroomAttention, StroomHero } from './StroomToday';
 import { safeHttpUrl } from '../lib/safeUrl';
 import { AuditFeed } from './AuditLog';
+import { DashBlocks, type DashBlockContext, type DashBlockView } from './DashboardBlocks';
 import type { AuditTarget } from '../lib/auditLog';
 
 export type DashboardNavPage =
@@ -486,6 +487,208 @@ export function Dashboard({
   // In Stroom staan te late facturen en open offertes al als knoop in de stroom.
   const stroomAttention = stream ? attention.filter(item => item.key !== 'overdue-inv' && item.key !== 'quotes') : attention;
 
+  // ── De blokken (Baken en Cockpit) ─────────────────────────────────────
+  // Elk blok is in- en uitklapbaar en de volgorde kies je zelf (DashBlocks).
+  // Zenit en Stroom hebben hun eigen, rustiger opbouw en blijven zoals ze zijn.
+
+  /* De cockpit: de stand van zaken in één oogopslag — de groet, de
+     kerncijfers en de week als spoor. Altijd donker, ook op Dag. Op de
+     telefoon en de tablet vallen de groet en het spoor weg (globals.css en
+     cockpit.css); daar blijven alleen de tegels. */
+  const cockpitSection = (context: DashBlockContext) => <section className="cockpit" aria-label="Stand van zaken">
+    <span className="cockpit-glow" aria-hidden="true" />
+    <div className="workspace-hero">
+      <div>
+        <span className="eyebrow">Dashboard · {dateLine(now)}</span>
+        <h1>{greetingFor(now)}, <span className="serif">{activeOrganization?.name ?? 'ResoFly'}</span></h1>
+        <p>{heroLead({
+          events: showCalendar ? todaysEvents.length : null,
+          tasks: showProjects ? todayOpenCount : null,
+          overdueInvoices: showFinance ? overdueInvoices.length : 0,
+        })}</p>
+      </div>
+      <div className="cockpit-actions">
+        <span className="cockpit-buttons">
+          <Button className="cockpit-btn cockpit-arrange" onClick={context.arrange} title="Blokken in- en uitklappen en in je eigen volgorde zetten">
+            <LayoutDashboard size={15} aria-hidden="true" /> Indelen
+          </Button>
+          {showProjects && <Button className="cockpit-btn" onClick={() => openPage('weekplanner')}>
+            <CalendarRange size={15} aria-hidden="true" /> Weekplanner <span className="cockpit-count" aria-label={pl(weekTasks.length, 'open actie deze week', 'open acties deze week')}>{weekTasks.length}</span>
+          </Button>}
+        </span>
+        <span className="cockpit-meta"><span className="cockpit-role">{activeRole}</span> · {isAccountant ? 'alleen lezen' : pl(teamMembers.length, 'actief teamlid', 'actieve teamleden')}</span>
+      </div>
+    </div>
+
+    <div className="dash-stats dash-stats-rich">{statTiles}</div>
+
+    {baken && stream
+      ? <BakenRail
+          choice={showProjects ? railChoice : 'geld'}
+          onChoose={showProjects ? chooseRail : undefined}
+          monthLabel={monthName}
+          flow={<FlowRail stream={stream} monthLabel={monthName} onStation={openStation} />}
+          week={showProjects ? <WeekRail dayKeys={weekDayKeys} todayKey={todayKey} tasks={weekTasks} projects={data.projects} onOpen={() => openPage('weekplanner')} /> : null}
+          stream={stream}
+        />
+      : showProjects && <WeekRail dayKeys={weekDayKeys} todayKey={todayKey} tasks={weekTasks} projects={data.projects} onOpen={() => openPage('weekplanner')} />}
+  </section>;
+  const todayCard = <div className="today-card">
+    <header className="dash-card-head">
+      <div>
+        <h2><CalendarDays size={16} aria-hidden="true" /> Vandaag</h2>
+        <p>{capitalize(formatLongDay(startOfToday))}{showProjects ? ` · ${pl(todayOpenCount, 'actie', 'acties')}` : ''}</p>
+      </div>
+      {showProjects && scopeToggle}
+    </header>
+
+    {showProjects && <>
+      {lingering.length > 0 && <>
+        <div className="dash-group-label dash-group-late"><span>Blijft liggen</span></div>
+        {lingering.slice(0, 6).map(task => <TaskRow key={task.id} task={task} {...taskRowProps} />)}
+        {lingering.length > 6 && <button type="button" className="dash-more" onClick={() => openPage('weekplanner')}>
+          Nog {lingering.length - 6} in de weekplanner <ChevronRight size={13} />
+        </button>}
+      </>}
+
+      <div className="dash-group-label"><span>{lingering.length > 0 ? 'Gepland voor vandaag' : 'Vandaag'}</span></div>
+      {todaysTasks.length === 0
+        ? <p className="dash-empty">Niets gepland voor vandaag. Plan werk in de weekplanner of pak iets uit deze week op.</p>
+        : todaysTasks.map(task => <TaskRow key={task.id} task={task} {...taskRowProps} />)}
+    </>}
+
+    {todaysEvents.length > 0 && <div className="today-agenda">
+      {todaysEvents.slice(0, 6).map(event => <button
+        key={`${event.source_id}:${event.id}`}
+        type="button"
+        className="today-ag"
+        onClick={() => openPage('calendar')}
+        title={`${event.title}${event.location ? ` · ${event.location}` : ''}`}
+      >
+        <strong>{event.all_day ? 'Hele dag' : formatTime(event.starts_at)}</strong>
+        <span>{event.title || 'Afspraak'}</span>
+      </button>)}
+    </div>}
+  </div>;
+  const attentionCard = <div className="attention-card">
+    <header>
+      <h2><BellRing size={16} aria-hidden="true" /> Vereist je aandacht</h2>
+      <p>Klik een regel om er direct heen te gaan</p>
+    </header>
+    {attention.length === 0
+      ? <div className="attention-empty">
+          <span className="attention-icon"><CheckCircle2 size={16} /></span>
+          <div><strong>Alles is bij</strong>Er staat op dit moment niets open dat je aandacht vraagt.</div>
+        </div>
+      : <div className="attention-list">
+          {attention.map(item => <button type="button" key={item.key} className={`attention-row attention-${item.tone}`} onClick={item.onClick}>
+            <span className="attention-icon">{item.icon}</span>
+            <span className="attention-text"><strong>{item.label}</strong>{item.meta && <span>{item.meta}</span>}</span>
+            <span className="attention-count">{item.count}</span>
+            <ChevronRight size={16} className="attention-chevron" />
+          </button>)}
+        </div>}
+  </div>;
+  const weekActionsCard = <div className="weekactions-card">
+    <header className="dash-card-head">
+      <div>
+        <h2><ListTodo size={16} aria-hidden="true" /> Weekacties</h2>
+        <p>Week {isoWeekNumber(weekStart)} · {formatDayShort(weekStart)} t/m {formatDayShort(addDays(weekStart, 6))} · {pl(weekTasks.length, 'actie', 'acties')}</p>
+      </div>
+      <div className="dash-head-tools">
+        {scopeToggle}
+        <button type="button" className="dash-link" onClick={() => openPage('weekplanner')}>Weekplanner <ChevronRight size={14} /></button>
+      </div>
+    </header>
+    <div className="weekactions-panes">
+      <WeekPane
+        title="Losse taken"
+        tone="loose"
+        icon={<ListTodo size={14} />}
+        tasks={looseWeekTasks}
+        dayKeys={weekDayKeys}
+        emptyText="Geen losse taken deze week."
+        {...taskRowProps}
+      />
+      <WeekPane
+        title="Projecttaken"
+        tone="project"
+        icon={<FolderOpen size={14} />}
+        tasks={projectWeekTasks}
+        dayKeys={weekDayKeys}
+        emptyText="Geen projecttaken deze week."
+        {...taskRowProps}
+      />
+    </div>
+  </div>;
+  const showGerrieQueues = Boolean(gerrieActions) && permissions.canRead('gerrie');
+  const dashBlocks: DashBlockView[] = [
+    {
+      id: 'stand', title: 'Stand van zaken', icon: <Gauge size={16} />,
+      summary: foldWhisper.slice(0, 2).join(' · ') || null,
+      render: cockpitSection,
+    },
+    ...(showGerrieQueues && gerrieActions ? [{
+      id: 'beslissingen' as const, title: 'Te beslissen', icon: <Sparkles size={16} />, selfHiding: true,
+      summary: 'Staat er alleen als Gerrie iets voor je klaarzette',
+      render: () => <DecisionFeed
+        organizationId={organizationId}
+        canWrite={(module) => orgCanWrite && permissions.canWrite(module as ModuleKey)}
+        handlers={gerrieActions}
+        variant="dashboard"
+        onOpenTarget={onOpenDecisionTarget}
+        onOpenCommandCenter={() => openPage('gerrie')}
+      />,
+    }, {
+      id: 'akkoord' as const, title: 'Jouw akkoord', icon: <ClipboardCheck size={16} />, selfHiding: true,
+      summary: 'Staat er alleen als je agents iets voor je klaarzetten',
+      render: () => <AgentApprovals
+        organizationId={organizationId}
+        canWrite={canWriteGerrie}
+        handlers={gerrieActions}
+        variant="dashboard"
+        onOpenCommandCenter={() => openPage('gerrie')}
+        currentUserId={currentUserId}
+        canOversee={organizationContext.activeMembership?.role === 'owner' || organizationContext.activeMembership?.role === 'admin'}
+        teamMembers={organizationContext.teamMembers ?? []}
+      />,
+    }] : []),
+    ...(showToday ? [{
+      id: 'vandaag' as const, title: 'Vandaag', icon: <CalendarDays size={16} />,
+      summary: [showProjects ? pl(todayOpenCount, 'actie', 'acties') : '', showCalendar && todaysEvents.length ? pl(todaysEvents.length, 'afspraak', 'afspraken') : ''].filter(Boolean).join(' · ') || null,
+      render: () => todayCard,
+    }] : []),
+    {
+      id: 'aandacht', title: 'Vereist je aandacht', icon: <BellRing size={16} />,
+      summary: attention.length ? pl(attention.length, 'punt', 'punten') : 'Alles is bij',
+      render: () => attentionCard,
+    },
+    ...(showProjects ? [{
+      id: 'weekacties' as const, title: 'Weekacties', icon: <ListTodo size={16} />,
+      summary: `Week ${isoWeekNumber(weekStart)} · ${pl(weekTasks.length, 'actie', 'acties')}`,
+      render: () => weekActionsCard,
+    }, {
+      id: 'projecten' as const, title: 'Projectplanning', icon: <FolderOpen size={16} />,
+      summary: pl(data.projects.filter(project => !project.archived).length, 'lopend project', 'lopende projecten'),
+      render: () => <ProjectTimeline data={data} openProject={openProject} />,
+    }] : []),
+    ...(reportsBlock ? [{
+      id: 'rapportages' as const, title: 'Mijn rapportages', icon: <BarChart3 size={16} />,
+      summary: pl(pinnedReports.length, 'rapportage', 'rapportages'),
+      render: () => reportsBlock,
+    }] : []),
+    ...(onboardingBlock ? [{
+      id: 'inrichting' as const, title: 'Inrichting', icon: <Settings2 size={16} />,
+      summary: `${onboardingDone}/${onboardingItems.length} stappen afgerond`,
+      render: () => onboardingBlock,
+    }] : []),
+    ...(activityBlock ? [{
+      id: 'logboek' as const, title: 'Logboek', icon: <History size={16} />,
+      summary: 'Wat er laatst veranderde',
+      render: () => activityBlock,
+    }] : []),
+  ];
+
   return <>
     {stroom
       ? <section className="sl-today" aria-label="Vandaag">
@@ -531,45 +734,10 @@ export function Dashboard({
           </header>
           {showToday && <DayArc items={arcItems} allDay={allDayTitles} onOpenPlanner={showProjects ? () => openPage('weekplanner') : undefined} showLane={false} quietStrip />}
         </section>
-      /* De cockpit: de stand van zaken in één oogopslag — de groet, de
-         kerncijfers en de week als spoor. Altijd donker, ook op Dag. Op de
-         telefoon en de tablet vallen de groet en het spoor weg (globals.css en
-         cockpit.css); daar blijven alleen de tegels. */
-      : <section className="cockpit" aria-label="Stand van zaken">
-          <span className="cockpit-glow" aria-hidden="true" />
-          <div className="workspace-hero">
-            <div>
-              <span className="eyebrow">Dashboard · {dateLine(now)}</span>
-              <h1>{greetingFor(now)}, <span className="serif">{activeOrganization?.name ?? 'ResoFly'}</span></h1>
-              <p>{heroLead({
-                events: showCalendar ? todaysEvents.length : null,
-                tasks: showProjects ? todayOpenCount : null,
-                overdueInvoices: showFinance ? overdueInvoices.length : 0,
-              })}</p>
-            </div>
-            <div className="cockpit-actions">
-              {showProjects && <Button className="cockpit-btn" onClick={() => openPage('weekplanner')}>
-                <CalendarRange size={15} aria-hidden="true" /> Weekplanner <span className="cockpit-count" aria-label={pl(weekTasks.length, 'open actie deze week', 'open acties deze week')}>{weekTasks.length}</span>
-              </Button>}
-              <span className="cockpit-meta"><span className="cockpit-role">{activeRole}</span> · {isAccountant ? 'alleen lezen' : pl(teamMembers.length, 'actief teamlid', 'actieve teamleden')}</span>
-            </div>
-          </div>
+      : null}
 
-          <div className="dash-stats dash-stats-rich">{statTiles}</div>
-
-          {baken && stream
-            ? <BakenRail
-                choice={showProjects ? railChoice : 'geld'}
-                onChoose={showProjects ? chooseRail : undefined}
-                monthLabel={monthName}
-                flow={<FlowRail stream={stream} monthLabel={monthName} onStation={openStation} />}
-                week={showProjects ? <WeekRail dayKeys={weekDayKeys} todayKey={todayKey} tasks={weekTasks} projects={data.projects} onOpen={() => openPage('weekplanner')} /> : null}
-                stream={stream}
-              />
-            : showProjects && <WeekRail dayKeys={weekDayKeys} todayKey={todayKey} tasks={weekTasks} projects={data.projects} onOpen={() => openPage('weekplanner')} />}
-        </section>}
-
-    <div className="dash-stack">
+    {calm
+      ? <div className="dash-stack">
       {/* Wat je agents hebben klaargezet staat vóór al het andere: het is het enige
           blok op dit scherm waar iets op JOU wacht in plaats van andersom. De kaart
           verbergt zichzelf zodra de wachtrij leeg is. */}
@@ -618,9 +786,7 @@ export function Dashboard({
         canOversee={organizationContext.activeMembership?.role === 'owner' || organizationContext.activeMembership?.role === 'admin'}
         teamMembers={organizationContext.teamMembers ?? []}
       />}
-
-      {calm
-        ? <div className="zcalm">
+      <div className="zcalm">
             {/* Onbewolkt: de woorden bij de Dagboog (Je dag), wat op je wacht
                 (Aandacht), en de rest achter één balk. Elk feit één keer.
                 Stroom zette Je dag al naast de stapel. */}
@@ -656,118 +822,8 @@ export function Dashboard({
               {activityBlock}
             </MoreFold>
           </div>
-        : <>
-          <section className={`dashboard-layout${showToday ? '' : ' dash-layout-single'}`}>
-            {showToday && <div className="today-card">
-              <header className="dash-card-head">
-                <div>
-                  <h2><CalendarDays size={16} aria-hidden="true" /> Vandaag</h2>
-                  <p>{capitalize(formatLongDay(startOfToday))}{showProjects ? ` · ${pl(todayOpenCount, 'actie', 'acties')}` : ''}</p>
-                </div>
-                {showProjects && scopeToggle}
-              </header>
-
-              {showProjects && <>
-                {lingering.length > 0 && <>
-                  <div className="dash-group-label dash-group-late"><span>Blijft liggen</span></div>
-                  {lingering.slice(0, 6).map(task => <TaskRow key={task.id} task={task} {...taskRowProps} />)}
-                  {lingering.length > 6 && <button type="button" className="dash-more" onClick={() => openPage('weekplanner')}>
-                    Nog {lingering.length - 6} in de weekplanner <ChevronRight size={13} />
-                  </button>}
-                </>}
-
-                <div className="dash-group-label"><span>{lingering.length > 0 ? 'Gepland voor vandaag' : 'Vandaag'}</span></div>
-                {todaysTasks.length === 0
-                  ? <p className="dash-empty">Niets gepland voor vandaag. Plan werk in de weekplanner of pak iets uit deze week op.</p>
-                  : todaysTasks.map(task => <TaskRow key={task.id} task={task} {...taskRowProps} />)}
-              </>}
-
-              {todaysEvents.length > 0 && <div className="today-agenda">
-                {todaysEvents.slice(0, 6).map(event => <button
-                  key={`${event.source_id}:${event.id}`}
-                  type="button"
-                  className="today-ag"
-                  onClick={() => openPage('calendar')}
-                  title={`${event.title}${event.location ? ` · ${event.location}` : ''}`}
-                >
-                  <strong>{event.all_day ? 'Hele dag' : formatTime(event.starts_at)}</strong>
-                  <span>{event.title || 'Afspraak'}</span>
-                </button>)}
-              </div>}
-            </div>}
-
-            <div className="attention-card">
-              <header>
-                <h2><BellRing size={16} aria-hidden="true" /> Vereist je aandacht</h2>
-                <p>Klik een regel om er direct heen te gaan</p>
-              </header>
-              {attention.length === 0
-                ? <div className="attention-empty">
-                    <span className="attention-icon"><CheckCircle2 size={16} /></span>
-                    <div><strong>Alles is bij</strong>Er staat op dit moment niets open dat je aandacht vraagt.</div>
-                  </div>
-                : <div className="attention-list">
-                    {attention.map(item => <button type="button" key={item.key} className={`attention-row attention-${item.tone}`} onClick={item.onClick}>
-                      <span className="attention-icon">{item.icon}</span>
-                      <span className="attention-text"><strong>{item.label}</strong>{item.meta && <span>{item.meta}</span>}</span>
-                      <span className="attention-count">{item.count}</span>
-                      <ChevronRight size={16} className="attention-chevron" />
-                    </button>)}
-                  </div>}
-            </div>
-          </section>
-
-          {showProjects && <div className="weekactions-card">
-            <header className="dash-card-head">
-              <div>
-                <h2><ListTodo size={16} aria-hidden="true" /> Weekacties</h2>
-                <p>Week {isoWeekNumber(weekStart)} · {formatDayShort(weekStart)} t/m {formatDayShort(addDays(weekStart, 6))} · {pl(weekTasks.length, 'actie', 'acties')}</p>
-              </div>
-              <div className="dash-head-tools">
-                {scopeToggle}
-                <button type="button" className="dash-link" onClick={() => openPage('weekplanner')}>Weekplanner <ChevronRight size={14} /></button>
-              </div>
-            </header>
-            <div className="weekactions-panes">
-              <WeekPane
-                title="Losse taken"
-                tone="loose"
-                icon={<ListTodo size={14} />}
-                tasks={looseWeekTasks}
-                dayKeys={weekDayKeys}
-                emptyText="Geen losse taken deze week."
-                {...taskRowProps}
-              />
-              <WeekPane
-                title="Projecttaken"
-                tone="project"
-                icon={<FolderOpen size={14} />}
-                tasks={projectWeekTasks}
-                dayKeys={weekDayKeys}
-                emptyText="Geen projecttaken deze week."
-                {...taskRowProps}
-              />
-            </div>
-          </div>}
-
-          {showProjects && <ProjectTimeline data={data} openProject={openProject} />}
-
-          {/* Zonder logboek (een teamlid) en zonder inrichting is de zijkolom
-              leeg; dan krijgen de rapportages de volle breedte in plaats van
-              een lege kolom van 330px naast zich. */}
-          {(reportsBlock || onboardingBlock || activityBlock) && <section className={`dashboard-layout dash-layout-tail${onboardingBlock || activityBlock ? '' : ' dash-layout-single'}`}>
-            <div className="dash-main">
-              {reportsBlock}
-            </div>
-
-            {(onboardingBlock || activityBlock) && <aside className="dash-side">
-              {onboardingBlock}
-
-              {activityBlock}
-            </aside>}
-          </section>}
-        </>}
-    </div>
+        </div>
+      : <DashBlocks blocks={dashBlocks} storageKey={`resofly.dashboard.blocks.${organizationId}.${currentUserId ?? 'anoniem'}`} />}
   </>;
 }
 

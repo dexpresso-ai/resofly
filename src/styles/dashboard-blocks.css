@@ -1,0 +1,147 @@
+/* ══════════════════════════════════════════════════════════════════════════
+   DASHBOARD · BLOKKEN (2026-11-24)
+   ──────────────────────────────────────────────────────────────────────────
+   Elk blok van het dashboard (Baken en Cockpit) is in- en uitklapbaar, en de
+   volgorde kies je zelf. Zie src/features/DashboardBlocks.tsx.
+
+   Het pijltje om in te klappen staat óver de kop van het blok, rechtsboven,
+   en niet op een eigen regel erboven: op de telefoon stond de eerste taak al
+   op 273 van de 280 pixels die de lay-outtest toestaat. De koppen krijgen
+   rechts ruimte, zodat het pijltje nergens overheen valt.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.dash-blocks .dash-block{position:relative;min-width:0}
+/* Een beslislijst of akkoord zonder iets erin: dan is er geen blok. */
+.dash-blocks .dash-block:has(> .dash-block-body:empty){display:none}
+/* De cockpit had zijn eigen ruimte eronder; in de stapel zorgt de stapel daarvoor. */
+.dash-blocks .dash-block > .dash-block-body > .cockpit{margin:0}
+
+/* ── Het pijltje ─────────────────────────────────────────────────────────── */
+.dash-block-fold{
+  position:absolute;top:var(--fold-top,14px);right:var(--fold-right,12px);z-index:3;
+  display:grid;place-items:center;width:28px;height:28px;padding:0;
+  border:1px solid transparent;border-radius:9px;background:transparent;
+  color:var(--ink-3,var(--muted));cursor:pointer;
+  transition:color .12s,background-color .12s,border-color .12s;
+}
+.dash-block-fold:hover{color:var(--ink,var(--text));background:var(--surface-2,var(--bg3));border-color:var(--line,var(--border))}
+.dash-block-fold:focus-visible,.dash-block-bar:focus-visible,.dash-arrange-open:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+/* In de donkere cockpit: licht op donker, ook op Dag. */
+.dash-block[data-block="stand"] > .dash-block-fold{color:rgba(255,255,255,.62)}
+.dash-block[data-block="stand"] > .dash-block-fold:hover{color:#fff;background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.14)}
+/* Op de tablet en de telefoon is de groet weg en ligt het pijltje op de hoek
+   van een tegel. Een eigen schijfje, zodat het niet leest als iets van die tegel. */
+@media (max-width:1024px){
+  .dash-block[data-block="stand"] > .dash-block-fold{
+    --fold-top:10px;--fold-right:10px;width:24px;height:24px;border-radius:99px;
+    background:rgba(12,12,16,.72);border-color:rgba(255,255,255,.16);color:#fff;
+  }
+}
+
+/* Ruimte in elke kop voor het pijltje. */
+.dash-block > .dash-block-body > :is(.today-card,.weekactions-card) > .dash-card-head,
+.dash-block > .dash-block-body > .attention-card > header,
+.dash-block > .dash-block-body > .dash-reports > .dash-reports-head,
+.dash-block > .dash-block-body > .onboarding-card > .onboarding-head,
+.dash-block > .dash-block-body > * > .alog-feed-head,
+.dash-block > .dash-block-body > .ag-queue > .ag-queue-head,
+.dash-block > .dash-block-body > .cockpit > .workspace-hero{padding-right:36px}
+.dash-block[data-block="projecten"] > .dash-block-body .ptl-top > :first-child{padding-right:36px}
+
+/* "Indelen" naast "Weekplanner" in de cockpit, niet erboven. */
+.app .cockpit .cockpit-buttons{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+
+/* ── Ingeklapt: één balk ─────────────────────────────────────────────────── */
+.dash-block-bar{
+  display:flex;align-items:center;gap:10px;width:100%;min-height:50px;padding:10px 14px 10px 16px;
+  border:1px solid var(--line,var(--border));border-radius:var(--r2,16px);
+  background:var(--surface,var(--bg2));box-shadow:var(--shadow-1,none);
+  color:var(--ink,var(--text));font:inherit;text-align:left;cursor:pointer;
+  transition:border-color .12s,background-color .12s;
+}
+.dash-block-bar:hover{border-color:var(--line-2,var(--border2))}
+.dash-block-icon{display:grid;place-items:center;flex:none;color:var(--accent-ink,var(--accent))}
+.dash-block-title{flex:none;font-size:14px;font-weight:700;white-space:nowrap}
+.dash-block-summary{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px;color:var(--ink-3,var(--muted))}
+.dash-block-caret{flex:none;margin-left:auto;color:var(--ink-3,var(--muted))}
+
+/* ── Rijen: een brede kolom met smalle blokken ernaast ───────────────────── */
+/* Smalle blokken vóór een breed blok staan links. Alleen naast elkaar op een
+   breed scherm; daaronder staat alles onder elkaar, in jouw volgorde. */
+@media (min-width:1101px){
+  .dashboard-layout.dash-row.is-side-first{grid-template-columns:330px minmax(0,1fr)}
+}
+
+/* ── Indelen ─────────────────────────────────────────────────────────────── */
+.dash-arrange-foot{display:flex;justify-content:center;padding:4px 0 8px}
+.dash-arrange-open{
+  display:inline-flex;align-items:center;gap:7px;min-height:34px;padding:0 14px;
+  border:1px dashed var(--line-2,var(--border2));border-radius:99px;background:transparent;
+  color:var(--ink-2,var(--muted2));font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;
+}
+.dash-arrange-open:hover{color:var(--ink,var(--text));border-style:solid;background:var(--surface,var(--bg2))}
+
+.dash-arrange{
+  display:flex;flex-direction:column;gap:12px;padding:16px;
+  border:1px solid var(--line,var(--border));border-radius:var(--r2,16px);
+  background:var(--surface,var(--bg2));box-shadow:var(--shadow-1,none);
+}
+.dash-arrange-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.dash-arrange-head h2{display:flex;align-items:center;gap:8px;font-size:16px;font-weight:700;outline:none}
+.dash-arrange-head p{margin-top:4px;max-width:62ch;font-size:12.5px;color:var(--ink-3,var(--muted))}
+.dash-arrange-actions{display:flex;align-items:center;gap:8px}
+.dash-arrange-actions .btn{display:inline-flex;align-items:center;gap:6px}
+
+.dash-arrange-list{display:flex;flex-direction:column;gap:6px;margin:0;padding:0;list-style:none}
+.dash-arrange-item{
+  display:flex;align-items:center;gap:10px;min-height:52px;padding:6px 8px 6px 4px;
+  border:1px solid var(--line,var(--border));border-radius:12px;background:var(--surface-2,var(--bg3));
+}
+.dash-arrange-item.is-collapsed .dash-arrange-text b{color:var(--ink-2,var(--muted2))}
+.dash-arrange-list.is-dragging .dash-arrange-item:not(.is-dragged){opacity:.72}
+.dash-arrange-item.is-dragged{
+  border-color:var(--accent);background:var(--surface,var(--bg2));
+  box-shadow:0 0 0 3px rgba(var(--accent-rgb),.22),0 14px 30px -14px rgba(0,0,0,.55);
+}
+.dash-arrange-grip{
+  display:grid;place-items:center;flex:none;width:34px;height:40px;padding:0;
+  border:0;border-radius:9px;background:transparent;color:var(--ink-3,var(--muted));
+  cursor:grab;touch-action:none;
+}
+.dash-arrange-list.is-dragging .dash-arrange-grip{cursor:grabbing}
+.dash-arrange-grip:hover,.dash-arrange-grip:focus-visible{color:var(--ink,var(--text));background:var(--surface,var(--bg2))}
+.dash-arrange-icon{display:grid;place-items:center;flex:none;color:var(--accent-ink,var(--accent))}
+.dash-arrange-text{display:flex;flex-direction:column;min-width:0;flex:1 1 auto}
+.dash-arrange-text b{font-size:13.5px;font-weight:700;color:var(--ink,var(--text));white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dash-arrange-text small{font-size:12px;color:var(--ink-3,var(--muted));white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dash-arrange-fold{
+  display:inline-flex;align-items:center;gap:5px;flex:none;min-height:30px;padding:0 10px;
+  border:1px solid var(--line,var(--border));border-radius:99px;background:transparent;
+  color:var(--ink-3,var(--muted));font:inherit;font-size:12px;font-weight:600;cursor:pointer;
+}
+.dash-arrange-fold.is-open{color:var(--ink,var(--text));border-color:var(--line-2,var(--border2));background:var(--surface,var(--bg2))}
+.dash-arrange-steps{display:flex;gap:2px;flex:none}
+.dash-arrange-steps button{
+  display:grid;place-items:center;width:32px;height:32px;padding:0;
+  border:1px solid transparent;border-radius:9px;background:transparent;color:var(--ink-2,var(--muted2));cursor:pointer;
+}
+.dash-arrange-steps button:hover:not(:disabled){color:var(--ink,var(--text));border-color:var(--line,var(--border));background:var(--surface,var(--bg2))}
+.dash-arrange-steps button:disabled{opacity:.3;cursor:default}
+:is(.dash-arrange-grip,.dash-arrange-fold,.dash-arrange-steps button):focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+
+/* Alleen voor de schermlezer: "Vandaag staat nu op plek 2 van 9." */
+.dash-sr{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+
+/* Telefoon: de samenvatting onder de naam, de knoppen compacter. */
+@media (max-width:760px){
+  .dash-block-bar{min-height:46px;padding:8px 12px}
+  .dash-arrange{padding:12px}
+  .dash-arrange-item{gap:6px;padding-right:4px}
+  .dash-arrange-fold span{display:none}
+  .dash-arrange-fold{padding:0 8px}
+  .dash-arrange-icon{display:none}
+}
+
+@media (prefers-reduced-motion:reduce){
+  .dash-block-fold,.dash-block-bar{transition:none}
+}

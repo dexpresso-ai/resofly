@@ -169,6 +169,10 @@ const PAGES = {
   // lay-outfout, dus geen enkele meting hier zag het — alleen openen doet dat.
   'calendar-event': { page: 'calendar', prepare: 'button.tb-ev:not(.tb-task-block)' },
   'calendar-task': { page: 'calendar', prepare: '.tb-task-block' },
+  // Het dashboard met "Blokken indelen" open (2026-11-24): elk blok een balk
+  // met handvat, Open/Ingeklapt en pijltjes. Die moeten op de telefoon passen
+  // zonder zijwaarts te scrollen.
+  'dashboard-indelen': { page: 'dashboard', prepare: '.dash-arrange-open', mustShow: [{ selector: '.dash-arrange-item', label: 'de blokken om in te delen' }] },
   // De maand (2026-11-13): op de telefoon het hele rooster met weeknummers,
   // zonder daglijst eronder. Die lijst nam een derde van het scherm en drukte
   // de weekrijen zo plat dat er per dag maar één regel overbleef.

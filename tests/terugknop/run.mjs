@@ -81,6 +81,8 @@ async function where(t) {
     gerrie: Boolean(document.querySelector('.gerrie-panel')),
     commThread: Boolean(document.querySelector('.comm-shell.is-single .comm-back')),
     chatThread: Boolean(document.querySelector('.chat-single .tmc-back')),
+    // "Blokken indelen" op het dashboard (2026-11-24).
+    arranging: Boolean(document.querySelector('.dash-arrange')),
     settingsTab: document.querySelector('section.content:not([hidden]) .settings-subtabs [aria-selected="true"]')?.dataset.settingsTab ?? null,
     marker: history.state && typeof history.state === 'object' ? history.state.resoflyBack ?? null : null,
   }));
@@ -190,6 +192,17 @@ await scenario('terug sluit het menu; kies je erin, dan gaat terug naar de pagin
   await expectState(t, 'project via het menu', { menu: false, page: 'project', steps: 1 });
   await back(t);
   await expectState(t, 'terug', { page: 'dashboard', steps: 0 });
+});
+
+await scenario('terug sluit "Blokken indelen"; Klaar haalt zijn stap weg', 'dashboard', async (t) => {
+  // De knop staat onderaan het dashboard; tap() scrolt er zelf naartoe.
+  await tap(t, '.dash-arrange-open');
+  await expectState(t, 'indelen open', { arranging: true, page: 'dashboard', steps: 1 });
+  await back(t);
+  await expectState(t, 'indelen dicht', { arranging: false, page: 'dashboard', steps: 0 });
+  await tap(t, '.dash-arrange-open');
+  await tap(t, '.dash-arrange-actions .btn-primary');
+  await expectState(t, 'dicht met Klaar', { arranging: false, page: 'dashboard', steps: 0 });
 });
 
 await scenario('terug sluit het chatpaneel van Gerrie', 'dashboard', async (t) => {
