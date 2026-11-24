@@ -10,7 +10,7 @@ import type { CrumbHome, CrumbTarget } from './lib/breadcrumbs';
 import { backButton } from './lib/backButton';
 import { BackScope, useBackStep } from './lib/useBackStep';
 import { TabHistory, type TabHistoryContext, type TabView } from './lib/tabHistory';
-import { applyFetch, clearFailed, emptyGroupData, EMPTY_GROUP_STATE, groupsFor, groupsToFetch, markStale, missingGroups, PAGE_DATA_GROUPS, type CoreData, type DataGroup, type GroupState } from './lib/dataGroups';
+import { applyFetch, clearFailed, DATA_GROUPS, emptyGroupData, EMPTY_GROUP_STATE, GROUP_FIELDS, groupsFor, groupsToFetch, markStale, missingGroups, PAGE_DATA_GROUPS, type CoreData, type DataGroup, type GroupState } from './lib/dataGroups';
 import { buildPermissions, EDIT_KIND_MODULE, firstAllowedPage, isAccountantRole, isAdminRole, MODULE_LABELS, PAGE_MODULE, type ModuleAccess, type ModuleKey, type Permissions } from './lib/permissions';
 import { appHomePage, applyStandaloneAppHead, canonicalAppUrl, installableAppFromPath, isPageInApp, standaloneAppFromPath, type InstallableApp, type StandaloneApp } from './lib/standaloneApps';
 import { captureInstallPrompt } from './lib/installPrompt';
@@ -229,9 +229,12 @@ import './styles/bonnen.css';
 import './styles/prognose.css';
 // De weekplanner (2026-11-15) als allerlaatste: de zeven oudere lagen planner-
 // CSS in globals.css spraken elkaar tegen, dit blok bepaalt de opbouw.
+import './styles/werkruimte-cache.css';
 import './styles/weekplanner.css';
 import type { SetupNext } from './features/OrganizationSetup';
 import { installChunkReload } from './lib/chunkReload';
+import { clearOpstartLijsten, saveOpstartLijst } from './lib/opstartverzoeken';
+import { clearWorkspaceCache, dropWorkspaceCache, readWorkspaceCache, rechtenVan, writeWorkspaceCache, WORKSPACE_CACHE_VERSIE, type WorkspaceCacheEntry } from './lib/workspaceCache';
 import { lazyPage, PageLoadBoundary, PageLoading } from './components/LazyPage';
 
 /*
@@ -598,6 +601,17 @@ function startRound(candidate: string | null, firstForOrganization: boolean): Ro
   return { candidate, context, early: { orgId: candidate, core, page, groups, groupLoads } };
 }
 
+/** De gebruiker in de opgeslagen sessie van supabase-js, zonder te wachten op de client. Alleen om vooruit te lezen. */
+function storedSessionUserId(): string | null {
+  try {
+    const ref = new URL(import.meta.env.VITE_SUPABASE_URL as string).hostname.split('.')[0];
+    const stored = JSON.parse(localStorage.getItem(`sb-${ref}-auth-token`) ?? 'null') as { user?: { id?: string } } | null;
+    return stored?.user?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /** Een adres waar de werkruimte (of het inlogscherm) komt: geen portaal, geen klantadres, geen deellink. */
 function isWorkspaceLocation(): boolean {
   if (typeof window === 'undefined' || !isSupabaseConfigured) return false;
@@ -619,15 +633,20 @@ function isWorkspaceLocation(): boolean {
  * applySession, alleen als voorkeur uit de opslag: welke het wordt, beslist
  * het lidmaatschap (loadOrganizationContext).
  */
-const BOOT_ROUND: Promise<(RoundStart & { userId: string }) | null> | null = isWorkspaceLocation()
+const BOOT_ROUND: Promise<(RoundStart & { userId: string; cache: Promise<WorkspaceCacheEntry | null> }) | null> | null = isWorkspaceLocation()
   ? (() => {
     let remembered: string | null = null;
     try { remembered = localStorage.getItem(activeOrgStorageKey); } catch { /* geen opslag */ }
     // Het bestand van de beginpagina hoeft niet op de sessie te wachten.
     PAGE_CHUNKS[expectedStartPage(remembered)]?.preload();
+    // De werkruimte van de vorige keer (lib/workspaceCache.ts) alvast lezen,
+    // tegelijk met de sessie. Voor wie de opgeslagen sessie zegt; geldt hij
+    // niet voor de echte gebruiker, dan vervalt hij hieronder.
+    const storedUser = storedSessionUserId();
+    const cache = storedUser && remembered ? readWorkspaceCache(storedUser, remembered) : Promise.resolve(null);
     return supabaseAuth.getSession().then(({ data }) => {
       const userId = data.session?.user.id;
-      return userId ? { userId, ...startRound(remembered, true) } : null;
+      return userId ? { userId, ...startRound(remembered, true), cache: userId === storedUser ? cache : Promise.resolve(null) } : null;
     }).catch(() => null);
   })()
   : null;
@@ -1184,6 +1203,16 @@ function App() {
   /** Telt op bij uitloggen: wat de vorige sessie nog aan het laden was, vervalt. */
   const sessionEpochRef = useRef(0);
   const [organizationContext, setOrganizationContext] = useState<OrganizationContext>(emptyOrganizationContext);
+  const organizationContextRef = useRef(organizationContext);
+  organizationContextRef.current = organizationContext;
+  /**
+   * De werkruimte staat er uit de cache van de vorige keer (lib/workspaceCache.ts)
+   * en de verse ronde is nog niet binnen. Tot dan kun je alleen kijken.
+   */
+  const [cacheView, setCacheView] = useState(false);
+  const cacheViewRef = useRef(false);
+  /** De rechten (rechtenVan) van het lidmaatschap uit de cache. */
+  const cacheRechtenRef = useRef('');
   const [activeOrganizationId, setActiveOrganizationId] = useState<string | null>(() => localStorage.getItem(activeOrgStorageKey));
   // Open tabbladen blijven allemaal gemount (keep-alive); alleen het actieve is
   // zichtbaar. Het opstart-tabblad opent de Bankpagina bij een PSD2-terugkomst
@@ -1200,6 +1229,8 @@ function App() {
     setTabs(ts => ts.map(t => (t.id === activeTab.id ? { ...t, ...patch(t) } : t)));
   }
   const page = activeTab.page;
+  const pageRef = useRef(page);
+  pageRef.current = page;
   const projectId = activeTab.projectId;
   const clientId = activeTab.clientId;
   const statsReportId = activeTab.statsReportId;
@@ -1353,7 +1384,8 @@ function App() {
   const activeMembership = organizationContext.activeMembership;
   // Organisatiebreed schrijfrecht (rol). Per módule kan dit alsnog beperkt zijn —
   // gebruik daarom binnen een pagina `permissions.canWritePage(...)`.
-  const orgCanWrite = activeMembership ? ['owner', 'admin', 'member'].includes(activeMembership.role) : false;
+  // Uit de cache (cacheView): nog even alleen kijken, tot de verse gegevens er zijn.
+  const orgCanWrite = !cacheView && (activeMembership ? ['owner', 'admin', 'member'].includes(activeMembership.role) : false);
   const canAdmin = activeMembership ? ['owner', 'admin'].includes(activeMembership.role) : false;
   // Modulerechten van dit lid: bepaalt welke modules in de navigatie verschijnen
   // en of er binnen een module gewijzigd mag worden. De database dwingt hetzelfde
@@ -1597,6 +1629,88 @@ function App() {
    */
   /** Welke aanvraag van het abonnementsoverzicht het laatst begon: een ouder antwoord dat later binnenkomt, telt niet. */
   const billingSeqRef = useRef(0);
+  /** De lijst opstartverzoeken wordt één keer per laadbeurt bewaard. */
+  const opstartLijstGeplandRef = useRef(false);
+  /** De werkruimte wordt na de eerste verse ronde één keer bewaard; daarna bij het verlaten. */
+  const cacheGeplandRef = useRef(false);
+  /** Wat het laatst bewaard is, om niet twee keer hetzelfde weg te schrijven. */
+  const cacheBewaardRef = useRef<{ data: AppData; context: OrganizationContext; page: string; groups: GroupState } | null>(null);
+
+  /**
+   * De werkruimte uit de cache neerzetten (lib/workspaceCache.ts): de
+   * organisatie, het lidmaatschap, de kern en de groepen van de pagina die
+   * openstond. Alleen kijken tot de verse ronde binnen is (cacheView).
+   */
+  function applyCachedWorkspace(entry: WorkspaceCacheEntry, early: RoundStart['early']) {
+    const groups = DATA_GROUPS.filter(group => entry.groups[group]);
+    const context: OrganizationContext = { ...emptyOrganizationContext, ...entry.organizationContext, billingOverview: null };
+    setOrganizationContext(context);
+    activeOrgIdRef.current = entry.orgId;
+    setActiveOrganizationId(entry.orgId);
+    resetDataGroups(entry.orgId);
+    const restored: AppData = { ...emptyData, ...emptyGroupData(), ...entry.core };
+    for (const group of groups) Object.assign(restored, entry.groups[group]);
+    dataRef.current = restored;
+    setData(restored);
+    if (groups.length) updateGroupState(() => applyFetch(EMPTY_GROUP_STATE, { loaded: groups, failed: [], outdated: false }));
+    cacheRechtenRef.current = entry.rechten;
+    cacheViewRef.current = true;
+    setCacheView(true);
+    tabsLoadedForRef.current = entry.orgId;
+    const access = buildPermissions(context.activeMembership);
+    restoreTabsForOrganization(entry.orgId, restored, access);
+    // De groepen van de beginpagina liepen al sinds het laden (startRound).
+    // Meteen als lopend boeken: anders zag de pagina ze niet en vroeg hij ze
+    // zelf nog een keer op (gezien in de laadtest: elke groepstabel dubbel).
+    if (early && early.orgId === entry.orgId && early.groups.length && access.canOpenPage(early.page)) {
+      void fetchGroups(entry.orgId, early.groups, early.groupLoads);
+    }
+  }
+
+  /**
+   * De werkruimte bewaren voor de volgende start. Nooit vanuit de cache
+   * zelf (dan zou oud oud blijven), en alleen als alles bij elkaar past:
+   * dezelfde gebruiker, dezelfde organisatie, een lidmaatschap. Van de
+   * groepen alleen die van de pagina die openstaat, en alleen als ze vers zijn.
+   */
+  function bewaarWerkruimte() {
+    if (cacheViewRef.current) return;
+    const userId = loadedForRef.current;
+    const orgId = dataOrgRef.current;
+    const context = organizationContextRef.current;
+    if (!userId || !orgId || context.activeOrganization?.id !== orgId || !context.activeMembership) return;
+    if (context.activeMembership.user_id !== userId) return;
+    const data = dataRef.current;
+    const state = groupStateRef.current;
+    const pageNow = pageRef.current;
+    const vorige = cacheBewaardRef.current;
+    if (vorige && vorige.data === data && vorige.context === context && vorige.page === pageNow && vorige.groups === state) return;
+    cacheBewaardRef.current = { data, context, page: pageNow, groups: state };
+    const groupFields = new Set<string>(Object.values(GROUP_FIELDS).flat());
+    const core = Object.fromEntries(Object.entries(data).filter(([key]) => !groupFields.has(key))) as CoreData;
+    // Het briefpapier hoort er niet bij: groot, en een PDF haalt het toch zelf op.
+    if (core.companySettings && 'invoice_template_data_url' in core.companySettings) {
+      const { invoice_template_data_url: _briefpapier, ...settings } = core.companySettings;
+      core.companySettings = settings as typeof core.companySettings;
+    }
+    const groups: WorkspaceCacheEntry['groups'] = {};
+    for (const group of groupsFor(pageNow)) {
+      if (!state.loaded.has(group) || state.stale.has(group)) continue;
+      groups[group] = Object.fromEntries(GROUP_FIELDS[group].map(field => [field, data[field]])) as Partial<AppData>;
+    }
+    void writeWorkspaceCache({
+      v: WORKSPACE_CACHE_VERSIE, userId, orgId, at: Date.now(), rechten: rechtenVan(context.activeMembership),
+      organizationContext: { ...context, billingOverview: null }, core, groups,
+    });
+  }
+  // Bij het verlaten van de app (ander venster, telefoon op slot, sluiten):
+  // dan staat de volgende start op wat je het laatst zag.
+  useEffect(() => {
+    const onHide = () => { if (document.visibilityState === 'hidden') bewaarWerkruimte(); };
+    document.addEventListener('visibilitychange', onHide);
+    return () => document.removeEventListener('visibilitychange', onHide);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   /**
    * Het abonnementsoverzicht (alleen owners en admins) na de kern, niet ervoor.
    * Het is alleen voor Instellingen; de inrichting haalt het zelf op. De
@@ -1633,9 +1747,32 @@ function App() {
         ? boot
         : startRound(candidate, Boolean(candidate) && candidate !== dataOrgRef.current);
       const early = start.early;
+      // De werkruimte van de vorige keer meteen tonen (lib/workspaceCache.ts),
+      // als die er is voor deze gebruiker en deze organisatie, en als hij
+      // eerder binnen is dan de verse ronde. Daarna gaat de ronde verder als
+      // een ververs van dezelfde organisatie.
+      if (boot && start === boot && dataOrgRef.current === null) {
+        const cached = await Promise.race([boot.cache, start.context.then(() => null, () => null)]);
+        if (session !== sessionEpochRef.current) return;
+        if (cached && cached.orgId === candidate && cached.userId === loadedForRef.current) applyCachedWorkspace(cached, early);
+      }
       const orgContext = await withTimeout(start.context, WORKSPACE_ROUND_TIMEOUT_MS, tooSlow);
       // Intussen uitgelogd: niets van deze ronde hoort nog in beeld.
       if (session !== sessionEpochRef.current) return;
+      // Uit de cache, maar het lidmaatschap kiest een andere organisatie of de
+      // rechten zijn veranderd: dan geldt de cache niet. Weg ermee, en verder
+      // zoals bij een eerste start (laadscherm, alles vers, tabbladen opnieuw).
+      if (cacheViewRef.current) {
+        const freshOrgId = orgContext.activeOrganization?.id ?? null;
+        if (freshOrgId !== dataOrgRef.current || rechtenVan(orgContext.activeMembership) !== cacheRechtenRef.current) {
+          const user = loadedForRef.current;
+          if (user && dataOrgRef.current) void dropWorkspaceCache(user, dataOrgRef.current);
+          dataOrgRef.current = null;
+          tabsLoadedForRef.current = null;
+          cacheViewRef.current = false;
+          setCacheView(false);
+        }
+      }
       // Het abonnementsoverzicht komt los binnen (loadBillingInBackground). Tot
       // dan blijft bij een ververs het vorige staan, anders knippert Instellingen.
       setOrganizationContext(prev => ({
@@ -1673,7 +1810,7 @@ function App() {
           : loadCoreData(orgId, { organizationCreatedAt: orgContext.activeOrganization?.created_at ?? null });
         const [loaded] = await withTimeout(Promise.all([
           core,
-          sameOrganization ? refreshOpenGroups(orgId) : Promise.resolve(),
+          sameOrganization ? refreshOpenGroups(orgId, early && early.orgId === orgId ? early : null) : Promise.resolve(),
         ]), WORKSPACE_ROUND_TIMEOUT_MS, tooSlow);
         const directoryClients = financeDirectory ? await financeDirectory : null;
         if (directoryClients) loaded.clients = directoryClients;
@@ -1701,6 +1838,23 @@ function App() {
           restoreTabsForOrganization(orgId, dataRef.current, access);
         }
         loadBillingInBackground(orgId, orgContext.activeMembership?.role);
+        // Vers binnen: vanaf nu weer wijzigen. En de werkruimte bewaren voor
+        // de volgende start, één keer per laadbeurt na de eerste verse ronde
+        // (daarna bij het verlaten van de app, zie bewaarWerkruimte).
+        if (cacheViewRef.current) { cacheViewRef.current = false; setCacheView(false); }
+        if (!cacheGeplandRef.current) {
+          cacheGeplandRef.current = true;
+          window.setTimeout(bewaarWerkruimte, 2000);
+        }
+        // De leesverzoeken van deze start bewaren voor de volgende
+        // (lib/opstartverzoeken.ts). Een paar tellen na de eerste
+        // geslaagde ronde, zodat ook de groepen van de beginpagina en de
+        // tellers van de schil erin zitten.
+        const startUser = loadedForRef.current;
+        if (!opstartLijstGeplandRef.current && startUser) {
+          opstartLijstGeplandRef.current = true;
+          window.setTimeout(() => { if (loadedForRef.current === startUser) saveOpstartLijst(startUser); }, 3000);
+        }
       } else {
         localStorage.removeItem(activeOrgStorageKey);
         resetDataGroups(null);
@@ -1768,7 +1922,7 @@ function App() {
    * alleen het laatst gevraagde toont, toont bij een stroom verversingen niets.
    * Mislukt een groep, dan onthoudt groupState dat met de melding.
    */
-  function fetchGroups(orgId: string, groups: readonly DataGroup[], started?: ReadonlyArray<Promise<Partial<AppData>>>): Promise<void> {
+  function fetchGroups(orgId: string, groups: readonly DataGroup[], started?: ReadonlyArray<Promise<Partial<AppData>> | undefined>): Promise<void> {
     const epoch = orgEpochRef.current;
     const freshness = freshnessRef.current;
     const seqs = groups.map(group => (groupSeqRef.current[group] = (groupSeqRef.current[group] ?? 0) + 1));
@@ -1830,11 +1984,15 @@ function App() {
    * open pagina gebruikt — dat komt nu meteen opnieuw binnen. Altijd een nieuwe
    * aanvraag, ook als er al een liep: die kan van vóór de wijziging zijn.
    */
-  function refreshOpenGroups(orgId: string): Promise<void> {
+  function refreshOpenGroups(orgId: string, early?: { groups: DataGroup[]; groupLoads: Array<Promise<Partial<AppData>>> } | null): Promise<void> {
     freshnessRef.current += 1;
     const open = openGroupsRef.current;
     updateGroupState(prev => markStale(prev, open));
-    return open.length ? fetchGroups(orgId, open) : Promise.resolve();
+    if (!open.length) return Promise.resolve();
+    // Na een start uit de cache liepen de groepen van de beginpagina al
+    // (startRound). Die nemen we over; anders vroegen we ze twee keer op.
+    const started = early ? open.map(group => { const index = early.groups.indexOf(group); return index >= 0 ? early.groupLoads[index] : undefined; }) : undefined;
+    return fetchGroups(orgId, open, started);
   }
 
   function retryGroups(groups: readonly DataGroup[]) {
@@ -2074,6 +2232,10 @@ function App() {
   }
 
   function ensureCanWrite(): boolean {
+    if (cacheView) {
+      setError('Even geduld: ResoFly haalt de nieuwste gegevens op. Daarna kun je wijzigen.');
+      return false;
+    }
     if (!orgCanWrite) {
       setError('Je hebt alleen-lezen toegang tot deze organisatie. Vraag een owner/admin om schrijfrechten.');
       return false;
@@ -2125,6 +2287,12 @@ function App() {
       } else if (!userId) {
         loadedForRef.current = null;
         tabsLoadedForRef.current = null;
+        // Uitgelogd (hier of elders): niets van deze gebruiker blijft klaarstaan
+        // voor een volgende start op dit apparaat.
+        clearOpstartLijsten();
+        void clearWorkspaceCache();
+        cacheViewRef.current = false;
+        setCacheView(false);
         // Wat de vorige sessie nog aan het laden was, komt niet meer in beeld.
         sessionEpochRef.current += 1;
         const queued = workspaceRunRef.current.queued;
@@ -4582,7 +4750,15 @@ function App() {
     },
   };
 
-  const pageReadOnly = !((orgCanWrite && permissions.canWritePage(page)) || permissions.canBookPage(page));
+  // "Alleen lezen" gaat over je rechten. Uit de cache kun je even niet
+  // wijzigen, maar dat zegt het teken "Bijwerken…" (cacheBadge) en niet dit.
+  const roleCanWrite = activeMembership ? ['owner', 'admin', 'member'].includes(activeMembership.role) : false;
+  const pageReadOnly = !((roleCanWrite && permissions.canWritePage(page)) || permissions.canBookPage(page));
+  const cacheBadge = cacheView
+    ? <div className="cache-badge" role="status" aria-live="polite" title={loading ? 'Je ziet de werkruimte van de vorige keer. ResoFly haalt de nieuwste gegevens op; daarna kun je wijzigen.' : 'Bijwerken lukte niet. Je ziet de werkruimte van de vorige keer; kies Ververs om het opnieuw te proberen.'}>
+      {loading && <span className="boot-spinner" aria-hidden="true" />}{loading ? 'Bijwerken…' : 'Niet bijgewerkt: je ziet de vorige stand'}
+    </div>
+    : null;
   // Baken: de gouden knop "+ Nieuw" rechtsboven, zoals "Nieuwe taak" in Value
   // Backlog. Alleen wat dit teamlid mag maken: de module moet open staan en
   // schrijfbaar zijn, net als bij de knop op de pagina zelf. De rechten gaan per
@@ -4798,6 +4974,7 @@ function App() {
     {officeOpening && !officeSession && <div style={{ position: 'fixed', bottom: 16, right: 16, zIndex: 2100, background: 'var(--panel-strong)', border: '1px solid var(--border2)', borderRadius: 10, padding: '8px 14px', fontWeight: 600 }}>Editor openen…</div>}
     {/* Zwevend teamchat-paneel — overal beschikbaar, behalve op de volledige chatpagina. */}
     <TeamChatDock api={teamChat} hidden={page === 'chat' || !permissions.canRead('chat')} onExpand={(id) => openTeamChat(id)} />
+    {cacheBadge}
     {/* Mobiele duim-onderbalk (alleen ≤760px, zie globals.css). Navigeert het
         actieve tabblad naar een kerndestinatie; sluit onderweg het uitschuifmenu. */}
     <BottomNav page={page} permissions={permissions} appItems={STANDALONE_APP?.dock} dock={look === 'stroom'} onAsk={look === 'stroom' && permissions.canRead('gerrie') ? () => askGerrie() : undefined} onNavigate={(p) => { setPage(p); setProjectId(null); setClientId(null); setStatsReportId(null); setMobileNavOpen(false); if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); }} />
@@ -4895,7 +5072,8 @@ function App() {
     // De boekhouder die mag boeken is geen schrijver (orgCanWrite), maar mag op
     // de boekhoudpagina's wel corrigeren en afsluiten. Alleen daar; de pagina's
     // zelf laten weg wat hij niet mag (rekeningschema, activum aanmaken).
-    const canBook = permissions.canBookPage(page);
+    // Uit de cache (cacheView): ook de boekhouder wacht tot de verse gegevens er zijn.
+    const canBook = !cacheView && permissions.canBookPage(page);
     const canManage = orgCanWrite && permissions.canWritePage(page);
     const canWrite = canManage || canBook;
     // Contracten horen bij de financiële module, ook als je ze vanaf een project

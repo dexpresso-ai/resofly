@@ -30,22 +30,10 @@ import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
 import { chromium } from '@playwright/test';
 import { installMock, storageScript, seed, SUPABASE_URL } from '../mobile/mock/backend.mjs';
-import { DATA_GROUPS, GROUP_FIELDS, PAGE_DATA_GROUPS } from '../../src/lib/dataGroups.ts';
+import { DATA_GROUPS, GROUP_FIELDS, GROUP_TABLES, PAGE_DATA_GROUPS } from '../../src/lib/dataGroups.ts';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
-/** De tabellen achter elke groep, in de volgorde van GROUP_FIELDS. */
-const GROUP_TABLES = {
-  time: ['time_entries'],
-  communication: ['ticket_notes', 'client_calls'],
-  financeHistory: [
-    'quote_approval_events', 'quote_email_deliveries', 'quote_versions',
-    'invoice_workflow_events', 'invoice_email_deliveries', 'invoice_payment_records', 'invoice_versions',
-    'invoice_refunds', 'credit_notes', 'invoice_chargebacks', 'invoice_dunning_notices',
-  ],
-  bookkeeping: ['journal_entries', 'journal_lines', 'closed_periods', 'fiscal_years', 'fixed_assets', 'asset_depreciations', 'prepaid_expenses', 'prepaid_expense_releases', 'vat_returns'],
-  bank: ['bank_accounts', 'bank_statements', 'bank_transactions', 'bank_transaction_allocations', 'bank_rules', 'bank_requisitions'],
-};
 const ALL_GROUP_TABLES = Object.values(GROUP_TABLES).flat();
 
 /** Elke pagina met een eigen behoefte, plus een paar die genoeg hebben aan de kern. */
@@ -250,6 +238,9 @@ try {
         await route.fallback();
       }
     });
+    // Een eerste start, zonder de werkruimte van de vorige keer: met een cache
+    // staat het grootboek er al en zegt een balk dat bijwerken mislukte (blok 10).
+    await page.addInitScript(() => { indexedDB.deleteDatabase('resofly-werkruimte'); });
     await page.addInitScript(storageScript('ledger'));
     await page.goto(baseUrl, { waitUntil: 'networkidle' });
     await page.waitForSelector('.app', { timeout: 20000 });
@@ -320,6 +311,168 @@ try {
   }
 
   await context.close();
+
+  // ── 9: opstartverzoeken (lib/opstartverzoeken.ts, het inline script in index.html) ──
+  // Na een start bewaart de app welke leesverzoeken hij deed; de volgende start
+  // in deze browser verstuurt die al tijdens het lezen van de HTML. Een gelijk
+  // verzoek van de app krijgt dat antwoord: geen adres twee keer, en niets
+  // vooruit wat de app niet ook vraagt.
+  {
+    const opstart = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: 'nl-NL', timezoneId: 'Europe/Amsterdam', reducedMotion: 'reduce' });
+    await installMock(opstart);
+    // Elke GET op /rest/v1 met zijn Prefer, per pagina.
+    const logGets = (page) => {
+      const list = [];
+      page.on('request', req => {
+        const url = new URL(req.url());
+        if (req.method() === 'GET' && url.origin === SUPABASE_URL && url.pathname.startsWith('/rest/v1/')) list.push(`${req.url()} ${req.headers()['prefer'] ?? ''}`);
+      });
+      return list;
+    };
+    const tel = (list) => list.reduce((m, g) => m.set(g, (m.get(g) ?? 0) + 1), new Map());
+    const eerste = { page: await opstart.newPage() };
+    const eersteGets = logGets(eerste.page);
+    await eerste.page.addInitScript(storageScript('dashboard'));
+    await eerste.page.goto(baseUrl, { waitUntil: 'networkidle' });
+    await eerste.page.waitForSelector('.app', { timeout: 20000 });
+    await idle(eerste.page);
+    // De lijst wordt een paar tellen na de eerste geslaagde ronde bewaard.
+    await eerste.page.waitForTimeout(3500);
+    const lijst = await eerste.page.evaluate(() => {
+      const key = Object.keys(localStorage).find(k => k.startsWith('resofly.opstartverzoeken.'));
+      return key ? JSON.parse(localStorage.getItem(key) ?? 'null') : null;
+    });
+    const urls = (lijst?.requests ?? []).map(r => r.url);
+    check('opstart: de eerste start bewaart zijn leesverzoeken', urls.length >= 10, `${urls.length} verzoeken`);
+    const groepsTabellen = urls.map(u => new URL(u).pathname.slice('/rest/v1/'.length)).filter(t => ALL_GROUP_TABLES.includes(t));
+    check('opstart: geen groepstabellen in de lijst (die hangen af van de beginpagina)', groepsTabellen.length === 0, groepsTabellen.join(', '));
+    check('opstart: geen adres met een datum in de lijst', !urls.some(u => /\d{4}-\d{2}-\d{2}/.test(decodeURIComponent(u))));
+    await eerste.page.close();
+
+    const tweede = await opstart.newPage();
+    const gets = logGets(tweede);
+    const errors = [];
+    tweede.on('pageerror', e => errors.push(String(e.message)));
+    await tweede.addInitScript(storageScript('dashboard'));
+    await tweede.goto(baseUrl, { waitUntil: 'networkidle' });
+    await tweede.waitForSelector('.app', { timeout: 20000 });
+    await idle(tweede);
+    // Vaker dan bij de eerste start (zonder vooruit) = dubbel door het vooruit
+    // halen. Sommige vragen doet de app zelf twee keer (twee onderdelen van
+    // Gerrie vragen dezelfde besluiten); die tellen dan ook bij de eerste.
+    const eersteTelling = tel(eersteGets);
+    const dubbel = [...tel(gets)].filter(([g, n]) => n > (eersteTelling.get(g) ?? 1)).map(([g]) => g);
+    check('opstart: tweede start vraagt geen adres vaker dan de eerste', dubbel.length === 0, dubbel.slice(0, 3).join(' | '));
+    const vooruit = urls.filter(u => gets.some(g => g.startsWith(`${u} `)));
+    check('opstart: de bewaarde verzoeken gingen bij de tweede start weg', vooruit.length === urls.length, `${vooruit.length} van ${urls.length}`);
+    const overgebleven = await tweede.evaluate(() => window.__resoflyOpstart?.entries.size ?? 0);
+    check('opstart: de app nam alles over wat vooruit ging', overgebleven === 0, `${overgebleven} niet overgenomen`);
+    check('opstart: tweede start zonder JavaScript-fout', errors.length === 0, errors[0]);
+    await tweede.close();
+    await opstart.close();
+  }
+
+  // ── 10: starten uit de cache (lib/workspaceCache.ts) ──
+  // De tweede start toont de werkruimte van de vorige keer meteen, ook als de
+  // database nog niet antwoordt; tot de verse ronde binnen is zegt een melding
+  // "Bijwerken…". Andere rechten: de cache vervalt. Uitloggen wist alles.
+  {
+    const cacheCtx = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: 'nl-NL', timezoneId: 'Europe/Amsterdam', reducedMotion: 'reduce' });
+    await installMock(cacheCtx);
+    const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+    /** De sleutels in de cache, zonder hem aan te maken als hij er niet is. */
+    const cacheKeys = (page) => page.evaluate(() => new Promise(resolve => {
+      const request = indexedDB.open('resofly-werkruimte', 1);
+      request.onupgradeneeded = () => request.transaction.abort();
+      request.onerror = () => resolve([]);
+      request.onsuccess = () => {
+        const db = request.result;
+        const all = db.transaction('werkruimte').objectStore('werkruimte').getAllKeys();
+        all.onsuccess = () => { db.close(); resolve(all.result); };
+      };
+    }));
+    /** Een start met een database die pas na `delay` ms antwoordt. */
+    async function start(delay) {
+      const page = await cacheCtx.newPage();
+      const errors = [];
+      page.on('pageerror', e => errors.push(String(e.message)));
+      if (delay) await page.route(`${SUPABASE_URL}/rest/v1/**`, async (route) => { await sleep(delay); await route.fallback(); });
+      await page.addInitScript(storageScript('dashboard'));
+      const t0 = Date.now();
+      await page.goto(baseUrl, { waitUntil: 'commit' });
+      await page.waitForSelector('.app', { timeout: 20000 });
+      return { page, errors, shownAfter: Date.now() - t0 };
+    }
+
+    const eerste = await start(0);
+    await idle(eerste.page);
+    check('cache: de eerste start toont geen melding "Bijwerken…"', (await eerste.page.locator('.cache-badge').count()) === 0);
+    await eerste.page.waitForTimeout(2600);
+    const keys = await cacheKeys(eerste.page);
+    check('cache: na de eerste start is de werkruimte bewaard', keys.length === 1, JSON.stringify(keys));
+    await eerste.page.close();
+
+    const tweede = await start(3000);
+    const badge = await tweede.page.locator('.cache-badge').textContent().catch(() => null);
+    check('cache: de tweede start staat er vóór de database antwoordt', tweede.shownAfter < 3000, `${tweede.shownAfter} ms`);
+    check('cache: met de melding "Bijwerken…"', (badge ?? '').includes('Bijwerken'), `melding: ${badge}`);
+    check('cache: het dashboard toont de bewaarde taken', (await tweede.page.locator('.content:not([hidden]) .dash-task').count()) > 0);
+    // Wijzigen wacht tot de verse gegevens er zijn: het dashboard heeft dan
+    // geen actieve afvinkknop bij een taak.
+    await tweede.page.waitForSelector('.cache-badge', { state: 'detached', timeout: 20000 }).catch(() => undefined);
+    check('cache: na de verse ronde is de melding weg', (await tweede.page.locator('.cache-badge').count()) === 0);
+    await idle(tweede.page);
+    check('cache: tweede start zonder JavaScript-fout', tweede.errors.length === 0, tweede.errors[0]);
+
+    // Andere rechten: in de cache staat de rol 'viewer', de database zegt iets anders.
+    await tweede.page.evaluate(() => new Promise(resolve => {
+      const request = indexedDB.open('resofly-werkruimte', 1);
+      request.onsuccess = () => {
+        const db = request.result;
+        const store = db.transaction('werkruimte', 'readwrite').objectStore('werkruimte');
+        const cursor = store.openCursor();
+        cursor.onsuccess = () => {
+          const c = cursor.result;
+          if (!c) { db.close(); resolve(); return; }
+          const entry = c.value;
+          const m = entry.organizationContext.activeMembership;
+          m.role = 'viewer';
+          const modules = m.module_access && typeof m.module_access === 'object' ? Object.keys(m.module_access).sort().map(k => `${k}=${String(m.module_access[k])}`).join(',') : '';
+          entry.rechten = `${m.role}|${m.status ?? ''}|${modules}|${m.accountant_can_book ? 'boekt' : ''}`;
+          c.update(entry);
+          c.continue();
+        };
+      };
+    }));
+    await tweede.page.close();
+    const derde = await start(1500);
+    check('cache: met de rechten uit de cache (viewer) staat hij er eerst ook', (await derde.page.locator('.cache-badge').count()) === 1);
+    await derde.page.waitForSelector('.cache-badge', { state: 'detached', timeout: 20000 }).catch(() => undefined);
+    await idle(derde.page);
+    await derde.page.waitForTimeout(2600);
+    const rol = await derde.page.evaluate(() => new Promise(resolve => {
+      const request = indexedDB.open('resofly-werkruimte', 1);
+      request.onsuccess = () => {
+        const db = request.result;
+        const all = db.transaction('werkruimte').objectStore('werkruimte').getAll();
+        all.onsuccess = () => { db.close(); resolve(all.result.map(e => e.organizationContext.activeMembership.role)); };
+      };
+    }));
+    check('cache: andere rechten in de database: de cache vervalt en wordt vers bewaard', rol.length === 1 && rol[0] !== 'viewer', JSON.stringify(rol));
+    check('cache: andere rechten zonder JavaScript-fout', derde.errors.length === 0, derde.errors[0]);
+
+    // Uitloggen wist de cache en de opstartverzoeken.
+    await derde.page.locator('.zrail-me').first().click();
+    await derde.page.locator('.zpop-item.danger', { hasText: 'Uitloggen' }).first().click();
+    await derde.page.waitForSelector('.login-card', { timeout: 20000 });
+    await derde.page.waitForTimeout(500);
+    const naUitloggen = await cacheKeys(derde.page);
+    const lijsten = await derde.page.evaluate(() => Object.keys(localStorage).filter(k => k.startsWith('resofly.opstartverzoeken.')));
+    check('cache: uitloggen wist de werkruimte van dit apparaat', naUitloggen.length === 0, JSON.stringify(naUitloggen));
+    check('cache: uitloggen wist de opstartverzoeken', lijsten.length === 0, JSON.stringify(lijsten));
+    await derde.page.close();
+    await cacheCtx.close();
+  }
 } finally {
   await browser.close();
   if (server) await server.close();
