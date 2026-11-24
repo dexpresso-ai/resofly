@@ -2592,6 +2592,24 @@ body::before{
 .mr-audio{margin-top:10px}
 .mr-audio audio{width:100%;height:34px}
 .mr-sent-note{display:flex;align-items:center;gap:6px;margin:8px 0 0;font-size:12.5px;color:var(--accent-ink)}
+/* Meeting in Inhoud: de vraag na het transcriberen (2026-11-24) */
+.mr-inhoud-vraag{margin-top:12px;padding:12px;border:1px solid rgba(var(--accent-rgb),.28);border-radius:11px;background:rgba(var(--accent-rgb),.07)}
+.mr-inhoud-tekst{margin:0;display:flex;flex-direction:column;gap:3px;font-size:13px;line-height:1.5;color:var(--text)}
+.mr-inhoud-tekst span{color:var(--muted)}
+.mr-inhoud-vraag .mr-actions{margin-top:10px}
+.mr-inhoud-later .mr-actions{margin-top:10px}
+.mr-inhoud-klaar{flex-wrap:wrap}
+.mr-link{background:none;border:0;padding:0;font:inherit;color:var(--accent-ink);text-decoration:underline;cursor:pointer}
+.mr-link:hover{text-decoration:none}
+/* Meeting in Inhoud: wisselen tussen notulen en transcript in de notitie */
+/* In het notitievenster (.form-grid) over de volle breedte, zoals de editor zelf (.rich-text-field). */
+.meeting-note-views{grid-column:1/-1;display:flex;flex-direction:column;gap:10px;min-width:0}
+.meeting-note-switch{align-self:flex-start;max-width:100%}
+.meeting-note-transcript{border:1px solid var(--border);border-radius:11px;padding:12px 14px;background:rgba(var(--sheen-rgb),calc(.035 * var(--sheen-k)));min-width:0}
+.meeting-note-meta{margin:0 0 10px;font-size:12px;line-height:1.5;color:var(--muted)}
+.meeting-note-lines{max-height:min(60vh,560px);overflow:auto;overflow-wrap:anywhere}
+.meeting-note-lines p{margin:0 0 8px;font-size:13.5px;line-height:1.6;color:var(--text)}
+.meeting-note-lines p:last-child{margin-bottom:0}
 .mr-transcript-edit{margin-top:8px}
 .mr-transcript-editor{margin-top:8px}
 .mr-transcript-editor .form-textarea{width:100%;font-family:inherit;font-size:12.5px;line-height:1.55}

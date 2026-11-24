@@ -11,6 +11,7 @@
 
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { recordAiUsage, summarizeTranscript, userHasBudget } from './claudeSummary.ts';
+import { meetingNoteContent, NOTULEN_VOLGEN, type MeetingSummaryLike } from './meetingNote.ts';
 import type { NormalizedTranscript } from './scribeTranscript.ts';
 import { recordTranscriptionUsage, type RecordingForUsage } from './transcriptionUsage.ts';
 
@@ -53,7 +54,7 @@ export async function runSummaryForRecording(
   admin: SupabaseClient, recordingId: string, { billTo }: { billTo?: string | null } = {},
 ): Promise<SummaryOutcome> {
   const { data: rec, error } = await admin.from('meeting_recordings')
-    .select('id, organization_id, created_by, transcript_text, event_title_snapshot, client_id, project_id, language')
+    .select('id, organization_id, created_by, transcript_text, event_title_snapshot, client_id, project_id, language, summary_json, summary_text, content_note_id')
     .eq('id', recordingId).single();
   if (error || !rec) return { summarized: false, reason: 'error', message: error?.message };
 
@@ -101,12 +102,40 @@ export async function runSummaryForRecording(
       error_message: null,
     }).eq('id', recordingId);
     await recordAiUsage(admin, String(rec.organization_id), payer, model, usage);
+    if (rec.content_note_id) {
+      await refreshContentNote(admin, String(rec.organization_id), String(rec.content_note_id), [
+        NOTULEN_VOLGEN,
+        meetingNoteContent(rec.summary_json as MeetingSummaryLike | null, rec.summary_text as string | null),
+      ], meetingNoteContent(summary));
+    }
     return { summarized: true };
   } catch (e) {
     const message = e instanceof Error ? e.message : 'Samenvatten mislukt.';
     await admin.from('meeting_recordings').update({ status: 'transcribed', error_message: message }).eq('id', recordingId);
     return { summarized: false, reason: 'error', message };
   }
+}
+
+/**
+ * Staat de meeting in Inhoud (content_note_id), dan krijgt die notitie de
+ * nieuwe notulen. Maar alleen als er nog staat wat ResoFly er zelf in zette:
+ * de tekst "notulen volgen" of de vorige notulen. Heeft iemand de notitie
+ * bewerkt, dan is het zijn tekst en blijft die staan.
+ *
+ * Eerst lezen en vergelijken, dan schrijven op voorwaarde dat updated_at niet
+ * veranderde: een filter op de hele tekst ging als query in de URL, en lange
+ * notulen maakten die te lang. Mislukt het, dan blijven de notulen gewoon op
+ * de opname staan; de notitie is een kopie.
+ */
+async function refreshContentNote(admin: SupabaseClient, organizationId: string, noteId: string, previous: string[], next: string): Promise<void> {
+  const { data: note, error } = await admin.from('notes').select('content, updated_at')
+    .eq('id', noteId).eq('organization_id', organizationId).maybeSingle();
+  if (error || !note) return;
+  const current = String(note.content ?? '');
+  if (current === next || !previous.includes(current)) return;
+  const { error: updateError } = await admin.from('notes').update({ content: next })
+    .eq('id', noteId).eq('organization_id', organizationId).eq('updated_at', note.updated_at);
+  if (updateError) console.warn('notulen in Inhoud bijwerken mislukt:', updateError.message);
 }
 
 async function lookupName(admin: SupabaseClient, table: 'clients' | 'projects', organizationId: string, id: string): Promise<string | null> {

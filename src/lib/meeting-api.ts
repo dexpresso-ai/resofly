@@ -134,6 +134,40 @@ export async function sendSummaryToAttendees(
   });
 }
 
+export interface SavedInContent {
+  noteId: UUID;
+  folderId: UUID | null;
+  /** Stond hij er al: dan is dit de notitie van toen, geen nieuwe. */
+  alreadySaved: boolean;
+}
+
+/**
+ * Zet een meeting uit de agenda in Inhoud: bij de klant van de afspraak (of
+ * onder Geen klant) in de map Meetings, als notitie "<titel> — <datum>". De
+ * server maakt de map als die er nog niet is. `meetingDate` is de dag van de
+ * afspraak (JJJJ-MM-DD); zonder wordt het de dag van de opname.
+ */
+export async function saveRecordingToContent(organizationId: UUID, recordingId: UUID, meetingDate: string | null): Promise<SavedInContent> {
+  return invoke<SavedInContent>(organizationId, { action: 'saveToContent', recordingId, meetingDate });
+}
+
+/**
+ * De meeting die in deze notitie in Inhoud staat, of null. De notitie toont er
+ * het transcript van (MeetingNoteViews). Wie Inhoud kan lezen, mag hem lezen
+ * (20261124100000_meeting_in_inhoud.sql).
+ */
+export async function getRecordingInContentNote(organizationId: UUID, noteId: UUID): Promise<MeetingRecording | null> {
+  const { data, error } = await supabase.from('meeting_recordings').select('*')
+    .eq('organization_id', organizationId).eq('content_note_id', noteId).maybeSingle();
+  // Zelfde afweging als bij een gesprek: alleen "de kolom bestaat nog niet"
+  // (migratie niet gedraaid) is geen fout.
+  if (error) {
+    if (error.code === '42703' || error.code === 'PGRST204') return null;
+    throw new Error(error.message);
+  }
+  return (data as MeetingRecording | null) ?? null;
+}
+
 /** Verwijdert opname + transcript + notulen (audio uit R2 én de databaserij). */
 export async function deleteRecording(organizationId: UUID, recording: Pick<MeetingRecording, 'id' | 'storage_key'>): Promise<void> {
   if (recording.storage_key) await deleteR2Object(recording.storage_key).catch(() => undefined);

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { AlertTriangle, Check, FilePlus2, FileText, Loader2, Mail, Mic, Pause, Pencil, Play, Send, Square, Trash2, Users, X } from 'lucide-react';
+import { AlertTriangle, Check, FilePlus2, FolderInput, Loader2, Mail, Mic, Pause, Pencil, Play, Send, Square, Trash2, Users, X } from 'lucide-react';
 import { Button, Input, Textarea } from './Ui';
 import { NotulenToevoegen } from './NotulenToevoegen';
 import { notulenAsRichText, type ContentTarget } from '../lib/notulen';
@@ -8,7 +8,7 @@ import { getAccessToken, getWorkerBase } from '../lib/r2-api';
 import { makeSeekable } from '../lib/audioSeek';
 import {
   canStartTranscription, createRecording, deleteRecording as apiDeleteRecording, getRecording,
-  isTerminalStatus, listRecordingsForCall, listRecordingsForEvent, listRecordingsForNote, loadTranscriptionBudget, sendSummaryToAttendees,
+  isTerminalStatus, listRecordingsForCall, listRecordingsForEvent, listRecordingsForNote, loadTranscriptionBudget, saveRecordingToContent, sendSummaryToAttendees,
   startTranscription, summarizeRecording, updateRecordingText, uploadMeetingAudio,
   type TranscriptionBudget,
 } from '../lib/meeting-api';
@@ -37,12 +37,29 @@ export interface MeetingRecorderEvent {
   attendees: { email: string; name: string }[];
 }
 
+/**
+ * Een meeting uit de agenda in Inhoud zetten (sinds 24 november). Na het
+ * transcriberen vraagt de kaart: "Ook opslaan in Inhoud?" Zo ja, dan komt er
+ * bij de klant (of onder Geen klant) een map Meetings met een notitie
+ * "<titel> — <datum>". Alleen meegeven als de gebruiker Inhoud mag wijzigen.
+ */
+export interface SaveToContentOptions {
+  /** Waar hij komt, in gewone woorden: "bij Bakkerij Jansen" of "onder Geen klant". */
+  placeLabel: string;
+  /** De dag van de afspraak (JJJJ-MM-DD), voor in de titel. */
+  meetingDate: string | null;
+  /** Na het opslaan: de notitie aan de afspraak hangen en de werkruimte verversen. */
+  onSaved?: (noteId: UUID) => void | Promise<void>;
+  /** Opent de notitie. */
+  onOpenNote?: (noteId: UUID) => void;
+}
+
 interface Props {
   organizationId: UUID;
   canWrite: boolean;
   event: MeetingRecorderEvent;
-  /** Wordt getoond als "Opslaan als notitie" wanneer aanwezig (alleen bij gedeelde items). */
-  onSaveAsNote?: (text: string) => Promise<void>;
+  /** Alleen bij een afspraak: de vraag "Ook opslaan in Inhoud?" na het transcriberen. */
+  saveToContent?: SaveToContentOptions;
   /**
    * Notities en documenten waaraan de notulen kunnen worden toegevoegd, en wat
    * er dan gebeurt. Alleen meegeven als de gebruiker Inhoud mag wijzigen: zonder
@@ -75,7 +92,7 @@ function fmtClock(seconds: number): string {
   return `${m}:${s}`;
 }
 
-export function MeetingRecorder({ organizationId, canWrite, event, onSaveAsNote, contentTargets, onAppendToContent, ensureNoteId, onInsertIntoNote }: Props) {
+export function MeetingRecorder({ organizationId, canWrite, event, saveToContent, contentTargets, onAppendToContent, ensureNoteId, onInsertIntoNote }: Props) {
   // Bij een notitie: andere woorden, een andere poort (Inhoud) en de opnames per notitie.
   const forNote = Boolean(ensureNoteId) || Boolean(event.noteId);
   // finishRecording draait vanuit de onstop van de recorder, met de props van
@@ -364,7 +381,8 @@ export function MeetingRecorder({ organizationId, canWrite, event, onSaveAsNote,
             onInsertIntoNote={onInsertIntoNote}
             onPatch={(patch) => setRecordings((prev) => prev.map((p) => (p.id === rec.id ? { ...p, ...patch } : p)))}
             onDelete={() => void onDelete(rec)} onRetrySummary={() => void onRetrySummary(rec)}
-            onStartTranscription={() => void onStartTranscription(rec)} onSaveAsNote={onSaveAsNote}
+            onStartTranscription={() => void onStartTranscription(rec)}
+            saveToContent={forNote || event.callId ? undefined : saveToContent}
             contentTargets={contentTargets} onAppendToContent={onAppendToContent} />
         ))}
       </div>
@@ -430,21 +448,20 @@ function AiWorkingIcon({ mode }: { mode: 'listening' | 'thinking' }) {
   );
 }
 
-function RecordingCard({ rec, busy, canWrite, organizationId, attendees, where, onInsertIntoNote, onPatch, onDelete, onRetrySummary, onStartTranscription, onSaveAsNote, contentTargets, onAppendToContent }: {
+function RecordingCard({ rec, busy, canWrite, organizationId, attendees, where, onInsertIntoNote, onPatch, onDelete, onRetrySummary, onStartTranscription, saveToContent, contentTargets, onAppendToContent }: {
   rec: MeetingRecording; busy: boolean; canWrite: boolean;
   organizationId: UUID; attendees: { email: string; name: string }[];
   where: RecordingWhere;
   onInsertIntoNote?: (html: string) => void;
   onPatch: (patch: Partial<MeetingRecording>) => void;
   onDelete: () => void; onRetrySummary: () => void; onStartTranscription: () => void;
-  onSaveAsNote?: (text: string) => Promise<void>;
+  saveToContent?: SaveToContentOptions;
   contentTargets?: ContentTarget[];
   onAppendToContent?: (target: ContentTarget, html: string) => Promise<void>;
 }) {
   const [showTranscript, setShowTranscript] = useState(false);
   const [appending, setAppending] = useState(false);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
-  const [savedNote, setSavedNote] = useState(false);
   // Transcriptie bewerken.
   const [editingTranscript, setEditingTranscript] = useState(false);
   const [transcriptDraft, setTranscriptDraft] = useState('');
@@ -539,11 +556,6 @@ function RecordingCard({ rec, busy, canWrite, organizationId, attendees, where, 
               </Button>
             )}
             <Button onClick={() => void navigator.clipboard?.writeText(summaryAsText())}>Kopieer notulen</Button>
-            {onSaveAsNote && (
-              <Button disabled={savedNote} onClick={async () => { await onSaveAsNote(summaryAsText()); setSavedNote(true); }}>
-                <FileText size={14} /> {savedNote ? 'Opgeslagen als notitie' : 'Opslaan als notitie'}
-              </Button>
-            )}
             {onAppendToContent && contentTargets && contentTargets.length > 0 && (
               <Button aria-expanded={appending} onClick={() => setAppending((v) => !v)}>
                 <FilePlus2 size={14} /> Toevoegen aan notitie of document
@@ -588,6 +600,11 @@ function RecordingCard({ rec, busy, canWrite, organizationId, attendees, where, 
             />
           )}
         </div>
+      )}
+
+      {saveToContent && canWrite && rec.transcript_text && rec.status !== 'transcribing' && (
+        <InhoudVraag rec={rec} organizationId={organizationId} options={saveToContent}
+          onSaved={(noteId) => onPatch({ content_note_id: noteId })} />
       )}
 
       {canStartTranscription(rec) && canWrite && (
@@ -656,6 +673,86 @@ function RecordingCard({ rec, busy, canWrite, organizationId, attendees, where, 
             : <Button onClick={() => void loadAudio()}><Play size={14} /> Beluister opname</Button>}
         </div>
       )}
+    </div>
+  );
+}
+
+/** Wie "Nee, niet nu" zei, krijgt de vraag bij deze opname niet opnieuw; de knop blijft. */
+const NEE_KEY = (recordingId: UUID) => `resofly.meetingInhoud.nee.${recordingId}`;
+
+function readNee(recordingId: UUID): boolean {
+  try { return window.localStorage.getItem(NEE_KEY(recordingId)) === '1'; } catch { return false; }
+}
+
+/**
+ * Na het transcriberen: "Ook opslaan in Inhoud?" Bij ja zet de server de
+ * meeting in de map Meetings bij de klant. Bij nee blijft er een knop staan,
+ * zodat je later alsnog kunt. Staat hij er al, dan zegt de kaart waar.
+ */
+function InhoudVraag({ rec, organizationId, options, onSaved }: {
+  rec: MeetingRecording; organizationId: UUID; options: SaveToContentOptions;
+  onSaved: (noteId: UUID) => void;
+}) {
+  const [nee, setNee] = useState(() => readNee(rec.id));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function save() {
+    setSaving(true); setError(null);
+    try {
+      const saved = await saveRecordingToContent(organizationId, rec.id, options.meetingDate);
+      onSaved(saved.noteId);
+      // Koppelen aan de afspraak en verversen mag mislukken: de meeting staat
+      // dan toch al in Inhoud.
+      try { await options.onSaved?.(saved.noteId); } catch { /* zie hierboven */ }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Opslaan in Inhoud mislukt.');
+    } finally { setSaving(false); }
+  }
+
+  function notNow() {
+    setNee(true);
+    try { window.localStorage.setItem(NEE_KEY(rec.id), '1'); } catch { /* alleen voor deze keer dan */ }
+  }
+
+  if (rec.content_note_id) {
+    const noteId = rec.content_note_id;
+    return (
+      <p className="mr-sent-note mr-inhoud-klaar">
+        {/* Niet de klant noemen: die kan na het opslaan aan de afspraak veranderd
+            zijn, terwijl de notitie blijft waar hij is. */}
+        <Check size={13} /> <span>Staat in Inhoud, in de map Meetings.</span>
+        {options.onOpenNote && <button type="button" className="mr-link" onClick={() => options.onOpenNote?.(noteId)}>Openen</button>}
+      </p>
+    );
+  }
+
+  const button = (
+    <Button variant={nee ? undefined : 'primary'} disabled={saving} onClick={() => void save()}>
+      {saving ? <><Loader2 size={14} className="spin" /> Opslaan…</> : <><FolderInput size={14} /> Opslaan in Inhoud</>}
+    </Button>
+  );
+
+  if (nee) {
+    return (
+      <div className="mr-inhoud-later">
+        <div className="mr-actions">{button}</div>
+        {error && <p className="mr-error">{error}</p>}
+      </div>
+    );
+  }
+
+  return (
+    <div className="mr-inhoud-vraag" role="group" aria-labelledby={`mr-inhoud-${rec.id}`}>
+      <p className="mr-inhoud-tekst">
+        <strong id={`mr-inhoud-${rec.id}`}>Ook opslaan in Inhoud?</strong>
+        <span>De meeting komt dan {options.placeLabel} in de map Meetings, met de notulen en het volledige transcript.</span>
+      </p>
+      <div className="mr-actions">
+        {button}
+        <Button variant="ghost" disabled={saving} onClick={notNow}>Nee, niet nu</Button>
+      </div>
+      {error && <p className="mr-error">{error}</p>}
     </div>
   );
 }

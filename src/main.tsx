@@ -19,6 +19,7 @@ import { GlobalSearch, type SearchResult } from './components/GlobalSearch';
 import { Button, ColorPicker, DecimalInput, DEFAULT_PROJECT_COLOR, Input, Select, Textarea, normalizeColor } from './components/Ui';
 import { MemberSelect } from './components/MemberSelect';
 import { RichTextEditor, sanitizeRichText } from './components/RichTextEditor';
+import { MeetingNoteViews } from './components/MeetingNoteViews';
 import { Modal } from './components/Modal';
 import { CheckCircle2, FileText, FolderOpen, Lock, Menu, Receipt, UserCheck, UserPlus, Users, X } from 'lucide-react';
 import { isZenitFamily, usesRailNav, useLook } from './lib/look';
@@ -5675,7 +5676,11 @@ function EditModal({ edit, data, dataStatus, organizationId, currentUserId, team
     {edit.kind === 'note' && <FormGrid>
       <Input value={form.title} onChange={e=>set('title',e.target.value)} placeholder="Titel"/>
       <Select value={form.note_type} onChange={e=>set('note_type',e.target.value)}>{Object.entries(noteTypeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select>
-      <RichTextEditor value={form.content} onChange={value=>set('content', value)} placeholder="Schrijf je notitie…" disabled={disabled}/>
+      {/* Een meeting die uit de agenda in Inhoud is gezet (2026-11-24): wissel
+          tussen de notulen hieronder en het volledige transcript. */}
+      <MeetingNoteViews organizationId={organizationId} noteId={item?.id ?? null} isMeeting={(item as Note | undefined)?.note_type === 'meeting'}>
+        <RichTextEditor value={form.content} onChange={value=>set('content', value)} placeholder="Schrijf je notitie…" disabled={disabled}/>
+      </MeetingNoteViews>
       {/* Opnemen en laten uitschrijven, zoals bij een meeting (2026-11-23). Een
           nieuwe notitie wordt opgeslagen zodra de opname begint; de notulen en
           het transcript zet je daarna met één knop in de tekst hierboven. */}

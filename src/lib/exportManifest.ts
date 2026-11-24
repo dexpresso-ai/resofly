@@ -137,7 +137,10 @@ export const EXPORT_FORMAT_VERSION = 1;
 // (landelijke tarieven, geen gegevens van een organisatie); geen tabellen of kolommen.
 // 20261123150000 (opname bij een notitie) zet de kolom note_id op
 // meeting_recordings; die tabel gaat al mee, met het bestand (storage_key).
-export const EXPORT_SCHEMA_VERSION = '20261123150000';
+// 20261124100000 (meeting in Inhoud) zet de kolom content_note_id op
+// meeting_recordings: in welke notitie de meeting in Inhoud staat. Gaat met
+// de tabel mee, net als de notitie zelf.
+export const EXPORT_SCHEMA_VERSION = '20261124100000';
 
 export type TableKind =
   | 'export'

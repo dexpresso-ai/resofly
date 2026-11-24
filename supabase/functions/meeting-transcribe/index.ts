@@ -15,6 +15,8 @@
 //                synchrone modus -> transcript + notulen meteen -> status 'done'.
 //                Is het tegoed op, dan blijft de opname bewaard op 'uploaded'.
 //  - summarize : (her)genereer de notulen uit het opgeslagen transcript.
+//  - saveToContent : zet een meeting uit de agenda in Inhoud, in de map
+//                Meetings bij de klant (sinds 24 november, _shared/meetingNote.ts).
 //  - delete    : verwijder de opname-rij (de R2-audio wist de frontend zelf).
 //
 // AI-budget: transcriptie en notulen vallen onder hetzelfde maandtegoed als
@@ -35,6 +37,7 @@ import {
 } from '../_shared/edgeAuth.ts';
 import { elevenlabsConfigured, requestTranscription } from '../_shared/elevenlabs.ts';
 import { completeTranscription, runSummaryForRecording } from '../_shared/meetingPipeline.ts';
+import { MEETINGS_FOLDER_NAME, meetingDay, meetingNoteContent, meetingNoteTitle } from '../_shared/meetingNote.ts';
 import { newRecordingModule, recordingModule, type RecordingModule } from '../_shared/recordingModule.ts';
 import { transcriptionBudget, transcriptionCostUsd, transcriptionRefusal } from '../_shared/transcriptionUsage.ts';
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
@@ -62,7 +65,7 @@ const MAX_AUDIO_BYTES = 200 * 1024 * 1024;
 
 // Deze acties wijzigen iets of versturen mail — daarvoor is schrijfrecht op de
 // module nodig, niet alleen leesrecht.
-const WRITE_ACTIONS = new Set(['create', 'start', 'summarize', 'update', 'sendSummary', 'delete']);
+const WRITE_ACTIONS = new Set(['create', 'start', 'summarize', 'update', 'sendSummary', 'saveToContent', 'delete']);
 
 // Supabase Edge Runtime heeft een ingebouwde `Deno.serve` — geen deno.land/std
 // nodig, wat het bundelen niet meer laat afhangen van een externe fetch.
@@ -92,6 +95,7 @@ Deno.serve(async (req) => {
       case 'summarize': return cors.json(req, await summarize(organizationId, role, body, user.id));
       case 'update': return cors.json(req, await updateRecording(organizationId, role, body));
       case 'sendSummary': return cors.json(req, await sendSummary(organizationId, role, body));
+      case 'saveToContent': return cors.json(req, await saveToContent(organizationId, user.id, role, body));
       case 'delete': return cors.json(req, await deleteRecording(organizationId, role, body));
       default: throw new HttpError(`Onbekende actie: ${action}`, 400);
     }
@@ -351,6 +355,118 @@ async function sendSummary(organizationId: string, role: Awaited<ReturnType<type
   }).eq('id', recordingId).eq('organization_id', organizationId);
 
   return { ok: true, sent: sent.length, failed };
+}
+
+/**
+ * Zet een meeting uit de agenda in Inhoud: bij de klant van de afspraak (of
+ * onder Geen klant) in de map Meetings, als notitie "<titel> — <datum>" met de
+ * notulen. Het transcript blijft op de opname; de notitie toont het via
+ * content_note_id (20261124100000_meeting_in_inhoud.sql).
+ *
+ * De poort hierboven gaf al schrijfrecht op Agenda (de opname). De notitie
+ * komt in Inhoud, dus daar is ook schrijfrecht nodig: anders zette iemand met
+ * alleen Agenda via deze weg mappen en notities in Inhoud. De service-role
+ * slaat RLS en de modulepoort in de database over; vandaar ook overal de
+ * organisatie in de filter (CLAUDE.md, harde regel 1).
+ *
+ * Twee keer vragen geeft geen tweede notitie: staat de meeting er al, dan
+ * komt dezelfde notitie terug.
+ */
+async function saveToContent(organizationId: string, userId: string, role: OrganizationRole, body: Record<string, unknown>) {
+  assertWriteRole(role);
+  await assertModuleAccess(admin, userId, organizationId, 'content', 'write');
+  const recordingId = String(body.recordingId || '');
+  if (!isUuid(recordingId)) throw new HttpError('Ongeldige recordingId.', 400);
+
+  const { data, error } = await admin.from('meeting_recordings')
+    .select('id, call_id, note_id, client_id, event_title_snapshot, created_at, status, transcript_text, summary_json, summary_text, content_note_id')
+    .eq('id', recordingId).eq('organization_id', organizationId).maybeSingle();
+  if (error) throw new HttpError(`Opname laden mislukt: ${error.message}`, 500);
+  if (!data) throw new HttpError('Opname niet gevonden in deze organisatie.', 404);
+  const rec = data as {
+    id: string; call_id: string | null; note_id: string | null; client_id: string | null;
+    event_title_snapshot: string | null; created_at: string; status: string;
+    transcript_text: string | null; summary_json: Record<string, unknown> | null; summary_text: string | null;
+    content_note_id: string | null;
+  };
+  // Een notitie-opname staat al in Inhoud; een gesprek hoort bij het klantdossier.
+  if (rec.note_id || rec.call_id) throw new HttpError('Alleen een meeting uit de agenda kan zo in Inhoud.', 400);
+  if (!String(rec.transcript_text ?? '').trim()) throw new HttpError('Deze meeting is nog niet uitgeschreven.', 409);
+
+  if (rec.content_note_id) {
+    const existing = await noteInOrg(organizationId, rec.content_note_id);
+    if (existing) return { ok: true, noteId: existing.id, folderId: existing.folder_id, alreadySaved: true };
+  }
+
+  const day = meetingDay(body.meetingDate, rec.created_at);
+  const folderId = await meetingsFolder(organizationId, rec.client_id, userId);
+  const { data: note, error: noteError } = await admin.from('notes').insert({
+    organization_id: organizationId,
+    created_by: userId,
+    client_id: rec.client_id,
+    // De map Meetings staat op klantniveau; een notitie met een project erin
+    // viel in de verkenner onder die projectmap en niet in deze map.
+    project_id: null,
+    folder_id: folderId,
+    title: meetingNoteTitle(rec.event_title_snapshot, day),
+    content: meetingNoteContent(rec.summary_json as Parameters<typeof meetingNoteContent>[0], rec.summary_text),
+    note_type: 'meeting',
+    tags: [],
+  }).select('id').single();
+  if (noteError || !note) throw new HttpError(`Notitie aanmaken mislukt: ${noteError?.message ?? 'onbekende fout'}`, 500);
+
+  // Voorwaardelijk op "nog niet opgeslagen": twee gelijktijdige klikken maken
+  // dan geen twee notities. Wie verliest, ruimt zijn notitie op en krijgt die
+  // van de winnaar terug.
+  const { data: claimed, error: claimError } = await admin.from('meeting_recordings')
+    .update({ content_note_id: note.id })
+    .eq('id', recordingId).eq('organization_id', organizationId).is('content_note_id', null)
+    .select('id');
+  if (claimError || !claimed?.length) {
+    await admin.from('notes').delete().eq('id', note.id).eq('organization_id', organizationId);
+    if (claimError) throw new HttpError(`Opslaan in Inhoud mislukt: ${claimError.message}`, 500);
+    const { data: again } = await admin.from('meeting_recordings').select('content_note_id')
+      .eq('id', recordingId).eq('organization_id', organizationId).maybeSingle();
+    const winner = again?.content_note_id ? await noteInOrg(organizationId, String(again.content_note_id)) : null;
+    if (!winner) throw new HttpError('Opslaan in Inhoud mislukt. Probeer het opnieuw.', 409);
+    return { ok: true, noteId: winner.id, folderId: winner.folder_id, alreadySaved: true };
+  }
+  return { ok: true, noteId: String(note.id), folderId, alreadySaved: false };
+}
+
+async function noteInOrg(organizationId: string, noteId: string): Promise<{ id: string; folder_id: string | null } | null> {
+  const { data } = await admin.from('notes').select('id, folder_id').eq('id', noteId).eq('organization_id', organizationId).maybeSingle();
+  return (data as { id: string; folder_id: string | null } | null) ?? null;
+}
+
+/**
+ * De map Meetings bovenin bij de klant (of onder Geen klant). Bestaat hij al,
+ * ook met een andere hoofdletter, dan die; anders een nieuwe, achteraan, zoals
+ * de knop "Nieuwe map" hem zet.
+ */
+async function meetingsFolder(organizationId: string, clientId: string | null, userId: string): Promise<string> {
+  const scope = () => {
+    const query = admin.from('content_folders').select('id, name')
+      .eq('organization_id', organizationId).is('project_id', null).is('parent_id', null);
+    return clientId ? query.eq('client_id', clientId) : query.is('client_id', null);
+  };
+  const { data: rows, error } = await scope();
+  if (error) throw new HttpError(`Mappen laden mislukt: ${error.message}`, 500);
+  const wanted = MEETINGS_FOLDER_NAME.toLowerCase();
+  const found = (rows ?? []).find((row) => String(row.name ?? '').trim().toLowerCase() === wanted);
+  if (found) return String(found.id);
+
+  const { data: created, error: createError } = await admin.from('content_folders').insert({
+    organization_id: organizationId,
+    created_by: userId,
+    client_id: clientId,
+    project_id: null,
+    parent_id: null,
+    name: MEETINGS_FOLDER_NAME,
+    position: rows?.length ?? 0,
+  }).select('id').single();
+  if (createError || !created) throw new HttpError(`Map ${MEETINGS_FOLDER_NAME} aanmaken mislukt: ${createError?.message ?? 'onbekende fout'}`, 500);
+  return String(created.id);
 }
 
 async function deleteRecording(organizationId: string, role: Awaited<ReturnType<typeof requireOrganizationAccess>>, body: Record<string, unknown>) {
