@@ -208,7 +208,19 @@ Op een lokale stack met alle migraties, als de eigenaar met zijn eigen sessie
   - de kaarten van Gerrie;
   - de CSV.
 - **`deno check`** van de CI-lijst: schoon.
-- **Schermen:** zie onderaan.
+- **Schermen:**
+  - `test:mobile --theme=both`: 914 pagina's gemeten, 0 met problemen. Nieuw
+    daarin: `owners-perioden`, `owners-vennoot-datum` en
+    `boekjaren-vof-uittreder`.
+  - `test:loading`, `test:inrichten`: alle controles geslaagd.
+  - `test:terugknop`: 16 gelukt. Nieuw: terug sluit het venster van een
+    vennoot.
+- **In de browser** (lokale stack, desktop en 390 × 844): een vof met Anna en
+  Bram 50/50, Bram uit en Chris in per 1 juli 2026.
+  - 2026 valt uiteen in twee perioden.
+  - Bram gaat bij het afsluiten met zijn kapitaal naar zijn rekening-courant.
+  - De afsluitvensters van 2025 en 2026 kloppen.
+  - Geen JavaScript-fouten.
 
 ## Bewust open
 
