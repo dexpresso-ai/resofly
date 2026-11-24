@@ -101,6 +101,9 @@ blijft een knop **Opslaan in Inhoud** staan voor later.
 - `supabase db start`: de hele keten vanaf nul, en de migratie nog een keer erover
   (veilig opnieuw). `npm run test:database`: alle 9 bestanden geslaagd.
 - `npm run typecheck`, `npm test` (2250 tests, 0 mislukt).
+- `npm run test:mobile -- --theme=both`, de volledige ronde: 896 pagina's gemeten,
+  0 met problemen.
+- `npm run test:terugknop`: 15 gelukt, 0 mislukt.
 - `deno check` kon in de sessie niet draaien: esm.sh en deno.land zijn er niet
   bereikbaar. Daarom zijn `meeting-transcribe`, `meetingPipeline.ts` en
   `meetingNote.ts` met `tsc --strict` gecontroleerd (supabase-js uit node_modules).
