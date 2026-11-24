@@ -120,10 +120,10 @@ organisatie bij de bestanden, of financiële stukken in OneDrive komen. Wel:
   volgorde, een map pas weg als er niets meer wacht, aan/uit, *Alles opnieuw
   kopiëren*, vertrek van de eigenaar, opruimen). De migratie draait ook een
   tweede keer schoon.
-- `npm run test:mobile -- --theme=both` voor de geraakte pagina's (30
-  metingen, geen problemen), met twee nieuwe scenario's (`settings-onedrive`,
-  `settings-onedrive-koppelen`) en de verkenner met het OneDrive-icoon. De
-  volledige ronde, de laadtest en de terugknoptest lopen nog; de uitslag komt
-  hier bij.
+- `npm run test:mobile -- --theme=both`: 908 pagina's gemeten, geen problemen,
+  met twee nieuwe scenario's (`settings-onedrive`, `settings-onedrive-koppelen`)
+  en de verkenner met het OneDrive-icoon. `npm run test:loading`: alle controles
+  geslaagd. `npm run test:terugknop`: 15 van 15. Deze drie draaiden op de
+  schermcode van commit 9f3256e; de correcties na de review raakten geen scherm.
 - **Niet getest tegen het echte Microsoft**: daarvoor moet eerst §3 van de
   handleiding gedaan zijn, en de media-worker opnieuw uitgerold.
