@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import { supabaseFetch } from './opstartverzoeken';
 
 const url = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const anon = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
@@ -31,6 +32,9 @@ export const supabase = createClient(
       // dezelfde browser.
       flowType: 'pkce',
     },
+    // Neemt de leesverzoeken over die het inline script in index.html al bij het
+    // laden van de HTML verstuurde, en onthoudt wat de opstart opvroeg.
+    global: { fetch: supabaseFetch },
   },
 );
 

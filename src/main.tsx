@@ -232,6 +232,7 @@ import './styles/prognose.css';
 import './styles/weekplanner.css';
 import type { SetupNext } from './features/OrganizationSetup';
 import { installChunkReload } from './lib/chunkReload';
+import { clearOpstartLijsten, saveOpstartLijst } from './lib/opstartverzoeken';
 import { lazyPage, PageLoadBoundary, PageLoading } from './components/LazyPage';
 
 /*
@@ -1597,6 +1598,8 @@ function App() {
    */
   /** Welke aanvraag van het abonnementsoverzicht het laatst begon: een ouder antwoord dat later binnenkomt, telt niet. */
   const billingSeqRef = useRef(0);
+  /** De lijst opstartverzoeken wordt één keer per laadbeurt bewaard. */
+  const opstartLijstGeplandRef = useRef(false);
   /**
    * Het abonnementsoverzicht (alleen owners en admins) na de kern, niet ervoor.
    * Het is alleen voor Instellingen; de inrichting haalt het zelf op. De
@@ -1701,6 +1704,15 @@ function App() {
           restoreTabsForOrganization(orgId, dataRef.current, access);
         }
         loadBillingInBackground(orgId, orgContext.activeMembership?.role);
+        // De leesverzoeken van deze start bewaren voor de volgende
+        // (lib/opstartverzoeken.ts). Een paar tellen na de eerste
+        // geslaagde ronde, zodat ook de groepen van de beginpagina en de
+        // tellers van de schil erin zitten.
+        const startUser = loadedForRef.current;
+        if (!opstartLijstGeplandRef.current && startUser) {
+          opstartLijstGeplandRef.current = true;
+          window.setTimeout(() => { if (loadedForRef.current === startUser) saveOpstartLijst(startUser); }, 3000);
+        }
       } else {
         localStorage.removeItem(activeOrgStorageKey);
         resetDataGroups(null);
@@ -2125,6 +2137,9 @@ function App() {
       } else if (!userId) {
         loadedForRef.current = null;
         tabsLoadedForRef.current = null;
+        // Uitgelogd (hier of elders): niets van deze gebruiker blijft klaarstaan
+        // voor een volgende start op dit apparaat.
+        clearOpstartLijsten();
         // Wat de vorige sessie nog aan het laden was, komt niet meer in beeld.
         sessionEpochRef.current += 1;
         const queued = workspaceRunRef.current.queued;

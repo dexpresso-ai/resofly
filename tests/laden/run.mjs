@@ -30,22 +30,10 @@ import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
 import { chromium } from '@playwright/test';
 import { installMock, storageScript, seed, SUPABASE_URL } from '../mobile/mock/backend.mjs';
-import { DATA_GROUPS, GROUP_FIELDS, PAGE_DATA_GROUPS } from '../../src/lib/dataGroups.ts';
+import { DATA_GROUPS, GROUP_FIELDS, GROUP_TABLES, PAGE_DATA_GROUPS } from '../../src/lib/dataGroups.ts';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
-/** De tabellen achter elke groep, in de volgorde van GROUP_FIELDS. */
-const GROUP_TABLES = {
-  time: ['time_entries'],
-  communication: ['ticket_notes', 'client_calls'],
-  financeHistory: [
-    'quote_approval_events', 'quote_email_deliveries', 'quote_versions',
-    'invoice_workflow_events', 'invoice_email_deliveries', 'invoice_payment_records', 'invoice_versions',
-    'invoice_refunds', 'credit_notes', 'invoice_chargebacks', 'invoice_dunning_notices',
-  ],
-  bookkeeping: ['journal_entries', 'journal_lines', 'closed_periods', 'fiscal_years', 'fixed_assets', 'asset_depreciations', 'prepaid_expenses', 'prepaid_expense_releases', 'vat_returns'],
-  bank: ['bank_accounts', 'bank_statements', 'bank_transactions', 'bank_transaction_allocations', 'bank_rules', 'bank_requisitions'],
-};
 const ALL_GROUP_TABLES = Object.values(GROUP_TABLES).flat();
 
 /** Elke pagina met een eigen behoefte, plus een paar die genoeg hebben aan de kern. */
@@ -320,6 +308,66 @@ try {
   }
 
   await context.close();
+
+  // ── 9: opstartverzoeken (lib/opstartverzoeken.ts, het inline script in index.html) ──
+  // Na een start bewaart de app welke leesverzoeken hij deed; de volgende start
+  // in deze browser verstuurt die al tijdens het lezen van de HTML. Een gelijk
+  // verzoek van de app krijgt dat antwoord: geen adres twee keer, en niets
+  // vooruit wat de app niet ook vraagt.
+  {
+    const opstart = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: 'nl-NL', timezoneId: 'Europe/Amsterdam', reducedMotion: 'reduce' });
+    await installMock(opstart);
+    // Elke GET op /rest/v1 met zijn Prefer, per pagina.
+    const logGets = (page) => {
+      const list = [];
+      page.on('request', req => {
+        const url = new URL(req.url());
+        if (req.method() === 'GET' && url.origin === SUPABASE_URL && url.pathname.startsWith('/rest/v1/')) list.push(`${req.url()} ${req.headers()['prefer'] ?? ''}`);
+      });
+      return list;
+    };
+    const tel = (list) => list.reduce((m, g) => m.set(g, (m.get(g) ?? 0) + 1), new Map());
+    const eerste = { page: await opstart.newPage() };
+    const eersteGets = logGets(eerste.page);
+    await eerste.page.addInitScript(storageScript('dashboard'));
+    await eerste.page.goto(baseUrl, { waitUntil: 'networkidle' });
+    await eerste.page.waitForSelector('.app', { timeout: 20000 });
+    await idle(eerste.page);
+    // De lijst wordt een paar tellen na de eerste geslaagde ronde bewaard.
+    await eerste.page.waitForTimeout(3500);
+    const lijst = await eerste.page.evaluate(() => {
+      const key = Object.keys(localStorage).find(k => k.startsWith('resofly.opstartverzoeken.'));
+      return key ? JSON.parse(localStorage.getItem(key) ?? 'null') : null;
+    });
+    const urls = (lijst?.requests ?? []).map(r => r.url);
+    check('opstart: de eerste start bewaart zijn leesverzoeken', urls.length >= 10, `${urls.length} verzoeken`);
+    const groepsTabellen = urls.map(u => new URL(u).pathname.slice('/rest/v1/'.length)).filter(t => ALL_GROUP_TABLES.includes(t));
+    check('opstart: geen groepstabellen in de lijst (die hangen af van de beginpagina)', groepsTabellen.length === 0, groepsTabellen.join(', '));
+    check('opstart: geen adres met een datum in de lijst', !urls.some(u => /\d{4}-\d{2}-\d{2}/.test(decodeURIComponent(u))));
+    await eerste.page.close();
+
+    const tweede = await opstart.newPage();
+    const gets = logGets(tweede);
+    const errors = [];
+    tweede.on('pageerror', e => errors.push(String(e.message)));
+    await tweede.addInitScript(storageScript('dashboard'));
+    await tweede.goto(baseUrl, { waitUntil: 'networkidle' });
+    await tweede.waitForSelector('.app', { timeout: 20000 });
+    await idle(tweede);
+    // Vaker dan bij de eerste start (zonder vooruit) = dubbel door het vooruit
+    // halen. Sommige vragen doet de app zelf twee keer (twee onderdelen van
+    // Gerrie vragen dezelfde besluiten); die tellen dan ook bij de eerste.
+    const eersteTelling = tel(eersteGets);
+    const dubbel = [...tel(gets)].filter(([g, n]) => n > (eersteTelling.get(g) ?? 1)).map(([g]) => g);
+    check('opstart: tweede start vraagt geen adres vaker dan de eerste', dubbel.length === 0, dubbel.slice(0, 3).join(' | '));
+    const vooruit = urls.filter(u => gets.some(g => g.startsWith(`${u} `)));
+    check('opstart: de bewaarde verzoeken gingen bij de tweede start weg', vooruit.length === urls.length, `${vooruit.length} van ${urls.length}`);
+    const overgebleven = await tweede.evaluate(() => window.__resoflyOpstart?.entries.size ?? 0);
+    check('opstart: de app nam alles over wat vooruit ging', overgebleven === 0, `${overgebleven} niet overgenomen`);
+    check('opstart: tweede start zonder JavaScript-fout', errors.length === 0, errors[0]);
+    await tweede.close();
+    await opstart.close();
+  }
 } finally {
   await browser.close();
   if (server) await server.close();
