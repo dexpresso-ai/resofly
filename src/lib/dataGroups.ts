@@ -46,6 +46,25 @@ export const GROUP_FIELDS = {
   bank: ['bankAccounts', 'bankStatements', 'bankTransactions', 'bankAllocations', 'bankRules', 'bankRequisitions'],
 } as const satisfies Record<DataGroup, readonly (keyof AppData)[]>;
 
+/**
+ * De tabellen achter elke groep, in de volgorde van GROUP_FIELDS. De laadtest
+ * (tests/laden/run.mjs) kijkt hiermee welke groepen een pagina ophaalt, en
+ * controleert dat de lijst bij GROUP_FIELDS blijft passen. De opstartverzoeken
+ * (lib/opstartverzoeken.ts) slaan deze tabellen over: welke groepen de
+ * volgende start nodig heeft, hangt af van de pagina waarop hij opent.
+ */
+export const GROUP_TABLES = {
+  time: ['time_entries'],
+  communication: ['ticket_notes', 'client_calls'],
+  financeHistory: [
+    'quote_approval_events', 'quote_email_deliveries', 'quote_versions',
+    'invoice_workflow_events', 'invoice_email_deliveries', 'invoice_payment_records', 'invoice_versions',
+    'invoice_refunds', 'credit_notes', 'invoice_chargebacks', 'invoice_dunning_notices',
+  ],
+  bookkeeping: ['journal_entries', 'journal_lines', 'closed_periods', 'fiscal_years', 'fixed_assets', 'asset_depreciations', 'prepaid_expenses', 'prepaid_expense_releases', 'vat_returns'],
+  bank: ['bank_accounts', 'bank_statements', 'bank_transactions', 'bank_transaction_allocations', 'bank_rules', 'bank_requisitions'],
+} as const satisfies Record<DataGroup, readonly string[]>;
+
 export type GroupField = (typeof GROUP_FIELDS)[DataGroup][number];
 export type GroupData<G extends DataGroup> = Pick<AppData, (typeof GROUP_FIELDS)[G][number]>;
 export type CoreData = Omit<AppData, GroupField>;

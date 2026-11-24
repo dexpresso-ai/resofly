@@ -1,5 +1,5 @@
 /**
- * Tests voor de losse apps (Agenda, Financiën, Communicatie). Draaien met:  npm test
+ * Tests voor de losse apps (Agenda, Financiën, Communicatie, Documenten). Draaien met:  npm test
  *
  * Een app is een adres, een manifest en een lijst pagina's. Lopen die uit
  * elkaar, dan merk je het pas op een telefoon: de browser biedt installeren
@@ -26,6 +26,7 @@ test('een adres hoort bij de goede app, met of zonder slash', () => {
   assert.equal(standaloneAppFromPath('/app/agenda')?.id, 'agenda');
   assert.equal(standaloneAppFromPath('/app/financien/')?.id, 'financien');
   assert.equal(standaloneAppFromPath('/app/communicatie')?.id, 'communicatie');
+  assert.equal(standaloneAppFromPath('/app/documenten')?.id, 'documenten');
   // De werkruimte, de publieke pagina's en de manifesten zelf zijn geen app.
   for (const other of ['/', '/app/', '/app/agendas', '/apps/agenda.webmanifest', '/portal', '/invoice/abc', '/agenda', '/app/werkruimte/']) {
     assert.equal(standaloneAppFromPath(other), null, other);
@@ -54,6 +55,17 @@ test('elke pagina van de module hoort in zijn app, en niets daarbuiten', () => {
   assert.deepEqual([...app('financien').pages].sort(), pagesOf('finance'));
   assert.deepEqual([...app('agenda').pages].sort(), pagesOf('calendar'));
   assert.deepEqual([...app('communicatie').pages].sort(), ['chat', 'communication', 'marketing']);
+  // Documenten is de hele module Inhoud: de verkenner, notities en documenten.
+  assert.deepEqual([...app('documenten').pages].sort(), pagesOf('content'));
+});
+
+test('Documenten opent op de verkenner, en zonder Inhoud is er geen app', () => {
+  const member = buildPermissions({ role: 'member' });
+  assert.equal(appHomePage(app('documenten'), member.canOpenPage), 'content');
+  assert.ok(availableApps(member.canOpenPage).some(a => a.id === 'documenten'));
+  const without = buildPermissions({ role: 'member', module_access: { content: 'none' } });
+  assert.equal(appHomePage(app('documenten'), without.canOpenPage), null);
+  assert.ok(!availableApps(without.canOpenPage).some(a => a.id === 'documenten'));
 });
 
 test('elke pagina van een app bestaat en hangt aan een module', () => {
@@ -82,7 +94,7 @@ test('de boekhouder krijgt alleen de app Financiën, en die opent op Facturen', 
 test('Communicatie opent op wat openstaat: zonder klanten op de chat', () => {
   const member = buildPermissions({ role: 'member', module_access: { clients: 'none', chat: 'write', marketing: 'none' } });
   assert.equal(appHomePage(app('communicatie'), member.canOpenPage), 'chat');
-  const nothing = buildPermissions({ role: 'member', module_access: { clients: 'none', chat: 'none', marketing: 'none', calendar: 'none', finance: 'none' } });
+  const nothing = buildPermissions({ role: 'member', module_access: { clients: 'none', chat: 'none', marketing: 'none', calendar: 'none', finance: 'none', content: 'none' } });
   assert.deepEqual(availableApps(nothing.canOpenPage), []);
   assert.deepEqual(installableApps(nothing.canOpenPage).map(a => a.id), ['werkruimte']);
 });
@@ -118,7 +130,7 @@ test('de werkruimte-app blijft dezelfde app als die al op telefoons staat', () =
   assert.match(fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8'), /<link rel="manifest" href="\/manifest\.webmanifest"\/>/);
 });
 
-test('geen app woont binnen het adres van een andere: dan kun je ze alle vier installeren', () => {
+test('geen app woont binnen het adres van een andere: dan kun je ze allemaal installeren', () => {
   // Android kijkt bij Installeren of er al een app is waarvan de scope het
   // adres van de nieuwe app bevat. Had de werkruimte scope "/", dan was dat
   // zo voor elke losse app, en zei de telefoon "deze app is al geïnstalleerd".
@@ -171,6 +183,9 @@ test('in een app begint het kruimelpad bij het begin van de app, niet bij het da
   assert.deepEqual(trail('agenda', 'meeting-booking'), ['home:Agenda→calendar', 'current:Boekingslinks']);
   // Een klant geopend vanuit de app: wel de kop en de lijst, en terug naar de app.
   assert.deepEqual(trail('financien', 'client', 'c1'), ['home:Financiën→invoices', 'section:Werk', 'page:Klanten→clients', 'current:Bakkerij De Korenaar']);
+  // Notities en documenten hangen in de app direct onder het begin.
+  assert.deepEqual(trail('documenten', 'notes'), ['home:Documenten→content', 'current:Notities']);
+  assert.deepEqual(trail('documenten', 'content'), ['current:Inhoud']);
   // In de werkruimte verandert er niets.
   assert.deepEqual(breadcrumbTrail({ page: 'quotes', projectId: null, clientId: null }, data).map(c => c.label), ['Dashboard', 'Financiën', 'Offertes']);
 });

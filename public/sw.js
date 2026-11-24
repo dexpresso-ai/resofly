@@ -37,8 +37,10 @@ self.addEventListener('push', (event) => {
 });
 
 /*
- * Losse apps (2026-11-12, src/lib/standaloneApps.ts): Agenda, Financiën en
- * Communicatie draaien elk in een eigen venster op /app/<naam>/. Een melding
+ * Losse apps (2026-11-12, src/lib/standaloneApps.ts): Agenda, Financiën,
+ * Communicatie en (sinds 23 november) Documenten draaien elk in een eigen
+ * venster op /app/<naam>/. Documenten krijgt geen eigen soort melding: een
+ * melding over iets anders hoort daar niet in thuis. Een melding
  * hoort in het venster waar hij over gaat: een nieuwe mail of chat in
  * Communicatie, een boeking in Agenda, een betaalde factuur in Financiën. Het
  * soort staat vooraan in de tag ("chat:<id>", zie de migraties met web_push).
@@ -47,7 +49,7 @@ self.addEventListener('push', (event) => {
  * de app Agenda zijn, en dan opende een chatbericht in je agenda.
  */
 const APP_FOR_KIND = { chat: '/app/communicatie/', email: '/app/communicatie/', booking: '/app/agenda/', invoice: '/app/financien/' };
-const MODULE_APPS = ['/app/agenda/', '/app/financien/', '/app/communicatie/'];
+const MODULE_APPS = ['/app/agenda/', '/app/financien/', '/app/communicatie/', '/app/documenten/'];
 
 /*
  * De werkruimte als app woont op /app/werkruimte/ (WORKSPACE_APP in

@@ -7192,7 +7192,30 @@ export async function deleteEntityCascade(table: Table, id: UUID, organizationId
     await deleteAttachment({ id: att.id, storage_key: att.storage_key, organization_id: organizationId });
   }
 
+  // De opnames bij een notitie gaan met de cascade mee uit de database, maar
+  // hun audio staat in R2 en bleef daar anders liggen
+  // (20261123150000_opname_bij_notitie.sql).
+  if (table === 'notes') {
+    for (const key of await noteRecordingStorageKeys(id, organizationId)) {
+      await deleteR2Object(key).catch(() => undefined);
+    }
+  }
+
   await deleteRow(table, id, organizationId);
+}
+
+async function noteRecordingStorageKeys(noteId: UUID, organizationId?: UUID): Promise<string[]> {
+  let query = supabase.from('meeting_recordings').select('storage_key').eq('note_id', noteId);
+  if (organizationId) query = query.eq('organization_id', organizationId);
+  const { data, error } = await query;
+  // Zonder de kolom (migratie nog niet gedraaid) zijn er geen notitie-opnames.
+  if (error) {
+    if (isMissingColumn(error, 'note_id')) return [];
+    throw error;
+  }
+  return ((data ?? []) as Array<{ storage_key: string | null }>)
+    .map(row => row.storage_key)
+    .filter((key): key is string => Boolean(key));
 }
 
 /**

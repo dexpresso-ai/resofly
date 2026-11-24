@@ -173,6 +173,10 @@ const PAGES = {
   // zonder daglijst eronder. Die lijst nam een derde van het scherm en drukte
   // de weekrijen zo plat dat er per dag maar één regel overbleef.
   'calendar-month': { page: 'calendar', prepare: 'button.tb-vbtn[title^="Maandweergave"]' },
+  // De werkweek (2026-11-23): vijf kolommen, ma t/m vr. Op de telefoon moet het
+  // rooster even hoog beginnen als de gewone week; de extra knop mag de
+  // weergavetabs niet over twee regels duwen.
+  'calendar-workweek': { page: 'calendar', prepare: 'button.tb-vbtn[title^="Werkweek"]' },
   content: 'content', notes: 'notes', documents: 'documents', stats: 'stats',
   // Rapportages met Gerrie (2026-11-09): het overzicht, de rapportbouwer van
   // voorheen (tweede tabblad), één rapportage met het kader, en dezelfde
@@ -490,6 +494,8 @@ const PAGES = {
   'app-agenda': { path: '/app/agenda/', app: 'agenda', page: 'calendar' },
   'app-financien': { path: '/app/financien/', app: 'financien', page: 'invoices' },
   'app-communicatie': { path: '/app/communicatie/', app: 'communicatie', page: 'communication' },
+  // 2026-11-23 — Documenten: de verkenner, met notities en documenten in de duimbalk.
+  'app-documenten': { path: '/app/documenten/', app: 'documenten', page: 'content' },
   // De hele werkruimte als app (/app/werkruimte/): zelfde menu en tabbladen als
   // op "/". Hij kreeg een eigen adres, anders kon Android er geen andere app
   // naast zetten.
@@ -608,6 +614,7 @@ const FIRST_ITEM = {
   quotes: { selector: '.quote-table tbody tr', maxTop: 496 },
   weekplanner: { selector: '.wp-daystrip', maxTop: 600 },
   calendar: { selector: '.tb-scroll', maxTop: 260 },
+  'calendar-workweek': { selector: '.tb-scroll', maxTop: 260 },
   // De eerste weekrij van de maand. Gemeten 2026-11-13: 168px; de grens ligt 20% hoger.
   'calendar-month': { selector: '.cm-week', maxTop: 202 },
   time: { selector: '.tt-kpi', maxTop: 396 },
@@ -631,6 +638,7 @@ const FIRST_ITEM = {
   'app-agenda': { selector: '.tb-scroll', maxTop: 260 },
   'app-financien': { selector: '.quote-table tbody tr', maxTop: 496 },
   'app-communicatie': { selector: '.comm-row', maxTop: 185 },
+  'app-documenten': { selector: '.odrv-tr', maxTop: 336 },
   // Zelfde dashboard, zelfde grens (zie dashboard hierboven).
   'app-werkruimte': { selector: '.dash-task', maxTop: 280 },
   suppliers: { selector: '.supplier-table tbody tr', maxTop: 356 },

@@ -12200,6 +12200,10 @@ button.task-agenda-when:hover{text-decoration:underline}
 
 /* ── Sectie in het notitieformulier ── */
 .note-ink-section{grid-column:1/-1;border:1px solid var(--border);border-radius:14px;background:transparent;padding:13px;display:flex;flex-direction:column;gap:12px;min-width:0}
+/* De opname bij een notitie (2026-11-23): over de volle breedte en in hetzelfde
+   kader als het handschrift eronder. In een halve kolom brak de uitleg bij de
+   toestemming in vijf regels, en stond de knop los van de rest. */
+.form-grid>.mr-section{grid-column:1/-1;border:1px solid var(--border);border-radius:14px;padding:13px;min-width:0}
 .note-ink-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .note-ink-head>div{min-width:0;flex:1 1 220px}
 .note-ink-kicker{display:block;font-size:9px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--accent-ink);margin-bottom:4px}

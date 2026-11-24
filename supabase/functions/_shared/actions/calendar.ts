@@ -266,10 +266,24 @@ interface RecordingRow {
   provider: string | null; event_ref: string | null;
   summary_recipients: Array<{ email: string; name: string | null }> | null;
   summary_sent_at: string | null; created_at: string;
+  note_id: string | null;
 }
 
 const RECORDING_FIELDS =
-  'id, event_title_snapshot, status, transcript_text, summary_text, provider, event_ref, summary_recipients, summary_sent_at, created_at';
+  'id, event_title_snapshot, status, transcript_text, summary_text, provider, event_ref, summary_recipients, summary_sent_at, created_at, note_id';
+
+/**
+ * Een opname voor de handelingen hieronder, die onder Agenda vallen. Sinds
+ * 23 november kan een opname ook bij een notitie horen; die valt onder Inhoud
+ * (20261123150000_opname_bij_notitie.sql). De handelingen lezen met de
+ * service-role, dus zonder deze controle las iemand met Agenda maar zonder
+ * Inhoud via Gerrie het transcript van een notitie.
+ */
+export async function agendaRecording(ctx: ActionCtx, recordingId: string): Promise<RecordingRow> {
+  const recording = await row<RecordingRow>(ctx, 'meeting_recordings', recordingId, RECORDING_FIELDS, 'Opname');
+  if (recording.note_id) throw new ActionError('Deze opname hoort bij een notitie. Open de notitie onder Documenten om hem te bekijken.');
+  return recording;
+}
 
 export const CALENDAR_ACTIONS: ActionDef[] = [
   // ── Agendabronnen ─────────────────────────────────────────────────────────
@@ -1592,6 +1606,8 @@ export const CALENDAR_ACTIONS: ActionDef[] = [
       const limit = Math.min(Math.max(Number(input.limit) || 10, 1), 50);
       let query = orgQuery(ctx, 'meeting_recordings',
         'id, event_title_snapshot, client_id, project_id, status, error_message, duration_seconds, language, transcript_text, summary_text, summary_sent_at, summary_recipients, created_at')
+        // Opnames bij een notitie vallen onder Inhoud (zie agendaRecording).
+        .is('note_id', null)
         .order('created_at', { ascending: false }).limit(limit);
       const clientId = optId(input, 'client_id');
       if (clientId) query = query.eq('client_id', clientId);
@@ -1645,6 +1661,8 @@ export const CALENDAR_ACTIONS: ActionDef[] = [
       let query = orgQuery(ctx, 'meeting_recordings',
         'id, event_title_snapshot, client_id, project_id, duration_seconds, summary_text, summary_json, summary_sent_at, summary_recipients, created_at')
         .eq('status', 'done').gte('created_at', `${since}T00:00:00Z`)
+        // Opnames bij een notitie vallen onder Inhoud (zie agendaRecording).
+        .is('note_id', null)
         .order('created_at', { ascending: false }).limit(limit);
       const clientId = optId(input, 'client_id');
       if (clientId) query = query.eq('client_id', clientId);
@@ -1683,7 +1701,7 @@ export const CALENDAR_ACTIONS: ActionDef[] = [
     required: ['recording_id'],
     async plan(ctx, input) {
       const recordingId = id(input, 'recording_id');
-      const recording = await row<RecordingRow>(ctx, 'meeting_recordings', recordingId, RECORDING_FIELDS, 'Opname');
+      const recording = await agendaRecording(ctx, recordingId);
       if (!recording.transcript_text) {
         throw new ActionError('Deze opname heeft nog geen transcript; er valt niets samen te vatten.');
       }
@@ -1716,7 +1734,7 @@ export const CALENDAR_ACTIONS: ActionDef[] = [
     required: ['recording_id', 'transcript_text'],
     async plan(ctx, input) {
       const recordingId = id(input, 'recording_id');
-      const recording = await row<RecordingRow>(ctx, 'meeting_recordings', recordingId, RECORDING_FIELDS, 'Opname');
+      const recording = await agendaRecording(ctx, recordingId);
       const text = str(input, 'transcript_text', 200000);
       const was = recording.transcript_text?.length ?? 0;
       if (recording.transcript_text === text) throw new ActionError('Die tekst staat er al zo in.');
@@ -1749,7 +1767,7 @@ export const CALENDAR_ACTIONS: ActionDef[] = [
     required: ['recording_id'],
     async plan(ctx, input) {
       const recordingId = id(input, 'recording_id');
-      const recording = await row<RecordingRow>(ctx, 'meeting_recordings', recordingId, RECORDING_FIELDS, 'Opname');
+      const recording = await agendaRecording(ctx, recordingId);
       if (!recording.summary_text) throw new ActionError('Deze opname heeft nog geen notulen. Maak ze eerst met `meeting_recording.regenerate_summary`.');
 
       const wanted = Array.isArray(input.recipients)

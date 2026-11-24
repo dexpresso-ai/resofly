@@ -3707,6 +3707,8 @@ export interface MeetingRecording extends OrgScopedRow {
   project_id: UUID | null;
   /** Gevuld als deze opname bij een telefoongesprek hoort in plaats van bij een agenda-item. */
   call_id: UUID | null;
+  /** Gevuld als deze opname bij een notitie hoort (sinds 2026-11-23); valt dan onder Inhoud. */
+  note_id?: UUID | null;
   storage_key: string | null;
   mime_type: string | null;
   size_bytes: number | null;

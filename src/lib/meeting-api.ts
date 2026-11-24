@@ -21,7 +21,16 @@ export interface CreateRecordingInput {
    * verschuift van Agenda naar Klanten.
    */
   callId?: UUID | null;
+  /**
+   * Gevuld als deze opname bij een notitie hoort (sinds 23 november). Ook dan
+   * dezelfde pijplijn; de poort is Inhoud. Een notitie-opname heeft geen
+   * afspraak en geen gesprek.
+   */
+  noteId?: UUID | null;
 }
+
+/** Waar een opname bij hoort, voor de vraag naar het AI-tegoed: dat bepaalt de module. */
+export type RecordingScope = { callId?: UUID | null; forNote?: boolean };
 
 async function invoke<T>(organizationId: UUID, body: Record<string, unknown>): Promise<T> {
   const { data, error } = await supabase.functions.invoke('meeting-transcribe', { body: { ...body, organizationId } });
@@ -44,9 +53,15 @@ export interface TranscriptionBudget {
  * het vóór het opnemen. Lukt de vraag niet, dan null: de server controleert het
  * bij het uitschrijven hoe dan ook.
  */
-export async function loadTranscriptionBudget(organizationId: UUID, callId?: UUID | null): Promise<TranscriptionBudget | null> {
+export async function loadTranscriptionBudget(organizationId: UUID, scope: RecordingScope = {}): Promise<TranscriptionBudget | null> {
   try {
-    const data = await invoke<{ allowed?: boolean; message?: string | null }>(organizationId, { action: 'budget', ...(callId ? { callId } : {}) });
+    // De vraag gaat langs de poort van de module waar de opname bij hoort: wie
+    // alleen Inhoud heeft, kreeg bij een notitie anders "geen toegang tot Agenda".
+    const data = await invoke<{ allowed?: boolean; message?: string | null }>(organizationId, {
+      action: 'budget',
+      ...(scope.callId ? { callId: scope.callId } : {}),
+      ...(scope.forNote ? { forNote: true } : {}),
+    });
     return { allowed: data.allowed !== false, message: data.message ?? null };
   } catch {
     return null;
@@ -144,6 +159,20 @@ export async function listRecordingsForCall(organizationId: UUID, callId: UUID):
   // match op het woord "column" zou ook een rechtenfout of een dubbelzinnige
   // kolomverwijzing opslokken, en dan verdwijnt een bestaande opname — mét
   // transcript en samenvatting — stilletjes uit beeld als "geen opnames".
+  if (error) {
+    if (error.code === '42703' || error.code === 'PGRST204') return [];
+    throw new Error(error.message);
+  }
+  return (data as MeetingRecording[]) ?? [];
+}
+
+/** Alle opnames die aan één notitie hangen. */
+export async function listRecordingsForNote(organizationId: UUID, noteId: UUID): Promise<MeetingRecording[]> {
+  const { data, error } = await supabase.from('meeting_recordings').select('*')
+    .eq('organization_id', organizationId).eq('note_id', noteId)
+    .order('created_at', { ascending: false });
+  // Zelfde afweging als bij een gesprek: alleen "de kolom bestaat nog niet"
+  // (migratie 20261123150000 niet gedraaid) is geen fout.
   if (error) {
     if (error.code === '42703' || error.code === 'PGRST204') return [];
     throw new Error(error.message);
