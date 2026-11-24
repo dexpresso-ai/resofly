@@ -21,6 +21,12 @@
 // Zie docs/changelog/CHANGELOG_VOF_HERSTELWEGEN_2026-11-22.md en
 // supabase/migrations/20261122100000_vof_verdeling_per_boekjaar.sql.
 //
+// Sinds 24 november 2026 heeft elke vennoot een tijdlijn met ingangsdatums
+// (20261124120000_vof_tijdlijn_en_rekening_courant.sql). Een uittreden of
+// toetreden ná het jaar weigert de afsluiting dus niet meer: 2025 rekent
+// vanzelf met wie er in 2025 meedeed. Het halverwege splitsen, de
+// rekening-courant en de verliesgrens staan in vof-tijdlijn.mjs.
+//
 // Alles gaat zoals in de app: als de eigenaar, via REST en RPC met zijn eigen
 // sessie (RLS geldt). Gerrie zoals in de chat (buildProposal in gerrieCore.ts).
 // Vandaag is in november 2026: 2025 kan dicht. De boekhouding heeft de KOR,
@@ -143,26 +149,27 @@ async function uittreden() {
   });
   if (!w) return;
 
-  await stap('Bram treedt uit: afsluiten weigert en vraagt de verdeling van 2025, niet "pas de verdeling aan"', async () => {
+  // Eerst weigerde het afsluiten hier ("na 31-12-2025 gewijzigd (Bram)") en
+  // moest je de verdeling van 2025 zelf vastleggen. Met de tijdlijn treedt Bram
+  // per vandaag uit, en deed hij in heel 2025 gewoon mee.
+  await stap('Bram treedt per vandaag uit: Vennoten 2025 telt hem nog mee, zonder iets vast te leggen', async () => {
     gelukt(await rpc('save_partnership_partner', {
       p_organization_id: w.orgId, p_partner_id: w.vennoten.Bram.id, p_name: 'Bram', p_profit_share_basis_points: 5000, p_kind: 'beherend', p_is_active: false,
     }, w.eigenaar.token), 'Bram uitgetreden');
-    const res = await afsluiten(w, '2025');
-    geweigerd(res, 'afsluiten met een gewijzigde vennoot');
-    verwacht(/na 31-12-2025 gewijzigd \(Bram\)/.test(res.tekst) && /Verdeling/.test(res.tekst), `melding: ${res.tekst}`);
     const ov = await overzicht(w, '2025');
-    gelijk(ov.splitChangedAfterYearEnd, ['Bram'], 'Vennoten noemt Bram als gewijzigd na het jaareinde');
-    gelijk(ov.splitFixed, false, 'nog geen verdeling vastgelegd');
+    const bram = nodig(vennoot(ov, 'Bram'), 'Bram in 2025');
+    gelijk([bram.inSplit, bram.shareBasisPoints, bram.resultShareCents, bram.leftOn], [true, 5000, 400000, null], 'Bram: 50% van 2025, eind 2025 nog vennoot');
+    gelijk([ov.splitChangedAfterYearEnd, ov.splitFixed], [[], false], 'niets te herstellen, niets vastgelegd');
+    gelijk(nodig(vennoot(await overzicht(w, '2026'), 'Bram'), 'Bram in 2026').leftOn, VANDAAG, 'in 2026: uitgetreden per vandaag');
   });
 
-  await stap('Gerrie: de afsluitkaart weigert vooraf, met de weg erbij', async () => {
+  await stap('Gerrie: de afsluitkaart verdeelt over Anna en Bram', async () => {
     const kaart = await gerrie(w, 'fiscal_year.close', { fiscal_year_id: jaar(w, '2025').id });
-    gelijk(kaart.ok, false, 'geen kaart');
-    verwacht(/Bram/.test(kaart.error) && /fiscal_year\.set_partner_shares/.test(kaart.error), `melding: ${kaart.error}`);
+    const tekst = `${kaart.proposal?.title ?? ''} — ${kaart.proposal?.sub ?? ''}`;
+    verwacht(kaart.ok === true && /Anna € 4\.000,00; Bram € 4\.000,00/.test(tekst), `kaart: ${JSON.stringify(kaart.proposal ?? kaart.error)}`);
   });
 
-  await stap('de verdeling van 2025 vastleggen (ook met een uitgetreden vennoot) en afsluiten: € 4.000 en € 4.000', async () => {
-    gelukt(await verdeling(w, '2025', [['Anna', 5000], ['Bram', 5000]]), 'verdeling 2025');
+  await stap('afsluiten zonder vast te leggen: € 4.000 en € 4.000', async () => {
     gelukt(await afsluiten(w, '2025'), 'afsluiten');
     gelijk([kapitaal(w, '0501'), kapitaal(w, '0502'), kapitaal(w, '0510')], [400000, 400000, 0], 'Anna en Bram elk € 4.000, niets op 0510');
     gelijk(jaar(w, '2025').result_account_code, 'vennoten', 'de winst ging naar de vennoten');
@@ -208,8 +215,12 @@ async function toetredenEnPercentages() {
   });
   if (!w) return;
 
-  await stap('Chris (20%) erbij, Anna 50% en Bram 30%: Vennoten 2025 blijft € 6.000 / € 4.000, Chris staat er niet in', async () => {
-    w.vennoten.Chris = gelukt(await rpc('save_partnership_partner', { p_organization_id: w.orgId, p_partner_id: null, p_name: 'Chris', p_profit_share_basis_points: 2000 }, w.eigenaar.token), 'Chris');
+  // Chris met ingangsdatum 1 januari; Anna en Bram als correctie zonder datum,
+  // zoals je dat in het scherm doet. Zo'n correctie raakt het afgesloten 2025
+  // niet: hij geldt vanaf 1 januari 2026. Eerst paste hij de stand van 2025
+  // aan, en gaf heropenen en opnieuw afsluiten 2025 de nieuwe percentages.
+  await stap('Chris (20%) per 1 januari erbij, Anna 50% en Bram 30%: Vennoten 2025 blijft € 6.000 / € 4.000, Chris staat er niet in', async () => {
+    w.vennoten.Chris = gelukt(await rpc('save_partnership_partner', { p_organization_id: w.orgId, p_partner_id: null, p_name: 'Chris', p_profit_share_basis_points: 2000, p_effective_date: '2026-01-01' }, w.eigenaar.token), 'Chris');
     gelukt(await rpc('save_partnership_partner', { p_organization_id: w.orgId, p_partner_id: w.vennoten.Anna.id, p_name: 'Anna', p_profit_share_basis_points: 5000 }, w.eigenaar.token), 'Anna 50%');
     gelukt(await rpc('save_partnership_partner', { p_organization_id: w.orgId, p_partner_id: w.vennoten.Bram.id, p_name: 'Bram', p_profit_share_basis_points: 3000 }, w.eigenaar.token), 'Bram 30%');
     const ov = await overzicht(w, '2025');
@@ -219,6 +230,9 @@ async function toetredenEnPercentages() {
     gelijk(vennoot(ov, 'Anna').endCents, kapitaal(w, '0501', '2025-12-31'), 'eind Anna = grootboek');
     const ov26 = await overzicht(w, '2026');
     gelijk([vennoot(ov26, 'Anna').beginCents, vennoot(ov26, 'Bram').beginCents], [vennoot(ov, 'Anna').endCents, vennoot(ov, 'Bram').endCents], 'begin 2026 = eind 2025');
+    gelijk(['Anna', 'Bram', 'Chris'].map((n) => vennoot(ov26, n).shareBasisPoints), [5000, 3000, 2000], '2026: 50/30/20');
+    gelijk(sql(`select string_agg(t.valid_from::text, ',' order by t.valid_from) from public.partnership_partner_timeline t
+      where t.partner_id = ${q(w.vennoten.Anna.id)}`), '2025-01-01,2026-01-01', 'de correctie van Anna geldt vanaf 1 januari 2026');
   });
 
   await stap('2025 heropenen voor een vergeten € 1.000 en opnieuw afsluiten: 60/40 van € 11.000, Chris niets', async () => {
@@ -407,27 +421,45 @@ async function verwijderen() {
 async function randen() {
   groep('Vof — iedereen uitgetreden, een latere wijziging na de overstap, en € 0 resultaat met een bedrag vooraf');
 
-  await stap('de vof stopt per 31-12-2025 en Anna en Bram treden allebei uit: 2025 sluit niet stil af naar 0510', async () => {
+  // Eerst weigerde het afsluiten als iedereen op uitgetreden stond, en moest
+  // de verdeling van 2025 met de hand. Nu treden ze per 1 januari 2026 uit:
+  // 2025 verdeelt vanzelf, en wie per 1 januari 2025 al weg was, deed niet mee.
+  await stap('de vof stopt per 31-12-2025, Anna en Bram treden per 1 januari 2026 uit: 2025 gaat naar hen, niet naar 0510', async () => {
     const w = await vof('vofstop', [['Anna', 5000], ['Bram', 5000]]);
     await winst(w, '2025-06-01', 1000000);
     for (const wie of ['Anna', 'Bram']) {
-      gelukt(await rpc('save_partnership_partner', { p_organization_id: w.orgId, p_partner_id: w.vennoten[wie].id, p_name: wie, p_profit_share_basis_points: 5000, p_kind: 'beherend', p_is_active: false }, w.eigenaar.token), `${wie} uit`);
+      gelukt(await rpc('save_partnership_partner', { p_organization_id: w.orgId, p_partner_id: w.vennoten[wie].id, p_name: wie, p_profit_share_basis_points: 5000, p_kind: 'beherend', p_is_active: false, p_effective_date: '2026-01-01' }, w.eigenaar.token), `${wie} uit`);
     }
-    const res = await afsluiten(w, '2025');
-    geweigerd(res, 'afsluiten zonder één actieve vennoot');
-    verwacht(/\(Anna, Bram\)/.test(res.tekst), `melding: ${res.tekst}`);
-    gelukt(await verdeling(w, '2025', [['Anna', 5000], ['Bram', 5000]]), 'verdeling 2025');
     gelukt(await afsluiten(w, '2025'), 'afsluiten');
     gelijk([kapitaal(w, '0501'), kapitaal(w, '0502'), kapitaal(w, '0510')], [500000, 500000, 0], '€ 5.000 / € 5.000 / € 0');
   });
 
-  await stap('overgestapt in januari 2026 (alles op één dag vastgelegd), in maart treedt Bram uit: 2025 weigert alsnog', async () => {
+  // Wie de uittreding bewust per 1 januari 2025 zet, zegt dat in 2025 niemand
+  // meer meedeed. Dan blijft het resultaat onverdeeld op 0510, en de kaart
+  // zegt dat, met de omzetting van hun kapitaal naar de rekening-courant.
+  await stap('treedt iedereen per 1 januari 2025 uit: 2025 blijft onverdeeld op 0510, en de kaart zegt het', async () => {
+    const w = await vof('vofleeg', [['Anna', 5000], ['Bram', 5000]]);
+    gelukt(await memoriaal(w, '2025-01-01', 'Inbreng Anna', [{ account_code: '1100', debit_cents: 200000 }, { account_code: '0501', credit_cents: 200000 }]), 'inbreng Anna');
+    await winst(w, '2025-06-01', 1000000);
+    for (const wie of ['Anna', 'Bram']) {
+      gelukt(await rpc('save_partnership_partner', { p_organization_id: w.orgId, p_partner_id: w.vennoten[wie].id, p_name: wie, p_profit_share_basis_points: 5000, p_kind: 'beherend', p_is_active: false, p_effective_date: '2025-01-01' }, w.eigenaar.token), `${wie} uit`);
+    }
+    const kaart = await gerrie(w, 'fiscal_year.close', { fiscal_year_id: jaar(w, '2025').id });
+    const tekst = kaart.proposal?.sub ?? '';
+    verwacht(kaart.ok === true && /niet verdeeld/.test(tekst) && /Anna is uitgetreden per 2025-01-01: zijn kapitaal \(€ 2\.000,00\) gaat naar zijn rekening-courant/.test(tekst),
+      `kaart: ${JSON.stringify(kaart.proposal ?? kaart.error)}`);
+    gelukt(await afsluiten(w, '2025'), 'afsluiten');
+    gelijk([kapitaal(w, '0510'), kapitaal(w, '0501'), kapitaal(w, '1411')], [1000000, 0, 200000], '€ 10.000 op 0510; Annas € 2.000 een schuld aan haar');
+  });
+
+  // Eerst weigerde dit: alles was op één dag in januari vastgelegd, en een
+  // wijziging in maart leek dan een wijziging na het jaareinde.
+  await stap('overgestapt in januari 2026 (alles op één dag vastgelegd), Bram treedt per 1 maart uit: 2025 sluit af met Anna en Bram', async () => {
     const w = await vof('vofoverstapdag', [['Anna', 5000], ['Bram', 5000]], { sinds: '2026-01-15T10:00:00+01' });
     await winst(w, '2025-06-01', 1000000);
-    gelukt(await rpc('save_partnership_partner', { p_organization_id: w.orgId, p_partner_id: w.vennoten.Bram.id, p_name: 'Bram', p_profit_share_basis_points: 5000, p_kind: 'beherend', p_is_active: false }, w.eigenaar.token), 'Bram uit');
-    const res = await afsluiten(w, '2025');
-    geweigerd(res, 'een latere wijziging na het inrichten');
-    verwacht(/\(Bram\)/.test(res.tekst), `melding: ${res.tekst}`);
+    gelukt(await rpc('save_partnership_partner', { p_organization_id: w.orgId, p_partner_id: w.vennoten.Bram.id, p_name: 'Bram', p_profit_share_basis_points: 5000, p_kind: 'beherend', p_is_active: false, p_effective_date: '2026-03-01' }, w.eigenaar.token), 'Bram uit');
+    gelukt(await afsluiten(w, '2025'), 'afsluiten');
+    gelijk([kapitaal(w, '0501'), kapitaal(w, '0502')], [500000, 500000], '€ 5.000 / € 5.000');
   });
 
   await stap('vandaag overgestapt en ingericht: 2025 sluit gewoon af met de vennoten van nu', async () => {

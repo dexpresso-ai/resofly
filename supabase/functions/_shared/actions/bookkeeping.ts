@@ -2416,7 +2416,9 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
         const overview = await rpc<{
           isPartnership: boolean; shareTotalBasisPoints: number | null; splitFixed: boolean;
           splitChangedAfterYearEnd: string[]; generalPrivateCents: number; partnersDefined: boolean;
-          owners: Array<{ name: string; inSplit?: boolean; shareBasisPoints: number; priorShareCents?: number; resultShareCents: number }>;
+          owners: Array<{ name: string; inSplit?: boolean; shareBasisPoints: number; priorShareCents?: number; resultShareCents: number;
+            leftOn?: string | null; toCurrentAccountCents?: number; lossShiftCents?: number }>;
+          splitMode?: 'vastgelegd' | 'automatisch'; periods?: Array<{ periodStart: string; periodEnd: string }>;
         }>(ctx, 'owners_equity_overview', { p_fiscal_year_id: fiscalYearId }, 'Verdeling ophalen');
         distributes = overview.isPartnership;
         if (distributes) {
@@ -2428,7 +2430,19 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
           }
           const inSplit = overview.owners.filter((o) => o.inSplit !== false && (o.shareBasisPoints > 0 || (o.priorShareCents ?? 0) !== 0 || o.resultShareCents !== 0));
           destination = `naar de vennoten (${inSplit.map((o) => `${o.name} ${euroCents(o.resultShareCents)}${(o.priorShareCents ?? 0) !== 0 ? `, waarvan ${euroCents(o.priorShareCents ?? 0)} vooraf` : ''}`).join('; ')}); hun privé naar hun eigen kapitaal`;
-          notes.push(overview.splitFixed ? `de verdeling van ${fiscalYear.label} is vastgelegd` : `de verdeling is die van de vennoten nu; klopt die niet voor ${fiscalYear.label}, leg hem dan eerst vast`);
+          // GEWIJZIGD (20261124120000): de verdeling volgt de tijdlijn van de
+          // vennoten, met een periode per in- of uittreden of ander percentage.
+          const periods = overview.periods ?? [];
+          notes.push(overview.splitFixed
+            ? `de verdeling van ${fiscalYear.label} is vastgelegd`
+            : periods.length > 1
+              ? `${periods.length} perioden volgens de ingangsdatums bij Vennoten (${periods.map((p) => `${p.periodStart} t/m ${p.periodEnd}`).join('; ')}), elk met het resultaat van die periode`
+              : `de verdeling volgt de vennoten en hun ingangsdatums bij Vennoten; klopt die niet voor ${fiscalYear.label}, leg hem dan eerst vast`);
+          for (const o of overview.owners) {
+            if ((o.lossShiftCents ?? 0) > 0) {
+              notes.push(`${o.name} draagt als commanditaire vennoot niet meer verlies dan zijn inbreng: ${euroCents(o.lossShiftCents ?? 0)} gaat naar de beherende vennoten`);
+            }
+          }
         } else {
           // Het algemene privé (0550/0560) gaat bij elke IB-onderneming naar 0500,
           // niet alleen bij een eenmanszaak. Een vof zonder actieve vennoot
@@ -2436,6 +2450,14 @@ export const BOOKKEEPING_ACTIONS: ActionDef[] = [
           const undivided = legalForm === 'eenmanszaak' ? '' : ' (geen vennoten in de verdeling: niet verdeeld)';
           destination = `naar ${resultCode}${undivided}; privé (0550/0560) naar 0500 Eigen vermogen`;
           if (overview.partnersDefined) destination += '; het privé van de vennoten naar hun eigen kapitaal';
+        }
+        // Wie aan het eind van het jaar geen vennoot meer is: zijn kapitaal
+        // wordt een schuld aan hem, op zijn rekening-courant. Ook als in dit
+        // jaar niemand meer meedeed; daar zweeg de kaart eerst over.
+        for (const o of overview.owners) {
+          if ((o.toCurrentAccountCents ?? 0) !== 0) {
+            notes.push(`${o.name} is uitgetreden${o.leftOn ? ` per ${o.leftOn}` : ''}: zijn kapitaal (${euroCents(o.toCurrentAccountCents ?? 0)}) gaat naar zijn rekening-courant, een schuld aan hem`);
+          }
         }
         // Privé zonder vennoot (0550/0560) komt bij een vof op 0500 en bij
         // geen enkele vennoot op de aangifte. De kaart zweeg erover.

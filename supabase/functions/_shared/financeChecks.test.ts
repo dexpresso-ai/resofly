@@ -210,7 +210,19 @@ test('afsluiten weigert vooraf als de winstverdeling van de vennoten niet op 100
     (error: unknown) => error instanceof ActionError && /90% in plaats van 100%/.test(error.message));
   const plan = await close.plan!(ctx(rows, verdeling()), { fiscal_year_id: ID });
   assert.match(plan.sub, /naar de vennoten \(Anna €\s600,00; Bram €\s400,00\)/);
-  assert.match(plan.sub, /de verdeling is die van de vennoten nu/);
+  assert.match(plan.sub, /de verdeling volgt de vennoten en hun ingangsdatums bij Vennoten/);
+  // Perioden, een uittreder met zijn rekening-courant, en de verliesgrens (20261124120000).
+  const tijdlijn = await close.plan!(ctx(rows, verdeling({
+    periods: [{ periodStart: '2025-01-01', periodEnd: '2025-06-30' }, { periodStart: '2025-07-01', periodEnd: '2025-12-31' }],
+    owners: [
+      { name: 'Anna', inSplit: true, shareBasisPoints: 10000, priorShareCents: 0, resultShareCents: 70000 },
+      { name: 'Bram', inSplit: true, shareBasisPoints: 5000, priorShareCents: 0, resultShareCents: 30000, leftOn: '2025-07-01', toCurrentAccountCents: 30000 },
+      { name: 'Kees', inSplit: true, shareBasisPoints: 0, priorShareCents: 0, resultShareCents: 0, lossShiftCents: 5000 },
+    ],
+  })), { fiscal_year_id: ID });
+  assert.match(tijdlijn.sub, /2 perioden volgens de ingangsdatums/);
+  assert.match(tijdlijn.sub, /Bram is uitgetreden per 2025-07-01: zijn kapitaal \(€\s300,00\) gaat naar zijn rekening-courant/);
+  assert.match(tijdlijn.sub, /Kees draagt als commanditaire vennoot niet meer verlies dan zijn inbreng/);
   // Een vennoot die na het einde van het jaar is gewijzigd: eerst de verdeling van dat jaar.
   await assert.rejects(close.plan!(ctx(rows, verdeling({ splitChangedAfterYearEnd: ['Bram'] })), { fiscal_year_id: ID }),
     (error: unknown) => error instanceof ActionError && /na het einde van 2025 gewijzigd \(Bram\)/.test(error.message) && /fiscal_year\.set_partner_shares/.test(error.message));
@@ -328,7 +340,13 @@ test('vennoot vastleggen via Gerrie: alleen bij een vof, met de verdeling op de 
   assert.equal(plan.payload.profit_share_basis_points, 6000);
   // Een vorig jaar dat nog open staat: de kaart zegt dat de wijziging vanaf nu geldt.
   const metOpenJaar = await save.plan!(ctx({ ...rows, fiscal_years: [{ id: ID, label: '2025', period_end: '2025-12-31', status: 'open' }] }), { name: 'Anna', profit_share_percent: 60 });
-  assert.match(metOpenJaar.sub, /geldt vanaf nu; 2025 staat nog open/);
+  assert.match(metOpenJaar.sub, /zonder ingangsdatum: bij de eerste vennoten vanaf het begin van de boekhouding/);
+  // Met een ingangsdatum (20261124120000): toetreden en uittreden per een datum.
+  const per = await save.plan!(ctx(rows), { name: 'Anna', profit_share_percent: 60, effective_date: '2026-07-01' });
+  assert.match(per.sub, /vennoot sinds 2026-07-01/);
+  assert.equal(per.payload.effective_date, '2026-07-01');
+  const uitPer = await save.plan!(ctx(rows), { partner_id: 'c0000000-0000-4000-8000-000000000002', is_active: false, effective_date: '2026-02-01' });
+  assert.match(uitPer.sub, /uitgetreden per 2026-02-01/);
   // Na de overstap van cv naar vof: een commanditaire vennoot laten uittreden
   // gaf een 422; nu wordt hij beherend.
   const vroegerCv = { ...rows, partnership_partners: [{ ...rows.partnership_partners[0], kind: 'commanditair' }] };

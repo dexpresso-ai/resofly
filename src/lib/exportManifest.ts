@@ -140,7 +140,12 @@ export const EXPORT_FORMAT_VERSION = 1;
 // 20261124100000 (meeting in Inhoud) zet de kolom content_note_id op
 // meeting_recordings: in welke notitie de meeting in Inhoud staat. Gaat met
 // de tabel mee, net als de notitie zelf.
-export const EXPORT_SCHEMA_VERSION = '20261124100000';
+// 20261124120000 (vof: tijdlijn en rekening-courant) zet
+// partnership_partner_timeline erbij (de stand van elke vennoot met een
+// ingangsdatum), current_account_id en timeline_since op partnership_partners
+// en source op fiscal_year_partner_shares. Alles gaat mee: zonder de tijdlijn
+// komt de verdeling van een jaar met in- of uittreden elders anders uit.
+export const EXPORT_SCHEMA_VERSION = '20261124120000';
 
 export type TableKind =
   | 'export'
@@ -394,6 +399,7 @@ export const EXPORT_MANIFEST: Readonly<Record<string, TableRule>> = {
   share_encumbrances: { kind: 'export' },
   partnership_partners: { kind: 'export' },
   fiscal_year_partner_shares: { kind: 'export' },
+  partnership_partner_timeline: { kind: 'export' },
   income_tax_profiles: { kind: 'export' },
   income_tax_corrections: { kind: 'export' },
   income_tax_kia_exclusions: { kind: 'export' },

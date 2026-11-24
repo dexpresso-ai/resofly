@@ -2088,8 +2088,25 @@ export interface PartnershipPartner extends OrgScopedRow {
   contributions_account_id: UUID;
   /** Het teamlid dat deze vennoot is; zijn uren tellen voor het urencriterium van de vennoot. */
   user_id: UUID | null;
+  /** Zijn rekening-courant (141n, kortlopende schuld); 20261124120000. */
+  current_account_id?: UUID | null;
   created_at: string;
   updated_at: string;
+}
+
+/**
+ * Eén stand van een vennoot met een ingangsdatum (partnership_partner_timeline,
+ * 20261124120000): vanaf valid_from geldt dit percentage, deze soort en of hij
+ * vennoot is. Zo splitst de jaarafsluiting een jaar bij in- of uittreden.
+ */
+export interface PartnershipPartnerChange {
+  id: UUID;
+  partner_id: UUID;
+  valid_from: string;
+  share_basis_points: number;
+  kind: 'beherend' | 'commanditair';
+  is_active: boolean;
+  created_at: string;
 }
 
 /** Uitkomst van partnership_partner_hours: de uren van één vennoot in een kalenderjaar. */
@@ -2132,7 +2149,48 @@ export interface OwnersEquityRow {
   withdrawalsCents: number;
   /** Andere boekingen rechtstreeks op het kapitaal (bijv. een memoriaal tussen vennoten). */
   otherMovementsCents: number;
+  /**
+   * Eind = begin + winstaandeel + stortingen − opnamen + overig −
+   * `toCurrentAccountCents` (sinds 20261124120000).
+   */
   endCents: number;
+  // ── De tijdlijn en de rekening-courant (20261124120000). Optioneel: een
+  //    database van daarvoor kent ze niet, en bij een eenmanszaak ontbreken ze.
+  /** De eerste dag dat hij vennoot was. */
+  joinedOn?: string | null;
+  /** Uitgetreden per (de eerste dag zonder), als hij aan het eind van dit jaar geen vennoot meer is. */
+  leftOn?: string | null;
+  /**
+   * De verliesgrens van een cv: positief bij een commanditaire vennoot (verlies
+   * dat hij niet draagt, want het is meer dan zijn eigen vermogen), negatief
+   * bij een beherende vennoot die het overneemt. Zit al in resultShareCents.
+   */
+  lossShiftCents?: number;
+  /** Zijn rekening-courant (141n, een kortlopende schuld). */
+  currentAccountId?: UUID | null;
+  /** Saldo van zijn rekening-courant aan het eind van het jaar, credit positief: een schuld aan hem. */
+  currentAccountCents?: number;
+  /**
+   * Wat er bij de jaarafsluiting van zijn kapitaal naar zijn rekening-courant
+   * gaat (open jaar, een verwachting) of ging (afgesloten jaar): het kapitaal
+   * van wie aan het eind van het jaar geen vennoot meer is. Positief: een
+   * schuld aan hem.
+   */
+  toCurrentAccountCents?: number;
+}
+
+/**
+ * Eén periode van een boekjaar bij een vof, maatschap of cv (20261124120000).
+ * Zonder vastgelegde verdeling valt het jaar uiteen op de ingangsdatums van de
+ * vennoten; het resultaat van elke periode gaat naar wie toen vennoot was.
+ */
+export interface OwnersEquityPeriod {
+  periodStart: string;
+  periodEnd: string;
+  /** Het resultaat van de boekingen in deze periode (in de periode van vandaag ook het verschil met een prognose). */
+  resultCents: number;
+  /** Wie in deze periode meedoet. Leeg: er was niemand vennoot, en dat resultaat is niet verdeeld. */
+  shares: Array<{ partnerId: UUID; name: string; shareBasisPoints: number; shareCents: number }>;
 }
 
 /** Uitkomst van owners_equity_overview: de kapitaalvergelijking van één boekjaar. */
@@ -2144,6 +2202,14 @@ export interface OwnersEquityOverview {
   currentLegalForm?: LegalForm;
   /** Ligt er voor dit boekjaar een verdeling vast? Zo niet, dan geldt die van de actieve vennoten. */
   splitFixed?: boolean;
+  /**
+   * 'vastgelegd': de verdeling die de gebruiker voor het hele jaar vastlegde.
+   * 'automatisch': volgens de ingangsdatums van de vennoten, per periode
+   * (20261124120000). Ontbreekt bij een database van daarvoor.
+   */
+  splitMode?: 'vastgelegd' | 'automatisch';
+  /** De perioden van het jaar met hun resultaat en het deel per vennoot. Eén periode bij een vastgelegde verdeling. */
+  periods?: OwnersEquityPeriod[];
   /**
    * Namen van vennoten die na het einde van dit (open) jaar zijn toegevoegd,
    * uitgetreden of een ander percentage kregen, terwijl er al vennoten waren.

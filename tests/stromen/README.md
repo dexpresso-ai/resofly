@@ -206,25 +206,47 @@ Zie `docs/changelog/CHANGELOG_INKOMSTENBELASTING_RAMING_2026-11-18.md`.
 
 En `vof`: de winst van een jaar gaat naar de vennoten en de rechtsvorm van dát jaar
 (migratie 20261122100000). Getoetst:
-- een vennoot die vóór het afsluiten uittreedt: afsluiten weigert en noemt hem, de verdeling van het
-  jaar vastleggen (ook met een uitgetreden vennoot), afsluiten, Vennoten en de raming met zijn deel,
-  heropenen en opnieuw afsluiten met dezelfde verdeling;
+- een vennoot die vóór het afsluiten uittreedt (per vandaag): hij deelt nog in het hele vorige jaar,
+  zonder iets vast te leggen; de kaart van Gerrie, Vennoten en de raming met zijn deel, heropenen en
+  opnieuw afsluiten met dezelfde verdeling;
 - een nieuwe vennoot en andere percentages per 1 januari: het afgesloten jaar blijft wat er geboekt is,
-  eind = begin van het volgende jaar;
+  een correctie zonder datum geldt pas na het laatste afgesloten jaar, eind = begin van het volgende
+  jaar;
 - een bedrag vooraf (arbeidsbeloning) in de verdeling, via het scherm en Gerrie, tot op de cent gelijk in
   afsluiting, Vennoten en raming; wie de verdeling mag vastleggen;
 - de overstap naar een eenmanszaak met het vorige jaar nog open, de rechtsvorm per boekjaar;
 - de winst van een open vorig jaar apart, privé ontvangen bij een creditnota, een vennoot verwijderen;
-- de randen: iedereen uitgetreden, een latere wijziging na een overstap, € 0 resultaat met een bedrag
-  vooraf.
+- de randen: iedereen uitgetreden per 1 januari van het volgende jaar of van dit jaar (dan onverdeeld
+  op 0510, met hun kapitaal naar de rekening-courant), een uittreden in maart na een overstap in
+  januari, € 0 resultaat met een bedrag vooraf.
 
-Het scenario draait ook op een database van vóór die migratie, en faalt daar op de bedragen.
+Het scenario draait ook op een database van vóór die migratie, en faalt daar op de bedragen. Sinds
+20261124120000 verwacht het de tijdlijn hieronder.
+
+En `vof-tijdlijn`: in- en uittreden met een ingangsdatum, de rekening-courant en de verliesgrens
+(migratie 20261124120000). Getoetst:
+- een vennoot die per 1 juli uittreedt: twee perioden met elk hun eigen resultaat (geboekt, niet naar
+  tijd), zonder iets vast te leggen; de kaart van Gerrie noemt de perioden en de rekening-courant; bij
+  het afsluiten gaat zijn kapitaal naar zijn rekening-courant (141n, een schuld), en uitbetalen via de
+  bank haalt die schuld weg;
+- een vennoot die per 1 juli toetreedt: Vennoten, de raming (geboekt én prognose) en de database
+  verdelen tot op de cent hetzelfde; een correctie zonder datum tegenover een wijziging met een datum;
+  een verkeerde stand weghalen;
+- de grenzen: geen ingangsdatum in een afgesloten jaar, en een wijziging van vóór de tijdlijn weigert
+  het afsluiten nog tot de verdeling vastligt;
+- de rekening-courant: 1411 en 1412 als kortlopende schuld op naam van de vennoot, geen 1413 met de
+  hand, een lening van een vennoot erop, geen btw erop, en de jaarafsluiting laat hem staan;
+- de verliesgrens van een commanditaire vennoot: niet meer verlies dan zijn inbreng, de rest naar de
+  beherende vennoten, gelijk in de raming en de database, en zijn kapitaal komt op nul.
+
+Op een database zonder die migratie faalt het al bij het vastleggen met een ingangsdatum.
 
 En `vof-bank-inkoop`: privé bij de bank en de inkoop (20261122110000): geen btw op privé via een
 inkoopfactuur of leverancier, een privé betaalde factuur die de bank niet nog eens als kosten boekt, en
 de reden bij een betaling aan de Belastingdienst die bij een vof naar de vennoot wijst.
 
-Zie `docs/changelog/CHANGELOG_VOF_HERSTELWEGEN_2026-11-22.md`.
+Zie `docs/changelog/CHANGELOG_VOF_HERSTELWEGEN_2026-11-22.md` en
+`docs/changelog/CHANGELOG_VOF_TIJDLIJN_2026-11-24.md`.
 
 `wereld.mjs` rondt de inrichting van zijn organisaties zelf af, net als de knop in de app; anders bleef
 de UI-test in de stappen staan. De uitkomst van de documenten staat in

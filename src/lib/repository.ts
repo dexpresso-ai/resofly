@@ -168,7 +168,7 @@ import type {
   DgaInterestRate,
   DgaSignals,
   OwnersEquityOverview,
-  PartnershipPartner,
+  PartnershipPartner, PartnershipPartnerChange,
   PartnershipPartnerHours,
   DividendDistributionLine,
   DividendDistributionRow,
@@ -3309,7 +3309,17 @@ export async function listPartnershipPartners(organizationId: UUID): Promise<Par
  */
 export async function savePartnershipPartner(
   organizationId: UUID,
-  input: { id?: UUID | null; name: string; profitShareBasisPoints: number; kind?: PartnershipPartner['kind']; isActive?: boolean },
+  input: {
+    id?: UUID | null; name: string; profitShareBasisPoints: number; kind?: PartnershipPartner['kind']; isActive?: boolean;
+    /**
+     * De eerste dag waarop de wijziging geldt (JJJJ-MM-DD), 20261124120000.
+     * Leeg bij een ander percentage of soort: dan is het een correctie van de
+     * stand van nu. Uittreden of weer meedoen zonder datum geldt vanaf vandaag;
+     * een nieuwe vennoot zonder datum (de eerste, bij het inrichten) vanaf het
+     * begin van de boekhouding.
+     */
+    effectiveDate?: string | null;
+  },
 ): Promise<PartnershipPartner> {
   const { data, error } = await supabase.rpc('save_partnership_partner', {
     p_organization_id: organizationId,
@@ -3318,9 +3328,34 @@ export async function savePartnershipPartner(
     p_profit_share_basis_points: input.profitShareBasisPoints,
     p_kind: input.kind ?? 'beherend',
     p_is_active: input.isActive ?? true,
+    p_effective_date: input.effectiveDate || null,
   });
   if (error) throw bookkeepingError(error);
   return (Array.isArray(data) ? data[0] : data) as PartnershipPartner;
+}
+
+/** De tijdlijn van de vennoten: per vennoot de stand met een ingangsdatum (20261124120000). */
+export async function listPartnershipPartnerTimeline(organizationId: UUID): Promise<PartnershipPartnerChange[]> {
+  const { data, error } = await supabase
+    .from('partnership_partner_timeline')
+    .select('id, partner_id, valid_from, share_basis_points, kind, is_active, created_at')
+    .eq('organization_id', organizationId)
+    .order('valid_from', { ascending: true });
+  if (error) throw bookkeepingError(error);
+  return (data ?? []) as PartnershipPartnerChange[];
+}
+
+/**
+ * Een wijziging met een verkeerde ingangsdatum weghalen. Niet de eerste stand
+ * van een vennoot, en niet in een afgesloten boekjaar; de melding van de
+ * database komt ongewijzigd mee.
+ */
+export async function deletePartnershipPartnerChange(organizationId: UUID, changeId: UUID): Promise<void> {
+  const { error } = await supabase.rpc('delete_partnership_partner_change', {
+    p_organization_id: organizationId,
+    p_change_id: changeId,
+  });
+  if (error) throw bookkeepingError(error);
 }
 
 /**

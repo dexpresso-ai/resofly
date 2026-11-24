@@ -699,6 +699,110 @@ export function splitWithPrior(amountCents: number, shares: Array<IbShare & { pr
   return out;
 }
 
+/** Hoe de jaarafsluiting het resultaat verdeelt (get_income_tax_inputs.partnerSplit, 20261124120000). */
+export interface IbSplitSpec {
+  /** "vastgelegd": de verdeling die voor het jaar is vastgelegd; "automatisch": de tijdlijn van de vennoten. */
+  mode: 'vastgelegd' | 'automatisch';
+  /** De periode (vanaf 0) waarin een prognose het verschil met de boekingen krijgt: die van vandaag. */
+  targetPeriod: number;
+  periods: Array<{
+    start: string;
+    end: string;
+    /** Het geboekte resultaat in deze periode (omzet min kosten), winst positief. */
+    resultCents: number;
+    shares: Array<{ partnerId: string; partnerNumber: number; kind: 'beherend' | 'commanditair'; basisPoints: number; priorCents: number }>;
+  }>;
+  /** Per commanditaire vennoot: zijn eigen vermogen vóór de verdeling, de grens van zijn verlies. */
+  lossCaps: Record<string, number>;
+}
+
+export interface IbSplitResult {
+  /** Het winstaandeel per vennoot over het jaar. */
+  shares: Map<string, number>;
+  /** Verschoven verlies: positief bij de commanditaire vennoot (draagt hij niet), negatief bij wie het overnam. */
+  lossShift: Map<string, number>;
+  /** Resultaat van perioden waarin geen vennoot meedoet: niet verdeeld. */
+  undistributedCents: number;
+  /** Perioden waarin de percentages niet op 100% uitkomen. */
+  incompletePeriods: Array<{ start: string; end: string; basisPoints: number }>;
+}
+
+/**
+ * Het resultaat verdeeld zoals de jaarafsluiting het doet
+ * (fiscal_year_result_detail, 20261124120000): per periode het resultaat van
+ * die periode over wie toen vennoot was (eerst ieders bedrag vooraf), het
+ * verschil tussen `usedResultCents` en de boekingen in de periode van vandaag
+ * (een prognose), en daarna de verliesgrens: een commanditaire vennoot draagt
+ * niet meer verlies dan zijn eigen vermogen; het meerdere gaat naar de
+ * beherende vennoten, naar de som van hun percentages over de perioden.
+ * Afronding zoals splitByShares. De database en dit rekenen geven dezelfde
+ * centen (tests/stromen/vof-tijdlijn.mjs).
+ */
+export function splitYearResult(spec: IbSplitSpec, usedResultCents: number): IbSplitResult {
+  const results = spec.periods.map(p => Math.trunc(p.resultCents));
+  const booked = results.reduce((sum, r) => sum + r, 0);
+  if (results.length > 0) {
+    const target = Math.min(Math.max(0, Math.trunc(spec.targetPeriod)), results.length - 1);
+    results[target] += Math.trunc(usedResultCents) - booked;
+  }
+  const totals = new Map<string, number>();
+  const kinds = new Map<string, string>();
+  const weights = new Map<string, number>();
+  const numbers = new Map<string, number>();
+  const incompletePeriods: IbSplitResult['incompletePeriods'] = [];
+  let undistributedCents = 0;
+  spec.periods.forEach((period, i) => {
+    const result = results[i];
+    if (period.shares.length === 0) {
+      undistributedCents += result;
+      return;
+    }
+    const totalBp = period.shares.reduce((sum, s) => sum + s.basisPoints, 0);
+    if (totalBp !== 10000) incompletePeriods.push({ start: period.start, end: period.end, basisPoints: totalBp });
+    const parts = splitWithPrior(result, period.shares.map(s => ({ key: s.partnerId, basisPoints: s.basisPoints, order: s.partnerNumber, priorCents: s.priorCents })));
+    for (const s of period.shares) {
+      totals.set(s.partnerId, (totals.get(s.partnerId) ?? 0) + (parts.get(s.partnerId) ?? 0));
+      kinds.set(s.partnerId, s.kind);
+      numbers.set(s.partnerId, s.partnerNumber);
+      if (s.kind === 'beherend') weights.set(s.partnerId, (weights.get(s.partnerId) ?? 0) + s.basisPoints);
+    }
+  });
+
+  const lossShift = new Map<string, number>();
+  const weightSum = [...weights.values()].reduce((sum, w) => sum + w, 0);
+  const commanditair = [...totals.keys()]
+    .filter(id => kinds.get(id) === 'commanditair' && (totals.get(id) ?? 0) < 0)
+    .sort((a, b) => (numbers.get(a) ?? 0) - (numbers.get(b) ?? 0));
+  for (const id of commanditair) {
+    const cap = Math.max(0, Math.trunc(spec.lossCaps[id] ?? 0));
+    const total = totals.get(id) ?? 0;
+    if (-total <= cap || weightSum <= 0) continue;
+    const excess = -total - cap;
+    totals.set(id, cap === 0 ? 0 : -cap);
+    lossShift.set(id, (lossShift.get(id) ?? 0) + excess);
+    const big = BigInt(excess);
+    const ws = BigInt(weightSum);
+    const parts = [...weights.entries()].filter(([, w]) => w > 0).map(([pid, w]) => {
+      const product = big * BigInt(w);
+      return { pid, order: numbers.get(pid) ?? 0, base: product / ws, rem: product % ws };
+    });
+    let leftover = big - parts.reduce((sum, p) => sum + p.base, 0n);
+    const ranked = [...parts].sort((a, b) => (a.rem === b.rem ? a.order - b.order : a.rem > b.rem ? -1 : 1));
+    const extra = new Set<string>();
+    for (const p of ranked) {
+      if (leftover <= 0n) break;
+      extra.add(p.pid);
+      leftover -= 1n;
+    }
+    for (const p of parts) {
+      const part = Number(p.base) + (extra.has(p.pid) ? 1 : 0);
+      totals.set(p.pid, (totals.get(p.pid) ?? 0) - part);
+      lossShift.set(p.pid, (lossShift.get(p.pid) ?? 0) - part);
+    }
+  }
+  return { shares: totals, lossShift, undistributedCents, incompletePeriods };
+}
+
 // ── Prognose voor het lopende jaar ──────────────────────────────────────────
 
 const DAY_MS = 86_400_000;
@@ -831,6 +935,14 @@ export interface IncomeTaxInputs {
    */
   ownerFirstHourDate?: string | null;
   partnerFirstHourDates?: Record<string, string> | null;
+  /**
+   * Hoe de jaarafsluiting het resultaat van een open boekjaar verdeelt: de
+   * perioden van de tijdlijn (in- of uittreden, een ander percentage met een
+   * ingangsdatum), een vastgelegde verdeling, en de verliesgrens van een
+   * commanditaire vennoot (20261124120000). Leeg bij een afgesloten jaar: dan
+   * telt wat er geboekt is.
+   */
+  partnerSplit?: IbSplitSpec | null;
 }
 
 export type IncomeTaxBasis = 'geboekt' | 'prognose';
@@ -1030,13 +1142,14 @@ export function buildIncomeTaxOverview(inputs: IncomeTaxInputs, options: { basis
       ? `In ${inputs.year} doet geen vennoot mee in de verdeling. Deze raming rekent alsof één persoon de hele winst heeft; leg de verdeling van het boekjaar vast bij Boekjaren → Afsluiten.`
       : 'Er zijn nog geen vennoten vastgelegd. Deze raming rekent alsof één persoon de hele winst heeft; leg de vennoten en hun winstaandeel vast bij Vennoten.');
   }
+  const spec = inputs.isPartnershipForm && inputs.partnerSplit && inputs.partnerSplit.periods.length > 0 ? inputs.partnerSplit : null;
   const shareTotal = active.reduce((sum, p) => sum + p.shareBasisPoints, 0);
-  if (active.length > 0 && shareTotal !== 10000) {
+  if (!spec && active.length > 0 && shareTotal !== 10000) {
     warnings.push(`De winstverdeling van de vennoten telt op tot ${(shareTotal / 100).toLocaleString('nl-NL', { maximumFractionDigits: 2 })}% in plaats van 100%. Pas de verdeling aan bij Vennoten; tot dan klopt deze raming niet.`);
   }
   // Een voorbij jaar zonder vastgelegde verdeling rekent met de vennoten van
   // nu. Wie sindsdien uittrad of toetrad, telt dan verkeerd mee.
-  if (inputs.isPartnershipForm && active.length > 0 && inputs.splitFixed === false && inputs.year < Number(options.today.slice(0, 4))) {
+  if (!spec && inputs.isPartnershipForm && active.length > 0 && inputs.splitFixed === false && inputs.year < Number(options.today.slice(0, 4))) {
     warnings.push(`De verdeling van ${inputs.year} is nog niet vastgelegd: deze raming rekent met de vennoten en percentages van nu. Waren die in ${inputs.year} anders, leg de verdeling dan vast bij Boekjaren → Afsluiten.`);
   }
 
@@ -1055,9 +1168,24 @@ export function buildIncomeTaxOverview(inputs: IncomeTaxInputs, options: { basis
     && active.every(p => typeof p.bookedShareCents === 'number')
     ? new Map(active.map(p => [p.id, Math.trunc(p.bookedShareCents as number)]))
     : null;
+  // Een open jaar: zoals de jaarafsluiting het gaat verdelen, met de perioden
+  // van de tijdlijn en de verliesgrens (20261124120000). Hier rekende het met
+  // één percentage per vennoot voor het hele jaar: wie halverwege toetrad,
+  // kreeg een deel van de winst van vóór zijn komst.
+  const yearSplit = spec && !booked ? splitYearResult(spec, usedResultCents) : null;
+  if (yearSplit) {
+    for (const p of yearSplit.incompletePeriods) {
+      warnings.push(`De winstverdeling van ${p.start} t/m ${p.end} telt op tot ${(p.basisPoints / 100).toLocaleString('nl-NL', { maximumFractionDigits: 2 })}% in plaats van 100%. Kijk de percentages en hun ingangsdatum na bij Vennoten; tot dan klopt deze raming niet.`);
+    }
+    if (yearSplit.undistributedCents !== 0) {
+      warnings.push(`In een deel van ${inputs.year} doet geen vennoot mee: ${euroText(yearSplit.undistributedCents)} is in deze raming niet verdeeld. Kijk de datums van toe- en uittreden na bij Vennoten.`);
+    }
+  }
   const profitShares = (people.length === 1 && people[0].partnerId === null)
     ? split(usedResultCents)
-    : booked ?? splitWithPrior(usedResultCents, people.map((p, i) => ({ ...shares[i], priorCents: p.priorCents })));
+    : booked ?? (yearSplit
+      ? new Map(people.map(p => [p.key, yearSplit.shares.get(p.partnerId ?? '') ?? 0]))
+      : splitWithPrior(usedResultCents, people.map((p, i) => ({ ...shares[i], priorCents: p.priorCents }))));
   const kiaShares = split(kiaCents);
   // Eten, drinken en representatie op 4600: het niet-aftrekbare deel telt
   // ResoFly zelf mee, voor de hele onderneming (bij een vof naar winstaandeel).
@@ -1163,6 +1291,13 @@ export function buildIncomeTaxOverview(inputs: IncomeTaxInputs, options: { basis
       notes: [
         ...(who.priorCents !== 0
           ? [`Winstaandeel: eerst ${euroText(who.priorCents)} vooraf (arbeidsbeloning of rente over het kapitaal), daarna ${((who.shareBasisPoints ?? 0) / 100).toLocaleString('nl-NL', { maximumFractionDigits: 2 })}% van de rest. Zo staat het in de verdeling van het boekjaar.`]
+          : []),
+        // De verliesgrens van de commanditaire vennoot (art. 20 lid 3 WvK).
+        ...((yearSplit?.lossShift.get(who.partnerId ?? '') ?? 0) > 0
+          ? [`Het verlies is begrensd tot de inbreng: ${euroText(yearSplit?.lossShift.get(who.partnerId ?? '') ?? 0)} verlies gaat naar de beherende vennoten. Een commanditaire vennoot draagt niet meer verlies dan hij inbracht.`]
+          : []),
+        ...((yearSplit?.lossShift.get(who.partnerId ?? '') ?? 0) < 0
+          ? [`Neemt ${euroText(-(yearSplit?.lossShift.get(who.partnerId ?? '') ?? 0))} verlies over van een commanditaire vennoot, boven diens inbreng.`]
           : []),
         ...personNotes(rules, { kind: who.kind, profile, estimate, hoursFromTimeTracking, registeredMinutes, projectedMinutes, investmentTotalCents }),
       ],
