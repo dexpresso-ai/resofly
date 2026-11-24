@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { Fragment, useMemo, useState } from 'react';
 import { AlertTriangle, Pencil, Plus, RotateCcw, Save, X } from 'lucide-react';
 import type { OwnersEquityOverview, OwnersEquityPeriod, PartnershipPartner } from '../types';
 import { LEGAL_FORM_LABELS } from '../types';
@@ -169,8 +169,10 @@ export function SplitPeriods({ overview, onPartnersPage = false, canEdit = false
             <span className={period.resultCents < 0 ? 'bk-neg' : ''}> · resultaat {euroCents(period.resultCents)}</span>
             {period.shares.length === 0
               ? <span className="bk-neg"> · geen vennoot, niet verdeeld</span>
+              // De punt buiten het blok: een spatie aan het begin van een
+              // inline-block valt weg, en dan stond er "€ 40.000,00· Anna".
               : period.shares.map(s => (
-                  <span key={s.partnerId} className="bk-split-period-share"> · {s.name} {pct(s.shareBasisPoints)} {euroCents(s.shareCents)}</span>
+                  <Fragment key={s.partnerId}>{' · '}<span className="bk-split-period-share">{s.name} {pct(s.shareBasisPoints)} {euroCents(s.shareCents)}</span></Fragment>
                 ))}
           </li>
         ))}
@@ -283,7 +285,12 @@ export function YearSplitPanel({ organizationId, overview, partners, canWrite, e
       )}
       {allAfter && !editing && (
         <p className="bk-note">
-          Klopt deze verdeling voor {year.label}? De vennoten zijn pas na {year.label} in ResoFly vastgelegd, dus dit is hun verdeling van nu.
+          {/* Met de tijdlijn (20261124120000) is het niet meer "de verdeling
+              van nu": de eerste stand van de vennoten geldt vanaf het begin
+              van de boekhouding, en een latere wijziging heeft een datum. */}
+          Klopt deze verdeling voor {year.label}? De vennoten zijn pas na {year.label} in ResoFly vastgelegd, {overview.splitMode
+            ? 'en hun eerste stand geldt vanaf het begin van je boekhouding.'
+            : 'dus dit is hun verdeling van nu.'}
           {' '}Was die in {year.label} anders, of kreeg iemand vooraf een arbeidsbeloning of rente, pas hem dan aan.
         </p>
       )}
@@ -311,10 +318,15 @@ export function YearSplitPanel({ organizationId, overview, partners, canWrite, e
                 return (
                   <tr key={o.partnerId ?? o.name}>
                     <td><strong>{o.name}</strong>
-                      {o.leftOn
-                        ? <span className="bk-muted"> · uitgetreden per {dayLabel(o.leftOn)}</span>
-                        : !o.isActive && <span className="bk-muted"> · uitgetreden</span>}
-                      {joinedInYear && <span className="bk-muted"> · sinds {dayLabel(joinedInYear)}</span>}
+                      {/* Op een eigen regel: achter de naam begon de tweede
+                          regel op de telefoon met een losse punt. */}
+                      {(o.leftOn || joinedInYear)
+                        ? <div className="bk-muted bk-split-sub">
+                            {[joinedInYear && `sinds ${dayLabel(joinedInYear)}`, o.leftOn && `uitgetreden per ${dayLabel(o.leftOn)}`].filter(Boolean).join(' · ')}
+                          </div>
+                        // Uitgetreden na dit jaar: "· uitgetreden" las in het
+                        // venster van 2025 alsof hij in 2025 uittrad.
+                        : !o.isActive && <span className="bk-muted"> · inmiddels uitgetreden</span>}
                     </td>
                     <td className="bk-num">{(shares.length ? shares : [o.shareBasisPoints]).map(pct).join(' → ')}</td>
                     <td className="bk-num bk-split-col-prior">{o.priorShareCents ? euroCents(o.priorShareCents) : '—'}</td>
