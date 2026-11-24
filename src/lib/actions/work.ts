@@ -63,7 +63,7 @@ export const WORK_EXECUTORS: Record<string, ActionExecutor> = {
     const minutes = Number(payload.minutes);
     if (!Number.isFinite(minutes) || minutes <= 0) throw new Error('Deze actie mist het aantal minuten.');
     await savePlannerDayCapacity(ctx.organizationId, text(payload, 'user_id'), { minutes, include_weekend: flag(payload, 'include_weekend') });
-    return `Weekplanner staat op ${(minutes / 60).toLocaleString('nl-NL')} uur per dag${flag(payload, 'include_weekend') ? ', ook in het weekend' : ''}`;
+    return `Je werktijd in de weekplanner staat op ${(minutes / 60).toLocaleString('nl-NL')} uur per dag${flag(payload, 'include_weekend') ? ', ook in het weekend' : ''}`;
   },
 
   'project.shift_planning': async (payload, ctx) => {
