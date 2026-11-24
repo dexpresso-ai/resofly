@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { AlertTriangle, Pencil, Plus, RotateCcw, Save, X } from 'lucide-react';
-import type { OwnersEquityOverview, PartnershipPartner } from '../types';
+import type { OwnersEquityOverview, OwnersEquityPeriod, PartnershipPartner } from '../types';
 import { LEGAL_FORM_LABELS } from '../types';
 import { Button, Input, Select } from '../components/Ui';
 import { dateNL, euro } from '../lib/format';
@@ -52,6 +52,44 @@ export function parsePercent(value: string): number | null {
 const bpToInput = (bp: number) => (bp / 100).toLocaleString('nl-NL', { maximumFractionDigits: 2, useGrouping: false });
 const centsToInput = (cents: number) => (cents ? (cents / 100).toFixed(2).replace('.', ',') : '');
 
+const MONTHS_SHORT = ['jan', 'feb', 'mrt', 'apr', 'mei', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec'];
+
+/**
+ * "1 jan 2025" (of "1 jan" zonder jaar). Zelf, niet met Intl: die schrijft
+ * "1 jan. 2025", en in een regel als "1 jan t/m 30 jun 2026" las de punt als
+ * het einde van een zin.
+ */
+export function dayLabel(iso: string, withYear = true): string {
+  const [y, m, d] = iso.slice(0, 10).split('-').map(Number);
+  return `${d} ${MONTHS_SHORT[m - 1] ?? ''}${withYear ? ` ${y}` : ''}`;
+}
+
+/** "1 jan t/m 30 jun 2026"; over een jaargrens heen met beide jaren. */
+export function periodLabel(start: string, end: string): string {
+  return start.slice(0, 4) === end.slice(0, 4)
+    ? `${dayLabel(start, false)} t/m ${dayLabel(end)}`
+    : `${dayLabel(start)} t/m ${dayLabel(end)}`;
+}
+
+/** Valt het jaar uiteen in meer dan één periode (in- of uittreden, een ander percentage met een datum)? */
+export function hasPeriods(overview: OwnersEquityOverview): boolean {
+  return overview.splitMode === 'automatisch' && (overview.periods?.length ?? 0) > 1;
+}
+
+/**
+ * De eerste periode die niet op precies 100% uitkomt, of waarin niemand
+ * vennoot is. Zo weigert ook de jaarafsluiting (close_fiscal_year), en die
+ * noemt dezelfde periode.
+ */
+export function periodProblem(overview: OwnersEquityOverview): { period: OwnersEquityPeriod; total: number } | null {
+  if (!hasPeriods(overview)) return null;
+  for (const period of overview.periods ?? []) {
+    const total = period.shares.reduce((sum, s) => sum + s.shareBasisPoints, 0);
+    if (total !== 10000) return { period, total };
+  }
+  return null;
+}
+
 /** De dag (in Nederland) waarop iets is vastgelegd, als JJJJ-MM-DD. */
 function amsterdamDay(timestamp: string): string {
   return new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Amsterdam' }).format(new Date(timestamp));
@@ -73,17 +111,126 @@ export function changedAfterYearEnd(overview: OwnersEquityOverview): string[] {
 
 /** Waar de verdeling van dit jaar vandaan komt, in een paar woorden. */
 export function splitSourceLabel(overview: OwnersEquityOverview): string {
+  // Sinds 20261124120000 legt de afsluiting van een automatische verdeling een
+  // momentopname vast die niet als "vastgelegd" telt (splitFixed is dan
+  // false). Hier stond daarom "niet over vennoten verdeeld" bij een jaar dat
+  // wél over de vennoten was verdeeld.
   if (overview.fiscalYear.status === 'closed') {
-    return overview.splitFixed ? 'vastgelegd bij het afsluiten' : 'niet over vennoten verdeeld';
+    if (overview.splitFixed) return 'vastgelegd bij het afsluiten';
+    return overview.splitMode === 'automatisch' && overview.isPartnership
+      ? 'volgens de ingangsdatums, geboekt bij het afsluiten'
+      : 'niet over vennoten verdeeld';
   }
-  return overview.splitFixed ? 'vastgelegd voor dit jaar' : 'die van de vennoten nu';
+  if (overview.splitFixed) return 'vastgelegd voor dit jaar';
+  return overview.splitMode === 'automatisch' ? 'volgens de ingangsdatums van de vennoten' : 'die van de vennoten nu';
 }
 
-/** Telt de verdeling van dit jaar op tot iets anders dan 100%? (null als er niemand meedoet) */
+/**
+ * Telt de verdeling van dit jaar op tot iets anders dan 100%? (null als er
+ * niemand meedoet). Bij perioden: het totaal van de eerste periode die niet
+ * klopt, anders 100%. De percentages van alle vennoten van het jaar optellen
+ * gaf bij Bram eruit en Chris erin per 1 juli 150%, en dan stond afsluiten uit.
+ */
 export function splitTotalBasisPoints(overview: OwnersEquityOverview): number | null {
   const inSplit = overview.owners.filter(o => o.inSplit);
   if (inSplit.length === 0) return null;
+  if (hasPeriods(overview)) return periodProblem(overview)?.total ?? 10000;
   return inSplit.reduce((sum, o) => sum + o.shareBasisPoints, 0);
+}
+
+/** Per vennoot zijn percentages door het jaar heen, in volgorde: [50] of [50, 30]. */
+function periodShares(overview: OwnersEquityOverview, partnerId: string | null): number[] {
+  const out: number[] = [];
+  for (const period of overview.periods ?? []) {
+    const share = period.shares.find(s => s.partnerId === partnerId);
+    if (share && out[out.length - 1] !== share.shareBasisPoints) out.push(share.shareBasisPoints);
+  }
+  return out;
+}
+
+/**
+ * De perioden van een jaar met een automatische verdeling, onder elkaar: wanneer,
+ * het resultaat, en per vennoot zijn percentage en deel. Alleen bij meer dan
+ * één periode; anders zegt de tabel eronder alles.
+ */
+export function SplitPeriods({ overview, onPartnersPage = false, canEdit = false }: {
+  overview: OwnersEquityOverview;
+  /** Op Vennoten staan de ingangsdatums op dezelfde pagina; in het afsluitvenster niet. */
+  onPartnersPage?: boolean;
+  canEdit?: boolean;
+}) {
+  if (!hasPeriods(overview)) return null;
+  return (
+    <div className="bk-split-periods">
+      <ol className="bk-split-period-list">
+        {(overview.periods ?? []).map(period => (
+          <li key={period.periodStart} className="bk-split-period">
+            <strong>{periodLabel(period.periodStart, period.periodEnd)}</strong>
+            <span className={period.resultCents < 0 ? 'bk-neg' : ''}> · resultaat {euroCents(period.resultCents)}</span>
+            {period.shares.length === 0
+              ? <span className="bk-neg"> · geen vennoot, niet verdeeld</span>
+              : period.shares.map(s => (
+                  <span key={s.partnerId} className="bk-split-period-share"> · {s.name} {pct(s.shareBasisPoints)} {euroCents(s.shareCents)}</span>
+                ))}
+          </li>
+        ))}
+      </ol>
+      <p className="bk-muted">
+        De verdeling volgt uit de ingangsdatums {onPartnersPage ? 'van de vennoten hierboven' : 'bij Vennoten'}: het resultaat van elke periode gaat naar wie toen vennoot was, met het percentage van toen.
+        {canEdit && ' Met Verdeling aanpassen leg je een eigen verdeling voor het hele jaar vast; die gaat dan voor.'}
+      </p>
+    </div>
+  );
+}
+
+/** "Anna", "Anna en Bram", "Anna, Bram en Chris". */
+function joinNL(items: string[]): string {
+  return items.length <= 1 ? (items[0] ?? '') : `${items.slice(0, -1).join(', ')} en ${items[items.length - 1]}`;
+}
+
+/**
+ * De verliesgrens van een cv: een commanditaire vennoot draagt niet meer
+ * verlies dan zijn eigen vermogen (art. 20 lid 3 WvK). Het meerdere gaat naar
+ * de beherende vennoten; dat staat al in hun winstaandeel, en hier waarom.
+ */
+export function LossShiftNote({ overview }: { overview: OwnersEquityOverview }) {
+  const givers = overview.owners.filter(o => (o.lossShiftCents ?? 0) > 0);
+  if (givers.length === 0) return null;
+  const takers = overview.owners.filter(o => (o.lossShiftCents ?? 0) < 0);
+  return (
+    <p className="bk-note bk-loss-shift">
+      Een commanditaire vennoot draagt niet meer verlies dan zijn eigen vermogen.
+      {' '}{joinNL(givers.map(o => `${o.name} draagt ${euroCents(o.lossShiftCents)} van zijn deel niet`))}; dat gaat naar de beherende vennoten
+      {takers.length > 0 ? ` (${joinNL(takers.map(o => `${o.name} ${euroCents(-(o.lossShiftCents ?? 0))}`))})` : ''}.
+    </p>
+  );
+}
+
+/**
+ * Wie aan het eind van het jaar geen vennoot meer is: zijn kapitaal gaat bij
+ * de jaarafsluiting naar zijn rekening-courant. Tot 24 november 2026 bleef het
+ * eigen vermogen, terwijl de vof het hem schuldig is.
+ */
+export function CurrentAccountTransferNote({ overview }: { overview: OwnersEquityOverview }) {
+  const leavers = overview.owners.filter(o => (o.toCurrentAccountCents ?? 0) !== 0);
+  if (leavers.length === 0) return null;
+  const closed = overview.fiscalYear.status === 'closed';
+  return (
+    <>
+      {leavers.map(o => {
+        const cents = o.toCurrentAccountCents ?? 0;
+        const who = o.leftOn ? `${o.name} is uitgetreden per ${dayLabel(o.leftOn)}` : `${o.name} is aan het eind van ${overview.fiscalYear.label} geen vennoot meer`;
+        return (
+          <p key={o.partnerId ?? o.name} className="bk-note bk-rc-note">
+            {cents > 0
+              ? <>{who}: zijn kapitaal ({euroCents(cents)}) {closed ? 'ging' : 'gaat'} bij het afsluiten naar zijn rekening-courant, een schuld aan hem.</>
+              : <>{who}: zijn kapitaal is negatief ({euroCents(cents)}) en {closed ? 'ging' : 'gaat'} bij het afsluiten naar zijn rekening-courant, een vordering op hem.</>}
+            {' '}{cents > 0 ? 'Wat je hem uitbetaalt' : 'Wat hij terugbetaalt'}, boek je bij de bank op die rekening-courant, niet op privé.
+          </p>
+        );
+      })}
+    </>
+  );
 }
 
 /**
@@ -112,6 +259,8 @@ export function YearSplitPanel({ organizationId, overview, partners, canWrite, e
   const priorTotal = inSplit.reduce((sum, o) => sum + (o.priorShareCents ?? 0), 0);
   const shareSum = inSplit.reduce((sum, o) => sum + o.resultShareCents, 0);
   const canEdit = open && canWrite && partners.length > 0;
+  const multi = hasPeriods(overview);
+  const problem = periodProblem(overview);
 
   return (
     <div className="bk-split">
@@ -139,6 +288,8 @@ export function YearSplitPanel({ organizationId, overview, partners, canWrite, e
         </p>
       )}
 
+      {!editing && <SplitPeriods overview={overview} canEdit={canEdit} />}
+
       {editing
         ? <YearSplitEditor organizationId={organizationId} overview={overview} partners={partners}
             onCancel={() => onEditingChange(false)}
@@ -151,30 +302,50 @@ export function YearSplitPanel({ organizationId, overview, partners, canWrite, e
                 <th className="bk-num bk-split-col-prior" title="Arbeidsbeloning of rente over het kapitaal, vóór de verdeling naar rato">Vooraf</th>
                 <th className="bk-num">Naar kapitaal</th>
               </tr></thead>
-              <tbody>{inSplit.map(o => (
-                <tr key={o.partnerId ?? o.name}>
-                  <td><strong>{o.name}</strong>{!o.isActive && <span className="bk-muted"> · uitgetreden</span>}</td>
-                  <td className="bk-num">{pct(o.shareBasisPoints)}</td>
-                  <td className="bk-num bk-split-col-prior">{o.priorShareCents ? euroCents(o.priorShareCents) : '—'}</td>
-                  <td className={`bk-num ${o.resultShareCents < 0 ? 'bk-neg' : ''}`}><strong>{euroCents(o.resultShareCents)}</strong>
-                    {/* Op de telefoon past de kolom Vooraf er niet naast: dan hier. */}
-                    {o.priorShareCents ? <div className="bk-muted bk-split-sub bk-split-prior-inline">waarvan vooraf {euroCents(o.priorShareCents)}</div> : null}
-                  </td>
-                </tr>
-              ))}</tbody>
+              <tbody>{inSplit.map(o => {
+                // Met perioden heeft een vennoot soms meer dan één percentage
+                // ("50% → 30%"), en doet hij niet het hele jaar mee: dat staat
+                // onder zijn naam.
+                const shares = multi ? periodShares(overview, o.partnerId) : [o.shareBasisPoints];
+                const joinedInYear = o.joinedOn && o.joinedOn > year.periodStart && o.joinedOn <= year.periodEnd ? o.joinedOn : null;
+                return (
+                  <tr key={o.partnerId ?? o.name}>
+                    <td><strong>{o.name}</strong>
+                      {o.leftOn
+                        ? <span className="bk-muted"> · uitgetreden per {dayLabel(o.leftOn)}</span>
+                        : !o.isActive && <span className="bk-muted"> · uitgetreden</span>}
+                      {joinedInYear && <span className="bk-muted"> · sinds {dayLabel(joinedInYear)}</span>}
+                    </td>
+                    <td className="bk-num">{(shares.length ? shares : [o.shareBasisPoints]).map(pct).join(' → ')}</td>
+                    <td className="bk-num bk-split-col-prior">{o.priorShareCents ? euroCents(o.priorShareCents) : '—'}</td>
+                    <td className={`bk-num ${o.resultShareCents < 0 ? 'bk-neg' : ''}`}><strong>{euroCents(o.resultShareCents)}</strong>
+                      {/* Op de telefoon past de kolom Vooraf er niet naast: dan hier. */}
+                      {o.priorShareCents ? <div className="bk-muted bk-split-sub bk-split-prior-inline">waarvan vooraf {euroCents(o.priorShareCents)}</div> : null}
+                    </td>
+                  </tr>
+                );
+              })}</tbody>
               {inSplit.length > 1 && (
                 <tfoot><tr className="bk-split-total-row">
                   <td>Samen</td>
-                  <td className={`bk-num ${total !== 10000 ? 'bk-neg' : ''}`}>{pct(total)}</td>
+                  <td className={`bk-num ${total !== 10000 ? 'bk-neg' : ''}`}>{pct(total)}{multi && total === 10000 ? ' per periode' : ''}</td>
                   <td className="bk-num bk-split-col-prior">{priorTotal ? euroCents(priorTotal) : '—'}</td>
                   <td className="bk-num">{euroCents(shareSum)}</td>
                 </tr></tfoot>
               )}
             </table></div>}
 
-      {!editing && total !== null && total !== 10000 && (
+      {!editing && problem && (
+        <p className="bk-neg"><AlertTriangle size={13} aria-hidden="true" /> {problem.period.shares.length === 0
+          ? <>Van {periodLabel(problem.period.periodStart, problem.period.periodEnd)} doet geen vennoot mee, dus het resultaat van die periode kan nergens heen.</>
+          : <>De verdeling van {periodLabel(problem.period.periodStart, problem.period.periodEnd)} telt op tot {pct(problem.total)}; dat moet precies 100% zijn.</>}
+          {' '}Kijk de datums en percentages na bij Vennoten{canEdit ? ', of leg met Verdeling aanpassen een verdeling voor het hele jaar vast' : ''}.
+        </p>
+      )}
+      {!editing && !problem && total !== null && total !== 10000 && (
         <p className="bk-neg"><AlertTriangle size={13} aria-hidden="true" /> De verdeling van {year.label} telt op tot {pct(total)}. Dat moet precies 100% zijn{canEdit ? ': pas hem aan' : ''}.</p>
       )}
+      {!editing && <LossShiftNote overview={overview} />}
       {!editing && priorTotal !== 0 && (
         <p className="bk-muted">
           Eerst krijgt elke vennoot zijn voorafgaande bedrag (samen {euroCents(priorTotal)}); de rest van het resultaat gaat naar rato van het aandeel.
@@ -242,12 +413,15 @@ function YearSplitEditor({ organizationId, overview, partners, onCancel, onSaved
     finally { setBusy(false); }
   }
 
+  // Sinds 20261124120000 is "geen vastgelegde verdeling" niet meer "de vennoten
+  // van nu", maar de verdeling volgens de ingangsdatums bij Vennoten.
+  const automaticWord = overview.splitMode ? 'de verdeling volgens de ingangsdatums bij Vennoten' : 'die van de actieve vennoten van nu';
   async function reset() {
-    if (!confirm(`De vastgelegde verdeling van ${year.label} weghalen? Dan geldt weer die van de actieve vennoten van nu.`)) return;
+    if (!confirm(`De vastgelegde verdeling van ${year.label} weghalen? Dan geldt weer ${automaticWord}.`)) return;
     setBusy(true); setError(null);
     try {
       await setFiscalYearPartnerShares(organizationId, year.id, []);
-      onSaved(`De verdeling van ${year.label} is weer die van de vennoten nu.`);
+      onSaved(`De verdeling van ${year.label} is weer ${automaticWord}.`);
     } catch (e) { setError(e instanceof Error ? e.message : 'Terugzetten mislukt'); }
     finally { setBusy(false); }
   }
@@ -301,14 +475,17 @@ function YearSplitEditor({ organizationId, overview, partners, onCancel, onSaved
         Vooraf: wat een vennoot volgens het vennootschapscontract eerst krijgt, zoals een arbeidsbeloning of rente over zijn kapitaal.
         {' '}Het is geen kost maar een deel van zijn winstaandeel, en telt mee in wat hij aangeeft. De rest van het resultaat ({euroCents(overview.resultCents)} nu) gaat naar rato van het aandeel.
         {' '}Een vennoot die in {year.label} meedeed maar inmiddels is uitgetreden, hoort er gewoon in.
+        {/* Wie hier opslaat bij een jaar met perioden, ruilt die in voor één
+            verdeling over het hele jaar; dat moet vooraf duidelijk zijn. */}
+        {hasPeriods(overview) && ` Wat je hier vastlegt, geldt voor heel ${year.label}: de perioden van de ingangsdatums vervallen dan, en het resultaat gaat in één keer naar rato.`}
       </p>
       {error && <div className="error">{error}</div>}
       <div className="bk-fy-new-actions bk-split-actions">
         <Button variant="primary" disabled={!canSave} onClick={() => void save()}><Save size={14} /> {busy ? 'Bezig…' : 'Opslaan'}</Button>
         <Button variant="ghost" disabled={busy} onClick={onCancel}><X size={14} /> Annuleren</Button>
         {overview.splitFixed && (
-          <Button variant="ghost" disabled={busy} onClick={() => void reset()} title="Haal de vastgelegde verdeling weg: dan geldt weer die van de actieve vennoten">
-            <RotateCcw size={14} /> Terug naar de vennoten van nu
+          <Button variant="ghost" disabled={busy} onClick={() => void reset()} title={`Haal de vastgelegde verdeling weg: dan geldt weer ${automaticWord}`}>
+            <RotateCcw size={14} /> {overview.splitMode ? 'Terug naar de ingangsdatums' : 'Terug naar de vennoten van nu'}
           </Button>
         )}
       </div>

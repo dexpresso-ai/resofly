@@ -3290,6 +3290,38 @@ body::before{
 .bk-split-foot{display:flex;align-items:center;justify-content:space-between;gap:8px 12px;flex-wrap:wrap}
 .bk-split-total{font-size:.84rem;font-weight:600;font-variant-numeric:tabular-nums}
 .bk-split-actions{flex-wrap:wrap}
+/* De perioden van een jaar (in- of uittreden, 2026-11-24): onder elkaar, en
+   per vennoot een blok dat als geheel naar de volgende regel gaat. Met
+   nowrap liep een lange naam op de telefoon rechts uit het venster. */
+.bk-split-periods{display:flex;flex-direction:column;gap:6px;margin:0 0 10px}
+.bk-split .bk-split-periods{margin:0}
+.bk-split-period-list{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;font-size:.86rem}
+.bk-split-period{padding:7px 0;border-bottom:1px solid var(--border);overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+.bk-split-period:first-child{padding-top:0}
+.bk-split-period:last-child{border-bottom:0}
+.bk-split-period-share{display:inline-block;max-width:100%}
+.bk-split-periods>p{margin:0;font-size:.8rem}
+.bk-rc-note,.bk-loss-shift{display:block}
+/* De rekening-courant per vennoot onder de kapitaalvergelijking. */
+.bk-rc-list{display:flex;flex-direction:column;gap:4px;margin:10px 0;font-size:.86rem}
+.bk-rc-list p{margin:0;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+/* Het venster van een vennoot (Owners.tsx): de velden in twee kolommen, de
+   ingangsdatum over de hele breedte met zijn uitleg eronder, en de standen. */
+.bk-partner-dialog .bk-fy-new-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.bk-partner-dialog .bk-fy-new-fields label{min-width:0}
+.bk-partner-date{grid-column:1/-1}
+.bk-partner-date input{max-width:220px}
+.bk-partner-date-hint{margin:-2px 0 0;font-size:.8rem}
+.bk-partner-timeline{display:flex;flex-direction:column;gap:6px;margin-top:4px;padding-top:10px;border-top:1px solid var(--border)}
+.bk-partner-timeline-head{font-size:.72rem;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--muted,rgba(var(--ink-rgb),.55))}
+.bk-partner-timeline ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px}
+.bk-partner-timeline li{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:34px;font-size:.86rem;overflow-wrap:anywhere}
+.bk-partner-timeline li.is-future{color:var(--muted2)}
+.bk-partner-timeline p{margin:0;font-size:.8rem}
+@media(max-width:640px){
+  .bk-partner-dialog .bk-fy-new-fields{grid-template-columns:minmax(0,1fr)}
+  .bk-partner-date input{max-width:none}
+}
 /* Instellingen: een andere rechtsvorm, met per open jaar een vinkje. */
 .legal-change{display:flex;flex-direction:column;gap:10px;font-size:.9rem}
 .legal-change p{margin:0}

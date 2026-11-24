@@ -328,7 +328,42 @@ const PAGES = {
   },
   // Het potlood is sinds 2026-11-22 een knop van 34px (.bk-icon-btn), naast
   // een prullenbak; het was 12×17px en stond op de telefoon buiten beeld.
-  'owners-bewerken': { page: 'owners', mock: { ledger: true, vof: true }, prepare: '.bk-cell-action .bk-icon-btn' },
+  // Sinds 2026-11-24 opent het potlood een venster (met de standen van de vennoot).
+  'owners-bewerken': { page: 'owners', mock: { ledger: true, vof: true }, prepare: '.bk-cell-action .bk-icon-btn', contained: '.bk-modal' },
+  // 2026-11-24 — de tijdlijn per vennoot en de rekening-courant. Vennoten met
+  // een jaar dat op 1 juli uiteenvalt (Bram eruit, Chris erin): de perioden
+  // onder elkaar, de kolom "Naar rekening-courant" bij Bram en het saldo van
+  // zijn rekening-courant.
+  'owners-perioden': {
+    page: 'owners', mock: { ledger: true, vof: true, vofPerioden: true },
+    mustShow: [
+      { selector: '.bk-split-periods .bk-split-period', text: 'resultaat', label: 'de perioden van het jaar' },
+      { selector: '.bk-split-periods li + li', text: 'Chris Bakker', label: 'de tweede periode met Chris' },
+      { selector: '.bk-rc-list', text: 'schuld aan Bram Jansen', label: 'het saldo van de rekening-courant van Bram' },
+    ],
+  },
+  // Het venster van Bram, op uitgetreden gezet: het datumveld heet dan
+  // "Uitgetreden per" (standaard vandaag), met zijn standen eronder.
+  'owners-vennoot-datum': {
+    page: 'owners', mock: { ledger: true, vof: true },
+    prepare: ['tr:has-text("Bram Jansen") .bk-cell-action .bk-icon-btn[aria-label$="aanpassen"]', '.bk-modal .select-trigger[aria-label="Status"]', '.select-menu .select-option:has-text("Uitgetreden")'],
+    contained: '.bk-modal',
+    mustShow: [
+      { selector: '.bk-modal .bk-partner-date', text: 'Uitgetreden per', label: 'het datumveld met het label bij uittreden' },
+      { selector: '.bk-modal .bk-partner-date input[type="date"]', label: 'het datumveld' },
+      { selector: '.bk-modal .bk-partner-timeline', text: 'vanaf 1 jan', label: 'de standen van de vennoot' },
+    ],
+  },
+  // Het afsluitvenster van een jaar met een uittreder: de perioden, en dat
+  // zijn kapitaal naar zijn rekening-courant gaat.
+  'boekjaren-vof-uittreder': {
+    page: 'fiscal-years', mock: { ledger: true, vof: true, vofPerioden: true },
+    prepare: `tr:has-text("31-12-${VORIG_JAAR + 1}") button:has-text("Afsluiten")`, contained: '.bk-modal',
+    mustShow: [
+      { selector: '.bk-modal .bk-split-periods', text: 'Chris Bakker', label: 'de perioden in het afsluitvenster' },
+      { selector: '.bk-modal .bk-rc-note', text: 'rekening-courant, een schuld aan hem', label: 'de regel over het kapitaal van Bram' },
+    ],
+  },
   // 2026-11-22 — de verdeling per boekjaar. Vennoten met het vorige jaar nog
   // open: de regel "Winst van <jaar>, nog niet verdeeld" apart van "nog niet
   // toegewezen", en het venster Verdeling aanpassen (per vennoot het
