@@ -1084,7 +1084,8 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
       'Alleen voor een eenmanszaak, vof, maatschap of cv: daar is de winst van de ondernemer of de vennoten zelf. Geeft voor één boekjaar de kapitaalvergelijking: beginvermogen, resultaat (bij een vof met vennoten het winstaandeel per vennoot volgens de verdeling van DAT boekjaar, met `priorShareCents` als bedrag vooraf zoals een arbeidsbeloning; bij een afgesloten jaar het geboekte bedrag), privé-stortingen, privé-opnamen, overige mutaties en eindvermogen. ' +
       'Dat is wat de aangifte inkomstenbelasting vraagt als ondernemingsvermogen aan het begin en het eind van het jaar; elke vennoot geeft zijn eigen winstaandeel aan. Bij een open boekjaar is het resultaat voorlopig. `unassigned` is vermogen dat op geen enkele vennoot staat (bijv. een beginbalans van vóór de vennoten). Ook de vennoten zelf met hun winstaandeel en rekeningen, en het teamlid dat de vennoot is (`user_id`). ' +
       '`hours` geeft per vennoot zijn uren in het kalenderjaar van het boekjaar (direct, indirect, in minuten) voor het urencriterium van 1225 uur; alleen als de aanroeper Uren mag lezen, anders null. Een vennoot zonder gekoppeld teamlid heeft geen uren. ' +
-      '`legalForm` is de rechtsvorm van dat boekjaar (`currentLegalForm` die van nu); `splitFixed` zegt of de verdeling voor dat jaar is vastgelegd, `splitChangedAfterYearEnd` noemt vennoten die na het einde van het jaar zijn gewijzigd (dan eerst `fiscal_year.set_partner_shares`), en `unassigned.openPriorResultCents` is de winst van een vorig jaar dat nog open staat.',
+      '`legalForm` is de rechtsvorm van dat boekjaar (`currentLegalForm` die van nu); `splitFixed` zegt of de verdeling voor dat jaar is vastgelegd, `splitChangedAfterYearEnd` noemt vennoten die na het einde van het jaar zijn gewijzigd (dan eerst `fiscal_year.set_partner_shares`), en `unassigned.openPriorResultCents` is de winst van een vorig jaar dat nog open staat. ' +
+      'Per vennoot ook `joinedOn` en `leftOn` (de tijdlijn), `currentAccountCents` (zijn rekening-courant: credit is een schuld aan hem), `toCurrentAccountCents` (wat er bij uittreden naar zijn rekening-courant gaat) en `lossShiftCents` (verlies boven de inbreng van een commanditaire vennoot, naar de beherende vennoten). `splitMode` is "automatisch" (de tijdlijn, met `periods`: per periode het resultaat en het deel per vennoot) of "vastgelegd".',
     keywords: ['eigen vermogen', 'kapitaal', 'privé', 'privé-opname', 'privé-storting', 'vennoot', 'vennoten', 'winstverdeling', 'winstaandeel', 'vof', 'eenmanszaak', 'kapitaalvergelijking', 'urencriterium', 'uren per vennoot'],
     input: {
       fiscal_year_id: { type: 'string', description: 'Id van het boekjaar (uit list_fiscal_years).' },
@@ -1129,7 +1130,7 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
     description:
       'Alleen bij een vof, maatschap of cv: legt een vennoot vast (zonder `partner_id`) of past er een aan: naam, winstaandeel in procenten, soort (alleen bij een cv: beherend of commanditair), actief of uitgetreden, en het teamlid dat de vennoot is (`user_id`; een lege tekst koppelt los). ' +
       'Een nieuwe vennoot krijgt eigen rekeningen: kapitaal 050n, privé-opnamen 055n en privé-stortingen 056n. De winstaandelen van de actieve vennoten moeten bij de jaarafsluiting samen precies 100% zijn; de kaart toont de verdeling daarna. ' +
-      'Een vennoot met boekingen verwijder je niet: zet hem op uitgetreden (`is_active: false`). Een wijziging geldt vanaf nu; de verdeling van een eerder boekjaar leg je vast met `fiscal_year.set_partner_shares`. Bekijk de vennoten eerst met `owners.equity_overview`; teamleden (met hun user_id) met `team.list_access`.',
+      'Een vennoot met boekingen verwijder je niet: zet hem op uitgetreden (`is_active: false`, met `effective_date`). Elke wijziging heeft een ingangsdatum: treedt iemand halverwege het jaar in of uit, of verandert een percentage per een datum, dan splitst de jaarafsluiting dat jaar vanzelf in perioden, elk met het resultaat van die periode. Bij de jaarafsluiting gaat het kapitaal van een uittreder naar zijn rekening-courant (141n): een schuld aan hem. Een eigen verdeling voor één boekjaar leg je vast met `fiscal_year.set_partner_shares`. Bekijk de vennoten eerst met `owners.equity_overview`; teamleden (met hun user_id) met `team.list_access`.',
     keywords: ['vennoot', 'vennoten', 'vennoot toevoegen', 'winstaandeel', 'winstverdeling', 'uittreden', 'vof', 'maatschap', 'cv', 'teamlid koppelen'],
     input: {
       partner_id: { type: 'string', description: 'Id van de vennoot om aan te passen (uit owners.equity_overview). Weglaten voor een nieuwe vennoot.' },
@@ -1138,6 +1139,7 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
       kind: { type: 'string', enum: ['beherend', 'commanditair'], description: 'Alleen bij een cv. Standaard beherend.' },
       is_active: { type: 'boolean', description: 'false = uitgetreden.' },
       user_id: { type: 'string', description: 'Het teamlid dat de vennoot is (voor het urencriterium); lege tekst koppelt los.' },
+      effective_date: { type: 'string', description: 'Ingangsdatum (JJJJ-MM-DD): de eerste dag waarop de wijziging geldt. Bij een nieuwe vennoot "vennoot sinds", bij uittreden "uitgetreden per" (de eerste dag dat hij geen vennoot meer is), bij een ander percentage "met ingang van". Leeg bij een ander percentage = een correctie van de stand van nu (in een afgesloten boekjaar: vanaf de dag erna); leeg bij uittreden = vandaag. Niet op of vóór het einde van het laatste afgesloten boekjaar.' },
     },
     async plan(ctx, input) {
       const { data: settings, error: settingsError } = await orgQuery(ctx, 'company_settings', 'legal_form').maybeSingle();
@@ -1172,6 +1174,7 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
         ?? 'beherend';
       if (kind === 'commanditair' && legalForm !== 'cv') throw new ActionError('Een commanditaire (stille) vennoot bestaat alleen bij een cv.');
       const isActive = typeof input.is_active === 'boolean' ? input.is_active : (current?.is_active ?? true);
+      const effectiveDate = optIsoDate(input, 'effective_date');
 
       // Het teamlid: alleen een actief teamlid van deze organisatie, niet de
       // boekhouder, en één teamlid hoort bij één vennoot (zoals
@@ -1200,6 +1203,17 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
       // Een wijziging hier zou dan stil ook dat jaar raken; sinds 20261122100000
       // weigert de jaarafsluiting dat, en de kaart zegt het vooraf.
       const changesSplit = !current || basisPoints !== current.profit_share_basis_points || isActive !== current.is_active || kind !== current.kind;
+      // Niet op of vóór het einde van het laatste afgesloten boekjaar, zoals
+      // save_partnership_partner (20261124120000). Anders kwam er een kaart
+      // die pas bij het uitvoeren werd geweigerd.
+      if (effectiveDate) {
+        const { data: closedYears } = await orgQuery(ctx, 'fiscal_years', 'label, period_end, status').eq('status', 'closed');
+        const lastClosed = ((closedYears ?? []) as Array<{ label: string; period_end: string }>)
+          .reduce<{ label: string; period_end: string } | null>((last, y) => (!last || y.period_end > last.period_end ? y : last), null);
+        if (lastClosed && effectiveDate <= lastClosed.period_end) {
+          throw new ActionError(`Boekjaar ${lastClosed.label} is afgesloten, met de verdeling die toen gold; een ingangsdatum op of vóór ${lastClosed.period_end} verandert die. Kies een datum na dat jaar, of heropen het eerst (Boekjaren, eigenaar of beheerder).`);
+        }
+      }
       let openPast: string | null = null;
       if (changesSplit) {
         const { data: years } = await orgQuery(ctx, 'fiscal_years', 'id, label, period_end, status').eq('status', 'open');
@@ -1216,12 +1230,17 @@ export const BUSINESS_ACTIONS: ActionDef[] = [
           setUser ? (userId ? `teamlid ${memberLabel}` : 'geen teamlid') : null,
           `verdeling actieve vennoten daarna ${pct(after)}${after === 10000 ? '' : ' (bij het afsluiten moet dat 100% zijn)'}`,
           current ? null : 'met eigen kapitaal- en privérekeningen',
-          openPast ? `geldt vanaf nu; ${openPast} staat nog open: leg de verdeling van dat jaar vast (fiscal_year.set_partner_shares) als die anders was` : null,
-        ], 360),
+          effectiveDate
+            ? `${!current ? 'vennoot sinds' : !isActive && current.is_active ? 'uitgetreden per' : 'met ingang van'} ${effectiveDate}`
+            : !current ? 'zonder ingangsdatum: bij de eerste vennoten vanaf het begin van de boekhouding, anders vanaf vandaag (nooit in een afgesloten boekjaar)'
+            : current.is_active !== isActive ? `${isActive ? 'weer vennoot' : 'uitgetreden'} per vandaag`
+            : changesSplit ? 'correctie van de stand van nu (zonder ingangsdatum; ligt die in een afgesloten boekjaar, dan vanaf de dag erna)' : null,
+          !effectiveDate && openPast && current && current.is_active === isActive ? `${openPast} staat nog open: een correctie geldt ook daar; een wijziging per een datum geef je met effective_date` : null,
+        ], 420),
         kind: 'money',
         payload: {
           partner_id: partnerId, name, profit_share_basis_points: basisPoints, kind, is_active: isActive,
-          set_user: setUser, user_id: userId,
+          set_user: setUser, user_id: userId, effective_date: effectiveDate,
         },
       };
     },

@@ -55,6 +55,8 @@ export const BUSINESS_EXECUTORS: Record<string, ActionExecutor> = {
     const saved = await savePartnershipPartner(ctx.organizationId, {
       id: optText(payload, 'partner_id'), name: text(payload, 'name'),
       profitShareBasisPoints: Number(payload.profit_share_basis_points), kind, isActive: payload.is_active !== false,
+      // De ingangsdatum van de wijziging (20261124120000), zoals het venster bij Vennoten.
+      effectiveDate: optText(payload, 'effective_date'),
     });
     if (flag(payload, 'set_user') && (saved.user_id ?? null) !== (optText(payload, 'user_id') ?? null)) {
       await setPartnershipPartnerMember(ctx.organizationId, saved.id, optText(payload, 'user_id'));

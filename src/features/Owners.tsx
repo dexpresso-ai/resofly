@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, Download, Pencil, Plus, Save, Trash2, X } from 'lucide-react';
-import type { AppData, FiscalYearListRow, OrganizationMember, OwnersEquityOverview, PartnershipPartner, PartnershipPartnerHours, UUID } from '../types';
+import type {
+  AppData, FiscalYearListRow, OrganizationMember, OwnersEquityOverview, PartnershipPartner, PartnershipPartnerChange, PartnershipPartnerHours, UUID,
+} from '../types';
 import { Button, Input, Select, Skeleton } from '../components/Ui';
 import { PageIcon } from '../components/PageIcon';
 import { euro, minutesToHours } from '../lib/format';
@@ -17,10 +19,12 @@ import {
   IB_CORRECTION_LABELS, buildIncomeTaxOverview, formatRate, incomeTaxRulesFor, type IncomeTaxInputs,
 } from '../lib/inkomstenbelasting';
 import {
-  deletePartnershipPartner, listFiscalYears, listPartnershipPartners, loadIncomeTaxInputs, loadOwnersEquityOverview, loadPartnershipPartnerHours, openFiscalYear,
-  savePartnershipPartner, setPartnershipPartnerMember, setUpBookkeeping,
+  deletePartnershipPartner, deletePartnershipPartnerChange, listFiscalYears, listPartnershipPartnerTimeline, listPartnershipPartners, loadIncomeTaxInputs,
+  loadOwnersEquityOverview, loadPartnershipPartnerHours, openFiscalYear, savePartnershipPartner, setPartnershipPartnerMember, setUpBookkeeping,
 } from '../lib/repository';
-import { YearSplitPanel, changedAfterYearEnd, legalFormWord, parsePercent, pct, splitSourceLabel } from './PartnerSplit';
+import {
+  LossShiftNote, SplitPeriods, YearSplitPanel, changedAfterYearEnd, dayLabel, legalFormWord, parsePercent, periodLabel, periodProblem, pct, splitSourceLabel,
+} from './PartnerSplit';
 
 const euroCents = (cents: number | null | undefined) => euro((cents ?? 0) / 100);
 /** Hele uren, naar boven afgerond: "nog 325 u", net als de "900 u" ernaast. */
@@ -32,8 +36,74 @@ function resultAccountLabel(code: string | null | undefined): string {
   return code === '0500' ? '0500 Eigen vermogen' : '0510 Onverdeeld resultaat';
 }
 
-type PartnerForm = { id: string | null; name: string; share: string; kind: PartnershipPartner['kind']; isActive: boolean; userId: string };
-const EMPTY_FORM: PartnerForm = { id: null, name: '', share: '', kind: 'beherend', isActive: true, userId: '' };
+type PartnerForm = { name: string; share: string; kind: PartnershipPartner['kind']; isActive: boolean; userId: string; date: string };
+
+/** Het percentage zoals in het veld: "50" of "33,33". */
+const bpToField = (bp: number) => String(bp / 100).replace('.', ',');
+
+/** JJJJ-MM-DD plus `days` (ook negatief), zonder tijdzone-gedoe. */
+function addDays(iso: string, days: number): string {
+  const d = new Date(`${iso.slice(0, 10)}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+/** De dag (in Nederland) waarop iets is vastgelegd, als JJJJ-MM-DD. */
+function amsterdamDay(timestamp: string): string {
+  return new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Amsterdam' }).format(new Date(timestamp));
+}
+
+/** De stand van een vennoot op `day`: de laatste wijziging met een ingangsdatum op of vóór die dag. */
+function standOn(changes: PartnershipPartnerChange[], day: string): PartnershipPartnerChange | null {
+  let found: PartnershipPartnerChange | null = null;
+  for (const c of changes) if (c.valid_from <= day) found = c;
+  return found;
+}
+
+const kindWord = (kind: PartnershipPartner['kind']) => (kind === 'commanditair' ? 'commanditair (stil)' : 'beherend');
+
+/** Eén regel van de tijdlijn: "sinds 1 jan 2025: 50%", "vanaf 1 jul 2026: 30%", "uitgetreden per 1 feb 2026". */
+function changeLabel(change: PartnershipPartnerChange, previous: PartnershipPartnerChange | null, cv: boolean): string {
+  const kind = cv && change.kind === 'commanditair' ? ', commanditair' : '';
+  if (!change.is_active) return `uitgetreden per ${dayLabel(change.valid_from)}`;
+  const share = `${pct(change.share_basis_points)}${kind}`;
+  if (!previous) return `sinds ${dayLabel(change.valid_from)}: ${share}`;
+  if (!previous.is_active) return `weer vennoot per ${dayLabel(change.valid_from)}: ${share}`;
+  return `vanaf ${dayLabel(change.valid_from)}: ${share}`;
+}
+
+/**
+ * Wat er in de tabel onder de naam staat: "sinds 1 jan 2025", "uitgetreden per
+ * 1 jul 2026", en wat er nog komt ("treedt uit per 1 jan 2027").
+ */
+function partnerDates(changes: PartnershipPartnerChange[], today: string): string | null {
+  if (changes.length === 0) return null;
+  const now = standOn(changes, today);
+  const next = changes.find(c => c.valid_from > today) ?? null;
+  const parts: string[] = [];
+  if (!now) {
+    parts.push(next?.is_active ? `vennoot vanaf ${dayLabel(next.valid_from)}` : 'nog geen vennoot');
+    return parts.join(' · ');
+  }
+  if (!now.is_active) parts.push(`uitgetreden per ${dayLabel(now.valid_from)}`);
+  else {
+    // Sinds het begin van de periode waarin hij nu vennoot is: een ander
+    // percentage halverwege verandert "sinds" niet.
+    let since: string | null = null;
+    for (const c of changes) {
+      if (c.valid_from > today) break;
+      if (!c.is_active) since = null;
+      else if (since === null) since = c.valid_from;
+    }
+    parts.push(`sinds ${dayLabel(since ?? now.valid_from)}`);
+  }
+  if (next) {
+    if (!next.is_active) parts.push(`treedt uit per ${dayLabel(next.valid_from)}`);
+    else if (!now.is_active) parts.push(`weer vennoot per ${dayLabel(next.valid_from)}`);
+    else if (next.share_basis_points !== now.share_basis_points) parts.push(`vanaf ${dayLabel(next.valid_from)}: ${pct(next.share_basis_points)}`);
+  }
+  return parts.join(' · ');
+}
 
 /** Wat er in de kolom Urencriterium staat: de uren, en of het haalbaar is. */
 function hoursCell(partner: PartnershipPartner, row: PartnershipPartnerHours | undefined, year: number, today: string) {
@@ -100,8 +170,11 @@ export function OwnersPage({ data, organizationId, canWrite, onChanged, canReadH
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
-  const [form, setForm] = useState<PartnerForm | null>(null);
+  /** Het venster van een vennoot: een bestaande (zijn id) of een nieuwe (null). */
+  const [dialog, setDialog] = useState<{ partnerId: string | null } | null>(null);
   const [splitOpen, setSplitOpen] = useState(false);
+  /** De standen van alle vennoten, met ingangsdatum (20261124120000). */
+  const [timeline, setTimeline] = useState<PartnershipPartnerChange[]>([]);
 
   const accountCode = useMemo(() => new Map(data.ledgerAccounts.map(a => [a.id, a.code])), [data.ledgerAccounts]);
   const today = formatISODate(new Date());
@@ -134,12 +207,19 @@ export function OwnersPage({ data, organizationId, canWrite, onChanged, canReadH
 
   const loadBase = useCallback(async () => {
     try {
-      const [ys, ps] = await Promise.all([listFiscalYears(organizationId), listPartnershipPartners(organizationId)]);
+      const [ys, ps, tl] = await Promise.all([
+        listFiscalYears(organizationId),
+        listPartnershipPartners(organizationId),
+        // Zonder tijdlijn (een database van vóór 20261124120000) blijft de
+        // pagina werken zoals daarvoor, met de stand van de vennoten zelf.
+        isPartnershipForm ? listPartnershipPartnerTimeline(organizationId).catch(() => [] as PartnershipPartnerChange[]) : Promise.resolve([] as PartnershipPartnerChange[]),
+      ]);
       setYears(ys);
       setPartners(ps);
+      setTimeline(tl);
       setFiscalYearId(prev => prev || ys[0]?.id || '');
     } catch (e) { setError(e instanceof Error ? e.message : 'Laden mislukt'); }
-  }, [organizationId]);
+  }, [organizationId, isPartnershipForm]);
 
   const loadOverview = useCallback(async (id: string) => {
     if (!id) { setOverview(null); return; }
@@ -174,8 +254,19 @@ export function OwnersPage({ data, organizationId, canWrite, onChanged, canReadH
     </div></div>;
   }
 
-  const activePartners = partners.filter(p => p.is_active);
-  const activeShare = activePartners.reduce((s, p) => s + p.profit_share_basis_points, 0);
+  // De standen per vennoot, oudste eerst.
+  const changesOf = (partnerId: string) => timeline.filter(c => c.partner_id === partnerId).sort((a, b) => a.valid_from.localeCompare(b.valid_from));
+  // Actief en percentage van vandaag. De vennoot zelf staat sinds
+  // 20261124120000 op zijn laatste stand, ook als die pas later ingaat: wie per
+  // 1 januari uittreedt, telde hier anders nu al niet meer mee.
+  const nowOf = (p: PartnershipPartner) => {
+    const changes = changesOf(p.id);
+    if (changes.length === 0) return { active: p.is_active, bp: p.profit_share_basis_points };
+    const stand = standOn(changes, today);
+    return { active: Boolean(stand?.is_active), bp: stand?.share_basis_points ?? 0 };
+  };
+  const activePartners = partners.filter(p => nowOf(p).active);
+  const activeShare = activePartners.reduce((s, p) => s + nowOf(p).bp, 0);
   const shareOk = activeShare === 10000;
   // Teamleden die je aan een vennoot kunt koppelen: actief, en nog niet aan een
   // andere vennoot gekoppeld (de database weigert dat ook).
@@ -209,30 +300,12 @@ export function OwnersPage({ data, organizationId, canWrite, onChanged, canReadH
     finally { setBusy(false); }
   };
 
-  const savePartner = async () => {
-    if (!form) return;
-    const share = parsePercent(form.share);
-    setBusy(true); setError(null); setMessage(null);
-    try {
-      if (!form.name.trim()) throw new Error('Geef de vennoot een naam.');
-      if (share === null) throw new Error('Vul het winstaandeel in als percentage tussen 0 en 100.');
-      const saved = await savePartnershipPartner(organizationId, {
-        id: form.id, name: form.name.trim(), profitShareBasisPoints: share,
-        kind: legalForm === 'cv' ? form.kind : 'beherend', isActive: form.isActive,
-      });
-      const wantedUser = form.userId || null;
-      if ((saved.user_id ?? null) !== wantedUser) await setPartnershipPartnerMember(organizationId, saved.id, wantedUser);
-      setForm(null);
-      await loadBase();
-      await loadOverview(fiscalYearId);
-      onChanged();
-      setMessage(form.id ? 'Vennoot bijgewerkt.' : 'Vennoot vastgelegd, met eigen kapitaal- en privérekeningen.');
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Opslaan mislukt');
-      // Een nieuwe vennoot kan al bestaan als alleen het koppelen misging.
-      void loadBase();
-    }
-    finally { setBusy(false); }
+  /** Na opslaan of een wijziging weghalen in het venster: alles opnieuw, want de verdeling en de perioden kunnen anders zijn. */
+  const reloadAfterPartnerChange = async (text: string | null) => {
+    await loadBase();
+    await loadOverview(fiscalYearId);
+    onChanged();
+    if (text) setMessage(text);
   };
 
   // Geen boekjaar: met één klik het rekeningschema en de boekjaren vanaf de
@@ -252,7 +325,14 @@ export function OwnersPage({ data, organizationId, canWrite, onChanged, canReadH
   const totals = owners.reduce((t, o) => ({
     begin: t.begin + o.beginCents, result: t.result + o.resultShareCents, contributions: t.contributions + o.contributionsCents,
     withdrawals: t.withdrawals + o.withdrawalsCents, other: t.other + o.otherMovementsCents, end: t.end + o.endCents,
-  }), { begin: 0, result: 0, contributions: 0, withdrawals: 0, other: 0, end: 0 });
+    toCurrent: t.toCurrent + (o.toCurrentAccountCents ?? 0),
+  }), { begin: 0, result: 0, contributions: 0, withdrawals: 0, other: 0, end: 0, toCurrent: 0 });
+  // De kolom "Naar rekening-courant" alleen als er iemand is uitgetreden: de
+  // tabel heeft op de telefoon al zeven kolommen.
+  const showToCurrent = owners.some(o => (o.toCurrentAccountCents ?? 0) !== 0);
+  // Het saldo van de rekening-courant per vennoot (een schuld aan hem of een
+  // vordering op hem), en bij een open jaar wat het na het afsluiten wordt.
+  const currentAccounts = owners.filter(o => (o.currentAccountCents ?? 0) !== 0 || (o.toCurrentAccountCents ?? 0) !== 0);
   const unassigned = overview?.unassigned ?? null;
   // De winst van een vorig jaar dat nog open staat, staat sinds 20261122100000
   // apart. Hij zat in het begin van "nog niet toegewezen", en de tekst eronder
@@ -316,8 +396,8 @@ export function OwnersPage({ data, organizationId, canWrite, onChanged, canReadH
               <div><span>Vennoten</span><strong>{activePartners.length}</strong></div>
               <div><span>Winstverdeling</span><strong className={activePartners.length > 0 && !shareOk ? 'bk-neg' : ''}>{pct(activeShare)}</strong></div>
             </div>
-            {canWrite && !form && (
-              <Button onClick={() => setForm({ ...EMPTY_FORM, share: partners.length === 0 ? '50' : '' })} disabled={busy}><Plus size={14} /> Vennoot toevoegen</Button>
+            {canWrite && (
+              <Button onClick={() => { setMessage(null); setDialog({ partnerId: null }); }} disabled={busy}><Plus size={14} /> Vennoot toevoegen</Button>
             )}
           </div>
 
@@ -338,26 +418,34 @@ export function OwnersPage({ data, organizationId, canWrite, onChanged, canReadH
                 </tr></thead>
                 <tbody>{partners.map(p => {
                   const cell = hoursCell(p, hours?.get(p.id), hoursYear, today);
+                  const now = nowOf(p);
+                  const dates = partnerDates(changesOf(p.id), today);
                   return (
-                    <tr key={p.id} className={p.is_active ? '' : 'is-reversed'}>
+                    <tr key={p.id} className={now.active ? '' : 'is-reversed'}>
                       {/* Het teamlid en de status onder de naam: als eigen kolommen
                           stonden ze op de telefoon pas na zijwaarts vegen in beeld, en
-                          dan was de naam weg. */}
+                          dan was de naam weg. Sinds 20261124120000 met de datums:
+                          "sinds 1 jan 2025", "uitgetreden per 1 jul 2026". */}
                       <td><strong>{p.name}</strong>
                         <div className="bk-muted bk-partner-member">
                           {p.user_id ? linkedLabel(p.user_id) : 'Geen teamlid gekoppeld'}
-                          {!p.is_active && <> · <span className="bk-partner-status">uitgetreden</span></>}
+                          {!dates && !now.active && <> · <span className="bk-partner-status">uitgetreden</span></>}
                         </div>
+                        {/* Op een eigen regel: achter het teamlid brak het op de telefoon midden in de woorden. */}
+                        {dates && <div className={`bk-muted bk-partner-member${now.active ? '' : ' bk-partner-status'}`}>{dates}</div>}
                       </td>
-                      <td className="bk-num">{pct(p.profit_share_basis_points)}</td>
+                      {/* Een uitgetreden vennoot heeft nu geen winstaandeel; zijn
+                          percentage van toen staat in het venster bij zijn standen. */}
+                      <td className="bk-num">{now.active ? pct(now.bp) : '—'}</td>
                       {legalForm === 'cv' && <td>{p.kind === 'commanditair' ? 'Commanditair (stil)' : 'Beherend'}</td>}
                       {showHours && <td className={`bk-partner-hours ${cell.tone}`.trim()}>{cell.text}</td>}
-                      <td className="bk-muted bk-col-wide">{[p.capital_account_id, p.withdrawals_account_id, p.contributions_account_id].map(id => accountCode.get(id) ?? '—').join(' · ')}</td>
+                      <td className="bk-muted bk-col-wide">{[p.capital_account_id, p.withdrawals_account_id, p.contributions_account_id, p.current_account_id]
+                        .filter((id): id is string => Boolean(id)).map(id => accountCode.get(id) ?? '—').join(' · ')}</td>
                       {canWrite && (
                         <td className="bk-cell-action">
                           <div className="bk-partner-actions">
                             <button type="button" className="bk-icon-btn" title={`${p.name} aanpassen`} aria-label={`${p.name} aanpassen`} disabled={busy}
-                              onClick={() => setForm({ id: p.id, name: p.name, share: String(p.profit_share_basis_points / 100).replace('.', ','), kind: p.kind, isActive: p.is_active, userId: p.user_id ?? '' })}>
+                              onClick={() => { setMessage(null); setDialog({ partnerId: p.id }); }}>
                               <Pencil size={14} /></button>
                             <button type="button" className="bk-icon-btn" title={`${p.name} verwijderen (alleen zonder boekingen)`} aria-label={`${p.name} verwijderen`} disabled={busy}
                               onClick={() => void removePartner(p)}>
@@ -379,56 +467,20 @@ export function OwnersPage({ data, organizationId, canWrite, onChanged, canReadH
             <p className="bk-neg"><AlertTriangle size={13} /> De winstverdeling van de actieve vennoten telt op tot {pct(activeShare)}. Bij de jaarafsluiting moet dat precies 100% zijn.</p>
           )}
 
-          {form && (
-            <>
-              <div className="bk-fy-new-fields">
-                <label><span>Naam</span><Input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Naam van de vennoot" /></label>
-                <label><span>Winstaandeel (%)</span><Input value={form.share} onChange={e => setForm({ ...form, share: e.target.value })} placeholder="50" /></label>
-                {legalForm === 'cv' && (
-                  <label><span>Soort</span>
-                    <Select value={form.kind} onChange={e => setForm({ ...form, kind: e.target.value as PartnershipPartner['kind'] })}>
-                      <option value="beherend">Beherend vennoot</option>
-                      <option value="commanditair">Commanditaire (stille) vennoot</option>
-                    </Select>
-                  </label>
-                )}
-                <label><span>Teamlid</span>
-                  <Select value={form.userId} onChange={e => setForm({ ...form, userId: e.target.value })}>
-                    <option value="">Niet gekoppeld</option>
-                    {form.userId && !teamMembers.some(m => m.user_id === form.userId) && (
-                      <option value={form.userId}>Teamlid (niet meer in de organisatie)</option>
-                    )}
-                    {linkableMembers(form.id).map(m => (
-                      <option key={m.user_id} value={m.user_id}>{memberName(m.user_id, teamMembers, currentUserId)}</option>
-                    ))}
-                  </Select>
-                </label>
-                {form.id && (
-                  <label><span>Status</span>
-                    <Select value={form.isActive ? 'actief' : 'uit'} onChange={e => setForm({ ...form, isActive: e.target.value === 'actief' })}>
-                      <option value="actief">Actief</option>
-                      <option value="uit">Uitgetreden</option>
-                    </Select>
-                  </label>
-                )}
-              </div>
-              <div className="bk-fy-new-actions">
-                <Button variant="primary" disabled={busy} onClick={() => void savePartner()}><Save size={14} /> Opslaan</Button>
-                <Button variant="ghost" disabled={busy} onClick={() => setForm(null)}><X size={14} /> Annuleren</Button>
-              </div>
-            </>
-          )}
-
           <p className="bk-muted">
-            Elke vennoot krijgt een eigen kapitaalrekening (050n) en privérekeningen voor opnamen (055n) en stortingen (056n). Bij de jaarafsluiting
-            gaat het resultaat volgens de verdeling van dat boekjaar naar de kapitaalrekeningen, tot op de cent sluitend, en gaat het privé van elke vennoot naar zijn kapitaal.
-            Die verdeling geldt per boekjaar: wie in de loop van een jaar toetreedt of uittreedt, of een ander percentage krijgt, verandert de jaren daarvóór niet.
+            Elke vennoot krijgt een eigen kapitaalrekening (050n), privérekeningen voor opnamen (055n) en stortingen (056n), en een rekening-courant (141n). Bij de jaarafsluiting
+            gaat het resultaat naar de kapitaalrekeningen, tot op de cent sluitend, en gaat het privé van elke vennoot naar zijn kapitaal.
+            {/* Tot 24 november 2026 stond hier dat de verdeling per boekjaar
+                geldt. Wie halverwege het jaar toetrad of uittrad, moest zijn
+                deel dan zelf uitrekenen en als bedrag vooraf vastleggen. */}
+            {' '}Elke wijziging heeft een ingangsdatum. Treedt iemand in de loop van een jaar toe of uit, of krijgt hij een ander percentage, dan valt dat jaar uiteen in perioden:
+            het resultaat van elke periode gaat naar wie toen vennoot was. Wie uittreedt, houdt geen kapitaal in de {legalFormWord(legalForm)}: bij de jaarafsluiting gaat het naar zijn rekening-courant, een schuld aan hem.
             {/* Tot 22 november 2026 stond hier "boek die als memoriaal tussen de
                 kapitaalrekeningen". Dat kwam in de kapitaalvergelijking onder
                 Overig, en niet in het winstaandeel dat elke vennoot aangeeft. */}
             {' '}Staat er in het vennootschapscontract een arbeidsbeloning of rente over het kapitaal vóór de verdeling, vul die dan in als voorafgaand bedrag in de verdeling van het boekjaar
             (Verdeling aanpassen bij de kapitaalvergelijking hieronder, of bij Boekjaren → Afsluiten). Dan telt hij mee in het winstaandeel.
-            {legalForm === 'cv' && ' Een commanditaire vennoot deelt in de winst, maar is voor de inkomstenbelasting geen ondernemer: geen ondernemersaftrek en geen urencriterium.'}
+            {legalForm === 'cv' && ' Een commanditaire vennoot deelt in de winst, maar is voor de inkomstenbelasting geen ondernemer: geen ondernemersaftrek en geen urencriterium. Verlies draagt hij niet verder dan zijn eigen vermogen; het meerdere gaat naar de beherende vennoten.'}
           </p>
           {partners.length > 0 && (
             <p className="bk-muted">
@@ -491,6 +543,27 @@ export function OwnersPage({ data, organizationId, canWrite, onChanged, canReadH
               {' '}Het staat hieronder bij "nog niet toegewezen"{yearOpen ? ' en gaat bij het afsluiten naar de resultaatrekening, bij geen enkele vennoot' : ''}.
             </p>
           )}
+          {/* Een jaar met perioden: per periode wie meedeed en wat hij kreeg
+              (20261124120000). Daaronder het totaal per vennoot. */}
+          {vofView && overview.isPartnership && (
+            <SplitPeriods overview={overview} onPartnersPage canEdit={yearOpen && canWrite && partners.length > 0} />
+          )}
+          {/* Treedt Bram per 1 juli uit en blijft Anna op 50%, dan telt de
+              tweede helft op tot 50% en weigert de jaarafsluiting. Dat zag je
+              pas bij het afsluiten; nu hier, met wat je eraan doet. */}
+          {vofView && yearOpen && (() => {
+            const problem = periodProblem(overview);
+            if (!problem) return null;
+            const when = periodLabel(problem.period.periodStart, problem.period.periodEnd);
+            return (
+              <p className="bk-note bk-split-warn" role="alert">
+                <AlertTriangle size={13} aria-hidden="true" /> {problem.period.shares.length === 0
+                  ? `Van ${when} doet geen vennoot mee, dus het resultaat van die periode kan nergens heen.`
+                  : `De verdeling van ${when} telt op tot ${pct(problem.total)}; dat moet precies 100% zijn.`}
+                {' '}Geef de vennoten per {dayLabel(problem.period.periodStart)} een percentage dat samen 100% is (het potlood bij de vennoot, met die datum), of leg met Verdeling aanpassen een verdeling voor heel {yearLabel} vast. Afsluiten kan pas daarna.
+              </p>
+            );
+          })()}
 
           <div className="bk-table-wrap"><table className="bk-table">
             <thead><tr>
@@ -500,34 +573,53 @@ export function OwnersPage({ data, organizationId, canWrite, onChanged, canReadH
               <th className="bk-num">Stortingen</th>
               <th className="bk-num">Opnamen</th>
               <th className="bk-num">Overig</th>
+              {showToCurrent && <th className="bk-num">Naar rekening-courant</th>}
               <th className="bk-num">Eind</th>
             </tr></thead>
             <tbody>
-              {owners.map(o => (
-                <tr key={o.partnerId ?? 'owner'} className={o.isActive ? '' : 'is-reversed'}>
-                  <td><strong>{o.name}</strong>
-                    {/* Het percentage van dít jaar, niet dat van nu. */}
-                    {vofView && o.partnerId && (o.inSplit === false
-                      ? <span className="bk-muted"> · doet niet mee in {yearLabel}</span>
-                      : <span className="bk-muted"> · {pct(o.shareBasisPoints)}</span>)}
-                  </td>
-                  <td className="bk-num">{euroCents(o.beginCents)}</td>
-                  <td className="bk-num">{euroCents(o.resultShareCents)}
-                    {(o.priorShareCents ?? 0) !== 0 && <div className="bk-muted bk-split-sub">waarvan vooraf {euroCents(o.priorShareCents)}</div>}
-                  </td>
-                  <td className="bk-num">{euroCents(o.contributionsCents)}</td>
-                  {/* Zonder opnamen stond er "€ -0,00". */}
-                  <td className="bk-num">{euroCents(o.withdrawalsCents ? -o.withdrawalsCents : 0)}</td>
-                  <td className="bk-num">{o.otherMovementsCents ? euroCents(o.otherMovementsCents) : '—'}</td>
-                  <td className="bk-num"><strong>{euroCents(o.endCents)}</strong></td>
-                </tr>
-              ))}
+              {owners.map(o => {
+                const joinedInYear = o.joinedOn && o.joinedOn > overview.fiscalYear.periodStart && o.joinedOn <= overview.fiscalYear.periodEnd ? o.joinedOn : null;
+                const toCurrent = o.toCurrentAccountCents ?? 0;
+                return (
+                  <tr key={o.partnerId ?? 'owner'} className={o.isActive ? '' : 'is-reversed'}>
+                    <td><strong>{o.name}</strong>
+                      {/* Het percentage van dít jaar, niet dat van nu. */}
+                      {vofView && o.partnerId && (o.inSplit === false
+                        ? <span className="bk-muted"> · doet niet mee in {yearLabel}</span>
+                        : <span className="bk-muted"> · {pct(o.shareBasisPoints)}</span>)}
+                      {/* Wie in dit jaar toe- of uittrad, met de datum: zo lees je
+                          het winstaandeel als dat van een deel van het jaar. */}
+                      {(joinedInYear || o.leftOn) && (
+                        <div className="bk-muted bk-split-sub">
+                          {[joinedInYear && `sinds ${dayLabel(joinedInYear)}`, o.leftOn && `uitgetreden per ${dayLabel(o.leftOn)}`].filter(Boolean).join(' · ')}
+                        </div>
+                      )}
+                    </td>
+                    <td className="bk-num">{euroCents(o.beginCents)}</td>
+                    <td className="bk-num">{euroCents(o.resultShareCents)}
+                      {(o.priorShareCents ?? 0) !== 0 && <div className="bk-muted bk-split-sub">waarvan vooraf {euroCents(o.priorShareCents)}</div>}
+                    </td>
+                    <td className="bk-num">{euroCents(o.contributionsCents)}</td>
+                    {/* Zonder opnamen stond er "€ -0,00". */}
+                    <td className="bk-num">{euroCents(o.withdrawalsCents ? -o.withdrawalsCents : 0)}</td>
+                    <td className="bk-num">{o.otherMovementsCents ? euroCents(o.otherMovementsCents) : '—'}</td>
+                    {/* Eraf, net als de opnamen: het eind is wat er daarna op zijn kapitaal staat. */}
+                    {showToCurrent && (
+                      <td className="bk-num">{toCurrent ? euroCents(-toCurrent) : '—'}
+                        {toCurrent !== 0 && yearOpen && <div className="bk-muted bk-split-sub">bij afsluiten</div>}
+                      </td>
+                    )}
+                    <td className="bk-num"><strong>{euroCents(o.endCents)}</strong></td>
+                  </tr>
+                );
+              })}
               {unassigned && (unassigned.beginCents !== 0 || unassigned.movementsCents !== 0 || unassignedResult !== 0 || openPrior === 0) && (
                 <tr className="bk-balance-sub">
                   <td>Nog niet aan een vennoot toegewezen</td>
                   <td className="bk-num">{euroCents(unassigned.beginCents)}</td>
                   <td className="bk-num">{unassignedResult ? euroCents(unassignedResult) : '—'}</td><td className="bk-num">—</td><td className="bk-num">—</td>
                   <td className="bk-num">{unassigned.movementsCents ? euroCents(unassigned.movementsCents) : '—'}</td>
+                  {showToCurrent && <td className="bk-num">—</td>}
                   <td className="bk-num"><strong>{euroCents(unassignedEnd)}</strong></td>
                 </tr>
               )}
@@ -538,6 +630,7 @@ export function OwnersPage({ data, organizationId, canWrite, onChanged, canReadH
                   </td>
                   <td className="bk-num">{euroCents(openPrior)}</td>
                   <td className="bk-num">—</td><td className="bk-num">—</td><td className="bk-num">—</td><td className="bk-num">—</td>
+                  {showToCurrent && <td className="bk-num">—</td>}
                   <td className="bk-num"><strong>{euroCents(openPrior)}</strong></td>
                 </tr>
               )}
@@ -550,10 +643,36 @@ export function OwnersPage({ data, organizationId, canWrite, onChanged, canReadH
                 <td className="bk-num">{euroCents(totals.contributions)}</td>
                 <td className="bk-num">{euroCents(totals.withdrawals ? -totals.withdrawals : 0)}</td>
                 <td className="bk-num">{euroCents(totals.other + (unassigned?.movementsCents ?? 0))}</td>
+                {showToCurrent && <td className="bk-num">{euroCents(-totals.toCurrent)}</td>}
                 <td className="bk-num">{euroCents(totals.end + (unassigned?.endCents ?? 0))}</td>
               </tr></tfoot>
             )}
           </table></div>
+
+          {/* De rekening-courant per vennoot (141n): een schuld van de vof aan
+              hem, of een vordering op hem. Geen eigen vermogen, dus niet in de
+              tabel hierboven; wel wat hij in zijn aangifte als vordering op de
+              vof (of schuld) opgeeft. */}
+          {vofView && currentAccounts.length > 0 && (
+            <div className="bk-rc-list">
+              <strong>Rekening-courant eind {yearLabel}</strong>
+              {currentAccounts.map(o => {
+                const now = o.currentAccountCents ?? 0;
+                const after = now + (o.toCurrentAccountCents ?? 0);
+                const code = o.currentAccountId ? accountCode.get(o.currentAccountId) : null;
+                const balance = (cents: number) => (cents > 0 ? `schuld aan ${o.name} ${euroCents(cents)}`
+                  : cents < 0 ? `vordering op ${o.name} ${euroCents(-cents)}` : 'nul, verrekend');
+                return (
+                  <p key={o.partnerId ?? o.name}>
+                    <span className="bk-muted">{o.name}{code ? ` · ${code}` : ''}:</span> {yearOpen && (o.toCurrentAccountCents ?? 0) !== 0
+                      ? <>nu {balance(now)}; na het afsluiten {balance(after)}</>
+                      : balance(now)}
+                  </p>
+                );
+              })}
+            </div>
+          )}
+          {vofView && <LossShiftNote overview={overview} />}
 
           {unassigned && (unassigned.beginCents !== 0 || unassigned.movementsCents !== 0) && (
             <p className="bk-muted">
@@ -588,6 +707,16 @@ export function OwnersPage({ data, organizationId, canWrite, onChanged, canReadH
               ? 'Elke vennoot geeft zijn eigen winstaandeel aan in zijn aangifte inkomstenbelasting en moet zelf aan het urencriterium voldoen voor de ondernemersaftrek. Boek wat een vennoot opneemt op zijn eigen privé-opnamenrekening (055n) en wat hij inbrengt op zijn privé-stortingenrekening (056n).'
               : 'Boek geld dat je voor jezelf opneemt op 0550 Privé-opnamen en geld dat je inbrengt op 0560 Privé-stortingen, ook bij de bank. Bij de jaarafsluiting gaan ze naar 0500 Eigen vermogen. Begin- en eindvermogen heb je nodig in je aangifte inkomstenbelasting; de winst volgt uit de vergelijking van die twee, plus de opnamen en min de stortingen.'}
           </p>
+          {/* Tot 24 november 2026 kon een lening alleen op privé, en verdween
+              ze bij de jaarafsluiting in het kapitaal: dan stond een schuld van
+              de vof als eigen vermogen op de balans. */}
+          {vofView && (
+            <p className="bk-muted">
+              Leent een vennoot geld aan de {legalFormWord(overview.legalForm)} of leent hij ervan, of betaal je een uitgetreden vennoot zijn kapitaal uit, boek dat dan op zijn rekening-courant (141n), niet op privé:
+              privé gaat bij de jaarafsluiting naar zijn kapitaal, de rekening-courant blijft staan als schuld of vordering. Rente op een lening van een vennoot is voor de belasting geen kost maar
+              winstverdeling: leg die vast als bedrag vooraf in de verdeling van het boekjaar (Verdeling aanpassen).
+            </p>
+          )}
         </div>
       )}
 
@@ -608,6 +737,295 @@ export function OwnersPage({ data, organizationId, canWrite, onChanged, canReadH
           onSaved={text => { setSplitOpen(false); setMessage(text); void loadOverview(fiscalYearId); }}
         />
       )}
+
+      {dialog && isPartnershipForm && (() => {
+        const partner = dialog.partnerId ? partners.find(p => p.id === dialog.partnerId) ?? null : null;
+        // Een vennoot die intussen is verwijderd: niets om te tonen.
+        if (dialog.partnerId && !partner) return null;
+        return (
+          <PartnerDialog
+            key={dialog.partnerId ?? 'nieuw'}
+            organizationId={organizationId}
+            legalForm={legalForm}
+            partner={partner}
+            partners={partners}
+            changes={partner ? changesOf(partner.id) : []}
+            years={years}
+            memberOptions={linkableMembers(partner?.id ?? null)}
+            teamMembers={teamMembers}
+            currentUserId={currentUserId}
+            bookkeepingStart={bookkeepingStart}
+            today={today}
+            canWrite={canWrite}
+            onClose={() => setDialog(null)}
+            onSaved={async text => { setDialog(null); await reloadAfterPartnerChange(text); }}
+            onChangesChanged={text => reloadAfterPartnerChange(text)}
+            onFailed={() => void loadBase()}
+          />
+        );
+      })()}
+    </div>
+  );
+}
+
+/**
+ * Het venster van een vennoot: naam, winstaandeel, soort, teamlid, of hij
+ * vennoot is, en sinds 20261124120000 de ingangsdatum en zijn standen.
+ *
+ * Waarom een datum: een vennoot had alleen "actief" of "uitgetreden" en één
+ * percentage. Wie halverwege het jaar uittrad, kreeg zo over het hele jaar
+ * niets (of alles), en zijn deel moest je zelf uitrekenen en als bedrag vooraf
+ * vastleggen. Nu is elke wijziging een stand met de eerste dag waarop hij
+ * geldt, en splitst de jaarafsluiting het jaar daarop.
+ *
+ * Tot 24 november 2026 stond dit formulier onder de tabel; met de standen en
+ * de uitleg bij de datum werd het een eigen venster (met de terugknop dicht).
+ */
+function PartnerDialog({ organizationId, legalForm, partner, partners, changes, years, memberOptions, teamMembers, currentUserId, bookkeepingStart, today, canWrite, onClose, onSaved, onChangesChanged, onFailed }: {
+  organizationId: string;
+  legalForm: string;
+  /** null: een nieuwe vennoot. */
+  partner: PartnershipPartner | null;
+  partners: PartnershipPartner[];
+  /** Zijn standen, oudste eerst. */
+  changes: PartnershipPartnerChange[];
+  years: FiscalYearListRow[];
+  /** Teamleden die je aan deze vennoot kunt koppelen. */
+  memberOptions: OrganizationMember[];
+  teamMembers: OrganizationMember[];
+  currentUserId: UUID | null;
+  bookkeepingStart: string | null;
+  today: string;
+  canWrite: boolean;
+  onClose: () => void;
+  onSaved: (message: string) => Promise<void>;
+  /** Een stand is weggehaald: laad opnieuw, het venster blijft open. */
+  onChangesChanged: (message: string) => Promise<void>;
+  /** Opslaan mislukte half (een nieuwe vennoot, maar het koppelen niet): laad de lijst opnieuw. */
+  onFailed: () => void;
+}) {
+  // De terugknop van de telefoon sluit het venster, zoals Annuleren.
+  useBackStep(true, onClose);
+  const cv = legalForm === 'cv';
+  const [form, setForm] = useState<PartnerForm>(() => (partner
+    ? { name: partner.name, share: bpToField(partner.profit_share_basis_points), kind: partner.kind, isActive: partner.is_active, userId: partner.user_id ?? '', date: '' }
+    : { name: '', share: partners.length === 0 ? '50' : '', kind: 'beherend', isActive: true, userId: '', date: '' }));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // Vult het venster de datum zelf in (vandaag, bij uittreden), dan haalt het
+  // hem ook weer weg als je terugzet naar Actief.
+  const [autoDate, setAutoDate] = useState(false);
+
+  // Na het weghalen van een stand staat de vennoot op een andere stand: het
+  // formulier volgt, anders sloeg Opslaan de oude stand weer op.
+  const standKey = partner ? `${partner.profit_share_basis_points}|${partner.kind}|${partner.is_active}` : '';
+  const [shownStand, setShownStand] = useState(standKey);
+  if (partner && standKey !== shownStand) {
+    setShownStand(standKey);
+    setForm(f => ({ ...f, share: bpToField(partner.profit_share_basis_points), kind: partner.kind, isActive: partner.is_active, date: '' }));
+    setAutoDate(false);
+  }
+
+  const shareBp = parsePercent(form.share);
+  const kind: PartnershipPartner['kind'] = cv ? form.kind : 'beherend';
+  const who = form.name.trim() || partner?.name || 'de vennoot';
+  // Wat deze wijziging is, ten opzichte van zijn laatste stand (zo vergelijkt
+  // save_partnership_partner zonder datum ook).
+  const action: 'nieuw' | 'uittreden' | 'terug' | 'wijziging' | 'geen' = !partner ? 'nieuw'
+    : partner.is_active && !form.isActive ? 'uittreden'
+    : !partner.is_active && form.isActive ? 'terug'
+    : (shareBp !== null && shareBp !== partner.profit_share_basis_points) || kind !== partner.kind ? 'wijziging'
+    : 'geen';
+  const dateLabel = { nieuw: 'Vennoot sinds', uittreden: 'Uitgetreden per', terug: 'Weer vennoot per', wijziging: 'Met ingang van', geen: 'Met ingang van' }[action];
+
+  // De eerste vennoten (allemaal vandaag vastgelegd) zijn er zonder datum
+  // vanaf het begin van de boekhouding; een latere vanaf vandaag. Zo rekent
+  // save_partnership_partner het ook.
+  const firstPartners = partners.every(p => !p.created_at || amsterdamDay(p.created_at) >= today);
+  const startDay = [today, bookkeepingStart, ...years.map(y => y.period_start)]
+    .filter((d): d is string => Boolean(d)).reduce((min, d) => (d < min ? d : min), today);
+
+  // De dag waarop de nieuwe stand ingaat, als die er komt.
+  const effective = form.date || (action === 'uittreden' || action === 'terug' ? today : null);
+  const lastClosed = years.filter(y => y.status === 'closed').reduce<FiscalYearListRow | null>((last, y) => (!last || y.period_end > last.period_end ? y : last), null);
+  // Op of vóór het einde van het laatste afgesloten jaar verandert de tijdlijn
+  // niet meer, net als in save_partnership_partner: een stand van eerder loopt
+  // door dat jaar heen. Eerst blokkeerde alleen een datum ín een afgesloten jaar.
+  const closedYearOf = (day: string) => (lastClosed && day <= lastClosed.period_end ? lastClosed : null);
+  const closedYear = effective && action !== 'geen' ? closedYearOf(effective) : null;
+  const maxDate = addDays(today, 366);
+  // Een correctie zonder datum: ligt zijn laatste stand in of vóór het laatste
+  // afgesloten boekjaar, dan wordt het een nieuwe stand vanaf de dag na dat
+  // jaar (save_partnership_partner). Eerst corrigeerde hij de stand zelf, en
+  // veranderde zo stil de verdeling van een jaar dat al geboekt was.
+  const latestStand = changes.length > 0 ? changes[changes.length - 1] : null;
+  const correctionFrom = lastClosed && latestStand && latestStand.valid_from <= lastClosed.period_end
+    ? { from: addDays(lastClosed.period_end, 1), label: lastClosed.label }
+    : null;
+
+  const hint = (() => {
+    if (action === 'nieuw') {
+      if (form.date) return `${who} doet mee in de verdeling vanaf ${dayLabel(form.date)}.`;
+      return firstPartners
+        ? `Leeg: vanaf het begin van je boekhouding (${dayLabel(startDay)}).`
+        : `Leeg: vanaf vandaag (${dayLabel(today)}).`;
+    }
+    if (!form.date) {
+      if (action === 'uittreden' || action === 'terug') return `Leeg: per vandaag (${dayLabel(today)}).`;
+      if (action === 'wijziging') {
+        const what = shareBp !== null && shareBp !== partner?.profit_share_basis_points
+          ? `${pct(partner?.profit_share_basis_points)} wordt ${pct(shareBp)}`
+          : `${kindWord(partner?.kind ?? 'beherend')} wordt ${kindWord(kind)}`;
+        // Een correctie raakt geen afgesloten jaar: ligt de stand van nu daarin
+        // of ervoor, dan maakt de database een stand vanaf de dag erna.
+        if (correctionFrom) {
+          return `Leeg: ${what} vanaf ${dayLabel(correctionFrom.from)}. Boekjaar ${correctionFrom.label} is afgesloten en blijft zoals het is. Geldt het pas later, vul die dag dan in.`;
+        }
+        return `Leeg: een correctie van wat er nu staat (${what}), zonder nieuwe periode. Geldt het pas vanaf een bepaalde dag, vul die dan in.`;
+      }
+      return correctionFrom
+        ? `Wijzig je het winstaandeel of de soort, dan geldt dat vanaf deze datum. Leeg: vanaf ${dayLabel(correctionFrom.from)}, want ${correctionFrom.label} is afgesloten.`
+        : 'Wijzig je het winstaandeel of de soort, dan geldt dat vanaf deze datum. Leeg is een correctie van wat er nu staat.';
+    }
+    const before = standOn(changes, form.date);
+    if (!before) return `${who} is dan vennoot vanaf ${dayLabel(form.date)}.`;
+    if (before.is_active && !form.isActive) {
+      return `De eerste dag dat ${who} geen vennoot meer is: zijn winstaandeel loopt tot en met ${dayLabel(addDays(form.date, -1))}. Bij de jaarafsluiting gaat zijn kapitaal naar zijn rekening-courant, een schuld aan hem.`;
+    }
+    if (!before.is_active && form.isActive) return `De eerste dag dat ${who} weer meedoet in de verdeling.`;
+    if (shareBp !== null && before.share_basis_points !== shareBp) {
+      return `Tot en met ${dayLabel(addDays(form.date, -1))} ${pct(before.share_basis_points)}, vanaf ${dayLabel(form.date)} ${pct(shareBp)}.`;
+    }
+    if (before.kind !== kind) return `Vanaf ${dayLabel(form.date)} is ${who} ${kindWord(kind)} vennoot.`;
+    return `Op ${dayLabel(form.date)} stond het al zo: er verandert niets.`;
+  })();
+
+  const setStatus = (active: boolean) => {
+    if (!partner) return;
+    // Uittreden heeft altijd een datum; standaard vandaag.
+    if (partner.is_active && !active && !form.date) { setForm({ ...form, isActive: active, date: today }); setAutoDate(true); return; }
+    if (active === partner.is_active && autoDate) { setForm({ ...form, isActive: active, date: '' }); setAutoDate(false); return; }
+    setForm({ ...form, isActive: active });
+  };
+
+  async function save() {
+    setBusy(true); setError(null);
+    try {
+      if (!form.name.trim()) throw new Error('Geef de vennoot een naam.');
+      if (shareBp === null) throw new Error('Vul het winstaandeel in als percentage tussen 0 en 100.');
+      const saved = await savePartnershipPartner(organizationId, {
+        id: partner?.id ?? null, name: form.name.trim(), profitShareBasisPoints: shareBp, kind, isActive: form.isActive,
+        effectiveDate: form.date || null,
+      });
+      const wantedUser = form.userId || null;
+      if ((saved.user_id ?? null) !== wantedUser) await setPartnershipPartnerMember(organizationId, saved.id, wantedUser);
+      const name = form.name.trim();
+      const text = action === 'nieuw' ? `${name} is vastgelegd, met eigen kapitaal-, privé- en rekening-courantrekeningen.`
+        : action === 'uittreden' ? `${name} is uitgetreden per ${dayLabel(effective ?? today)}. Geef de vennoten die blijven per die dag een percentage dat samen 100% is.`
+        : action === 'terug' ? `${name} is weer vennoot per ${dayLabel(effective ?? today)}.`
+        : action === 'wijziging' ? ((form.date || correctionFrom?.from)
+          ? `${name}: ${pct(shareBp)}${cv ? `, ${kindWord(kind)}` : ''} vanaf ${dayLabel(form.date || correctionFrom?.from || today)}.`
+          : `${name}: gecorrigeerd naar ${pct(shareBp)}${cv ? `, ${kindWord(kind)}` : ''}.`)
+        : 'Vennoot bijgewerkt.';
+      await onSaved(text);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Opslaan mislukt');
+      // Een nieuwe vennoot kan al bestaan als alleen het koppelen misging.
+      onFailed();
+    } finally { setBusy(false); }
+  }
+
+  async function removeChange(change: PartnershipPartnerChange, previous: PartnershipPartnerChange | null) {
+    const back = previous ? changeLabel(previous, null, cv).replace(/^sinds [^:]+: /, '') : '';
+    if (!confirm(`De wijziging "${changeLabel(change, previous, cv)}" weghalen? Dan geldt ${previous?.is_active ? `weer ${back}` : 'weer de stand ervoor'}.`)) return;
+    setBusy(true); setError(null);
+    try {
+      await deletePartnershipPartnerChange(organizationId, change.id);
+      await onChangesChanged(`De wijziging van ${dayLabel(change.valid_from)} is weggehaald.`);
+    } catch (e) { setError(e instanceof Error ? e.message : 'Weghalen mislukt'); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <div className="bk-modal-backdrop" onClick={onClose}>
+      <div className="bk-modal bk-modal-split bk-partner-dialog" role="dialog" aria-label={partner ? `${partner.name} aanpassen` : 'Vennoot toevoegen'} onClick={e => e.stopPropagation()}>
+        <h3>{partner ? `${partner.name} aanpassen` : 'Vennoot toevoegen'}</h3>
+        <div className="bk-modal-body">
+          <div className="bk-fy-new-fields">
+            <label><span>Naam</span><Input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Naam van de vennoot" /></label>
+            <label><span>Winstaandeel (%)</span><Input inputMode="decimal" value={form.share} onChange={e => setForm({ ...form, share: e.target.value })} placeholder="50" /></label>
+            {cv && (
+              <label><span>Soort</span>
+                <Select aria-label="Soort" value={form.kind} onChange={e => setForm({ ...form, kind: e.target.value as PartnershipPartner['kind'] })}>
+                  <option value="beherend">Beherend vennoot</option>
+                  <option value="commanditair">Commanditaire (stille) vennoot</option>
+                </Select>
+              </label>
+            )}
+            <label><span>Teamlid</span>
+              <Select aria-label="Teamlid" value={form.userId} onChange={e => setForm({ ...form, userId: e.target.value })}>
+                <option value="">Niet gekoppeld</option>
+                {form.userId && !teamMembers.some(m => m.user_id === form.userId) && (
+                  <option value={form.userId}>Teamlid (niet meer in de organisatie)</option>
+                )}
+                {memberOptions.map(m => (
+                  <option key={m.user_id} value={m.user_id}>{memberName(m.user_id, teamMembers, currentUserId)}</option>
+                ))}
+              </Select>
+            </label>
+            {partner && (
+              <label><span>Status</span>
+                <Select aria-label="Status" value={form.isActive ? 'actief' : 'uit'} onChange={e => setStatus(e.target.value === 'actief')}>
+                  <option value="actief">Vennoot</option>
+                  <option value="uit">Uitgetreden</option>
+                </Select>
+              </label>
+            )}
+            <label className="bk-partner-date"><span>{dateLabel}</span>
+              <Input type="date" value={form.date} max={maxDate} aria-describedby="bk-partner-date-hint"
+                onChange={e => { setForm({ ...form, date: e.target.value }); setAutoDate(false); }} />
+            </label>
+          </div>
+          <p id="bk-partner-date-hint" className="bk-muted bk-partner-date-hint">{hint}</p>
+          {closedYear && (
+            <p className="bk-neg"><AlertTriangle size={13} aria-hidden="true" /> Boekjaar {closedYear.label} is afgesloten, met de verdeling die toen gold.
+              {' '}Kies een datum na {dayLabel(closedYear.period_end)}, of heropen {closedYear.label} eerst bij Boekjaren.</p>
+          )}
+
+          {partner && changes.length > 0 && (
+            <div className="bk-partner-timeline">
+              <span className="bk-partner-timeline-head">Standen</span>
+              <ul>
+                {changes.map((change, i) => {
+                  const previous = i > 0 ? changes[i - 1] : null;
+                  const closed = closedYearOf(change.valid_from);
+                  return (
+                    <li key={change.id} className={change.valid_from > today ? 'is-future' : ''}>
+                      <span>{changeLabel(change, previous, cv)}{change.valid_from > today && <span className="bk-muted"> · nog niet ingegaan</span>}</span>
+                      {/* De eerste stand haal je niet weg: dan was hij nooit vennoot. */}
+                      {i > 0 && canWrite && (
+                        <button type="button" className="bk-icon-btn" disabled={busy || Boolean(closed)}
+                          title={closed ? `Valt in boekjaar ${closed.label}, en dat is afgesloten` : 'Deze wijziging weghalen'}
+                          aria-label={`Wijziging van ${dayLabel(change.valid_from)} weghalen`}
+                          onClick={() => void removeChange(change, previous)}>
+                          <Trash2 size={14} /></button>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+              {changes.length > 1 && <p className="bk-muted">Een verkeerde wijziging haal je weg met de prullenbak; dan geldt de stand ervoor weer.</p>}
+            </div>
+          )}
+          {error && <div className="error bk-modal-error">{error}</div>}
+        </div>
+        <div className="bk-modal-actions">
+          <Button variant="ghost" disabled={busy} onClick={onClose}><X size={14} /> Annuleren</Button>
+          <Button variant="primary" disabled={busy || Boolean(closedYear)} title={closedYear ? `Boekjaar ${closedYear.label} is afgesloten` : undefined} onClick={() => void save()}>
+            <Save size={14} /> {busy ? 'Bezig…' : 'Opslaan'}
+          </Button>
+        </div>
+      </div>
     </div>
   );
 }

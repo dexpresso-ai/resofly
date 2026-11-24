@@ -12,7 +12,7 @@ import { readFileSync } from 'node:fs';
 import {
   IB_DISCLAIMER, IB_RULES, applyRate, bracketTax, buildIncomeTaxOverview, defaultIncomeTaxProfile, estimatePerson,
   euroText, formatRate, incomeTaxRulesFor, kiaForInvestments, mixedCostsAddBack, phaseOutCredit, premiumMonths, projectYearResult,
-  projectMinutesFromFirstEntry, splitByShares, splitWithPrior, tableCredit, type IbPersonInput, type IncomeTaxInputs,
+  projectMinutesFromFirstEntry, splitByShares, splitWithPrior, splitYearResult, type IbSplitSpec, tableCredit, type IbPersonInput, type IncomeTaxInputs,
 } from './inkomstenbelasting.ts';
 import { projectHourCriterion } from './hourCriterion.ts';
 import * as server from '../../supabase/functions/_shared/inkomstenbelasting.ts';
@@ -931,4 +931,76 @@ test('urencriterium in de prognose: het tempo vanaf de eerste uren, zoals de tel
   assert.equal(overview?.persons[0].profile.meetsHoursCriterion, true);
   // Zonder uren blijft het wat er staat.
   assert.equal(projectMinutesFromFirstEntry(0, null, '2026-11-22', 2026), 0);
+});
+
+// ── Perioden en de verliesgrens (20261124120000) ───────────────────────────
+
+const periode = (start: string, end: string, resultCents: number, shares: Array<[string, number, number, ('beherend' | 'commanditair')?, number?]>) => ({
+  start, end, resultCents,
+  shares: shares.map(([partnerId, basisPoints, partnerNumber, kind = 'beherend', priorCents = 0]) => ({ partnerId, basisPoints, partnerNumber, kind, priorCents })),
+});
+
+test('perioden: wie per 1 juli toetreedt, deelt alleen in de winst van daarna', () => {
+  // Eerste helft € 60.000 (Anna en Bram 50/50), tweede helft € 30.000 (Anna 40, Bram 30, Chris 30).
+  const spec: IbSplitSpec = { mode: 'automatisch', targetPeriod: 1, lossCaps: {}, periods: [
+    periode('2026-01-01', '2026-06-30', E(60_000), [['a', 5000, 1], ['b', 5000, 2]]),
+    periode('2026-07-01', '2026-12-31', E(30_000), [['a', 4000, 1], ['b', 3000, 2], ['c', 3000, 3]]),
+  ] };
+  const r = splitYearResult(spec, E(90_000));
+  assert.deepEqual([...r.shares], [['a', E(42_000)], ['b', E(39_000)], ['c', E(9_000)]]);
+  assert.equal(r.undistributedCents, 0);
+  // Een prognose: het verschil met de boekingen komt in de periode van vandaag (de tweede).
+  const p = splitYearResult(spec, E(100_000));
+  assert.deepEqual([...p.shares], [['a', E(46_000)], ['b', E(42_000)], ['c', E(12_000)]]);
+  // Een restcent per periode, zoals splitByShares.
+  const odd = splitYearResult({ ...spec, periods: [
+    periode('2026-01-01', '2026-06-30', 101, [['a', 5000, 1], ['b', 5000, 2]]),
+    periode('2026-07-01', '2026-12-31', 101, [['a', 5000, 1], ['b', 5000, 2]]),
+  ] }, 202);
+  assert.deepEqual([...odd.shares], [['a', 102], ['b', 100]]);
+});
+
+test('perioden: een periode zonder vennoot en een periode die niet op 100% uitkomt', () => {
+  const r = splitYearResult({ mode: 'automatisch', targetPeriod: 0, lossCaps: {}, periods: [
+    periode('2026-01-01', '2026-03-31', E(1_000), [['a', 6000, 1], ['b', 3000, 2]]),
+    periode('2026-04-01', '2026-12-31', E(5_000), []),
+  ] }, E(6_000));
+  assert.equal(r.undistributedCents, E(5_000));
+  assert.deepEqual(r.incompletePeriods, [{ start: '2026-01-01', end: '2026-03-31', basisPoints: 9000 }]);
+});
+
+test('verliesgrens: een commanditaire vennoot draagt niet meer dan zijn inbreng', () => {
+  // Cv: Anna beherend 50%, Bram beherend 20%, Kees commanditair 30% met € 1.000 eigen vermogen.
+  // Verlies € 10.000,01: Kees zou € 3.000,00 dragen, maar draagt € 1.000; het meerdere (€ 2.000,00)
+  // gaat 50:20 naar Anna en Bram.
+  const spec: IbSplitSpec = { mode: 'automatisch', targetPeriod: 0, lossCaps: { k: E(1_000) }, periods: [
+    periode('2026-01-01', '2026-12-31', -1_000_001, [['a', 5000, 1], ['b', 2000, 2], ['k', 3000, 3, 'commanditair']]),
+  ] };
+  const r = splitYearResult(spec, -1_000_001);
+  assert.deepEqual([...r.shares], [['a', -642_858], ['b', -257_143], ['k', -100_000]]);
+  assert.equal([...r.shares.values()].reduce((s, v) => s + v, 0), -1_000_001, 'de som blijft het verlies');
+  assert.deepEqual([...r.lossShift], [['k', 200_000], ['a', -142_857], ['b', -57_143]]);
+  // Zonder eigen vermogen draagt hij niets; bij winst geldt geen grens.
+  assert.equal(splitYearResult({ ...spec, lossCaps: { k: 0 } }, -1_000_001).shares.get('k'), 0);
+  assert.equal(splitYearResult(spec, E(10_000)).shares.get('k'), E(3_000));
+  // Zonder beherende vennoot is er niemand die het overneemt: geen grens.
+  const alleen = splitYearResult({ ...spec, periods: [periode('2026-01-01', '2026-12-31', -E(500), [['k', 10000, 1, 'commanditair']])] }, -E(500));
+  assert.equal(alleen.shares.get('k'), -E(500));
+});
+
+test('de raming rekent met de perioden: Chris krijgt alleen de tweede helft', () => {
+  const overview = buildIncomeTaxOverview(inputs({
+    legalForm: 'vof', isPartnershipForm: true, resultCents: E(90_000),
+    partners: [
+      { id: 'a', name: 'Anna', partnerNumber: 1, kind: 'beherend', isActive: true, shareBasisPoints: 4000 },
+      { id: 'b', name: 'Bram', partnerNumber: 2, kind: 'beherend', isActive: true, shareBasisPoints: 3000 },
+      { id: 'c', name: 'Chris', partnerNumber: 3, kind: 'beherend', isActive: true, shareBasisPoints: 3000 },
+    ],
+    partnerSplit: { mode: 'automatisch', targetPeriod: 1, lossCaps: {}, periods: [
+      periode('2026-01-01', '2026-06-30', E(60_000), [['a', 5000, 1], ['b', 5000, 2]]),
+      periode('2026-07-01', '2026-12-31', E(30_000), [['a', 4000, 1], ['b', 3000, 2], ['c', 3000, 3]]),
+    ] },
+  }), { basis: 'geboekt', today: TODAY });
+  assert.deepEqual(overview?.persons.map(p => [p.name, p.estimate.profitShareCents]), [['Anna', E(42_000)], ['Bram', E(39_000)], ['Chris', E(9_000)]]);
+  assert.deepEqual(overview?.warnings.filter(w => /telt op tot/.test(w)), []);
 });

@@ -270,21 +270,24 @@ select pg_temp.gelijk(pg_temp.saldo(:'org', '0551'), 0::bigint, 'verlies 2025: p
 select pg_temp.als(:'eigenaar');
 set local role authenticated;
 select (public.reopen_fiscal_year(:'org', :'fy2025')).status as heropend \gset
-select (public.save_partnership_partner(:'org', :'anna', 'Anna', 6000, 'beherend', false)).id is not null as ok \gset
-select (public.save_partnership_partner(:'org', :'bram', 'Bram', 4000, 'beherend', false)).id is not null as ok \gset
--- Sinds 20261122100000 ligt de verdeling van 2025 vast bij het afsluiten.
--- Opnieuw afsluiten gebruikt die weer, ook nu Anna en Bram zijn uitgetreden:
--- de winst van 2025 was van hen. Eerder ging hij hier naar 0510.
+-- Sinds 20261124120000 heeft uittreden een datum. Uittreden per vandaag raakt
+-- 2025 niet: de winst van 2025 was van Anna en Bram. Eerder ging hij hier
+-- naar 0510, en daarna (20261122100000) alleen via de vastgelegde verdeling.
+select (public.save_partnership_partner(:'org', :'anna', 'Anna', 6000, 'beherend', false, current_date)).id is not null as ok \gset
+select (public.save_partnership_partner(:'org', :'bram', 'Bram', 4000, 'beherend', false, current_date)).id is not null as ok \gset
 select (public.close_fiscal_year(:'org', :'fy2025')).status as fy2025_status \gset
 reset role;
 select pg_temp.beheer();
-select pg_temp.gelijk(pg_temp.saldo(:'org', '0501'), -615000::bigint, 'opnieuw afsluiten: Anna draagt weer € 180,01, ook na haar uittreden');
-select pg_temp.gelijk(pg_temp.saldo(:'org', '0502'), -333000::bigint, 'opnieuw afsluiten: Bram draagt weer € 120,00');
-select pg_temp.gelijk(pg_temp.saldo(:'org', '0510'), 0::bigint, 'opnieuw afsluiten: niets naar 0510');
+select pg_temp.gelijk(pg_temp.saldo(:'org', '0501'), -615000::bigint, 'uittreden per vandaag: Anna draagt in 2025 weer € 180,01');
+select pg_temp.gelijk(pg_temp.saldo(:'org', '0502'), -333000::bigint, 'uittreden per vandaag: Bram draagt in 2025 weer € 120,00');
+select pg_temp.gelijk(pg_temp.saldo(:'org', '0510'), 0::bigint, 'uittreden per vandaag: niets naar 0510');
+select pg_temp.gelijk(pg_temp.saldo(:'org', '1411'), 0::bigint, 'uittreden per vandaag: in 2025 nog geen rekening-courant');
 select pg_temp.als(:'eigenaar');
 set local role authenticated;
 select (public.reopen_fiscal_year(:'org', :'fy2025')).status as heropend \gset
--- Zonder vastgelegde verdeling geldt die van de actieve vennoten: geen.
+-- Uitgetreden per 1 januari 2025: in 2025 doet niemand mee.
+select (public.save_partnership_partner(:'org', :'anna', 'Anna', 6000, 'beherend', false, '2025-01-01')).id is not null as ok \gset
+select (public.save_partnership_partner(:'org', :'bram', 'Bram', 4000, 'beherend', false, '2025-01-01')).id is not null as ok \gset
 select public.set_fiscal_year_partner_shares(:'org', :'fy2025', '[]'::jsonb) = '[]'::jsonb as ok \gset
 select (public.close_fiscal_year(:'org', :'fy2025')).status as fy2025_status \gset
 select public.owners_equity_overview(:'org', :'fy2025') as ov2025_zonder \gset
@@ -292,12 +295,17 @@ reset role;
 select pg_temp.beheer();
 select pg_temp.gelijk(pg_temp.saldo(:'org', '0510'), 30001::bigint, 'zonder actieve vennoot: het verlies gaat naar 0510');
 select pg_temp.gelijk(pg_temp.saldo(:'org', '0551'), 0::bigint, 'zonder actieve vennoot: het privé van Anna staat niet meer open');
-select pg_temp.gelijk(pg_temp.saldo(:'org', '0501'), -633001::bigint, 'zonder actieve vennoot: de opname van € 70 gaat naar het kapitaal van Anna');
+-- Sinds 20261124120000 gaat het kapitaal van wie aan het eind van het jaar
+-- geen vennoot meer is, naar zijn rekening-courant: een schuld aan hem.
+select pg_temp.gelijk(pg_temp.saldo(:'org', '0501'), 0::bigint, 'zonder actieve vennoot: het kapitaal van Anna staat niet meer op 0501');
+select pg_temp.gelijk(pg_temp.saldo(:'org', '1411'), -633001::bigint, 'zonder actieve vennoot: het kapitaal van Anna (na haar opname van € 70) is een schuld aan haar op 1411');
 select pg_temp.gelijk((select result_account_code from public.fiscal_years where id = :'fy2025'), '0510', 'boekjaar 2025: resultaat naar 0510');
 -- Sinds 20261122100000 blijven de vennoten in beeld (eerder: één "Ondernemer"
 -- met het kapitaal van iedereen), en het resultaat staat apart als niet verdeeld.
 select pg_temp.gelijk((pg_temp.eigenaar(:'ov2025_zonder'::jsonb, 1) ->> 'withdrawalsCents')::bigint, 7000::bigint, 'zonder actieve vennoot: de opname van Anna telt bij Anna als opname');
 select pg_temp.gelijk((pg_temp.eigenaar(:'ov2025_zonder'::jsonb, 1) ->> 'otherMovementsCents')::bigint, 0::bigint, 'zonder actieve vennoot: en niet als overig');
+select pg_temp.gelijk((pg_temp.eigenaar(:'ov2025_zonder'::jsonb, 1) ->> 'toCurrentAccountCents')::bigint, 633001::bigint, 'zonder actieve vennoot: Vennoten toont wat er naar de rekening-courant ging');
+select pg_temp.gelijk((pg_temp.eigenaar(:'ov2025_zonder'::jsonb, 1) ->> 'endCents')::bigint, 0::bigint, 'zonder actieve vennoot: en Anna eindigt op nul');
 select pg_temp.gelijk((pg_temp.eigenaar(:'ov2025_zonder'::jsonb, 1) ->> 'resultShareCents')::bigint, 0::bigint, 'zonder actieve vennoot: Anna krijgt geen winstaandeel');
 select pg_temp.gelijk((:'ov2025_zonder'::jsonb -> 'unassigned' ->> 'resultCents')::bigint, -30001::bigint, 'zonder actieve vennoot: het verlies staat als niet verdeeld');
 select pg_temp.gelijk(:'ov2025_zonder'::jsonb ->> 'isPartnership', 'false', 'zonder actieve vennoot: er wordt niet verdeeld');
@@ -307,8 +315,9 @@ select pg_temp.gelijk(:'ov2025_zonder'::jsonb ->> 'isPartnership', 'false', 'zon
 select pg_temp.als(:'eigenaar');
 set local role authenticated;
 select (public.reopen_fiscal_year(:'org', :'fy2025')).status as heropend \gset
-select (public.save_partnership_partner(:'org', :'anna', 'Anna', 6000, 'beherend', true)).id is not null as ok \gset
-select (public.save_partnership_partner(:'org', :'bram', 'Bram', 4000, 'beherend', true)).id is not null as ok \gset
+-- Weer vennoot vanaf 1 januari 2025: de uittreding hierboven was een vergissing.
+select (public.save_partnership_partner(:'org', :'anna', 'Anna', 6000, 'beherend', true, '2025-01-01')).id is not null as ok \gset
+select (public.save_partnership_partner(:'org', :'bram', 'Bram', 4000, 'beherend', true, '2025-01-01')).id is not null as ok \gset
 reset role;
 select pg_temp.beheer();
 update public.company_settings set legal_form = 'eenmanszaak' where organization_id = :'org';

@@ -368,11 +368,15 @@ test('cumulatieve afschrijving gaat naar 0150, ook afgekort, en niet naar het ac
 // Privé-stortingen (geen vennoot), en ging bij de jaarafsluiting naar 0500.
 test('een rekening-courant met een vennoot wordt geen privé, ook niet op nummer', () => {
   const propose = (code: string, name: string) => proposeAccount({ code, name }, vofAnnaJan);
-  for (const [code, name] of [['0560', 'Rekening-courant vennoot Van Dam'], ['0550', 'R/C Jansen'], ['0552', 'Rekening courant Jan van Dam'], ['0500', 'RC vennoten']] as const) {
+  // Een administratie zonder rekening-courant per vennoot (van vóór 20261124120000).
+  for (const [code, name] of [['0560', 'Rekening-courant vennoot Van Dam'], ['0550', 'R/C Jansen'], ['0552', 'Rekening courant Jan van Dam']] as const) {
     const p = propose(code, name);
     assert.equal(p.targetId, null, `${code} ${name}`);
-    assert.match(p.reason ?? '', /schuld of vordering, geen privé/);
+    assert.match(p.reason ?? '', /geen rekening voor rekening-courant/);
   }
+  const zonderNaam = propose('0500', 'RC vennoten');
+  assert.equal(zonderNaam.targetId, null);
+  assert.match(zonderNaam.reason ?? '', /schuld of vordering, geen privé/);
   // Noemt de naam een vennoot, dan ook niet op nummer naar 0550 of 0560 (geen vennoot).
   assert.match(propose('0550', 'Privé Jansen').reason ?? '', /noemt een vennoot.*0550 Privé-opnamen \(geen vennoot\) is van geen enkele vennoot/);
   // Gewoon privé blijft gewoon privé.
@@ -492,4 +496,22 @@ test('wat geen auditfile van versie 3 is, krijgt een duidelijke melding', () => 
   assert.throws(() => parseXaf('<?xml version="1.0"?><auditfile><header><auditfileVersion>CLAIR2.00.00</auditfileVersion></header></auditfile>'), /versie 2/);
   assert.throws(() => parseXaf('<?xml version="1.0"?><factuur><nr>1</nr></factuur>'), /geen auditfile/);
   assert.throws(() => parseXaf('<auditfile><header><fiscalYear>2025</fiscalYear></header>'), /niet gesloten/);
+});
+
+// Sinds 20261124120000 heeft elke vennoot een rekening-courant (141n).
+test('een rekening-courant met een vennoot gaat naar zijn rekening-courant', () => {
+  const metRc: TargetAccount[] = [
+    ...vofAnnaJan,
+    { id: 'a1411', code: '1411', name: 'Rekening-courant Anna Jansen', type: 'liability', subtype: 'partner_current_account' },
+    { id: 'a1412', code: '1412', name: 'Rekening-courant Jan van Dam', type: 'liability', subtype: 'partner_current_account' },
+  ];
+  const propose = (code: string, name: string) => proposeAccount({ code, name }, metRc);
+  assert.equal(propose('0560', 'Rekening-courant vennoot Van Dam').targetId, 'a1412');
+  assert.equal(propose('1700', 'R/C Jansen').targetId, 'a1411');
+  assert.equal(propose('1710', 'Rekening courant A. Jansen').targetId, 'a1411');
+  // Iemand die niet in ResoFly staat, of geen naam: geen voorstel.
+  assert.equal(propose('1720', 'Rekening-courant L. van Leeuwen').targetId, null);
+  assert.match(propose('0500', 'RC vennoten').reason ?? '', /schuld of vordering, geen privé/);
+  // Het kapitaal blijft het kapitaal.
+  assert.equal(propose('0600', 'Kapitaal vennoot J. van Dam').targetId, 'a0502');
 });

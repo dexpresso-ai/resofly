@@ -63,7 +63,12 @@ export function vatReturnCsvRows(r: VatReturnRubrieken, boxes: readonly VatBoxDe
   return rows;
 }
 
-export const EQUITY_CSV_HEADER = ['Naam', 'Winstaandeel', 'Begin', 'Resultaat', 'Stortingen', 'Opnamen', 'Overig', 'Eind'];
+/**
+ * Sinds 24 november 2026 met "Naar rekening-courant": het kapitaal van een
+ * uitgetreden vennoot gaat bij de jaarafsluiting naar zijn rekening-courant,
+ * en het eind is dan zoveel lager. Zonder die kolom telde een regel niet meer op.
+ */
+export const EQUITY_CSV_HEADER = ['Naam', 'Winstaandeel', 'Begin', 'Resultaat', 'Stortingen', 'Opnamen', 'Overig', 'Naar rekening-courant', 'Eind'];
 
 /**
  * De kapitaalvergelijking: per ondernemer of vennoot begin, resultaat,
@@ -76,12 +81,14 @@ export function equityCsvRows(overview: OwnersEquityOverview): (string | number)
     o.name + (o.isActive ? '' : ' (uitgetreden)'),
     overview.isPartnership ? share(o.shareBasisPoints) : '',
     amount(o.beginCents), amount(o.resultShareCents), amount(o.contributionsCents),
-    amount(o.withdrawalsCents ? -o.withdrawalsCents : 0), amount(o.otherMovementsCents), amount(o.endCents),
+    amount(o.withdrawalsCents ? -o.withdrawalsCents : 0), amount(o.otherMovementsCents),
+    amount(o.toCurrentAccountCents ? -o.toCurrentAccountCents : 0), amount(o.endCents),
   ]);
   const u = overview.unassigned;
-  if (u) rows.push(['Nog niet aan een vennoot toegewezen', '', amount(u.beginCents), '', '', '', amount(u.movementsCents), amount(u.endCents)]);
+  if (u) rows.push(['Nog niet aan een vennoot toegewezen', '', amount(u.beginCents), '', '', '', amount(u.movementsCents), '', amount(u.endCents)]);
   const sum = (pick: (o: OwnersEquityOverview['owners'][number]) => number) => overview.owners.reduce((s, o) => s + pick(o), 0);
   const withdrawals = sum(o => o.withdrawalsCents);
+  const toCurrent = sum(o => o.toCurrentAccountCents ?? 0);
   rows.push([
     'Totaal', '',
     amount(sum(o => o.beginCents) + (u?.beginCents ?? 0)),
@@ -89,11 +96,12 @@ export function equityCsvRows(overview: OwnersEquityOverview): (string | number)
     amount(sum(o => o.contributionsCents)),
     amount(withdrawals ? -withdrawals : 0),
     amount(sum(o => o.otherMovementsCents) + (u?.movementsCents ?? 0)),
+    amount(toCurrent ? -toCurrent : 0),
     amount(sum(o => o.endCents) + (u?.endCents ?? 0)),
   ]);
   rows.push([
     `Boekjaar ${overview.fiscalYear.label}`, overview.fiscalYear.status === 'closed' ? 'afgesloten' : 'voorlopig',
-    '', amount(overview.resultCents), '', '', '', '',
+    '', amount(overview.resultCents), '', '', '', '', '',
   ]);
   return rows;
 }

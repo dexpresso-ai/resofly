@@ -178,6 +178,8 @@ const VOF_PARTNER_DEFS = [
   [1, 'Anna de Vries', 5000, true, seed.ids.USER],
   [2, 'Bram Jansen', 5000, true, seed.ids.USER2],
   [3, 'Cornelis van der Heijden-Wolters', 0, false, null],
+  // Alleen met `vofPerioden` (2026-11-24): Chris treedt per 1 juli toe.
+  [4, 'Chris Bakker', 5000, true, null],
 ];
 const vofAccount = (code, name, subtype, i) => ({
   id: `1ed9e000-0000-4000-8000-0000000001${String(i).padStart(2, '0')}`, organization_id: seed.ids.ORG, code, name, type: 'equity', subtype,
@@ -188,22 +190,52 @@ const VOF_PARTNER_ACCOUNTS = VOF_PARTNER_DEFS.flatMap(([n, name]) => [
   vofAccount(`050${n}`, `Kapitaal ${name}`, 'partner_capital', n * 3),
   vofAccount(`055${n}`, `Privé-opnamen ${name}`, 'partner_withdrawals', n * 3 + 1),
   vofAccount(`056${n}`, `Privé-stortingen ${name}`, 'partner_contributions', n * 3 + 2),
+  // De rekening-courant (20261124120000): een kortlopende schuld, geen eigen vermogen.
+  { ...vofAccount(`141${n}`, `Rekening-courant ${name}`, 'partner_current_account', 50 + n), type: 'liability', report_group: 'kortlopende_schulden' },
 ]);
-const VOF_LEDGER_ACCOUNTS = [
+const vofLedgerAccounts = (options = {}) => [
   ...LEDGER_ACCOUNTS.map(a => (a.code === '0500' ? { ...a, name: 'Eigen vermogen', subtype: 'equity' } : a)),
   // Zoals de database ze noemt zodra er een vennoot is (20261118130000).
   vofAccount('0550', 'Privé-opnamen (geen vennoot)', 'private_withdrawals', 1),
   vofAccount('0560', 'Privé-stortingen (geen vennoot)', 'private_contributions', 2),
-  ...VOF_PARTNER_ACCOUNTS,
+  ...VOF_PARTNER_ACCOUNTS.filter(a => options.vofPerioden || !a.code.endsWith('4')),
 ].sort((a, b) => a.code.localeCompare(b.code));
-const VOF_PARTNERS = VOF_PARTNER_DEFS.map(([n, name, bp, active, userId]) => ({
+const VOF_ALL_PARTNERS = VOF_PARTNER_DEFS.map(([n, name, bp, active, userId]) => ({
   id: `9a77e000-0000-4000-8000-00000000000${n}`, organization_id: seed.ids.ORG, created_by: seed.ids.USER,
   partner_number: n, name, profit_share_basis_points: bp, kind: 'beherend', is_active: active, user_id: userId,
   capital_account_id: VOF_PARTNER_ACCOUNTS.find(a => a.code === `050${n}`).id,
   withdrawals_account_id: VOF_PARTNER_ACCOUNTS.find(a => a.code === `055${n}`).id,
   contributions_account_id: VOF_PARTNER_ACCOUNTS.find(a => a.code === `056${n}`).id,
+  current_account_id: VOF_PARTNER_ACCOUNTS.find(a => a.code === `141${n}`).id,
   created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
 }));
+const VOF_PARTNERS = VOF_ALL_PARTNERS.slice(0, 3);
+/**
+ * De vennoten. `vofPerioden: true` (2026-11-24): Bram treedt per 1 juli van dit
+ * jaar uit en Chris per 1 juli toe; de vennoot zelf staat op zijn laatste stand.
+ */
+function vofPartners(options = {}) {
+  if (!options.vofPerioden) return VOF_PARTNERS;
+  return VOF_ALL_PARTNERS.map(p => (p.partner_number === 2 ? { ...p, is_active: false } : p));
+}
+/**
+ * De tijdlijn (partnership_partner_timeline, 20261124120000): Anna en Bram
+ * sinds vorig jaar (60/40, dit jaar 50/50), Cornelis uitgetreden per 1 januari
+ * vorig jaar. Met `vofPerioden` Bram eruit en Chris erin per 1 juli.
+ */
+function vofTimeline(options = {}) {
+  const change = (n, i, validFrom, bp, active) => ({
+    id: `9a77e000-0000-4000-8000-0000000007${n}${i}`, organization_id: seed.ids.ORG, partner_id: VOF_ALL_PARTNERS[n - 1].id,
+    valid_from: validFrom, share_basis_points: bp, kind: 'beherend', is_active: active, created_at: '2026-01-01T00:00:00Z',
+  });
+  return [
+    change(1, 1, `${VOF_YEAR - 1}-01-01`, 6000, true), change(1, 2, `${VOF_YEAR}-01-01`, 5000, true),
+    change(2, 1, `${VOF_YEAR - 1}-01-01`, 4000, true), change(2, 2, `${VOF_YEAR}-01-01`, 5000, true),
+    change(3, 1, `${VOF_YEAR - 2}-01-01`, 2000, true), change(3, 2, `${VOF_YEAR - 1}-01-01`, 0, false),
+    ...(options.vofPerioden ? [change(2, 3, `${VOF_YEAR}-07-01`, 5000, false), change(4, 1, `${VOF_YEAR}-07-01`, 5000, true)] : []),
+  ];
+}
+const VOF_JOINED = { 1: `${VOF_YEAR - 1}-01-01`, 2: `${VOF_YEAR - 1}-01-01`, 3: `${VOF_YEAR - 2}-01-01`, 4: `${VOF_YEAR}-07-01` };
 const VOF_FISCAL_YEARS = [
   { id: '9a77e000-0000-4000-8000-0000000000f1', label: String(VOF_YEAR), period_start: `${VOF_YEAR}-01-01`, period_end: `${VOF_YEAR}-12-31`, status: 'open', result_cents: null, close_journal_entry_id: null, computed_result_cents: 8412345, has_entries: true },
   { id: '9a77e000-0000-4000-8000-0000000000f0', label: String(VOF_YEAR - 1), period_start: `${VOF_YEAR - 1}-01-01`, period_end: `${VOF_YEAR - 1}-12-31`, status: 'closed', result_cents: 7020000, close_journal_entry_id: null, computed_result_cents: 7020000, has_entries: true },
@@ -232,6 +264,7 @@ function vofOverview(fiscalYearId, options = {}, fixed = null) {
   const result = fy.computed_result_cents;
   const prior = fy.label === String(VOF_YEAR - 1);
   const open = fy.status === 'open';
+  if (options.vofPerioden && !prior && !fixed?.length) return vofPeriodsOverview(fy);
   // Het vorige jaar: Anna 60%, Bram 40%, en Anna kreeg vooraf € 12.000 arbeidsbeloning.
   const defaults = prior
     ? [{ p: VOF_PARTNERS[0], bp: 6000, prior: 1_200_000 }, { p: VOF_PARTNERS[1], bp: 4000, prior: 0 }]
@@ -249,6 +282,9 @@ function vofOverview(fiscalYearId, options = {}, fixed = null) {
     return {
       partnerId: p.id, name: p.name, partnerNumber: p.partner_number, kind: p.kind, isActive: p.is_active,
       inSplit: Boolean(s), shareBasisPoints: s?.bp ?? 0, currentShareBasisPoints: p.profit_share_basis_points, priorShareCents: s?.prior ?? 0,
+      // 20261124120000: de tijdlijn en de rekening-courant.
+      joinedOn: VOF_JOINED[p.partner_number], leftOn: p.partner_number === 3 ? `${VOF_YEAR - 1}-01-01` : null, lossShiftCents: 0,
+      currentAccountId: p.current_account_id, currentAccountCents: 0, toCurrentAccountCents: 0,
       beginCents: begin, resultShareCents: share, contributionsCents: contributions, withdrawalsCents: withdrawals, otherMovementsCents: 0,
       endCents: begin + share + contributions - withdrawals,
     };
@@ -263,6 +299,12 @@ function vofOverview(fiscalYearId, options = {}, fixed = null) {
     fiscalYear: { id: fy.id, label: fy.label, periodStart: fy.period_start, periodEnd: fy.period_end, status: fy.status },
     legalForm: 'vof', currentLegalForm: 'vof', isPartnershipForm: true, isPartnership: true, partnersDefined: true,
     splitFixed: Boolean(fixed?.length) || !open,
+    splitMode: Boolean(fixed?.length) || !open ? 'vastgelegd' : 'automatisch',
+    // Eén periode: zonder in- of uittreden in dit jaar valt het niet uiteen.
+    periods: [{
+      periodStart: fy.period_start, periodEnd: fy.period_end, resultCents: result,
+      shares: owners.filter(o => o.inSplit).map(o => ({ partnerId: o.partnerId, name: o.name, shareBasisPoints: o.shareBasisPoints, shareCents: o.resultShareCents })),
+    }],
     splitChangedAfterYearEnd: open && !fixed?.length && options.vofChanged ? ['Bram Jansen'] : [],
     // In het vorige jaar nam iemand € 125 op van 0550 (geen vennoot).
     generalPrivateCents: prior ? 12_500 : 0,
@@ -272,6 +314,58 @@ function vofOverview(fiscalYearId, options = {}, fixed = null) {
     openPriorYears: openPrior ? [String(VOF_YEAR - 1)] : [],
     owners,
     unassigned: { beginCents: 1_000_000, openPriorResultCents: openPrior, movementsCents: -25_000, endCents: 975_000 + openPrior },
+  };
+}
+/**
+ * `vofPerioden: true` (2026-11-24): het lopende jaar valt uiteen op 1 juli.
+ * Tot en met 30 juni Anna en Bram 50/50, daarna Anna en Chris 50/50. Bram is
+ * uitgetreden: zijn kapitaal (€ 8.800) gaat bij het afsluiten naar zijn
+ * rekening-courant, waarvan in september al € 3.000 is uitbetaald (nu dus een
+ * vordering op hem van € 3.000, na het afsluiten een schuld van € 5.800).
+ */
+function vofPeriodsOverview(fy) {
+  const [anna, bram, , chris] = VOF_ALL_PARTNERS;
+  const firstHalf = 4_000_000;
+  const secondHalf = fy.computed_result_cents - firstHalf;
+  // Afronding zoals de database: eerst naar beneden, de cent naar het laagste vennootnummer.
+  const half = Math.floor(secondHalf / 2);
+  const shares = { [anna.id]: firstHalf / 2 + (secondHalf - half), [bram.id]: firstHalf / 2, [chris.id]: half };
+  const owner = (p, begin, contributions, withdrawals, extra = {}) => {
+    const share = shares[p.id];
+    const toCurrent = extra.toCurrentAccountCents ?? 0;
+    return {
+      partnerId: p.id, name: p.name, partnerNumber: p.partner_number, kind: 'beherend', isActive: p.partner_number !== 2,
+      inSplit: true, shareBasisPoints: 5000, currentShareBasisPoints: 5000, priorShareCents: 0,
+      joinedOn: VOF_JOINED[p.partner_number], leftOn: null, lossShiftCents: 0,
+      currentAccountId: p.current_account_id, currentAccountCents: 0, toCurrentAccountCents: 0,
+      beginCents: begin, resultShareCents: share, contributionsCents: contributions, withdrawalsCents: withdrawals, otherMovementsCents: 0,
+      endCents: begin + share + contributions - withdrawals - toCurrent,
+      ...extra,
+    };
+  };
+  const owners = [
+    owner(anna, 2_450_000, 0, 3_600_000),
+    owner(bram, 1_980_000, 150_000, 3_250_000, { leftOn: `${VOF_YEAR}-07-01`, currentAccountCents: -300_000, toCurrentAccountCents: 880_000 }),
+    owner(chris, 0, 500_000, 0),
+  ];
+  return {
+    fiscalYear: { id: fy.id, label: fy.label, periodStart: fy.period_start, periodEnd: fy.period_end, status: fy.status },
+    legalForm: 'vof', currentLegalForm: 'vof', isPartnershipForm: true, isPartnership: true, partnersDefined: true,
+    splitFixed: false, splitMode: 'automatisch',
+    periods: [
+      { periodStart: `${VOF_YEAR}-01-01`, periodEnd: `${VOF_YEAR}-06-30`, resultCents: firstHalf, shares: [
+        { partnerId: anna.id, name: anna.name, shareBasisPoints: 5000, shareCents: firstHalf / 2 },
+        { partnerId: bram.id, name: bram.name, shareBasisPoints: 5000, shareCents: firstHalf / 2 },
+      ] },
+      { periodStart: `${VOF_YEAR}-07-01`, periodEnd: `${VOF_YEAR}-12-31`, resultCents: secondHalf, shares: [
+        { partnerId: anna.id, name: anna.name, shareBasisPoints: 5000, shareCents: secondHalf - half },
+        { partnerId: chris.id, name: chris.name, shareBasisPoints: 5000, shareCents: half },
+      ] },
+    ],
+    splitChangedAfterYearEnd: [], generalPrivateCents: 0, shareTotalBasisPoints: 10000,
+    resultCents: fy.computed_result_cents, openPriorResultCents: 0, openPriorYears: [],
+    owners,
+    unassigned: { beginCents: 1_000_000, openPriorResultCents: 0, movementsCents: -25_000, endCents: 975_000 },
   };
 }
 // Anna haalt de 1225 uur (1260 uur), Bram zit eronder, Cornelis heeft geen teamlid.
@@ -307,9 +401,18 @@ const VOF_JOURNAL_ENTRIES = [{
   source_id: '9a77e000-0000-4000-8000-0000000000a2', status: 'posted', reversed_by_entry_id: null, reverses_entry_id: null,
   created_at: `${VOF_YEAR}-10-20T09:00:00Z`, updated_at: `${VOF_YEAR}-10-20T09:00:00Z`,
 }];
-const VOF_TABLES = { company_settings: [VOF_SETTINGS], partnership_partners: VOF_PARTNERS, ledger_accounts: VOF_LEDGER_ACCOUNTS, purchase_invoices: VOF_PURCHASES, journal_entries: VOF_JOURNAL_ENTRIES };
+const vofTables = (options = {}) => ({
+  company_settings: [VOF_SETTINGS], partnership_partners: vofPartners(options), ledger_accounts: vofLedgerAccounts(options),
+  purchase_invoices: VOF_PURCHASES, journal_entries: VOF_JOURNAL_ENTRIES, partnership_partner_timeline: vofTimeline(options),
+});
 function vofRpc(fn, body, options = {}, state = {}) {
   switch (fn) {
+    // Een vennoot opslaan (met een ingangsdatum) of een stand weghalen: de
+    // database geeft de vennoot terug; de mock verandert niets.
+    case 'save_partnership_partner':
+    case 'set_partnership_partner_member':
+      return vofPartners(options).find(p => p.id === body?.p_partner_id) ?? vofPartners(options)[0];
+    case 'delete_partnership_partner_change': return null;
     case 'list_fiscal_years': return vofYears(options);
     case 'owners_equity_overview': return vofOverview(body?.p_fiscal_year_id, options, state.shares?.[body?.p_fiscal_year_id] ?? null);
     // De verdeling van een boekjaar vastleggen (of met [] weghalen), zoals de
@@ -1092,7 +1195,7 @@ export async function installMock(context, options = {}) {
       // antwoord op een onbekende RPC) las de app als "geen instellingen".
       if (fn === 'company_settings_core') {
         const row = options.incomeTax ? { ...seed.companySettings, company_name: 'Studio Lopik', legal_form: options.incomeTax }
-          : options.vof ? VOF_TABLES.company_settings[0]
+          : options.vof ? VOF_SETTINGS
           : restRows('company_settings', url, setup)[0];
         if (!row) return reply(route, null);
         const { invoice_template_data_url: _paper, ...core } = row;
@@ -1151,7 +1254,7 @@ export async function installMock(context, options = {}) {
         : options.aiDeclined && table === 'ai_consents' ? [consentRow(false, [])]
         : options.aiOff && table === 'ai_consents' ? []
         // `vof: true`: bedrijfsgegevens, vennoten en rekeningschema van een vof.
-        : options.vof && table in VOF_TABLES ? VOF_TABLES[table]
+        : options.vof && table in vofTables(options) ? vofTables(options)[table]
         : options.ledger && table === 'ledger_accounts' ? (options.prepaid ? [...LEDGER_ACCOUNTS, PREPAID_ACCOUNT] : LEDGER_ACCOUNTS)
         : prepaid && table in prepaid ? prepaid[table]
         : bankGap && table in bankGap ? bankGap[table]

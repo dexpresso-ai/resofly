@@ -440,12 +440,15 @@ const PARTNER_PREFIX: Readonly<Record<string, string>> = {
   partner_capital: 'kapitaal ',
   partner_withdrawals: 'prive opnamen ',
   partner_contributions: 'prive stortingen ',
+  // Sinds 20261124120000 heeft elke vennoot een rekening-courant (141n).
+  partner_current_account: 'rekening courant ',
 };
 
 const PARTNER_KIND: Readonly<Record<string, string>> = {
   partner_capital: 'kapitaal',
   partner_withdrawals: 'privé-opnamen',
   partner_contributions: 'privé-stortingen',
+  partner_current_account: 'rekening-courant',
 };
 
 /**
@@ -515,7 +518,7 @@ function partnersFrom(options: TargetAccount[]): Partner[] {
     if (!target.subtype || !(target.subtype in PARTNER_PREFIX)) continue;
     const label = target.name.trim().replace(/^\S+\s+/, '');
     const parts = nameParts(normalize(label));
-    const key = /^05[056][1-9]$/.test(target.code) ? `n${target.code[3]}` : parts.words.join(' ');
+    const key = /^(05[056]|14[123])[1-9]$/.test(target.code) ? `n${target.code[3]}` : parts.words.join(' ');
     const existing = byKey.get(key);
     if (existing) {
       existing.accounts.push(target);
@@ -555,8 +558,13 @@ const listNames = (names: string[]) => (names.length <= 1 ? names.join('') : `${
  * Geeft null als de rekening geen kapitaal of privé is, er geen vennoten
  * zijn, of er geen naam in staat: dan beslist de rest van proposeAccount.
  */
-function partnerProposal(name: string, partners: Partner[]): AccountProposal | null {
-  const subtype = /\b(prive opname|prive opnamen|onttrekking)/.test(name) ? 'partner_withdrawals'
+function partnerProposal(rawName: string, partners: Partner[]): AccountProposal | null {
+  // Een rekening-courant met een vennoot gaat naar zijn rekening-courant
+  // (20261124120000); "R/C" telt daarna niet als voorletters.
+  const currentAccount = CURRENT_ACCOUNT.test(rawName);
+  const name = currentAccount ? rawName.replace(CURRENT_ACCOUNT, ' ').replace(/\s+/g, ' ').trim() : rawName;
+  const subtype = currentAccount ? 'partner_current_account'
+    : /\b(prive opname|prive opnamen|onttrekking)/.test(name) ? 'partner_withdrawals'
     : /\b(prive storting|prive stortingen)/.test(name) ? 'partner_contributions'
     : /\b(kapitaal|eigen vermogen)\b/.test(name) ? 'partner_capital'
     : null;

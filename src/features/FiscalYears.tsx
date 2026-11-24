@@ -13,7 +13,8 @@ import {
 import { formatISODate } from '../lib/dates';
 import { useBackStep } from '../lib/useBackStep';
 import {
-  GeneralPrivateNote, YearSplitPanel, changedAfterYearEnd, isIbLegalForm, isPartnershipLegalForm, legalFormWord, splitTotalBasisPoints,
+  CurrentAccountTransferNote, GeneralPrivateNote, YearSplitPanel, changedAfterYearEnd, isIbLegalForm, isPartnershipLegalForm, legalFormWord,
+  periodLabel, periodProblem, splitTotalBasisPoints,
 } from './PartnerSplit';
 
 const euroCents = (cents: number | null | undefined) => euro((cents ?? 0) / 100);
@@ -574,9 +575,11 @@ function CloseYearDialog({ row, organizationId, canWrite, currentForm, resultLab
 
   // Afsluiten staat uit zolang de database het toch zou weigeren, of je de
   // verdeling nog aan het aanpassen bent: dan sloot je af met de oude.
+  const problem = overview && distributes ? periodProblem(overview) : null;
   const blockedReason = loading ? 'Even wachten: de verdeling wordt geladen.'
     : editing ? 'Sla de verdeling eerst op, of annuleer het aanpassen.'
     : changed.length > 0 ? `Leg eerst de verdeling van ${label} vast.`
+    : problem ? `De verdeling van ${periodLabel(problem.period.periodStart, problem.period.periodEnd)} moet precies 100% zijn.`
     : total !== null && total !== 10000 ? `De verdeling van ${label} moet precies 100% zijn.`
     : null;
 
@@ -644,6 +647,10 @@ function CloseYearDialog({ row, organizationId, canWrite, currentForm, resultLab
         />
       )}
       {!loading && overview && <GeneralPrivateNote overview={overview} />}
+      {/* Wie aan het eind van het jaar geen vennoot meer is: zijn kapitaal gaat
+          naar zijn rekening-courant (20261124120000). Dat boekt de afsluiting
+          zelf; hier staat het vooraf, met het bedrag. */}
+      {!loading && overview && distributes && <CurrentAccountTransferNote overview={overview} />}
 
       <p className="bk-muted">Eerst moeten de btw-aangiften van dit boekjaar zijn afgesloten (met de KOR alleen de tijdvakken waarin je verlegde btw aangeeft), de bankmutaties van dit jaar geboekt of genegeerd (bij Bank → Af te letteren), en de afschrijvingen en de termijnen van vooruitbetaalde kosten tot en met {dateNL(row.period_end)} geboekt (bij Activa en Vooruitbetaald). Anders komen ze in het volgende jaar en klopt de winst van beide jaren niet. Kijk ook of er nog conceptfacturen of concept-inkoopfacturen van dit jaar liggen: die boeken na het afsluiten op 1 januari. Een afgesloten boekjaar kan later alleen door een eigenaar of beheerder worden heropend.</p>
     </ConfirmDialog>

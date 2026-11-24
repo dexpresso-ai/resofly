@@ -50,11 +50,26 @@ test('kapitaalvergelijking: per vennoot, het deel zonder vennoot en het totaal',
     unassigned: { beginCents: 2000, movementsCents: 0, endCents: 2000 },
   } as unknown as OwnersEquityOverview;
   const rows = equityCsvRows(overview);
-  assert.deepEqual(rows[0], ['Anna', '60%', '1000.00', '1800.00', '0.00', '-500.00', '0.00', '2300.00']);
-  assert.deepEqual(rows[1], ['Bram (uitgetreden)', '40%', '500.00', '1200.00', '100.00', '0.00', '0.00', '1800.00']);
-  assert.deepEqual(rows[2], ['Nog niet aan een vennoot toegewezen', '', '20.00', '', '', '', '0.00', '20.00']);
-  assert.deepEqual(rows[3], ['Totaal', '', '1520.00', '3000.00', '100.00', '-500.00', '0.00', '4120.00']);
-  assert.deepEqual(rows[4], ['Boekjaar 2025', 'afgesloten', '', '3000.00', '', '', '', '']);
+  assert.deepEqual(rows[0], ['Anna', '60%', '1000.00', '1800.00', '0.00', '-500.00', '0.00', '0.00', '2300.00']);
+  assert.deepEqual(rows[1], ['Bram (uitgetreden)', '40%', '500.00', '1200.00', '100.00', '0.00', '0.00', '0.00', '1800.00']);
+  assert.deepEqual(rows[2], ['Nog niet aan een vennoot toegewezen', '', '20.00', '', '', '', '0.00', '', '20.00']);
+  assert.deepEqual(rows[3], ['Totaal', '', '1520.00', '3000.00', '100.00', '-500.00', '0.00', '0.00', '4120.00']);
+  assert.deepEqual(rows[4], ['Boekjaar 2025', 'afgesloten', '', '3000.00', '', '', '', '', '']);
+});
+
+test('kapitaalvergelijking: het kapitaal van een uittreder naar zijn rekening-courant, en de regel telt op', () => {
+  const overview = {
+    fiscalYear: { id: 'f', label: '2026', periodStart: '2026-01-01', periodEnd: '2026-12-31', status: 'open' },
+    isPartnership: true, resultCents: 400000,
+    owners: [
+      { partnerId: 'a', name: 'Anna', isActive: true, shareBasisPoints: 5000, beginCents: 100000, resultShareCents: 300000, contributionsCents: 0, withdrawalsCents: 0, otherMovementsCents: 0, toCurrentAccountCents: 0, endCents: 400000 },
+      { partnerId: 'b', name: 'Bram', isActive: false, shareBasisPoints: 5000, beginCents: 50000, resultShareCents: 100000, contributionsCents: 0, withdrawalsCents: 20000, otherMovementsCents: 0, toCurrentAccountCents: 130000, endCents: 0 },
+    ],
+    unassigned: null,
+  } as unknown as OwnersEquityOverview;
+  const rows = equityCsvRows(overview);
+  assert.deepEqual(rows[1], ['Bram (uitgetreden)', '50%', '500.00', '1000.00', '0.00', '-200.00', '0.00', '-1300.00', '0.00']);
+  assert.deepEqual(rows[2], ['Totaal', '', '1500.00', '4000.00', '0.00', '-200.00', '0.00', '-1300.00', '4000.00']);
 });
 
 test('het overzicht voor de aangifte IB, regel voor regel', () => {
