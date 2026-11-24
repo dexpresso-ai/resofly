@@ -411,20 +411,14 @@ async function addLeaf(ctx: Ctx, transfer: TransferRow, leaf: Leaf, position: nu
   if (leaf.type === 'attachment') {
     const att = await must(admin
       .from('attachments')
-      .select('id,name,mime_type,size_bytes,storage_key,entity_type,cloud_provider')
+      .select('id,name,mime_type,size_bytes,storage_key,entity_type')
       .eq('id', leaf.id)
       .eq('organization_id', ctx.organizationId)
-      .maybeSingle()) as { id: string; name: string; mime_type: string | null; size_bytes: number | null; storage_key: string | null; entity_type: string | null; cloud_provider: string | null } | null;
+      .maybeSingle()) as { id: string; name: string; mime_type: string | null; size_bytes: number | null; storage_key: string | null; entity_type: string | null } | null;
     // Alleen bestanden uit Inhoud. Een bijlage van een taak, ticket of project
     // hoort bij een andere module, waar deze gebruiker misschien niet bij mag.
     if (!att || att.entity_type !== 'folder') {
       return { added: false, skipped: { name: att?.name ?? 'bestand', reason: 'Alleen bestanden uit Inhoud kunnen mee. Zet een bijlage eerst in een map.' } };
-    }
-    // Een gekoppeld bestand uit Google Drive of OneDrive ligt niet in onze
-    // opslag; kopiëren zou op "niet gevonden" stuklopen, midden in een zending.
-    if (att.cloud_provider) {
-      const where = att.cloud_provider === 'google' ? 'Google Drive' : 'OneDrive';
-      return { added: false, skipped: { name: att.name, reason: `Dit bestand staat in ${where}. Deel het vanuit ${where} zelf.` } };
     }
     if (!att.storage_key) return { added: false, skipped: { name: att.name, reason: 'Er hoort geen bestand bij.' } };
     if (!(await storageKeyBelongsOnlyTo(admin, ctx.organizationId, att.storage_key, { table: 'attachments', id: att.id }))) {

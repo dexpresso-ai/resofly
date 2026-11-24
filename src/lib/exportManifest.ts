@@ -135,13 +135,7 @@ export const EXPORT_FORMAT_VERSION = 1;
 // journal_entries; geen tabellen of kolommen.
 // 20261123142000 (wettelijke rente) zet één rij in statutory_interest_rates
 // (landelijke tarieven, geen gegevens van een organisatie); geen tabellen of kolommen.
-// 20261123150000 (Drive en OneDrive koppelen) zet drie tabellen erbij en
-// cloud_*-kolommen op attachments. cloud_drive_connections gaat mee (welk
-// account je koppelde; de app toont alleen je eigen), de tokens zijn 'geheim',
-// en cloud_file_deletions is de wachtrij van de edge function ('intern'). Een
-// gekoppeld bestand staat met zijn link in attachments; het bestand zelf ligt
-// in Drive of OneDrive, dus het segment 'cloud' komt niet in de zip.
-export const EXPORT_SCHEMA_VERSION = '20261123150000';
+export const EXPORT_SCHEMA_VERSION = '20261123142000';
 
 export type TableKind =
   | 'export'
@@ -274,8 +268,6 @@ export const EXPORT_MANIFEST: Readonly<Record<string, TableRule>> = {
   // ── Agenda en afspraken ──────────────────────────────────────────────────
   calendar_connections: { kind: 'export' },
   calendar_connection_tokens: { kind: 'geheim', reason: GEHEIM },
-  cloud_drive_connections: { kind: 'export' },
-  cloud_drive_connection_tokens: { kind: 'geheim', reason: GEHEIM },
   calendar_app_passwords: { kind: 'geheim', reason: GEHEIM },
   calendar_feed_links: { kind: 'geheim', reason: GEHEIM },
   calendar_sources: {
@@ -446,7 +438,6 @@ export const EXPORT_MANIFEST: Readonly<Record<string, TableRule>> = {
   notification_outbox: { kind: 'intern', reason: WACHTRIJ },
   storage_purge_queue: { kind: 'intern', reason: WACHTRIJ },
   gallery_purge_queue: { kind: 'intern', reason: WACHTRIJ },
-  cloud_file_deletions: { kind: 'intern', reason: WACHTRIJ },
   notification_preferences: { kind: 'prive', reason: PRIVE },
   push_subscriptions: { kind: 'geheim', reason: GEHEIM },
 
@@ -594,9 +585,7 @@ const FILE_FOLDERS: Readonly<Record<string, string>> = {
 };
 
 /** Segmenten die nooit in de export horen, ook niet als een rij ernaar wijst. */
-// 'cloud': een gekoppeld bestand uit Google Drive of OneDrive. Daar ligt niets
-// in onze opslag; anders telde de export elk gekoppeld bestand als "ontbreekt".
-export const EXCLUDED_FILE_SEGMENTS: ReadonlySet<string> = new Set(['gallery', 'transfer', 'cloud']);
+export const EXCLUDED_FILE_SEGMENTS: ReadonlySet<string> = new Set(['gallery', 'transfer']);
 
 /**
  * Het pad in de zip voor een opslagsleutel van deze organisatie, of null als

@@ -163,31 +163,3 @@
   X-DNS-Prefetch-Control: off
   Referrer-Policy: no-referrer
   X-Robots-Tag: noindex, nofollow
-
-# De kiezer van Google Drive (public/drive-kiezer.html, 2026-11-23). De app
-# opent hem in een kader (CloudDriveDialog.tsx); alleen de eigen app mag hem
-# inlijsten. Hier, en alleen hier, mag het script van Google (apis.google.com)
-# draaien, met de kaders en verbindingen die de kiezer van Google nodig heeft.
-# In de CSP van de app zelf zou die host een deur zijn voor elk stukje HTML dat
-# ooit ongefilterd in de app belandt; deze pagina toont niets van gebruikers.
-# De hash van het thema-script staat er alleen in omdat
-# scripts/check-csp-hash.mjs hem in elke regel verwacht; deze pagina heeft geen
-# inline script. Cloudflare Pages stuurt /drive-kiezer.html door naar
-# /drive-kiezer; vandaar twee paden met dezelfde regels.
-/drive-kiezer
-  ! Content-Security-Policy
-  ! X-Frame-Options
-  ! Referrer-Policy
-  Content-Security-Policy: default-src 'self'; base-uri 'none'; object-src 'none'; form-action 'none'; frame-ancestors 'self'; worker-src 'none'; script-src 'self' 'sha256-wtsUP8my7X7CvwMRDu18ionMzalXZ47DpmBlpML7lY8=' https://apis.google.com https://www.gstatic.com; style-src 'self' 'unsafe-inline' https://www.gstatic.com https://ssl.gstatic.com; img-src 'self' data: https:; font-src 'self' data: https://fonts.gstatic.com; frame-src https://docs.google.com https://drive.google.com https://accounts.google.com https://content.googleapis.com; connect-src 'self' https://apis.google.com https://www.googleapis.com https://content.googleapis.com
-  X-Frame-Options: SAMEORIGIN
-  Referrer-Policy: strict-origin-when-cross-origin
-  X-Robots-Tag: noindex, nofollow
-
-/drive-kiezer.html
-  ! Content-Security-Policy
-  ! X-Frame-Options
-  ! Referrer-Policy
-  Content-Security-Policy: default-src 'self'; base-uri 'none'; object-src 'none'; form-action 'none'; frame-ancestors 'self'; worker-src 'none'; script-src 'self' 'sha256-wtsUP8my7X7CvwMRDu18ionMzalXZ47DpmBlpML7lY8=' https://apis.google.com https://www.gstatic.com; style-src 'self' 'unsafe-inline' https://www.gstatic.com https://ssl.gstatic.com; img-src 'self' data: https:; font-src 'self' data: https://fonts.gstatic.com; frame-src https://docs.google.com https://drive.google.com https://accounts.google.com https://content.googleapis.com; connect-src 'self' https://apis.google.com https://www.googleapis.com https://content.googleapis.com
-  X-Frame-Options: SAMEORIGIN
-  Referrer-Policy: strict-origin-when-cross-origin
-  X-Robots-Tag: noindex, nofollow

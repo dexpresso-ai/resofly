@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { DragEvent as ReactDragEvent, KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react';
 import {
-  ArrowDown, ArrowUp, ArrowUpDown, Check, ChevronDown, ChevronLeft, ChevronRight, Cloud, Download, ExternalLink, Eye, EyeOff,
+  ArrowDown, ArrowUp, ArrowUpDown, Check, ChevronDown, ChevronLeft, ChevronRight, Download, Eye, EyeOff,
   File, FilePen, FileText, Folder, FolderOpen, FolderPlus, Info, LayoutGrid, Link2, List, MoreVertical,
   Pencil, Plus, Presentation, Search, Send, Share2, Sheet, SlidersHorizontal, StickyNote, Trash2, Upload, UploadCloud, Users, X,
 } from 'lucide-react';
-import type { AppData, Attachment, CloudDriveProvider, ContentFolder, InternalDocument, Note, Project } from '../types';
+import type { AppData, Attachment, ContentFolder, InternalDocument, Note, Project } from '../types';
 import { dateNL } from '../lib/format';
 import { insertRow, updateRow, deleteContentFolder, deleteAttachment, deleteEntityCascade, moveDriveItem, renameAttachment } from '../lib/repository';
 import { uploadToR2, downloadAttachment } from '../lib/r2';
@@ -19,12 +19,6 @@ import { AttachmentGlyph, DocumentGlyph, attAccentColor, attTypeLabel, documentA
 import { ShareDialog } from '../components/ShareDialog';
 import { SharedOverview, SharedOverviewButton } from '../components/SharedOverview';
 import { SendFilesDialog } from '../components/SendFilesDialog';
-import { CloudDriveDialog } from '../components/CloudDriveDialog';
-import {
-  attachmentDisplayBytes, cloudProviderLabel, cloudProviderOf, deleteConfirmText, deletionStatusText, isCloudAttachment,
-  takeLinkedCloudDrivePending,
-} from '../lib/cloudDrive';
-import { kickCloudDeletions } from '../lib/cloudDrive-api';
 import type { TransferSource } from '../lib/transfers-api';
 import { shareKey, sharedItemKeys, type ShareTarget } from '../lib/shares';
 import {
@@ -192,8 +186,6 @@ export function ContentLibrary({
   const [moving, setMoving] = useState<DriveDragItem[] | null>(null);
   /** Staat het paneel "Bestaande inhoud in deze map plaatsen" open? */
   const [linkOpen, setLinkOpen] = useState(false);
-  /** Het venster "Uit Google Drive" of "Uit OneDrive" voor de open map. */
-  const [cloudDialog, setCloudDialog] = useState<CloudDriveProvider | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Een open menu ("+ Nieuw", Weergeven, Sorteren, ⋮) gaat met de terugknop van
@@ -472,46 +464,13 @@ export function ContentLibrary({
     run(() => save(next.name));
   }
 
-  /** Gekoppelde bestanden (Drive, OneDrive) in deze mappen: die gaan daar naar de prullenbak. */
-  function cloudFilesIn(folderIds: string[]): Attachment[] {
-    const ids = new Set(folderIds);
-    return data.attachments.filter(a => a.entity_type === 'folder' && ids.has(a.entity_id) && isCloudAttachment(a));
-  }
-
-  function cloudSentence(cloud: Attachment[]): string {
-    if (!cloud.length) return '';
-    const where = [...new Set(cloud.map(a => cloudProviderLabel(cloudProviderOf(a))))].join(' en ');
-    return ` ${cloud.length === 1 ? 'Eén bestand komt' : `${cloud.length} bestanden komen`} uit ${where}: ${cloud.length === 1 ? 'dat gaat' : 'die gaan'} daar naar de prullenbak.`;
-  }
-
-  /**
-   * Na het verwijderen van gekoppelde bestanden: lukte het weggooien in Drive of
-   * OneDrive niet, dan zeggen we dat meteen (de rest staat in het venster bij
-   * "+ Nieuw → Uit Google Drive / OneDrive").
-   */
-  async function reportCloudDeletions(cloud: Attachment[]) {
-    if (!cloud.length) return;
-    const res = await kickCloudDeletions(organizationId);
-    if (!res) return;
-    const names = new Set(cloud.map(a => a.name));
-    const failed = res.deletions.filter(d => d.status === 'failed' && names.has(d.name));
-    if (!failed.length) return;
-    const first = failed[0];
-    const label = cloudProviderLabel(first.provider);
-    setError(failed.length === 1
-      ? `"${first.name}" is uit ResoFly verwijderd, maar staat nog in ${label}. ${deletionStatusText(first)}`
-      : `${failed.length} bestanden zijn uit ResoFly verwijderd, maar staan nog in ${label}. ${deletionStatusText(first)}`);
-  }
-
   function deleteFolder(folder: ContentFolder) {
     const descendants = folderDescendantIds(folderScope, folder.id);
     const sub = descendants.length ? ` en ${descendants.length} submap(pen)` : '';
-    const cloud = cloudFilesIn([folder.id, ...descendants]);
-    if (!window.confirm(`Map "${folder.name}"${sub} verwijderen? Notities en documenten blijven bestaan (ze worden ontkoppeld); geüploade bestanden in deze map(pen) worden verwijderd.${cloudSentence(cloud)}`)) return;
+    if (!window.confirm(`Map "${folder.name}"${sub} verwijderen? Notities en documenten blijven bestaan (ze worden ontkoppeld); geüploade bestanden in deze map(pen) worden verwijderd.`)) return;
     run(async () => {
       await deleteContentFolder(folder.id, descendants, organizationId);
       if (folderId === folder.id || descendants.includes(folderId ?? '')) setFolderId(folder.parent_id);
-      await reportCloudDeletions(cloud);
     });
   }
 
@@ -523,11 +482,8 @@ export function ContentLibrary({
   }
 
   function deleteFile(att: Attachment) {
-    if (!window.confirm(deleteConfirmText([att]))) return;
-    run(async () => {
-      await deleteAttachment({ id: att.id, storage_key: att.storage_key, organization_id: att.organization_id });
-      if (isCloudAttachment(att)) await reportCloudDeletions([att]);
-    });
+    if (!window.confirm(`"${att.name}" verwijderen? Het bestand wordt ook uit de Cloudflare-opslag gehaald.`)) return;
+    run(async () => { await deleteAttachment({ id: att.id, storage_key: att.storage_key, organization_id: att.organization_id }); });
   }
 
   /** Een notitie of document verwijderen — de bijlagen eraan gaan mee (ook uit Cloudflare). */
@@ -617,32 +573,6 @@ export function ContentLibrary({
     else setSendingFiles({ sources: [], clientId: null, chooseClient: clientId !== NO_CLIENT });
   }
 
-  /** "+ Nieuw → Uit Google Drive / Uit OneDrive": alleen in een dossiermap. */
-  function openCloud(provider: CloudDriveProvider) {
-    setNewOpen(false);
-    if (folderId) setCloudDialog(provider);
-  }
-
-  // Terug van Google of Microsoft na het koppelen: dezelfde map weer open, met
-  // het venster erbij. main.tsx rondt de koppeling af en zegt het met een event;
-  // staat de verkenner er dan nog niet, dan kijkt hij bij het openen.
-  useEffect(() => {
-    const restore = () => {
-      const pending = takeLinkedCloudDrivePending(organizationId, p => !embedded || p.clientId === rootClientId);
-      if (!pending) return;
-      const folder = data.folders.find(f => f.id === pending.folderId);
-      if (!folder) return;
-      if (!embedded) setClientId(pending.clientId);
-      setProjectId(pending.projectId);
-      setFolderId(pending.folderId);
-      setQuery('');
-      setCloudDialog(pending.provider);
-    };
-    restore();
-    window.addEventListener('resofly:cloud-drive-linked', restore);
-    return () => window.removeEventListener('resofly:cloud-drive-linked', restore);
-  }, [organizationId, embedded, rootClientId, data.folders]);
-
   function attOpen(att: Attachment) {
     if (isOfficeEditable(att)) void openOffice(att);
     else void handleDownload(att);
@@ -701,14 +631,13 @@ export function ContentLibrary({
   };
   const attRow = (att: Attachment): Row => {
     const key = `a-${att.id}`;
-    const bytes = attachmentDisplayBytes(att);
     return {
       key,
       kind: 'file',
       name: att.name,
       color: attAccentColor(att),
       modified: att.created_at,
-      size: bytes === null ? '' : fmtBytes(bytes),
+      size: fmtBytes(att.size_bytes),
       typeLabel: attTypeLabel(att),
       onOpen: () => attOpen(att),
       att,
@@ -898,11 +827,9 @@ export function ContentLibrary({
   const selectedItems = selection.items
     .map(row => row.drag)
     .filter((item): item is DriveDragItem => Boolean(item));
-  // Een gekoppeld bestand download je in Drive of OneDrive zelf: anders gingen
-  // er bij een grote selectie tientallen tabbladen open.
   const selectedAttachments = selection.items
     .map(row => row.att)
-    .filter((att): att is Attachment => Boolean(att) && !isCloudAttachment(att!));
+    .filter((att): att is Attachment => Boolean(att));
   /** Alles wat je kunt aanvinken kun je ook verwijderen. */
   const selectionDeletable = selectedItems.length > 0;
 
@@ -917,11 +844,7 @@ export function ContentLibrary({
       docs.length ? `${docs.length} ${docs.length === 1 ? 'document' : 'documenten'}` : null,
       folders.length ? `${folders.length} ${folders.length === 1 ? 'map' : 'mappen'}` : null,
     ].filter(Boolean).join(' en ');
-    const cloud = [
-      ...files.map(row => row.att!).filter(att => isCloudAttachment(att)),
-      ...cloudFilesIn(folders.flatMap(row => [row.drag!.id, ...folderDescendantIds(data.folders, row.drag!.id)])),
-    ];
-    if (!window.confirm(`${what} verwijderen? Bestanden gaan ook uit de Cloudflare-opslag. Notities en documenten in verwijderde mappen blijven bestaan (ze worden ontkoppeld); geüploade bestanden erin gaan wel weg.${cloudSentence(cloud)}`)) return;
+    if (!window.confirm(`${what} verwijderen? Bestanden gaan ook uit de Cloudflare-opslag. Notities en documenten in verwijderde mappen blijven bestaan (ze worden ontkoppeld); geüploade bestanden erin gaan wel weg.`)) return;
     setBusy(true); setError(null);
     try {
       for (const row of files) {
@@ -936,7 +859,6 @@ export function ContentLibrary({
       }
       clearSelection();
       onChanged();
-      await reportCloudDeletions(cloud);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Verwijderen mislukt');
     } finally {
@@ -1036,16 +958,6 @@ export function ContentLibrary({
   }
 
   function fileMenu(att: Attachment, rowKey: string) {
-    const cloud = cloudProviderOf(att);
-    if (cloud) return <>
-      <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setMenu(null); void handleDownload(att); }}><ExternalLink size={16} /> Openen in {cloudProviderLabel(cloud)}</button>
-      {canWrite && <>
-        <button type="button" className="drive-pop-item" role="menuitem" onClick={() => beginRename(rowKey)}><Pencil size={16} /> Naam wijzigen</button>
-        <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openMove([{ kind: 'attachment', id: att.id, name: att.name }])}><Folder size={16} /> Verplaatsen naar…</button>
-        <div className="drive-pop-sep" />
-        <button type="button" className="drive-pop-item danger" role="menuitem" onClick={() => { setMenu(null); deleteFile(att); }}><Trash2 size={16} /> Verwijderen</button>
-      </>}
-    </>;
     return <>
       {isOfficeEditable(att) && <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setMenu(null); void openOffice(att); }}><FilePen size={16} style={{ color: 'var(--accent-o)' }} /> Openen in editor</button>}
       <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setMenu(null); void handleDownload(att); }}><Download size={16} /> Downloaden</button>
@@ -1225,8 +1137,6 @@ export function ContentLibrary({
             {folderId && <>
               <div className="drive-pop-sep" />
               <button type="button" className="drive-pop-item" role="menuitem" disabled={uploading} onClick={() => { setNewOpen(false); fileInputRef.current?.click(); }}><Upload size={16} /> {uploading ? 'Uploaden…' : 'Bestand uploaden'}</button>
-              <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openCloud('google')}><Cloud size={16} style={{ color: 'var(--accent-b)' }} /> Uit Google Drive</button>
-              <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openCloud('microsoft')}><Cloud size={16} style={{ color: 'var(--accent-b)' }} /> Uit OneDrive</button>
             </>}
             {folderId && linkable.length > 0 && <>
               <div className="drive-pop-sep" />
@@ -1390,13 +1300,6 @@ export function ContentLibrary({
       origin={embedded ? 'client' : 'content'}
       onClose={() => { setSendingFiles(null); clearSelection(); }}
       onChanged={onChanged}
-    />}
-    {cloudDialog && folderId && currentFolder && scopeClientId && <CloudDriveDialog
-      organizationId={organizationId}
-      provider={cloudDialog}
-      folder={{ id: folderId, name: currentFolder.name, clientId: scopeClientId, projectId }}
-      onClose={() => setCloudDialog(null)}
-      onLinked={onChanged}
     />}
     {moving && <MoveDialog
       data={data}

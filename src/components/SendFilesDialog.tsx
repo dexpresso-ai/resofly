@@ -10,7 +10,6 @@ import { dateNL } from '../lib/format';
 import { folderPath } from '../lib/folders';
 import { resolveShareContext } from '../lib/shares';
 import { createClientContact } from '../lib/repository';
-import { isCloudAttachment } from '../lib/cloudDrive';
 import {
   TRANSFER_DEFAULT_EXPIRY, TRANSFER_EXPIRY_OPTIONS, expiryForServer, fileCountLabel, fileRefusal, formatBytes,
   maxExpiryDate, minExpiryDate, parseLooseEmails, recipientInputs, transferRecipientOptions,
@@ -485,10 +484,8 @@ export function TransferSourcePicker({ data, clientId, existing, onClose, onPick
   // eslint-disable-next-line react-hooks/exhaustive-deps
   [data.folders, clientId]);
 
-  // Een gekoppeld bestand uit Google Drive of OneDrive ligt niet in onze
-  // opslag en kan dus niet mee (de server slaat het ook over).
   const files = useMemo(() => data.attachments
-    .filter((a) => a.entity_type === 'folder' && !isCloudAttachment(a) && belongs('attachment', a.id))
+    .filter((a) => a.entity_type === 'folder' && belongs('attachment', a.id))
     .map((a) => ({ id: a.id, name: a.name, size: a.size_bytes, path: folderPath(data.folders, a.entity_id).map((p) => p.name).join(' / ') }))
     .sort((a, b) => a.name.localeCompare(b.name, 'nl', { numeric: true })),
   // eslint-disable-next-line react-hooks/exhaustive-deps

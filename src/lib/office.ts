@@ -1,6 +1,5 @@
 import { getAccessToken, getWorkerBase, deleteR2Object } from './r2-api';
 import { createAttachment } from './repository';
-import { isCloudAttachment } from './cloudDrive';
 import type { Attachment, InternalDocument, UUID } from '../types';
 
 /**
@@ -24,9 +23,6 @@ const OFFICE_EDITABLE_EXT = new Set(['docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp'
 
 /** Is dit bestand online bewerkbaar (Word/Excel/PowerPoint/ODF)? */
 export function isOfficeEditable(att: Attachment): boolean {
-  // Een bestand uit Google Drive of OneDrive bewerk je daar: het ligt niet in
-  // R2, dus de editor van ResoFly heeft niets om te openen.
-  if (isCloudAttachment(att)) return false;
   if (OFFICE_EDITABLE_MIME.has(att.mime_type)) return true;
   const ext = att.name.toLowerCase().match(/\.([a-z0-9]+)$/)?.[1];
   return Boolean(ext && OFFICE_EDITABLE_EXT.has(ext));

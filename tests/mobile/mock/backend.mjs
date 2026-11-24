@@ -980,34 +980,6 @@ function edgeFunction(name, body, options = {}) {
     if (action === 'createFeedLink') return { ok: true, feedLink: { ...seed.calendarFeedLink, id: 'feed-nieuw', label: String(body.label || 'Deellink'), detail: body.detail === 'details' ? 'details' : 'busy', last_used_at: null }, token: 'Q7v_-'.repeat(8) + 'abc' };
     return { ok: true, connections: [], sources: [seed.calendarSource], calendars: [seed.calendarSource], events: [], attendees: [], links: [], slots: [], ics: [] };
   }
-  // Google Drive en OneDrive (2026-11-23): gekoppeld met OneDrive, met een
-  // lang adres, een lijst met mappen en bestanden met lange namen, en één
-  // bestand dat nog niet uit OneDrive weg kon.
-  if (name === 'cloud-files') {
-    const now = new Date().toISOString();
-    if (body?.action === 'status') {
-      return {
-        ok: true,
-        providers: { google: { configured: true }, microsoft: { configured: true } },
-        connections: [{ id: 'cd-1', provider: 'microsoft', account: 'sanne.de.vries-van.den.berg@voorbeeld-ontwerpbureau.onmicrosoft.com', name: 'Sanne', status: 'active', lastError: null, createdAt: now, linkedFiles: 1 }],
-        deletions: [{ id: 'del-1', provider: 'microsoft', name: 'Offerte-2025-definitief-versie-3-met-opmerkingen-van-de-klant.docx', status: 'failed', failure: 'permission', lastError: 'OneDrive laat dit account het bestand niet weggooien. Het staat dus nog in OneDrive.', attempts: 1, createdAt: now, mine: true }],
-      };
-    }
-    if (body?.action === 'browse') {
-      const file = (id, name, size) => ({ id, driveId: 'b!seed', name, isFolder: false, size, mimeType: 'application/pdf', modified: now, webUrl: `https://onedrive.live.com/?id=${id}` });
-      return {
-        ok: true,
-        account: 'sanne.de.vries-van.den.berg@voorbeeld-ontwerpbureau.onmicrosoft.com',
-        next: 'https://graph.microsoft.com/v1.0/me/drive/root/children?$skiptoken=seed',
-        items: [
-          { id: 'od-map-1', driveId: 'b!seed', name: 'Klanten 2026 — lopende opdrachten en offertes', isFolder: true, size: null, mimeType: 'application/octet-stream', modified: now, webUrl: null },
-          file('od-1', 'Moodboard-voorjaarscampagne-met-alle-referentiebeelden-van-de-klant.pdf', 18_400_000),
-          file('od-2', 'Logo.svg', 12_000),
-        ],
-      };
-    }
-    return { ok: true, done: 0, failed: 0, pending: 0, deletions: [], added: [], skipped: [], notDeletable: [] };
-  }
   if (name === 'meeting-booking') {
     // De boekingslinks van de eerste klant; een andere klant heeft er geen.
     if (body?.action === 'listLinks') return { ok: true, links: body.clientId && body.clientId !== seed.clients[0].id ? [] : pub.bookingAdminLinks };

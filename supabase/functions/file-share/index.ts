@@ -158,18 +158,12 @@ async function shareItem(
   // Tickets een bijlage van een intern ticket via een deellink. De database
   // weigert het ook (drive_share_attachment_in_content); dit is de zin vooraf.
   if (itemType === 'attachment') {
-    const { data: file, error: fileError } = await admin.from('attachments').select('entity_type, cloud_provider')
+    const { data: file, error: fileError } = await admin.from('attachments').select('entity_type')
       .eq('organization_id', organizationId).eq('id', itemId).maybeSingle();
     if (fileError) throw new HttpError('Het bestand kon niet worden opgezocht. Probeer het opnieuw.', 500);
     if (!file) throw new HttpError('Dit bestand bestaat niet (meer) in deze organisatie.', 404);
     if (file.entity_type !== 'folder') {
       throw new HttpError('Alleen bestanden die in een map van Inhoud staan, kun je delen. Verplaats het bestand eerst naar een map.', 403);
-    }
-    // Ligt niet in onze opslag: het portaal en de deellink kunnen het niet geven.
-    // De database weigert het ook (drive_share_not_cloud).
-    if (file.cloud_provider) {
-      const where = file.cloud_provider === 'google' ? 'Google Drive' : 'OneDrive';
-      throw new HttpError(`Dit bestand staat in ${where}. Deel het daar; ResoFly kan het niet aan je klant geven.`, 403);
     }
   }
 

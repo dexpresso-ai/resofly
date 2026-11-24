@@ -118,8 +118,6 @@ import { memberShortName, memberColor, memberInitials, memberEmail, projectTeamA
 import { uploadToR2 } from './lib/r2';
 import { listExternalCalendarEvents, createExternalCalendarEvent, updateCalendarEvent, deleteCalendarEvent, completeCalendarOAuth, takeCalendarOAuthReturn, invalidateCalendarEventsCache, type CalendarEventInput } from './lib/calendar-api';
 import { calendarOAuthErrorText } from './lib/calendarConnection';
-import { completeCloudDriveOAuth, takeDriveOAuthReturn } from './lib/cloudDrive-api';
-import { clearCloudDrivePending, cloudProviderLabel, driveOAuthErrorText, markCloudDrivePendingLinked } from './lib/cloudDrive';
 import type { DocumentExportMeta } from './lib/documentExport';
 import { createOfficeSessionForDocument, uploadDocumentDocx, uploadOfficeDocumentFile, createBlankOfficeDocument, downloadOfficeDocument, officeFileNameForDocument, warmupOfficeEditor, OFFICE_UPLOAD_ACCEPT, NEW_OFFICE_LABEL, type OfficeSession, type NewOfficeType } from './lib/office';
 import { deleteR2Object } from './lib/r2-api';
@@ -1512,40 +1510,6 @@ function App() {
       })
       .finally(() => dismiss(busy));
   }, [calendarOAuthReturn, loading, activeOrganization?.id]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Terug van Google of Microsoft na het koppelen van Google Drive of OneDrive
-  // (Inhoud → + Nieuw → Uit Google Drive / Uit OneDrive). Hier afronden, met de
-  // sessie van wie er is ingelogd; daarna opent Inhoud weer in de map waar je
-  // begon, met het venster erbij (ContentLibrary leest rememberCloudDrivePending).
-  const [driveOAuthReturn, setDriveOAuthReturn] = useState(() => takeDriveOAuthReturn());
-  useEffect(() => {
-    if (!driveOAuthReturn || loading || !activeOrganization || tabsLoadedForRef.current !== activeOrganization.id) return;
-    const pending = driveOAuthReturn;
-    setDriveOAuthReturn(null);
-    if (pending.kind === 'error') {
-      clearCloudDrivePending();
-      notify({ tone: 'muted', title: `${pending.provider ? cloudProviderLabel(pending.provider) : 'Koppeling'} niet gekoppeld`, detail: driveOAuthErrorText(pending.error, pending.provider), ttl: 9000 });
-      return;
-    }
-    const busy = notify({ tone: 'gold', title: 'Koppelen…', detail: 'ResoFly rondt de koppeling af. Dat duurt een paar seconden.', ttl: 60_000 });
-    completeCloudDriveOAuth(pending.code, pending.state)
-      .then((done) => {
-        const name = cloudProviderLabel(done.provider);
-        const retried = done.retried ? ` ${done.retried === 1 ? 'Eén bestand dat je eerder verwijderde, gaat' : `${done.retried} bestanden die je eerder verwijderde, gaan`} nu alsnog naar de prullenbak.` : '';
-        notify({ tone: 'ok', title: `${name} gekoppeld`, detail: `${done.account ? `${done.account} staat nu in je werkruimte.` : 'Gekoppeld.'} Kies nu de bestanden voor je map.${retried}` });
-        markCloudDrivePendingLinked(done.organizationId);
-        if (done.organizationId === activeOrganization.id && permissions.canRead('content')) {
-          if (page !== 'content') { setPage('content'); setProjectId(null); setClientId(null); }
-          // Staat Inhoud al open, dan hoort hij het zo.
-          window.setTimeout(() => window.dispatchEvent(new Event('resofly:cloud-drive-linked')), 0);
-        }
-      })
-      .catch((error) => {
-        clearCloudDrivePending();
-        notify({ tone: 'muted', title: 'Koppelen lukte niet', detail: error instanceof Error ? error.message : 'Er ging iets mis.', ttl: 9000 });
-      })
-      .finally(() => dismiss(busy));
-  }, [driveOAuthReturn, loading, activeOrganization?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Uit een pushmelding van een agent: naar het commandocentrum, met die agent open.
   const [agentDeepLink, setAgentDeepLink] = useState<string | null>(() => readAgentDeepLink());
