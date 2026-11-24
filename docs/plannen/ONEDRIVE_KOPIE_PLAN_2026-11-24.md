@@ -1,7 +1,8 @@
 # Plan — Een kopie van Inhoud in OneDrive (2026-11-24)
 
-> **Status: voorstel, nog niet gebouwd.** Eerst akkoord op de open punten in §3,
-> dan pas bouwen.
+> **Status: akkoord op 24 november; fase 1 gebouwd op de werkbranch, nog niet
+> uitgerold.** De antwoorden op de open punten staan in §3, in de kolom
+> "Besloten". Wat er gebouwd is: `docs/changelog/CHANGELOG_ONEDRIVE_KOPIE_2026-11-24.md`.
 
 Vraag: *de bestanden van ResoFly ook in de cloudopslag van Microsoft OneDrive,
 met ResoFly als leidend systeem. Verwijder je iets in ResoFly, dan gaat het in
@@ -32,8 +33,8 @@ er niets van.
 **De eigenaar, in Instellingen → AI & koppelingen → OneDrive:**
 1. *OneDrive koppelen*: inloggen bij Microsoft en toestemming geven.
 2. Kiezen waar de kopie komt (standaard een map `ResoFly` in zijn OneDrive).
-3. *Kopie aanzetten*. ResoFly kopieert eerst wat er al is (zie §3, punt A) en
-   toont de voortgang: "1.240 van 3.512 bestanden".
+3. *Kopie aanzetten*. Vanaf dan komt elke wijziging in OneDrive. Wat er al
+   stond, gaat pas mee met *Alles opnieuw kopiëren* (§3, punt A).
 4. Daarna een statusregel: "Bijgewerkt om 14:32", of wat er misging, met
    *Opnieuw proberen*. Is de koppeling verlopen (wachtwoord gewijzigd,
    toestemming ingetrokken), dan ziet de eigenaar dat hier en in een melding;
@@ -65,14 +66,14 @@ klant hernoemd, dan wordt zijn map in OneDrive mee hernoemd.
 
 ## 3 · Nog te beslissen (met mijn advies)
 
-| # | Vraag | Advies |
-| --- | --- | --- |
-| A | Bestanden die er al zijn: meekopiëren bij het aanzetten, of alleen nieuwe? | **Meekopiëren.** Anders is de kopie onvolledig, en dat ziet niemand. |
-| B | Notities en tekstdocumenten (die staan als tekst in ResoFly, niet als bestand): ook in OneDrive? | **Eerst niet.** Fase 1: bestanden en Word/Excel/PowerPoint-documenten. Notities en tekstdocumenten later als PDF (fase 2). |
-| C | Waar in Microsoft: alleen de OneDrive van de eigenaar, of ook een SharePoint-bibliotheek (een teamsite)? | **Fase 1 de OneDrive van de eigenaar.** Collega's laat hij meekijken door de map in OneDrive te delen. SharePoint in fase 2: dat vraagt bredere rechten, en in veel bedrijven eerst goedkeuring van de beheerder. |
-| D | Bewerkt iemand de kopie in OneDrive en daarna het origineel in ResoFly? | **ResoFly overschrijft** (ResoFly is leidend). OneDrive bewaart de vorige versie in zijn versiegeschiedenis, dus er gaat niets onherroepelijk verloren. |
-| E | Verwijdert iemand een bestand in OneDrive zelf? | **ResoFly zet het niet vanzelf terug.** Bij de volgende wijziging in ResoFly komt het terug, en *Alles opnieuw kopiëren* in Instellingen maakt de kopie weer compleet. |
-| F | Wat al gebouwd is op de werkbranch: losse bestanden uit Google Drive of OneDrive koppelen (een verwijzing)? | **Weghalen** en de onderdelen hergebruiken (koppelen met Microsoft, de sleutels, de verwijderwachtrij). Twee manieren om bestanden in OneDrive te hebben, maakt het onduidelijk. Google Drive kan later als tweede bestemming voor dezelfde kopie. |
+| # | Vraag | Advies | Besloten (24 november) |
+| --- | --- | --- | --- |
+| A | Bestanden die er al zijn: meekopiëren bij het aanzetten, of alleen nieuwe? | Meekopiëren. | **Niet meekopiëren**: er zijn alleen bestanden op staging. Wie het toch wil, kiest *Alles opnieuw kopiëren* (punt E). |
+| B | Notities en tekstdocumenten (die staan als tekst in ResoFly, niet als bestand): ook in OneDrive? | Eerst niet; later als PDF. | **Niet.** Word/Excel/PowerPoint-documenten in Inhoud gaan wel mee. |
+| C | Waar in Microsoft: alleen de OneDrive van de eigenaar, of ook een SharePoint-bibliotheek? | Eerst de OneDrive van de eigenaar. | **Eerst alleen OneDrive.** |
+| D | Bewerkt iemand de kopie in OneDrive en daarna het origineel in ResoFly? | ResoFly overschrijft; OneDrive bewaart de vorige versie. | **ResoFly is leidend.** |
+| E | Verwijdert iemand een bestand in OneDrive zelf? | Niet vanzelf terugzetten; *Alles opnieuw kopiëren* maakt de kopie compleet. | **Volgens advies.** |
+| F | De eerste versie op de werkbranch (losse bestanden koppelen als verwijzing)? | Weghalen, onderdelen hergebruiken. | **Volgens advies.** Teruggedraaid in commit 7dc6928. |
 
 ## 4 · Hoe het werkt
 
@@ -178,7 +179,8 @@ nieuwe, zodat er geen tabellen en kolommen blijven hangen die niemand gebruikt.
   opnieuw proberen, uitzetten).
 - Kopie van klanten, projecten, dossiermappen, geüploade bestanden en
   Office-documenten. Hernoemen, verplaatsen, bewerken en verwijderen lopen mee.
-- De bestaande bestanden meekopiëren bij het aanzetten (§3 A).
+- *Alles opnieuw kopiëren*: controleert elk bestand in OneDrive en zet terug
+  wat ontbreekt of daar is veranderd (§3 A en E).
 
 **Fase 2 (later, apart te beslissen)**
 - Notities en tekstdocumenten als PDF.

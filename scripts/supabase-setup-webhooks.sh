@@ -29,6 +29,10 @@
 #      domeinen na bij Cloudflare en ruimt oude namen en inlogaanvragen op.
 #      CLIENT_DOMAINS_WORKER_SECRET zet dit script NIET: dezelfde waarde moet
 #      ook in de Worker staan, dus die kies je zelf (docs/setup/KLANTDOMEINEN_SETUP.md).
+#   7. De kopie in OneDrive (migratie 20261124100000): staat de pg_cron-taak
+#      'onedrive-sync' er nog niet, dan een nieuw ONEDRIVE_SYNC_CRON_SECRET en de
+#      taak (elke twee minuten). Die werkt de wachtrij af van wat er in OneDrive
+#      moet veranderen.
 #
 # Veilig om opnieuw te draaien: het zet alleen wat ontbreekt, en geen enkele
 # waarde komt in beeld. Draait in de workflow "Deploy Supabase (staging)"
@@ -214,6 +218,32 @@ select cron.schedule(
     :'url', :'secret'));
 SQL
   echo "CLIENT_DOMAINS_CRON_SECRET gezet en de taak 'client-domains-recheck' ingepland (elk kwartier)."
+fi
+
+# ── 7. De kopie in OneDrive: wat er in ResoFly verandert, ook daar ─────────
+#
+# Na een wijziging in Inhoud zwengelt de app de wachtrij meteen aan. Deze taak
+# pakt wat bleef liggen: een wijziging buiten Inhoud (een klant hernoemd), een
+# cascade zonder scherm (een klant verwijderd), of een storing. Elke twee
+# minuten; een mislukte poging wacht steeds langer
+# (onedrive_sync_jobs.next_attempt_at), dus dat is geen druk op Microsoft.
+if [ "$(sql -c "select to_regclass('public.onedrive_sync_jobs') is not null")" != "t" ]; then
+  echo "OneDrive: de migratie 20261124100000 staat nog niet op deze database; overgeslagen."
+elif [ "$(sql -c "select count(*) from cron.job where jobname = 'onedrive-sync'")" != "0" ]; then
+  echo "De taak 'onedrive-sync' staat al ingepland; taak en ONEDRIVE_SYNC_CRON_SECRET blijven zoals ze zijn."
+else
+  # Zelfde volgorde als hierboven: eerst het secret, dan de taak.
+  onedrive_secret="$(generate)"; mask "$onedrive_secret"
+  "$supabase_cli" secrets set --project-ref "$ref" "ONEDRIVE_SYNC_CRON_SECRET=$onedrive_secret" >/dev/null
+  sql -v secret="$onedrive_secret" -v url="https://${ref}.functions.supabase.co/onedrive-sync?cron=sync" >/dev/null <<'SQL'
+select cron.schedule(
+  'onedrive-sync',
+  '*/2 * * * *',
+  format(
+    'select net.http_post(url := %L, headers := jsonb_build_object(''Content-Type'', ''application/json'', ''x-cron-secret'', %L), body := ''{}''::jsonb, timeout_milliseconds := 120000);',
+    :'url', :'secret'));
+SQL
+  echo "ONEDRIVE_SYNC_CRON_SECRET gezet en de taak 'onedrive-sync' ingepland (elke twee minuten)."
 fi
 
 echo "Klaar: de webhooks zijn ingericht op ${ref}."

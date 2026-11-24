@@ -204,6 +204,19 @@ const PAGES = {
   'gerrie-aanzetten': { page: 'gerrie', mock: { aiOff: true } },
   'settings-ai': settingsPage('ai'),
   'settings-ai-uit': settingsPage('ai', { mock: { aiOff: true } }),
+  // De kopie in OneDrive (2026-11-24): aan, met een bestand dat niet in
+  // OneDrive kwam en een lang account; en de stand vóór het koppelen, met de
+  // uitleg en de waarschuwing over wie bij de map kan.
+  'settings-onedrive': settingsPage('onedrive', {
+    mustShow: [
+      { selector: '.onedrive-account', label: 'het gekoppelde account' },
+      { selector: '.onedrive-failed li', label: 'het bestand dat niet in OneDrive kwam' },
+    ],
+  }),
+  'settings-onedrive-koppelen': settingsPage('onedrive', {
+    mock: { oneDrive: 'geen' },
+    mustShow: [{ selector: '.onedrive-warning', label: 'de waarschuwing over wie bij de map kan' }],
+  }),
   // Geen AI gekozen (2026-11-15): Gerrie staat nergens meer in het menu. Een
   // onthouden tabblad op Gerrie zegt waarom, met de weg naar Instellingen → AI;
   // daar staat de keuze boven de drie punten.

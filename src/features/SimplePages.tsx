@@ -29,6 +29,7 @@ import { FULL_PERMISSIONS, isAccountantRole, isAdminRole, LEVEL_LABELS, MODULES,
 import { AuditLogPanel } from './AuditLog';
 import { ClientDomainSettings } from './ClientDomainSettings';
 import { DataExportPanel } from './DataExport';
+import { OneDriveSettings } from './OneDriveSettings';
 import type { AuditTarget } from '../lib/auditLog';
 import { SETTINGS_TAB_IDS, groupSettingsTabs, settingsGroupOf, visibleSettingsTabIds, type SettingsGroupId, type SettingsTab } from '../lib/settingsMenu';
 import { SETTINGS_TABS, settingsMenuGroups } from '../components/settingsMenuItems';
@@ -3428,6 +3429,12 @@ export function Settings({
     {activeTab === 'api' && <div className="settings-tab-panel">
       {activeOrganization
         ? <ApiIntegrations organizationId={activeOrganization.id} canAdmin={canAdminOrganization} teamMembers={organizationContext.teamMembers} />
+        : <p className="settings-help">Geen actieve organisatie geselecteerd.</p>}
+    </div>}
+
+    {activeTab === 'onedrive' && <div className="settings-tab-panel">
+      {activeOrganization
+        ? <OneDriveSettings organizationId={activeOrganization.id} />
         : <p className="settings-help">Geen actieve organisatie geselecteerd.</p>}
     </div>}
 

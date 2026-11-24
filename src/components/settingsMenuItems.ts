@@ -7,7 +7,7 @@
  * instellingenpagina, met de documentopmaak-editor, in de bundel die bij elke
  * start laadt. Nu laadt die pagina pas als je hem opent.
  */
-import { Bell, BookOpen, Building2, Calculator, CalendarCog, CreditCard, Download, Globe, History, LayoutTemplate, ListChecks, Mail, MonitorSmartphone, Palette, Plug, Receipt, ShieldCheck, Sparkles, SlidersHorizontal, Users, Wallet, Webhook, type LucideIcon } from 'lucide-react';
+import { Bell, BookOpen, Building2, Calculator, CalendarCog, Cloud, CreditCard, Download, Globe, History, LayoutTemplate, ListChecks, Mail, MonitorSmartphone, Palette, Plug, Receipt, ShieldCheck, Sparkles, SlidersHorizontal, Users, Wallet, Webhook, type LucideIcon } from 'lucide-react';
 import { SETTINGS_TAB_IDS, groupSettingsTabs, type SettingsGroupId, type SettingsTab } from '../lib/settingsMenu';
 
 export type SettingsTabMeta = { label: string; Icon: LucideIcon; description: string };
@@ -32,6 +32,7 @@ const SETTINGS_TAB_META: Record<SettingsTab, SettingsTabMeta> = {
   abonnement: { label: 'Abonnement', Icon: ShieldCheck, description: 'Je ResoFly-abonnement, betaalstatus en gebruikerslicenties.' },
   gegevens: { label: 'Gegevens', Icon: Download, description: 'Download al je gegevens in één keer: om over te stappen naar een ander pakket, voor je archief of voor je accountant.' },
   ai: { label: 'AI', Icon: Sparkles, description: 'Zet Gerrie, de AI-assistent, voor jezelf aan of uit. Koppel je eigen AI (Claude, ChatGPT, Gemini) aan deze werkruimte, en bekijk het verbruik en de kosten van Gerrie per gebruiker.' },
+  onedrive: { label: 'OneDrive', Icon: Cloud, description: 'Houd een kopie van de bestanden uit Inhoud en de klantdossiers bij in je OneDrive. ResoFly blijft leidend: wat je hier verandert of verwijdert, gebeurt daar ook.' },
   api: { label: 'API & webhooks', Icon: Webhook, description: 'Koppel andere software aan ResoFly — een webshop, je urenapp, Zapier, Make of n8n — met een API-sleutel.' },
   email: { label: 'E-mail', Icon: Mail, description: 'Pas de teksten van je offerte-, factuur- en herinneringsmails en van de ticketmeldingen aan klanten aan, bepaal of klanten e-mail krijgen over hun tickets, en verstuur een testmail om je configuratie te controleren.' },
 };

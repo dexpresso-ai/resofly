@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { DragEvent as ReactDragEvent, KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react';
 import {
-  ArrowDown, ArrowUp, ArrowUpDown, Check, ChevronDown, ChevronLeft, ChevronRight, Download, Eye, EyeOff,
+  ArrowDown, ArrowUp, ArrowUpDown, Check, ChevronDown, ChevronLeft, ChevronRight, Cloud, Download, Eye, EyeOff,
   File, FilePen, FileText, Folder, FolderOpen, FolderPlus, Info, LayoutGrid, Link2, List, MoreVertical,
   Pencil, Plus, Presentation, Search, Send, Share2, Sheet, SlidersHorizontal, StickyNote, Trash2, Upload, UploadCloud, Users, X,
 } from 'lucide-react';
@@ -19,6 +19,7 @@ import { AttachmentGlyph, DocumentGlyph, attAccentColor, attTypeLabel, documentA
 import { ShareDialog } from '../components/ShareDialog';
 import { SharedOverview, SharedOverviewButton } from '../components/SharedOverview';
 import { SendFilesDialog } from '../components/SendFilesDialog';
+import { kickOneDriveSync, loadOneDriveMirror, type OneDriveMirrorSummary } from '../lib/onedrive-api';
 import type { TransferSource } from '../lib/transfers-api';
 import { shareKey, sharedItemKeys, type ShareTarget } from '../lib/shares';
 import {
@@ -126,7 +127,7 @@ export function ContentLibrary({
   canWrite,
   initialView = 'all',
   rootClientId = null,
-  onChanged,
+  onChanged: onChangedProp,
   onNewNote,
   onEditNote,
   onNewDocument,
@@ -149,6 +150,24 @@ export function ContentLibrary({
 }) {
   /** Ingebed in het klantdossier: geen "alle klanten"-niveau, wél dezelfde inhoud. */
   const embedded = rootClientId !== null;
+
+  // Staat er een kopie in OneDrive (Instellingen → OneDrive), dan zegt de
+  // verkenner dat, en gaat na elke wijziging de wachtrij meteen naar OneDrive
+  // in plaats van op de geplande taak te wachten. De database zet de taken zelf
+  // klaar; dit is alleen het aanzwengelen.
+  const [oneDrive, setOneDrive] = useState<OneDriveMirrorSummary | null>(null);
+  useEffect(() => {
+    let alive = true;
+    loadOneDriveMirror(organizationId).then(m => { if (alive) setOneDrive(m); }).catch(() => undefined);
+    return () => { alive = false; };
+  }, [organizationId]);
+  const oneDriveOn = oneDrive?.enabled === true;
+  const onChanged = useCallback(() => {
+    onChangedProp();
+    if (oneDriveOn) kickOneDriveSync(organizationId);
+  }, [onChangedProp, oneDriveOn, organizationId]);
+  /** Bij verwijderen: wat er in OneDrive gebeurt. */
+  const oneDriveDeleteNote = oneDriveOn ? ' In OneDrive gaat het naar de prullenbak.' : '';
   const [showNotes, setShowNotes] = useState(initialView !== 'documents');
   const [showDocuments, setShowDocuments] = useState(initialView !== 'notes');
   const [showFiles, setShowFiles] = useState(true);
@@ -467,7 +486,7 @@ export function ContentLibrary({
   function deleteFolder(folder: ContentFolder) {
     const descendants = folderDescendantIds(folderScope, folder.id);
     const sub = descendants.length ? ` en ${descendants.length} submap(pen)` : '';
-    if (!window.confirm(`Map "${folder.name}"${sub} verwijderen? Notities en documenten blijven bestaan (ze worden ontkoppeld); geüploade bestanden in deze map(pen) worden verwijderd.`)) return;
+    if (!window.confirm(`Map "${folder.name}"${sub} verwijderen? Notities en documenten blijven bestaan (ze worden ontkoppeld); geüploade bestanden in deze map(pen) worden verwijderd.${oneDriveDeleteNote}`)) return;
     run(async () => {
       await deleteContentFolder(folder.id, descendants, organizationId);
       if (folderId === folder.id || descendants.includes(folderId ?? '')) setFolderId(folder.parent_id);
@@ -482,7 +501,7 @@ export function ContentLibrary({
   }
 
   function deleteFile(att: Attachment) {
-    if (!window.confirm(`"${att.name}" verwijderen? Het bestand wordt ook uit de Cloudflare-opslag gehaald.`)) return;
+    if (!window.confirm(`"${att.name}" verwijderen? Het bestand wordt ook uit de Cloudflare-opslag gehaald.${oneDriveDeleteNote}`)) return;
     run(async () => { await deleteAttachment({ id: att.id, storage_key: att.storage_key, organization_id: att.organization_id }); });
   }
 
@@ -844,7 +863,7 @@ export function ContentLibrary({
       docs.length ? `${docs.length} ${docs.length === 1 ? 'document' : 'documenten'}` : null,
       folders.length ? `${folders.length} ${folders.length === 1 ? 'map' : 'mappen'}` : null,
     ].filter(Boolean).join(' en ');
-    if (!window.confirm(`${what} verwijderen? Bestanden gaan ook uit de Cloudflare-opslag. Notities en documenten in verwijderde mappen blijven bestaan (ze worden ontkoppeld); geüploade bestanden erin gaan wel weg.`)) return;
+    if (!window.confirm(`${what} verwijderen? Bestanden gaan ook uit de Cloudflare-opslag. Notities en documenten in verwijderde mappen blijven bestaan (ze worden ontkoppeld); geüploade bestanden erin gaan wel weg.${oneDriveDeleteNote}`)) return;
     setBusy(true); setError(null);
     try {
       for (const row of files) {
@@ -1159,6 +1178,13 @@ export function ContentLibrary({
         {uploading && <span className="drive-uploading"><UploadCloud size={14} /> Uploaden…</span>}
 
         <div className="odrv-cmdbar-right">
+          {oneDriveOn && (oneDrive?.rootWebUrl
+            ? <a className="odrv-tool odrv-onedrive" href={oneDrive.rootWebUrl} target="_blank" rel="noopener noreferrer" title="Er staat een kopie van deze bestanden in OneDrive. Wat je hier verandert of verwijdert, gebeurt daar ook.">
+                <Cloud size={14} /> <span className="odrv-tool-label">OneDrive</span>
+              </a>
+            : <span className="odrv-tool odrv-onedrive" title="Er staat een kopie van deze bestanden in OneDrive. Wat je hier verandert of verwijdert, gebeurt daar ook.">
+                <Cloud size={14} /> <span className="odrv-tool-label">OneDrive</span>
+              </span>)}
           <SharedOverviewButton data={data} onOpen={() => { setSharedOpen(true); setNewOpen(false); setSortOpen(false); setFilterOpen(false); setMenu(null); }} />
           <div className="drive-new-wrap">
             <button type="button" className={`odrv-tool drive-pop-trigger${anyFilterOff ? ' is-active' : ''}`} onClick={() => { setFilterOpen(o => !o); setNewOpen(false); setSortOpen(false); setMenu(null); }} aria-haspopup="menu" aria-expanded={filterOpen}>

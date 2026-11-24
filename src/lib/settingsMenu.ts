@@ -26,7 +26,7 @@ export const SETTINGS_GROUPS = [
   // Alles wat bij je klant aankomt: portaal, PDF's, het adres en de mails.
   { id: 'klant', label: 'Wat je klant ziet', tabs: ['huisstijl', 'documenten', 'domein', 'email'] },
   { id: 'geld', label: 'Geld', tabs: ['facturatie', 'betalen', 'boekhouding'] },
-  { id: 'koppelingen', label: 'AI & koppelingen', tabs: ['ai', 'api'] },
+  { id: 'koppelingen', label: 'AI & koppelingen', tabs: ['ai', 'api', 'onedrive'] },
   // Per apparaat, niet per organisatie: meldingen en de losse apps.
   { id: 'apparaat', label: 'Op je apparaat', tabs: ['meldingen', 'apps'] },
 ] as const satisfies ReadonlyArray<{ id: SettingsGroupId; label: string; tabs: readonly string[] }>;
@@ -66,6 +66,10 @@ export function settingsTabRoleRule(tab: SettingsTab, role: OrganizationRole | n
   // gewoon teamlid of de boekhouder doet dat niet. log_data_export weigert hen
   // ook.
   if (tab === 'gegevens') return isAdminRole(role);
+  // De kopie in OneDrive: alleen de eigenaar (keuze van 24 november). Hij
+  // koppelt zijn eigen OneDrive, en wie bij die map kan, ziet alle bestanden
+  // van de klanten; dat beslist de eigenaar, niet een beheerder.
+  if (tab === 'onedrive') return role === 'owner';
   return null;
 }
 

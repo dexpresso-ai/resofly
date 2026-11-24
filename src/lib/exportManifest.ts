@@ -137,7 +137,11 @@ export const EXPORT_FORMAT_VERSION = 1;
 // (landelijke tarieven, geen gegevens van een organisatie); geen tabellen of kolommen.
 // 20261123150000 (opname bij een notitie) zet de kolom note_id op
 // meeting_recordings; die tabel gaat al mee, met het bestand (storage_key).
-export const EXPORT_SCHEMA_VERSION = '20261123150000';
+// 20261124100000 (kopie in OneDrive) zet vier tabellen erbij.
+// onedrive_mirrors gaat mee (welk account en welke map de eigenaar koppelde),
+// de tokens zijn 'geheim', en de wachtrij en de koppeltabel van de edge
+// function zijn 'intern'. De bestanden zelf staan al in de export, vanuit R2.
+export const EXPORT_SCHEMA_VERSION = '20261124100000';
 
 export type TableKind =
   | 'export'
@@ -270,6 +274,8 @@ export const EXPORT_MANIFEST: Readonly<Record<string, TableRule>> = {
   // ── Agenda en afspraken ──────────────────────────────────────────────────
   calendar_connections: { kind: 'export' },
   calendar_connection_tokens: { kind: 'geheim', reason: GEHEIM },
+  onedrive_mirrors: { kind: 'export', orderBy: ['organization_id'] },
+  onedrive_mirror_tokens: { kind: 'geheim', reason: GEHEIM },
   calendar_app_passwords: { kind: 'geheim', reason: GEHEIM },
   calendar_feed_links: { kind: 'geheim', reason: GEHEIM },
   calendar_sources: {
@@ -440,6 +446,8 @@ export const EXPORT_MANIFEST: Readonly<Record<string, TableRule>> = {
   notification_outbox: { kind: 'intern', reason: WACHTRIJ },
   storage_purge_queue: { kind: 'intern', reason: WACHTRIJ },
   gallery_purge_queue: { kind: 'intern', reason: WACHTRIJ },
+  onedrive_sync_jobs: { kind: 'intern', reason: WACHTRIJ },
+  onedrive_sync_items: { kind: 'intern', reason: WACHTRIJ },
   notification_preferences: { kind: 'prive', reason: PRIVE },
   push_subscriptions: { kind: 'geheim', reason: GEHEIM },
 

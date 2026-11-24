@@ -13514,3 +13514,33 @@ button.alog-feed-row:hover{background:var(--bg3)}
 /* Maandweergave: een taak toont de kleur van zijn project, niet overal goud. */
 .cm-chip.is-task .cm-chip-dot,
 .cm-dayitem.is-task .cm-dayitem-dot{background:var(--event-color,var(--accent))}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   KOPIE IN ONEDRIVE (2026-11-24)
+   Instellingen → OneDrive (OneDriveSettings.tsx), en het icoon in de
+   commandobalk van de verkenner als de kopie aanstaat.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.onedrive-card .data-export-columns{margin-top:4px}
+.onedrive-rules{margin:12px 0 0}
+.onedrive-rules strong{color:var(--text)}
+.onedrive-warning{display:flex;align-items:flex-start;gap:8px;margin:14px 0 0;padding:10px 12px;border-radius:10px;border:1px solid rgba(var(--warn-rgb),.35);background:rgba(var(--warn-rgb),.1);font-size:12.5px;line-height:1.55;color:var(--text)}
+.onedrive-warning svg{flex-shrink:0;margin-top:2px;color:var(--accent-o)}
+.onedrive-account{display:grid;grid-template-columns:18px minmax(0,1fr);gap:8px;align-items:start;margin:0 0 12px;padding:10px 12px;border-radius:10px;border:1px solid var(--border);font-size:13px;line-height:1.5;color:var(--muted2)}
+.onedrive-account svg{margin-top:2px;color:var(--accent-b)}
+.onedrive-account strong{color:var(--text);overflow-wrap:anywhere}
+.onedrive-status{display:flex;align-items:flex-start;gap:8px;margin:0 0 12px;padding:10px 12px;border-radius:10px;font-size:13px;line-height:1.5;color:var(--text);background:var(--bg3)}
+.onedrive-status svg{flex-shrink:0;margin-top:2px}
+.onedrive-status.is-ok svg{color:var(--accent-g)}
+.onedrive-status.is-busy svg{color:var(--accent-b)}
+.onedrive-status.is-warn{background:rgba(var(--warn-rgb),.1);border:1px solid rgba(var(--warn-rgb),.35)}
+.onedrive-status.is-warn svg{color:var(--accent-o)}
+.onedrive-status span{min-width:0;overflow-wrap:anywhere}
+.onedrive-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+.onedrive-actions .btn{display:inline-flex;align-items:center;gap:6px;text-decoration:none}
+.onedrive-failed{margin:0 0 12px;padding:12px;border-radius:10px;border:1px solid var(--border);background:var(--bg2)}
+.onedrive-failed h4{margin:0 0 8px;font-size:13px;font-weight:700}
+.onedrive-failed ul{list-style:none;margin:0 0 10px;padding:0;display:flex;flex-direction:column;gap:6px}
+.onedrive-failed li{display:flex;flex-direction:column;gap:2px;font-size:12.5px;line-height:1.45;color:var(--muted2);min-width:0}
+.onedrive-failed li strong{color:var(--text);overflow-wrap:anywhere}
+.onedrive-failed li span{overflow-wrap:anywhere}
+.odrv-onedrive{text-decoration:none;color:var(--accent-b)}

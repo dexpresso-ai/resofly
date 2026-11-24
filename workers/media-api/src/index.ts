@@ -1,4 +1,5 @@
 import { galleryObjectKey, galleryVariantFromKey } from './galleryKeys.ts';
+import { ONEDRIVE_PUSH_MAX_BYTES, ONEDRIVE_PUSH_SEGMENTS, isMicrosoftUploadUrl, pickDriveItem, uploadChunks } from './onedrivePush.ts';
 
 export interface Env {
   MEDIA_BUCKET: R2Bucket;
@@ -313,6 +314,10 @@ async function routeRequest(request: Request, env: Env, context: RouteContext): 
   }
   if (method === 'POST' && pathname === '/internal/signed-urls') {
     return handleInternalSignedUrls(request, env, context);
+  }
+  // Intern (gedeeld geheim): een kopie naar OneDrive (edge function onedrive-sync).
+  if (method === 'POST' && pathname === '/internal/onedrive/push') {
+    return handleInternalOneDrivePush(request, env, context);
   }
   // Downloaden met een getekende link (geen login; het token is de sleutel).
   const signedFileKey = matchSignedFileRoute(pathname);
@@ -2851,6 +2856,77 @@ async function handleInternalTransferCopy(request: Request, env: Env, context: R
     customMetadata: { name: displayName, organizationId, entityType: 'transfer', entityId: transferId, copiedFrom: sourceKey, uploadedAt: new Date().toISOString() },
   });
   return jsonResponse({ ok: true, key, size: object.size, sha256, contentType }, 200, context);
+}
+
+/**
+ * Een bestand uit R2 naar een uploadsessie van OneDrive, in stukken (de kopie
+ * van Inhoud in OneDrive, docs/plannen/ONEDRIVE_KOPIE_PLAN_2026-11-24.md).
+ *
+ * De edge function onedrive-sync levert het uploadadres; dat draagt de toegang
+ * zelf, dus hier is geen sleutel van Microsoft nodig. Elk stuk leest de worker
+ * apart uit R2 (een bereik), zodat een groot bestand niet in het geheugen hoeft,
+ * en alleen zolang het object niet verandert (etag). Verandert het halverwege
+ * (iemand slaat op in de editor), dan stopt de upload; de taak loopt dan nog
+ * een keer met de nieuwe versie.
+ *
+ * Antwoordt altijd met JSON. Een weigering van OneDrive komt terug als
+ * { ok: false, status } met status 200: de edge function beslist wat dat
+ * betekent (opnieuw proberen, OneDrive vol, opnieuw koppelen).
+ */
+async function handleInternalOneDrivePush(request: Request, env: Env, context: RouteContext): Promise<Response> {
+  requireInternalSecret(request, env);
+  const body = (await request.json().catch(() => ({}))) as { organizationId?: string; key?: string; uploadUrl?: string };
+  const organizationId = (body.organizationId || '').trim();
+  const key = (body.key || '').trim();
+  const uploadUrl = (body.uploadUrl || '').trim();
+  if (!isUuid(organizationId)) throw new HttpError(400, 'Ongeldige organisatie.');
+  assertKeyInOrg(key, organizationId);
+  if (!ONEDRIVE_PUSH_SEGMENTS.has(keySegment(key))) throw new HttpError(403, 'Dit bestand gaat niet naar OneDrive.');
+  if (!isMicrosoftUploadUrl(uploadUrl)) throw new HttpError(400, 'Dit is geen uploadadres van OneDrive.');
+
+  const head = await env.MEDIA_BUCKET.head(key);
+  if (!head) throw new HttpError(404, 'Het bestand staat niet (meer) in de opslag.');
+  // Een leeg bestand kan niet via een uploadsessie; dat zet de edge function zelf.
+  if (head.size === 0) return jsonResponse({ ok: true, empty: true }, 200, context);
+  if (head.size > ONEDRIVE_PUSH_MAX_BYTES) throw new HttpError(413, 'Dit bestand is te groot voor de kopie in OneDrive.');
+
+  const chunks = uploadChunks(head.size);
+  for (let i = 0; i < chunks.length; i++) {
+    const { start, end } = chunks[i];
+    const part = await env.MEDIA_BUCKET.get(key, { range: { offset: start, length: end - start + 1 }, onlyIf: { etagMatches: head.etag } });
+    if (!part || !('body' in part)) {
+      await fetch(uploadUrl, { method: 'DELETE' }).catch(() => undefined);
+      return jsonResponse({ ok: false, status: 409, changed: true, error: 'Het bestand veranderde tijdens het kopiëren.' }, 200, context);
+    }
+    const bytes = await part.arrayBuffer();
+    // Geen Authorization-header: het uploadadres draagt de toegang al, en
+    // OneDrive voor bedrijven weigert een upload mét token.
+    const res = await fetch(uploadUrl, {
+      method: 'PUT',
+      headers: { 'Content-Range': `bytes ${start}-${end}/${head.size}` },
+      body: bytes,
+    });
+    if (i < chunks.length - 1 && res.status === 202) {
+      await res.body?.cancel().catch(() => undefined);
+      continue;
+    }
+    const text = await res.text();
+    let payload: unknown = null;
+    try { payload = text ? JSON.parse(text) : null; } catch { payload = null; }
+    if (res.status === 200 || res.status === 201) {
+      const item = pickDriveItem(payload);
+      if (!item) return jsonResponse({ ok: false, status: 502, error: 'OneDrive gaf geen bestand terug.' }, 200, context);
+      return jsonResponse({ ok: true, item }, 200, context);
+    }
+    await fetch(uploadUrl, { method: 'DELETE' }).catch(() => undefined);
+    return jsonResponse({
+      ok: false,
+      status: res.status,
+      retryAfter: res.headers.get('retry-after'),
+      error: payload && typeof payload === 'object' ? payload : text.slice(0, 300),
+    }, 200, context);
+  }
+  return jsonResponse({ ok: false, status: 502, error: 'De upload naar OneDrive werd niet afgerond.' }, 200, context);
 }
 
 async function signPayload(payload: Record<string, unknown>, secret: string): Promise<string> {

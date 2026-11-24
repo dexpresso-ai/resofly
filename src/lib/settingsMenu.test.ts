@@ -68,6 +68,16 @@ test('de boekhouder ziet alleen zijn vier onderdelen; lege groepen verdwijnen', 
   assert.deepEqual(groups.find(group => group.id === 'geld')?.tabs.map(tab => tab.id), ['facturatie', 'boekhouding']);
 });
 
+test('OneDrive ziet alleen de eigenaar', () => {
+  // De eigenaar koppelt zijn eigen OneDrive, en wie bij die map kan, ziet alle
+  // bestanden van de klanten (keuze van 24 november).
+  assert.ok(visibleSettingsTabIds('owner', withCalendar).includes('onedrive'));
+  for (const role of ['admin', 'member', 'viewer', 'accountant'] as const) {
+    assert.ok(!visibleSettingsTabIds(role, withCalendar).includes('onedrive'), role);
+  }
+  assert.equal(settingsGroupOf('onedrive').id, 'koppelingen');
+});
+
 test('groeperen houdt de extra velden van een onderdeel vast', () => {
   const groups = groupSettingsTabs([{ id: 'email', label: 'E-mail' }, { id: 'huisstijl', label: 'Huisstijl' }]);
   assert.deepEqual(groups, [{ id: 'klant', label: 'Wat je klant ziet', tabs: [{ id: 'huisstijl', label: 'Huisstijl' }, { id: 'email', label: 'E-mail' }] }]);

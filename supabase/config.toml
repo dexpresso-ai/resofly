@@ -5,6 +5,14 @@
 [functions.calendar-integrations]
 verify_jwt = false
 
+# onedrive-sync (de kopie van Inhoud in OneDrive): Microsoft stuurt de browser na
+# "toestaan" terug naar deze functie, zonder Supabase-sessie, en de geplande taak
+# (?cron=sync) komt met een eigen geheim. Elke actie van de app eist in code
+# requireUser() + requireOrganizationAccess() + de module Inhoud, en voor het
+# koppelen en instellen de rol eigenaar.
+[functions.onedrive-sync]
+verify_jwt = false
+
 # invoice-workflow must be callable by Mollie's server-to-server payment webhook,
 # which carries no Supabase JWT. The webhook path is verified instead by the
 # Mollie webhook secret (?secret=...), and every authenticated app action still

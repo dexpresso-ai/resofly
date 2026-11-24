@@ -980,6 +980,27 @@ function edgeFunction(name, body, options = {}) {
     if (action === 'createFeedLink') return { ok: true, feedLink: { ...seed.calendarFeedLink, id: 'feed-nieuw', label: String(body.label || 'Deellink'), detail: body.detail === 'details' ? 'details' : 'busy', last_used_at: null }, token: 'Q7v_-'.repeat(8) + 'abc' };
     return { ok: true, connections: [], sources: [seed.calendarSource], calendars: [seed.calendarSource], events: [], attendees: [], links: [], slots: [], ics: [] };
   }
+  // De kopie in OneDrive (2026-11-24): aan, met een lang account, een lange
+  // mapnaam en een bestand dat niet in OneDrive kwam. Met `oneDrive: 'geen'`
+  // de stand vóór het koppelen, met de uitleg en de waarschuwing.
+  if (name === 'onedrive-sync') {
+    if (body?.action === 'process') return { ok: true, done: 0, retry: 0, failed: 0, paused: 0, pending: 0 };
+    const now = new Date().toISOString();
+    const connection = options.oneDrive === 'geen' ? null : {
+      account: 'sanne.de.vries-van.den.berg@voorbeeld-ontwerpbureau.onmicrosoft.com', name: 'Sanne', status: 'active', lastError: null,
+      enabled: true, rootName: 'ResoFly - Studio Lopik en Partners Ontwerp & Communicatie', rootWebUrl: 'https://onedrive.live.com/?id=root',
+      lastSyncedAt: now, enabledAt: now, connectedByMe: true,
+    };
+    return {
+      ok: true,
+      configured: true,
+      connection,
+      queue: connection ? {
+        pending: 0, failed: 1,
+        failedItems: [{ id: 'job-1', itemType: 'attachment', kind: 'sync', name: 'Offerte-2025-definitief-versie-3-met-opmerkingen-van-de-klant.docx', lastError: 'OneDrive weigerde dit (400 invalidRequest: The provided name contains invalid characters).', attempts: 1, updatedAt: now }],
+      } : { pending: 0, failed: 0, failedItems: [] },
+    };
+  }
   if (name === 'meeting-booking') {
     // De boekingslinks van de eerste klant; een andere klant heeft er geen.
     if (body?.action === 'listLinks') return { ok: true, links: body.clientId && body.clientId !== seed.clients[0].id ? [] : pub.bookingAdminLinks };

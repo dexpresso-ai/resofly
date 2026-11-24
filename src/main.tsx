@@ -118,6 +118,8 @@ import { memberShortName, memberColor, memberInitials, memberEmail, projectTeamA
 import { uploadToR2 } from './lib/r2';
 import { listExternalCalendarEvents, createExternalCalendarEvent, updateCalendarEvent, deleteCalendarEvent, completeCalendarOAuth, takeCalendarOAuthReturn, invalidateCalendarEventsCache, type CalendarEventInput } from './lib/calendar-api';
 import { calendarOAuthErrorText } from './lib/calendarConnection';
+import { completeOneDriveOAuth, takeOneDriveOAuthReturn } from './lib/onedrive-api';
+import { oneDriveOAuthErrorText } from './lib/onedrive';
 import type { DocumentExportMeta } from './lib/documentExport';
 import { createOfficeSessionForDocument, uploadDocumentDocx, uploadOfficeDocumentFile, createBlankOfficeDocument, downloadOfficeDocument, officeFileNameForDocument, warmupOfficeEditor, OFFICE_UPLOAD_ACCEPT, NEW_OFFICE_LABEL, type OfficeSession, type NewOfficeType } from './lib/office';
 import { deleteR2Object } from './lib/r2-api';
@@ -1545,6 +1547,40 @@ function App() {
       })
       .finally(() => dismiss(busy));
   }, [calendarOAuthReturn, loading, activeOrganization?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Terug van Microsoft na het koppelen van OneDrive (Instellingen → OneDrive).
+  // Hier afronden, met de sessie van wie er is ingelogd; de server doet het
+  // alleen voor wie startte, en alleen voor een eigenaar. Daarna naar
+  // Instellingen → OneDrive, waar de kopie aan te zetten is.
+  const [oneDriveOAuthReturn, setOneDriveOAuthReturn] = useState(() => takeOneDriveOAuthReturn());
+  useEffect(() => {
+    if (!oneDriveOAuthReturn || loading || !activeOrganization || tabsLoadedForRef.current !== activeOrganization.id) return;
+    const pending = oneDriveOAuthReturn;
+    setOneDriveOAuthReturn(null);
+    openSettings('onedrive');
+    if (pending.kind === 'error') {
+      notify({ tone: 'muted', title: 'OneDrive niet gekoppeld', detail: oneDriveOAuthErrorText(pending.error), ttl: 9000 });
+      return;
+    }
+    const busy = notify({ tone: 'gold', title: 'OneDrive koppelen…', detail: 'ResoFly rondt de koppeling af. Dat duurt een paar seconden.', ttl: 60_000 });
+    completeOneDriveOAuth(pending.code, pending.state)
+      .then((done) => {
+        notify({
+          tone: 'ok',
+          title: 'OneDrive gekoppeld',
+          detail: done.enabled
+            ? `${done.account ?? 'Je OneDrive'} is weer gekoppeld. De kopie gaat verder waar hij was.`
+            : `${done.account ?? 'Je OneDrive'} is gekoppeld. Zet nu de kopie aan in Instellingen → OneDrive.`,
+        });
+      })
+      .catch((error) => {
+        notify({ tone: 'muted', title: 'OneDrive koppelen lukte niet', detail: error instanceof Error ? error.message : 'Er ging iets mis.', ttl: 9000 });
+      })
+      .finally(() => {
+        dismiss(busy);
+        window.dispatchEvent(new Event('resofly:onedrive-changed'));
+      });
+  }, [oneDriveOAuthReturn, loading, activeOrganization?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Uit een pushmelding van een agent: naar het commandocentrum, met die agent open.
   const [agentDeepLink, setAgentDeepLink] = useState<string | null>(() => readAgentDeepLink());
