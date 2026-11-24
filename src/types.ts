@@ -3709,6 +3709,12 @@ export interface MeetingRecording extends OrgScopedRow {
   call_id: UUID | null;
   /** Gevuld als deze opname bij een notitie hoort (sinds 2026-11-23); valt dan onder Inhoud. */
   note_id?: UUID | null;
+  /**
+   * De notitie in Inhoud (map Meetings) waarin deze meeting uit de agenda is
+   * opgeslagen (sinds 2026-11-24). De opname blijft bij de afspraak horen; wie
+   * Inhoud kan lezen, ziet hem dan ook.
+   */
+  content_note_id?: UUID | null;
   storage_key: string | null;
   mime_type: string | null;
   size_bytes: number | null;
