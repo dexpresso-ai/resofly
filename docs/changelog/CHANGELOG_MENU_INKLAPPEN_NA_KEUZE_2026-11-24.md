@@ -60,7 +60,9 @@ ging pas weg als je ergens anders tikte.
 - `npm run test:loading`: groen. Die navigeert via de rail en het paneel, dus ook na het
   inklappen.
 - `npm run test:terugknop`: 16 gelukt, 0 mislukt.
-- `npm run test:mobile -- --theme=both`: zie hieronder.
+- `npm run test:mobile -- --theme=both`: 914 pagina's gemeten op telefoon, tablet, liggend
+  en laptop, in Dag en Nacht: 0 met problemen.
+- `npm run build` en `node scripts/check-csp-hash.mjs`: groen.
 - Een eigen ronde in Chromium tegen de mock-backend, 37 controles, op 1440×900 met de muis
   (los en vastgezet), op een tablet van 820×1180 met aanraking en op een telefoon van
   390×844. Gedraaid in Baken met en zonder animaties, in Zenit en in Stroom: alle vier
