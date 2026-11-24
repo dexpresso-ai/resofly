@@ -311,6 +311,19 @@ test('afspraken op dezelfde dag staan op tijd gesorteerd', () => {
   assert.equal(byDay.get('2026-08-11')!.minutes, 120);
 });
 
+test('afspraken die over elkaar heen vallen tellen hun tijd één keer', () => {
+  // Dezelfde meeting in twee agenda's, en een afspraak die half overlapt:
+  // 09:00–10:00 en 09:30–11:00 is samen anderhalf uur bezet, niet tweeënhalf.
+  const byDay = groupEventMinutesByDay(WEEK, [
+    event('2026-08-11T09:00:00', '2026-08-11T10:00:00'),
+    event('2026-08-11T09:00:00', '2026-08-11T10:00:00'),
+    event('2026-08-11T09:30:00', '2026-08-11T11:00:00'),
+    event('2026-08-11T14:00:00', '2026-08-11T15:00:00'),
+  ]);
+  assert.equal(byDay.get('2026-08-11')!.minutes, 180);
+  assert.equal(byDay.get('2026-08-11')!.items.length, 4, 'in beeld blijven ze alle vier');
+});
+
 // ── Meescrollen bij de randen ───────────────────────────────────────────────
 // Op een telefoon staan de zeven dagen onder elkaar; zonder dit kun je een taak
 // nooit van maandag naar zondag slepen.

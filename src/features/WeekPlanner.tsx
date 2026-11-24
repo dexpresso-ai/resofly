@@ -15,7 +15,8 @@ import { TimeBlockGrid, slotToTime, type GridDraft, type PreviewBlock, type Time
 import { addDays, DAY_NAMES_NL, formatISODate, isoWeekNumber, isSameDay, parseISODate, startOfWeek } from '../lib/dates';
 import { clockLabel, comparePlannedTasks, DEFAULT_BLOCK_MINUTES, edgeScrollDelta, groupEventMinutesByDay, hasPlannedTime, isSpanningTask, layoutWeekBars, PANE_EDGE_SCROLL_ZONE_PX, parseDurationInput, proposeTimeBlocks, shiftDateKey, snapMinute, sortForAutoPlan, taskBlockMinutes } from '../lib/planning';
 import { groupAssigneesByTask, scopeTasks } from '../lib/workweek';
-import { calendarEventKey, calendarLinkKey, formatLinkShort, groupLinksByTask, groupTrackedMinutesByEventKey, linkedMinutesOnDay, localDayKey, remainingEstimateOnDay } from '../lib/calendar-links';
+import { calendarEventKey, calendarLinkKey, formatLinkShort, groupLinksByTask, groupTrackedMinutesByEventKey, localDayKey } from '../lib/calendar-links';
+import { autoPlanWindowEnd, dayTaskMinutes, hasEstimate, netDay, netWeek, ownCalendarEvents, spanShares, taskEstimateMinutes, taskLoadByDay, workdayFrom, type NetDay } from '../lib/netTime';
 import type { BusySlot, PlanProposal, WeekBar } from '../lib/planning';
 import { priorityLabel } from '../lib/format';
 
@@ -126,12 +127,12 @@ type DraftSlot = { dayIndex: number; startSlot: number; endSlot: number };
 
 /** Waar het rooster de zoomstand bewaart; los van de agenda, die zijn eigen heeft. */
 const GRID_ZOOM_STORAGE_KEY = 'resofly.weekplanner.zoom';
-/** Binnen dit venster zet "Vul mijn week" werk neer. */
+/** Vanaf hier zet "Vul mijn week" werk neer; tot hoe laat hangt af van je
+ *  werktijd (`autoPlanWindowEnd`). De grens per dag is je netto tijd. Eerder
+ *  spreidde het voorstel zonder streep tot zes en een half uur per dag, en
+ *  zette het wat daar niet in paste alsnog in het eerste gat, ook als je dag
+ *  al vol zat met meetings. */
 const AUTO_PLAN_START_MINUTE = 9 * 60;
-const AUTO_PLAN_END_MINUTE = 17 * 60;
-/** Zonder streep spreidt het voorstel het werk: zo'n zes en een half uur per
- *  dag (afspraken meegerekend) vóór het naar de volgende dag gaat. */
-const AUTO_PLAN_SOFT_CAP_MINUTES = 6 * 60 + 30;
 
 type UndoAction = {
   /** Wat er gebeurde, in gewone taal: "Montage: wo → do". */
@@ -236,7 +237,7 @@ type StoredPrefs = {
    *  niet; een bewaarde "onder elkaar" van toen is geen keuze tégen het rooster. */
   layoutVersion?: number;
   /** Vijf of zeven dagen in het rooster. Ontbreekt hij, dan volgt hij je
-   *  streep: telt het weekend daar mee, dan staat het ook in beeld. */
+   *  werktijd: telt het weekend daar mee, dan staat het ook in beeld. */
   dayMode?: DayMode;
   /** Weekdagnummers (0 = maandag … 6 = zondag) die dichtgeklapt staan. Op
    *  nummer en niet op datum: wie het weekend dichtklapt wil dat volgende week
@@ -375,6 +376,9 @@ export function WeekPlanner({
   const gridRef = useRef<TimeBlockGridHandle | null>(null);
   /** Kleur per agenda, zodat een afspraak hier dezelfde kleur heeft als in de agenda. */
   const [sourceColors, setSourceColors] = useState<Map<string, string>>(() => new Map());
+  /** Van wie is welke agenda? Alleen afspraken in je eigen agenda's kosten jóu
+   *  tijd. `null` zolang het niet bekend is. */
+  const [calendarSources, setCalendarSources] = useState<Array<{ id: string; user_id: string; sync_enabled: boolean }> | null>(null);
   /** Een getekend tijdvak waar nog een titel bij moet. */
   const [draft, setDraft] = useState<DraftSlot | null>(null);
   const [proposal, setProposal] = useState<ProposalState | null>(null);
@@ -400,6 +404,7 @@ export function WeekPlanner({
       .then(payload => {
         if (cancelled) return;
         setSourceColors(new Map(payload.sources.map(source => [source.id, vividCalendarColor(source.color)])));
+        setCalendarSources(payload.sources.map(source => ({ id: source.id, user_id: source.user_id, sync_enabled: source.sync_enabled })));
       })
       // Geen agenda gekoppeld? Dan blijft het merkgoud de terugvalkleur.
       .catch(() => { /* de planner werkt door zonder agendakleuren */ });
@@ -450,7 +455,11 @@ export function WeekPlanner({
     return () => { cancelled = true; };
   }, [organizationId, windowStart, windowEnd]);
 
-  const agendaByDay = useMemo(() => groupEventMinutesByDay(days.map(formatISODate), events), [events, days]);
+  /** Je eigen afspraken. Een collega die zijn agenda met de organisatie deelt,
+   *  stond hier eerst ook in, en zijn meetings gingen van jóuw netto tijd af. */
+  const myEvents = useMemo(() => ownCalendarEvents(events, calendarSources, currentUserId), [events, calendarSources, currentUserId]);
+  /** Per dag: welke afspraken, en hoeveel tijd ze samen bezet houden (overlap één keer). */
+  const agendaByDay = useMemo(() => groupEventMinutesByDay(days.map(formatISODate), myEvents), [myEvents, days]);
 
   // ── Afspraak ↔ taak ───────────────────────────────────────────────────
   // Welke afspraken horen bij welke taak, en andersom. De koppelingen komen
@@ -463,7 +472,7 @@ export function WeekPlanner({
   }, [data.calendarEventLinks]);
   const tasksById = useMemo(() => new Map(data.tasks.map(task => [task.id, task])), [data.tasks]);
   /** Alle afspraken van de week op hun sleutel — voor de dropzones in het rooster. */
-  const eventsByKey = useMemo(() => new Map(events.map(event => [calendarEventKey(event), event])), [events]);
+  const eventsByKey = useMemo(() => new Map(myEvents.map(event => [calendarEventKey(event), event])), [myEvents]);
   const trackedByEventKey = useMemo(() => groupTrackedMinutesByEventKey(data.timeEntries, data.calendarEventLinks), [data.timeEntries, data.calendarEventLinks]);
   const trackedMinutesFor = useCallback((event: CalendarExternalEvent) => trackedByEventKey.get(calendarEventKey(event)) ?? null, [trackedByEventKey]);
 
@@ -524,6 +533,9 @@ export function WeekPlanner({
     });
   }, [archivedProjectIds, assigneesByTask, clientsById, currentUserId, data.tasks, filters, projectsById, scope]);
 
+  /** Je werktijd per dag: wat je zelf instelde, en anders acht uur op werkdagen. */
+  const workday = useMemo(() => workdayFrom(data.plannerCapacity), [data.plannerCapacity]);
+
   const { byDay, unscheduled, outsideThisWeek, weekBucket, busiestMinutes, spanningTasks } = useMemo(() => {
     const byDay = new Map<string, PlannerBucket>();
     const unscheduled: Task[] = [];
@@ -558,25 +570,17 @@ export function WeekPlanner({
     for (const [key, bucket] of byDay) {
       bucket.tasks.sort(comparePlannedTasks);
       bucket.count = bucket.tasks.length;
-      // Een gekoppelde afspraak op deze dag staat al in de agendabalk; de taak
-      // telt dan alleen het deel van zijn schatting dat daar niet al in zit.
-      // Anders leest "4u taak + 1u30 meeting voor die taak" als 5u30.
-      bucket.minutes = bucket.tasks.reduce((sum, task) => sum + remainingEstimateOnDay(taskEstimateMinutes(task), linksByTask.get(task.id) ?? [], key), 0);
-      bucket.noEstimateCount = bucket.tasks.filter(task => !hasEstimate(task)).length;
-      bucket.agendaMinutes = agendaByDay.get(key)?.minutes ?? 0;
+      // Zelfde regel als de netto tijd (`dayTaskMinutes`): een blok telt zijn
+      // blok, een gekoppelde afspraak op deze dag staat al bij de afspraken.
+      bucket.minutes = bucket.tasks.reduce((sum, task) => sum + dayTaskMinutes(task, key, linksByTask.get(task.id) ?? []), 0);
+      bucket.noEstimateCount = bucket.tasks.filter(task => !hasEstimate(task) && !hasPlannedTime(task)).length;
+      // In het team zijn het andermans dagen: jouw afspraken horen daar niet bij.
+      bucket.agendaMinutes = scope === 'mine' ? agendaByDay.get(key)?.minutes ?? 0 : 0;
     }
 
-    // Weekstroken verdelen hun uren over de dagen die ze beslaan — minus wat er
-    // al als afspraak op die dagen staat.
+    // Weekstroken verdelen hun uren over de werkdagen van de hele strook.
     for (const task of spanningTasks) {
-      const covered = orderedKeys.filter(key => key >= task.planned_date! && key <= task.planned_end_date!);
-      if (covered.length === 0) continue;
-      const links = linksByTask.get(task.id) ?? [];
-      const linked = covered.reduce((sum, key) => sum + linkedMinutesOnDay(links, key), 0);
-      const minutes = Math.max(0, taskEstimateMinutes(task) - linked);
-      if (minutes <= 0) continue;
-      const share = minutes / covered.length;
-      for (const key of covered) {
+      for (const [key, share] of spanShares(task, orderedKeys, workday, linksByTask.get(task.id) ?? [])) {
         const bucket = byDay.get(key);
         if (bucket) bucket.spanMinutes += share;
       }
@@ -590,7 +594,7 @@ export function WeekPlanner({
       tasks: weekTasks,
       count: weekTasks.length,
       minutes: weekTasks.reduce((sum, task) => sum + taskEstimateMinutes(task), 0),
-      noEstimateCount: [...weekTasks, ...spanningTasks].filter(task => !hasEstimate(task)).length,
+      noEstimateCount: [...weekTasks, ...spanningTasks].filter(task => !hasEstimate(task) && !hasPlannedTime(task)).length,
       agendaMinutes: Array.from(byDay.values()).reduce((sum, bucket) => sum + bucket.agendaMinutes, 0),
       spanMinutes: 0,
     };
@@ -601,7 +605,32 @@ export function WeekPlanner({
     const busiestMinutes = Math.max(0, ...Array.from(byDay.values()).map(bucket => bucket.minutes + bucket.agendaMinutes + bucket.spanMinutes));
 
     return { byDay, unscheduled, outsideThisWeek, weekBucket, busiestMinutes, spanningTasks };
-  }, [agendaByDay, dayKeys, days, filteredTasks, linksByTask]);
+  }, [agendaByDay, dayKeys, days, filteredTasks, linksByTask, scope, workday]);
+
+  // ── Netto tijd ────────────────────────────────────────────────────────
+  // Werktijd − afspraken = netto tijd; netto tijd − taken = vrij. Gerekend over
+  // al je open werk in deze week, los van zoeken en filters: met een filter op
+  // één project zei de dagkop anders "6u vrij" terwijl de rest van je werk er
+  // gewoon nog stond.
+  const myOpenTasks = useMemo(() => scopeTasks(data.tasks, 'mine', currentUserId, assigneesByTask)
+    .filter(task => task.status !== 'done' && !(task.project_id && archivedProjectIds.has(task.project_id))),
+  [archivedProjectIds, assigneesByTask, currentUserId, data.tasks]);
+  const linksFor = useCallback((taskId: string) => linksByTask.get(taskId) ?? [], [linksByTask]);
+  const myLoad = useMemo(() => taskLoadByDay(days.map(formatISODate), myOpenTasks, workday, linksFor), [days, linksFor, myOpenTasks, workday]);
+  const netByDay = useMemo(() => new Map<string, NetDay>(days.map(day => {
+    const key = formatISODate(day);
+    const load = myLoad.get(key);
+    return [key, netDay(key, workday, agendaByDay.get(key)?.minutes ?? 0, (load?.minutes ?? 0) + (load?.spanMinutes ?? 0))];
+  })), [agendaByDay, days, myLoad, workday]);
+  const net = useMemo(() => netWeek([...netByDay.values()]), [netByDay]);
+  /** Hoeveel van je open taken deze week staan, en hoeveel daarvan zonder schatting. */
+  const myWeek = useMemo(() => {
+    const first = formatISODate(days[0]);
+    const last = formatISODate(days[6]);
+    const inWeek = myOpenTasks.filter(task => !!task.planned_date && task.planned_date <= last && (task.planned_end_date ?? task.planned_date) >= first);
+    // Een blok heeft altijd een duur; alleen werk zónder tijd kan een schatting missen.
+    return { count: inWeek.length, noEstimate: inWeek.filter(task => !hasEstimate(task) && !hasPlannedTime(task)).length };
+  }, [days, myOpenTasks]);
 
   // "Vandaag" mag niet blijven staan op gisteren wanneer de app 's nachts open
   // blijft — alle werktabbladen blijven gemount. Eén timer die precies om
@@ -630,31 +659,38 @@ export function WeekPlanner({
 
   const isCurrentWeek = isSameDay(anchor, startOfWeek(todayLocal));
 
-  /** Alle taakuren van de week: dagtaken plus de weekstroken. Die laatste vielen
-   *  eerder buiten het weektotaal en hingen als los pilletje in de kop. */
+  /** De weekstroken bij elkaar, voor het kopje boven de weektaken in de lijst. */
   const spanningMinutes = spanningTasks.reduce((sum, task) => sum + taskEstimateMinutes(task), 0);
-  const weekTaskMinutes = weekBucket.minutes + spanningMinutes;
   const weekTaskCount = weekBucket.count + spanningTasks.length;
+  /** De taakuren van het team in beeld: dagtaken plus het deel van de stroken in deze week. */
+  const teamWeekMinutes = Array.from(byDay.values()).reduce((sum, bucket) => sum + bucket.minutes + bucket.spanMinutes, 0);
 
   /**
-   * De schaal van de dagbalken.
+   * Wat een dagkop laat zien, en waarop de dagbalk schaalt.
    *
-   * Zonder streep is het puur een onderlinge verhouding, met een bodem van vier
-   * uur zodat één taak van een kwartier de maandagbalk niet helemaal vol trekt.
-   * Heb je zelf een streep gezet, dan is dát de schaal — en pas dan kan de
-   * planner antwoord geven op de vraag van maandagochtend: past dit nog?
+   * In "Mijn week" is de werktijd de maat: de balk is je werkdag, violet zijn je
+   * afspraken, goud je taken, en wat leeg blijft is vrij. Zonder zelf gezette
+   * streep schaalde de balk op de volste dag van de week; die dag stond dan
+   * altijd vol, hoe leeg hij ook was.
+   *
+   * In het team is er geen werktijd (wiens zou het zijn?) en geen agenda van
+   * jou: daar blijft het de onderlinge verhouding tussen de dagen, met een
+   * bodem van vier uur zodat één taak van een kwartier de balk niet vult.
    */
-  const capacityMinutes = data.plannerCapacity && data.plannerCapacity.minutes > 0
-    ? data.plannerCapacity.minutes
-    : null;
-  const loadScale = capacityMinutes ?? Math.max(busiestMinutes, 240);
-
-  /** Telt deze dag mee voor de streep? Weekend alleen als je dat zelf aanzet. */
-  const dayCountsForCapacity = useCallback((day: Date) => {
-    if (!capacityMinutes) return false;
-    const weekend = day.getDay() === 0 || day.getDay() === 6;
-    return !weekend || (data.plannerCapacity?.include_weekend ?? false);
-  }, [capacityMinutes, data.plannerCapacity]);
+  const dayFigures = (key: string): { meetings: number; tasks: number; spread: boolean; net: NetDay | null; scale: number } => {
+    if (scope === 'mine') {
+      const netOfDay = netByDay.get(key) ?? netDay(key, workday, 0, 0);
+      return {
+        meetings: netOfDay.meetingMinutes,
+        tasks: netOfDay.taskMinutes,
+        spread: (myLoad.get(key)?.spanMinutes ?? 0) > 0,
+        net: netOfDay,
+        scale: Math.max(workday.minutes, netOfDay.meetingMinutes + netOfDay.taskMinutes),
+      };
+    }
+    const bucket = byDay.get(key) ?? EMPTY_BUCKET;
+    return { meetings: 0, tasks: bucket.minutes + bucket.spanMinutes, spread: bucket.spanMinutes > 0, net: null, scale: Math.max(busiestMinutes, 240) };
+  };
 
   // ── Blijven liggen werk ───────────────────────────────────────────────
   // Open taken met een plandatum vóór vandaag. Niet automatisch verplaatsen:
@@ -1706,19 +1742,26 @@ export function WeekPlanner({
     </div>;
   };
 
-  /** Onder de dagnaam in de kop: aantal, uren, je streep en de drukte-balk. */
+  /** Onder de dagnaam in de kop: aantal, netto tijd, wat er vrij is en de drukte-balk. */
   const dayHeaderExtra = (day: Date) => {
     const key = formatISODate(day);
     const bucket = byDay.get(key) ?? EMPTY_BUCKET;
-    const total = bucket.minutes + bucket.agendaMinutes + bucket.spanMinutes;
-    const room = dayCountsForCapacity(day) && capacityMinutes !== null ? capacityMinutes - total : null;
-    const agendaShare = Math.min(100, (bucket.agendaMinutes / loadScale) * 100);
-    const taskShare = Math.min(100 - agendaShare, ((bucket.minutes + bucket.spanMinutes) / loadScale) * 100);
+    const fig = dayFigures(key);
+    const total = fig.meetings + fig.tasks;
+    const agendaShare = Math.min(100, (fig.meetings / fig.scale) * 100);
+    const taskShare = Math.min(100 - agendaShare, (fig.tasks / fig.scale) * 100);
     return <>
-      <div className="wp-dh-stats">
+      {/* "5u 30m netto · 1u 30m vrij": wat er na je afspraken overblijft voor
+          taken, en wat daarvan nog over is. Eerder stond hier het totaal van
+          afspraken plus taken, zonder maat ernaast. */}
+      <div className="wp-dh-stats" title={fig.net ? netDayTitle(fig.net, fig.spread) : undefined}>
         {bucket.count > 0 && <span className="wp-day-count">{bucket.count}</span>}
-        <span className={`wp-day-total${total > 0 ? '' : ' is-empty'}`}>{total > 0 ? `${bucket.spanMinutes > 0 ? '±' : ''}${formatDuration(total)}` : '—'}</span>
-        {room !== null && <span className={`wp-day-room${room < 0 ? ' is-over' : ''}`}>{room < 0 ? `${formatDuration(-room)} over` : `${formatDuration(room)} vrij`}</span>}
+        {fig.net?.counts
+          ? <>
+            <span className="wp-day-net"><b>{formatDuration(fig.net.netMinutes)}</b><span className="wp-day-net-word"> netto</span></span>
+            <span className={`wp-day-room${fig.net.freeMinutes! < 0 ? ' is-over' : ''}`}>{roomLabel(fig.net.freeMinutes!, fig.spread)}</span>
+          </>
+          : <span className={`wp-day-total${total > 0 ? '' : ' is-empty'}`}>{total > 0 ? `${fig.spread ? '±' : ''}${formatDuration(total)}` : '—'}</span>}
         {canWrite && <button
           type="button"
           className="wp-day-add"
@@ -1727,9 +1770,9 @@ export function WeekPlanner({
           title="Taak toevoegen op deze dag — om negen uur, daarna te verschuiven"
         ><Plus size={12}/></button>}
       </div>
-      <div className="wp-day-load" role="img" aria-label={`${formatDuration(bucket.agendaMinutes)} afspraken en ${formatDuration(bucket.minutes + bucket.spanMinutes)} taken`}>
+      <div className="wp-day-load" role="img" aria-label={fig.net ? netDayTitle(fig.net, fig.spread) : `${formatDuration(fig.tasks)} taken`}>
         <span className="wp-day-load-agenda" style={{ width: `${agendaShare}%` }}/>
-        <span className="wp-day-load-fill" style={{ width: `${taskShare}%` }}/>
+        <span className={`wp-day-load-fill${fig.net && fig.net.freeMinutes !== null && fig.net.freeMinutes < 0 ? ' is-over' : ''}`} style={{ width: `${taskShare}%` }}/>
       </div>
     </>;
   };
@@ -1782,48 +1825,55 @@ export function WeekPlanner({
   }
 
   /**
-   * "Vul mijn week": zet werk zonder tijd in de vrije gaten tussen negen en vijf,
-   * om je afspraken en bestaande blokken heen — als voorstel. De blokken staan
-   * er gestippeld bij tot je "Zo inplannen" klikt; sluiten doet niets.
+   * "Vul mijn week": zet werk zonder tijd in de vrije gaten van je werkdag, om
+   * je afspraken en bestaande blokken heen — als voorstel. De blokken staan er
+   * gestippeld bij tot je "Zo inplannen" klikt; sluiten doet niets.
+   *
+   * De grens per dag is je netto tijd: werktijd min afspraken min wat er al
+   * staat. Wat daar niet in past, blijft liggen en dat zegt het voorstel ook.
    */
   function proposeWeek() {
-    const busy = new Map<string, BusySlot[]>();
-    const used = new Map<string, number>();
-    for (const key of orderedDayKeys) {
-      const slots: BusySlot[] = [];
-      let usedMinutes = 0;
-      for (const event of agendaByDay.get(key)?.items ?? []) {
-        const slot = eventBusyOnDay(event, key);
-        if (!slot) continue;
-        slots.push(slot);
-        usedMinutes += slot.end - slot.start;
-      }
-      for (const task of byDay.get(key)?.tasks ?? []) {
-        if (!hasPlannedTime(task) || task.status === 'done') continue;
-        const start = Number(task.planned_start_minute);
-        const end = start + taskBlockMinutes(task);
-        slots.push({ start, end });
-        usedMinutes += end - start;
-      }
-      busy.set(key, slots);
-      used.set(key, usedMinutes);
-    }
     // Kandidaten: de werkvoorraad plus wat deze week wel een dag maar nog geen
     // tijd heeft. Weekstroken blijven staan: die zijn bewust geen blok.
     const candidates = sortForAutoPlan([
       ...unscheduled,
       ...Array.from(byDay.values()).flatMap(bucket => bucket.tasks).filter(task => !hasPlannedTime(task)),
     ].filter(task => task.status !== 'done'));
-    // Het weekend telt mee als je streep dat zegt én het in beeld staat: een
+    const candidateIds = new Set(candidates.map(task => task.id));
+    // Wat al vastligt: al je open werk dat geen kandidaat is, ook wat zoeken of
+    // een filter nu verbergt, en het deel van de weekstroken op die dag. Eerder
+    // telden alleen de blokken in beeld; een weekstrook van twintig uur nam
+    // geen minuut in en het voorstel zette er een volle week overheen.
+    const fixed = myOpenTasks.filter(task => !candidateIds.has(task.id));
+    const fixedLoad = taskLoadByDay(orderedDayKeys, fixed, workday, linksFor);
+    const busy = new Map<string, BusySlot[]>();
+    const used = new Map<string, number>();
+    for (const key of orderedDayKeys) {
+      const slots: BusySlot[] = [];
+      for (const event of agendaByDay.get(key)?.items ?? []) {
+        const slot = eventBusyOnDay(event, key);
+        if (slot) slots.push(slot);
+      }
+      for (const task of fixed) {
+        if (task.planned_date !== key || !hasPlannedTime(task)) continue;
+        const start = Number(task.planned_start_minute);
+        slots.push({ start, end: start + taskBlockMinutes(task) });
+      }
+      busy.set(key, slots);
+      // Afspraken tellen hun bezette tijd één keer, ook als ze overlappen.
+      const load = fixedLoad.get(key);
+      used.set(key, (agendaByDay.get(key)?.minutes ?? 0) + (load?.minutes ?? 0) + (load?.spanMinutes ?? 0));
+    }
+    // Het weekend telt mee als je werktijd dat zegt én het in beeld staat: een
     // voorstel op een dag die je niet ziet, kun je niet beoordelen.
-    const includeWeekend = (data.plannerCapacity?.include_weekend ?? false) && (showWeekend || isNarrow);
+    const includeWeekend = workday.includeWeekend && (showWeekend || isNarrow);
     const skipDays = new Set(days.filter(day => !includeWeekend && (day.getDay() === 0 || day.getDay() === 6)).map(formatISODate));
     const now = new Date();
     const { proposals, unplaced } = proposeTimeBlocks({
       dayKeys: orderedDayKeys, busy, candidates, todayKey,
       nowMinute: now.getHours() * 60 + now.getMinutes(),
-      workStart: AUTO_PLAN_START_MINUTE, workEnd: AUTO_PLAN_END_MINUTE,
-      skipDays, dailyCap: capacityMinutes, usedMinutes: used, softCap: AUTO_PLAN_SOFT_CAP_MINUTES,
+      workStart: AUTO_PLAN_START_MINUTE, workEnd: autoPlanWindowEnd(workday, AUTO_PLAN_START_MINUTE),
+      skipDays, dailyCap: workday.minutes, usedMinutes: used,
     });
     const remaining = orderedDayKeys.filter(key => key >= todayKey);
     setDraft(null);
@@ -1861,21 +1911,26 @@ export function WeekPlanner({
 
   const proposalMinutes = proposal ? proposal.items.reduce((sum, item) => sum + item.minutes, 0) : 0;
   const proposalText = !proposal ? '' : proposal.items.length > 0
-    ? `Voorstel: ${proposal.items.length} ${proposal.items.length === 1 ? 'taak' : 'taken'} · ${formatDuration(proposalMinutes)}${proposal.unplaced > 0 ? ` · ${proposal.unplaced} ${proposal.unplaced === 1 ? 'past' : 'passen'} nergens` : ''}${proposal.skippedWeekend ? ' · weekend overgeslagen' : ''}`
+    ? `Voorstel: ${proposal.items.length} ${proposal.items.length === 1 ? 'taak' : 'taken'} · ${formatDuration(proposalMinutes)}${proposal.unplaced > 0 ? ` · ${proposal.unplaced} ${proposal.unplaced === 1 ? 'past' : 'passen'} niet meer in je netto tijd` : ''}${proposal.skippedWeekend ? ' · weekend overgeslagen' : ''}`
     : proposal.candidates === 0
       ? 'Alles wat open staat heeft al een tijd.'
       : proposal.pastWeek
         ? 'Deze week is voorbij — blader naar een week die nog komt.'
         : proposal.weekendOnly
-          ? 'Alleen het weekend is nog over, en dat telt niet mee. Blader naar volgende week, of zet onder Weergave het weekend aan (7 dagen, en "weekend telt ook mee" bij je streep).'
-          : `Geen vrij gat gevonden tussen ${clockLabel(AUTO_PLAN_START_MINUTE)} en ${clockLabel(AUTO_PLAN_END_MINUTE)} voor ${proposal.candidates} ${proposal.candidates === 1 ? 'taak' : 'taken'}.`;
+          ? 'Alleen het weekend is nog over, en dat telt niet mee. Blader naar volgende week, of zet onder Weergave het weekend aan (7 dagen, en "weekend telt ook mee" bij je werktijd).'
+          : `Geen plek voor ${proposal.candidates} ${proposal.candidates === 1 ? 'taak' : 'taken'}: je netto tijd is op. Je werktijd (${formatDuration(workday.minutes)} per dag, tussen ${clockLabel(AUTO_PLAN_START_MINUTE)} en ${clockLabel(autoPlanWindowEnd(workday, AUTO_PLAN_START_MINUTE))}) zit vol met afspraken en werk dat al staat.`;
 
   // ── De kop ────────────────────────────────────────────────────────────
   const weekNumber = isoWeekNumber(anchor);
   const rangeLabel = weekRangeLabel(anchor);
-  /** De streep voor de hele week: per dag die meetelt (weekend alleen als je dat aanzette). */
-  const capacityWeekMinutes = capacityMinutes ? days.filter(dayCountsForCapacity).length * capacityMinutes : null;
-  const meter = weekMeter(weekBucket.agendaMinutes, weekTaskMinutes, capacityWeekMinutes);
+  /** De weekbalk. In "Mijn week" is hij je werktijd van de week; in het team de
+   *  taken in beeld, zonder maat. */
+  const meter = scope === 'mine'
+    ? weekMeter(net.meetingMinutes, net.taskMinutes, net.workMinutes)
+    : weekMeter(0, teamWeekMinutes, null);
+  const workdayCount = days.filter(day => netByDay.get(formatISODate(day))?.counts).length;
+  /** De som van de week, voluit: voor de tooltip en de schermlezer. */
+  const netWeekTitle = `Werktijd ${formatDuration(net.workMinutes)} (${formatDuration(workday.minutes)} × ${workdayCount} ${workdayCount === 1 ? 'werkdag' : 'werkdagen'}${workday.isDefault ? ', de standaard' : ''}) − afspraken ${formatDuration(net.meetingMinutes)} = ${formatDuration(net.netMinutes)} netto voor taken. Ingepland ${formatDuration(net.taskMinutes)}, dus ${roomLabel(net.freeMinutes)}.${net.offDayMinutes > 0 ? ` Daarnaast ${formatDuration(net.offDayMinutes)} op dagen die niet meetellen.` : ''}`;
   const showCarryOver = canWrite && overdueTasks.length > 0 && !carryOverDismissed.includes(formatISODate(anchor));
   const hasNudges = showCarryOver || unplannedDeadlines.length > 0 || hiddenWeekend > 0;
 
@@ -1985,7 +2040,7 @@ export function WeekPlanner({
           <PlannerPopover
             triggerClassName="wp-toolbtn is-icon"
             triggerLabel="Weergave-instellingen"
-            title="Dagen, kaarten en je dagstreep"
+            title="Dagen, kaarten en je werktijd"
             panelClassName="wp-display-pop"
             trigger={<CalendarCog size={15} aria-hidden="true"/>}
           >{() => <div className="wp-pop-body">
@@ -2032,20 +2087,31 @@ export function WeekPlanner({
         </div>
       </div>
 
-      {/* Hoe vol is de week, en wat vraagt om aandacht. De balk is meteen de
-          legenda van het rooster: violet zijn afspraken, goud is je eigen werk. */}
-      <div className="wp-pulse">
-        <div className="wp-meter" role="img" aria-label={`${formatDuration(weekBucket.agendaMinutes)} afspraken en ${formatDuration(weekTaskMinutes)} taken${meter.freeMinutes !== null ? `, ${formatDuration(meter.freeMinutes)} vrij` : ''}${meter.overMinutes > 0 ? `, ${formatDuration(meter.overMinutes)} boven je streep` : ''}`}>
+      {/* Hoe vol is de week, en wat vraagt om aandacht. De balk is je werktijd
+          van de week en meteen de legenda van het rooster: violet zijn je
+          afspraken, goud je eigen werk, en wat leeg blijft is vrij. Daarnaast
+          de som: afspraken gaan van je werktijd af, wat overblijft is netto, en
+          daar moeten je taken in passen. */}
+      <div className="wp-pulse" title={scope === 'mine' ? netWeekTitle : undefined}>
+        <div className="wp-meter" role="img" aria-label={scope === 'mine' ? netWeekTitle : `${formatDuration(teamWeekMinutes)} taken van het team`}>
           <span className="wp-meter-agenda" style={{ width: `${meter.agendaPct}%` }}/>
           <span className={`wp-meter-tasks${meter.overMinutes > 0 ? ' is-over' : ''}`} style={{ width: `${meter.taskPct}%` }}/>
         </div>
-        <div className="wp-pulse-stats">
-          <span className="wp-stat is-agenda"><i aria-hidden="true"/><b>{formatDuration(weekBucket.agendaMinutes)}</b> afspraken</span>
-          <span className="wp-stat is-tasks"><i aria-hidden="true"/><b>{formatDuration(weekTaskMinutes)}</b> {weekTaskCount === 1 ? 'taak' : `in ${weekTaskCount} taken`}</span>
-          {meter.freeMinutes !== null && meter.overMinutes === 0 && <span className="wp-stat is-free"><i aria-hidden="true"/><b>{formatDuration(meter.freeMinutes)}</b> vrij</span>}
-          {meter.overMinutes > 0 && <span className="wp-stat is-over"><b>{formatDuration(meter.overMinutes)}</b> boven je streep</span>}
+        {scope === 'mine' ? <div className="wp-pulse-stats">
+          <span className="wp-stat is-agenda"><i aria-hidden="true"/><b>{formatDuration(net.meetingMinutes)}</b> afspraken</span>
+          <span className="wp-stat is-net"><b>{formatDuration(net.netMinutes)}</b> netto <span className="wp-stat-of">van {formatDuration(net.workMinutes)}</span></span>
+          <span className="wp-stat is-tasks"><i aria-hidden="true"/><b>{formatDuration(net.taskMinutes)}</b> {myWeek.count === 1 ? 'taak' : `in ${myWeek.count} taken`}</span>
+          {net.freeMinutes >= 0
+            ? <span className="wp-stat is-free"><i aria-hidden="true"/><b>{formatDuration(net.freeMinutes)}</b> vrij</span>
+            : <span className="wp-stat is-over"><b>{formatDuration(-net.freeMinutes)}</b> te veel</span>}
+          {myWeek.noEstimate > 0 && <span className="wp-stat is-minor is-warn">{myWeek.noEstimate === 1 ? '1 taak zonder schatting' : `${myWeek.noEstimate} zonder schatting`}</span>}
+          {net.offDayMinutes > 0 && <span className="wp-stat is-minor">+{formatDuration(net.offDayMinutes)} in het weekend</span>}
+        </div> : <div className="wp-pulse-stats">
+          {/* Het team heeft geen gezamenlijke werktijd en jouw afspraken horen
+              hier niet: alleen de taken in beeld. */}
+          <span className="wp-stat is-tasks"><i aria-hidden="true"/><b>{formatDuration(teamWeekMinutes)}</b> {weekTaskCount === 1 ? 'taak' : `in ${weekTaskCount} taken`}</span>
           {weekBucket.noEstimateCount > 0 && <span className="wp-stat is-minor is-warn">{weekBucket.noEstimateCount === 1 ? '1 taak zonder schatting' : `${weekBucket.noEstimateCount} zonder schatting`}</span>}
-        </div>
+        </div>}
 
         {hasNudges && <div className="wp-nudges">
           {hiddenWeekend > 0 && <button type="button" className="wp-nudge" onClick={() => setDayMode('week')} title="Zaterdag en zondag in het rooster zetten">
@@ -2120,21 +2186,22 @@ export function WeekPlanner({
         {isNarrow && <div className="wp-daystrip" role="tablist" aria-label="Dag kiezen">
           {days.map(day => {
             const key = formatISODate(day);
-            const bucket = byDay.get(key) ?? EMPTY_BUCKET;
-            const total = bucket.minutes + bucket.agendaMinutes + bucket.spanMinutes;
+            const fig = dayFigures(key);
+            const total = fig.meetings + fig.tasks;
             const isDropHere = drag?.moved === true && drag.target?.type === 'day' && drag.target.date === key;
             return <button
               key={key}
               type="button"
               role="tab"
               aria-selected={key === mobileDay}
-              className={`wp-daystrip-day ${key === mobileDay ? 'is-on' : ''} ${isSameDay(day, todayLocal) ? 'is-today' : ''} ${isDropHere ? 'is-drop' : ''}`}
+              className={`wp-daystrip-day ${key === mobileDay ? 'is-on' : ''} ${isSameDay(day, todayLocal) ? 'is-today' : ''} ${isDropHere ? 'is-drop' : ''} ${fig.net?.freeMinutes != null && fig.net.freeMinutes < 0 ? 'is-over' : ''}`}
+              title={fig.net ? netDayTitle(fig.net, fig.spread) : undefined}
               ref={el => registerZone(`${STRIP_PREFIX}${key}`, el)}
               onClick={() => setMobileDay(key)}
             >
               <span className="wp-daystrip-name">{DAY_NAMES_NL[day.getDay() === 0 ? 6 : day.getDay() - 1]}</span>
               <span className="wp-daystrip-num">{day.getDate()}</span>
-              <span className={`wp-daystrip-dot ${total > 0 ? 'is-busy' : ''}`} style={{ opacity: total > 0 ? Math.min(1, 0.35 + total / loadScale) : 0 }}/>
+              <span className={`wp-daystrip-dot ${total > 0 ? 'is-busy' : ''}`} style={{ opacity: total > 0 ? Math.min(1, 0.35 + total / fig.scale) : 0 }}/>
             </button>;
           })}
         </div>}
@@ -2158,7 +2225,7 @@ export function WeekPlanner({
           <TimeBlockGrid
             ref={gridRef}
             days={gridDays}
-            events={events}
+            events={myEvents}
             tasks={gridTasks}
             sourceColors={sourceColors}
             trackedMinutesFor={trackedMinutesFor}
@@ -2197,7 +2264,7 @@ export function WeekPlanner({
           van drie woorden en verder niets, en een dag met acht taken verdwijnt in
           zijn eigen scrollvak. Onder elkaar krijgt een taak de volle breedte, en
           wat je nu niet nodig hebt klap je dicht — dichtgeklapt is de hele week
-          zeven koppen op één scherm, mét de drukte-balk, de uren en je streep.
+          zeven koppen op één scherm, mét de drukte-balk, je netto tijd en wat vrij is.
 
           De dichtgeklapte kop blijft een dropzone. Hij meldt zich aan onder
           dezelfde `strip:`-sleutel als de dagstrook op een telefoon, en die
@@ -2236,7 +2303,7 @@ export function WeekPlanner({
             const agenda = agendaByDay.get(key);
             const isToday = isSameDay(day, todayLocal);
             const marker = insertMarkerFor(key);
-            const total = bucket.minutes + bucket.agendaMinutes + bucket.spanMinutes;
+            const fig = dayFigures(key);
             const folded = collapsedDays.includes(i);
             const state = `${isToday ? 'is-today ' : ''}${marker !== null ? 'is-drop' : ''}`;
             // Zeven <section>-landmarks in één scherm maakt de landmarkslijst
@@ -2268,26 +2335,26 @@ export function WeekPlanner({
                   {isToday && <span className="wp-stack-today">vandaag</span>}
                 </button>
 
-                {/* Aantal én uren: acht taken zonder schatting leest anders als
-                    een lege dag, want dan staat de urenteller op nul. De ± staat
-                    er zodra een weekstrook meetelt — dat deel is een verdeling
-                    over zijn dagen, geen gemeten tijd. */}
+                {/* Aantal, netto tijd en wat ervan vrij is. Het aantal blijft:
+                    acht taken zonder schatting leest anders als een lege dag. De
+                    ± staat er zodra een weekstrook meetelt — dat deel is een
+                    verdeling over zijn dagen, geen gemeten tijd. */}
                 {bucket.count > 0 && <span className="wp-day-count">{bucket.count}</span>}
-                {total > 0 && <span className="wp-day-total">{bucket.spanMinutes > 0 ? '±' : ''}{formatDuration(total)}</span>}
+                {fig.net?.counts
+                  ? <span className="wp-day-net" title={netDayTitle(fig.net, fig.spread)}><b>{formatDuration(fig.net.netMinutes)}</b> netto</span>
+                  : fig.meetings + fig.tasks > 0 && <span className="wp-day-total" title={fig.net ? netDayTitle(fig.net, fig.spread) : undefined}>{fig.spread ? '±' : ''}{formatDuration(fig.meetings + fig.tasks)}</span>}
 
                 <div
                   className="wp-day-load"
                   role="img"
-                  aria-label={`${formatDuration(bucket.agendaMinutes)} afspraken en ${formatDuration(bucket.minutes + bucket.spanMinutes)} taken`}
+                  aria-label={fig.net ? netDayTitle(fig.net, fig.spread) : `${formatDuration(fig.tasks)} taken`}
                 >
-                  <span className="wp-day-load-agenda" style={{ width: `${(bucket.agendaMinutes / loadScale) * 100}%` }}/>
-                  <span className="wp-day-load-fill" style={{ width: `${((bucket.minutes + bucket.spanMinutes) / loadScale) * 100}%` }}/>
+                  <span className="wp-day-load-agenda" style={{ width: `${Math.min(100, (fig.meetings / fig.scale) * 100)}%` }}/>
+                  <span className={`wp-day-load-fill${fig.net?.freeMinutes != null && fig.net.freeMinutes < 0 ? ' is-over' : ''}`} style={{ width: `${Math.min(100, (fig.tasks / fig.scale) * 100)}%` }}/>
                 </div>
 
-                {dayCountsForCapacity(day) && capacityMinutes !== null && <div className={`wp-day-room ${total > capacityMinutes ? 'is-over' : ''}`}>
-                  {total > capacityMinutes
-                    ? `${formatDuration(total - capacityMinutes)} over je streep`
-                    : `nog ${formatDuration(capacityMinutes - total)} vrij`}
+                {fig.net?.counts && <div className={`wp-day-room ${fig.net.freeMinutes! < 0 ? 'is-over' : ''}`}>
+                  {roomLabel(fig.net.freeMinutes!, fig.spread)}
                 </div>}
 
                 {canWrite && <button
@@ -2392,8 +2459,8 @@ export function WeekPlanner({
             const isToday = isSameDay(day, todayLocal);
             // De teamcellen eronder zijn de dropzones; de kop licht niet op.
             const marker: string | null = null;
-            const total = bucket.minutes + bucket.agendaMinutes + bucket.spanMinutes;
-            const scale = loadScale;
+            const fig = dayFigures(key);
+            const total = fig.tasks;
             // Geen aparte markering meer voor de volste dag: die deelde zijn
             // specificiteit met `is-today` en won, waardoor "vandaag" verdween
             // zodra vandaag óók je drukste dag was. De balk zegt het al.
@@ -2416,25 +2483,20 @@ export function WeekPlanner({
                   {/* Geen plusje: in de teamweergave hoort een nieuwe taak bij een
                       persoon, en die staat in de rij eronder. */}
                 </div>
-                {/* Eerst je afspraken, dan je taken; de rest van de balk is vrij. */}
+                {/* De taken van het team, in verhouding tot de drukste dag. Geen
+                    afspraken en geen werktijd: die zijn van jou, niet van het
+                    team. Eerder stonden jouw meetings hier in de balk en mat de
+                    dagkop het werk van het hele team tegen jouw dagstreep. */}
                 <div
                   className="wp-day-load"
                   role="img"
-                  aria-label={`${formatDuration(bucket.agendaMinutes)} afspraken en ${formatDuration(bucket.minutes + bucket.spanMinutes)} taken`}
+                  aria-label={`${formatDuration(fig.tasks)} taken`}
                 >
-                  <span className="wp-day-load-agenda" style={{ width: `${(bucket.agendaMinutes / scale) * 100}%` }}/>
-                  <span className="wp-day-load-fill" style={{ width: `${((bucket.minutes + bucket.spanMinutes) / scale) * 100}%` }}/>
+                  <span className="wp-day-load-fill" style={{ width: `${Math.min(100, (fig.tasks / fig.scale) * 100)}%` }}/>
                 </div>
                 {/* Hele-dag-afspraken kosten geen minuten maar maken je dag wél
                     vol. Ze verdwenen hier volledig, dus een shootdag las als een
                     lege dag. */}
-                {/* Met een streep zegt de dagkop het in mensentaal, niet in een
-                    verhouding: "nog 1u15 vrij" of "45m over je streep". */}
-                {dayCountsForCapacity(day) && capacityMinutes !== null && <div className={`wp-day-room ${total > capacityMinutes ? 'is-over' : ''}`}>
-                  {total > capacityMinutes
-                    ? `${formatDuration(total - capacityMinutes)} over je streep`
-                    : `nog ${formatDuration(capacityMinutes - total)} vrij`}
-                </div>}
                 {!!agenda?.allDay.length && <div className="wp-day-allday">
                   {agenda.allDay.map(event => <span key={`${event.source_id}-${event.provider_event_id}`} className="wp-allday-chip" title={event.title}>
                     {event.title}
@@ -2643,15 +2705,15 @@ export function WeekPlanner({
 }
 
 /**
- * De persoonlijke dagstreep. Standaard uit: dan blijft het scherm precies zoals
- * het was — zeven gelijkwaardige dagen, geen werkweeknorm. Zet je hem aan, dan
- * schaalt de dagbalk op jóuw getal en kan de planner eindelijk zeggen dat iets
- * niet meer past, in plaats van alleen dat de ene dag voller is dan de andere.
+ * Je werktijd per dag: de maat waar de netto tijd van afgaat. Heette eerst de
+ * "dagstreep" en stond standaard uit; dan had de planner geen maat en kon hij
+ * nooit zeggen dat iets niet paste, hoeveel meetings er ook in je week stonden.
+ * Nu rekent hij zonder instelling met acht uur op werkdagen, en zet je hier je
+ * eigen getal.
  *
- * Bewust persoonlijk en niet zichtbaar in de teamweergave: "wiens streep?" is
- * daar onbeantwoordbaar. Staat sinds de nieuwe kop in het paneel Weergave: een
- * eigen knop "Geen streep" in de werkbalk was een instelling die zich als
- * handeling voordeed.
+ * Bewust persoonlijk en niet zichtbaar in de teamweergave: "wiens werktijd?" is
+ * daar onbeantwoordbaar. Staat in het paneel Weergave: een eigen knop in de
+ * werkbalk was een instelling die zich als handeling voordeed.
  */
 function CapacityControl({ capacity, canWrite, onSave }: {
   capacity: PlannerDayCapacity | null;
@@ -2660,9 +2722,9 @@ function CapacityControl({ capacity, canWrite, onSave }: {
 }) {
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
-  const active = !!capacity && capacity.minutes > 0;
-  const [hours, setHours] = useState(() => String(((capacity?.minutes ?? 480) / 60).toFixed(1).replace(/\.0$/, '')));
-  const [weekend, setWeekend] = useState(capacity?.include_weekend ?? false);
+  const workday = workdayFrom(capacity);
+  const [hours, setHours] = useState(() => String((workday.minutes / 60).toFixed(1).replace(/\.0$/, '')));
+  const [weekend, setWeekend] = useState(workday.includeWeekend);
 
   async function save(minutes: number, includeWeekend: boolean) {
     setBusy(true);
@@ -2671,14 +2733,15 @@ function CapacityControl({ capacity, canWrite, onSave }: {
     finally { setBusy(false); }
   }
 
-  return <section className="wp-cap" aria-label="Dagstreep">
+  return <section className="wp-cap" aria-label="Werktijd">
     <div className="wp-cap-head">
-      <span>Dagstreep</span>
-      <b className={active ? 'is-on' : ''}>{active ? `${formatDuration(capacity!.minutes)} per dag` : 'uit'}</b>
+      <span>Werktijd</span>
+      <b className={workday.isDefault ? '' : 'is-on'}>{formatDuration(workday.minutes)} per dag{workday.isDefault ? ' · standaard' : ''}</b>
     </div>
     <p className="wp-cap-hint">
-      Hoeveel uur wil je op een werkdag kwijt kunnen? Dan zegt elke dag hoeveel er
-      nog vrij is, en de weekbalk ook. Alleen voor jou.
+      Hoeveel uur werk je op een werkdag? Je afspraken gaan daar vanaf; wat
+      overblijft is je netto tijd voor taken. Zonder eigen getal rekent de
+      planner met 8 uur, maandag tot en met vrijdag. Alleen voor jou.
     </p>
     <div className="wp-cap-row">
       <input
@@ -2704,9 +2767,10 @@ function CapacityControl({ capacity, canWrite, onSave }: {
         className="wp-cap-save"
         disabled={busy}
         onClick={() => void save(Math.round(Math.max(0, Math.min(24, Number(hours) || 0)) * 60), weekend)}
-      >{busy ? 'Bezig…' : saved ? 'Opgeslagen' : active ? 'Streep bijwerken' : 'Streep zetten'}</button>
-      {active && <button type="button" className="wp-cap-clear" disabled={busy} onClick={() => void save(0, weekend)}>
-        Weghalen
+      >{busy ? 'Bezig…' : saved ? 'Opgeslagen' : 'Opslaan'}</button>
+      {/* 0 minuten betekent "geen eigen getal": dan geldt de standaard weer. */}
+      {!workday.isDefault && <button type="button" className="wp-cap-clear" disabled={busy} onClick={() => { setHours('8'); void save(0, weekend); }}>
+        Terug naar 8 uur
       </button>}
     </div>}
   </section>;
@@ -3503,19 +3567,6 @@ function PlannerNotes({ notes, weekStart, canWrite, onAdd, onToggle, onRemove }:
 }
 
 /** Heeft deze taak een ingevulde tijdschatting? */
-function hasEstimate(task: Task): boolean {
-  return task.estimated_minutes !== null
-    && task.estimated_minutes !== undefined
-    && Number.isFinite(Number(task.estimated_minutes));
-}
-
-/** Minuten die deze taak meetelt. Zonder schatting is dat niets: een onbekende
- *  duur stil als een uur meetellen maakt elk totaal deels verzonnen. */
-function taskEstimateMinutes(task: Task): number {
-  if (!hasEstimate(task)) return 0;
-  return Math.max(0, Math.min(24 * 60, Math.round(Number(task.estimated_minutes))));
-}
-
 function formatEventTime(iso: string): string {
   return new Date(iso).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' });
 }
@@ -3575,6 +3626,20 @@ function statusLabel(status: TaskStatus): string {
  *  zonder venster nodig hebt. */
 function nextStatus(status: TaskStatus): TaskStatus {
   return ({ todo: 'doing', doing: 'review', review: 'done', done: 'todo' } as Record<TaskStatus, TaskStatus>)[status] ?? 'doing';
+}
+
+/** "1u 30m vrij" of "45m te veel". Eerder stond er "45m over", en "over" kan
+ *  in het Nederlands allebei betekenen: nog over, of eroverheen. */
+function roomLabel(freeMinutes: number, spread = false): string {
+  const prefix = spread ? '±' : '';
+  return freeMinutes < 0 ? `${prefix}${formatDuration(-freeMinutes)} te veel` : `${prefix}${formatDuration(freeMinutes)} vrij`;
+}
+
+/** De som achter een dag, voor de tooltip en de schermlezer. */
+function netDayTitle(net: NetDay, spread: boolean): string {
+  const tasks = `${spread ? '±' : ''}${formatDuration(net.taskMinutes)}`;
+  if (!net.counts) return `Geen werkdag: hier telt geen werktijd. Afspraken ${formatDuration(net.meetingMinutes)}, taken ${tasks}.`;
+  return `Werktijd ${formatDuration(net.workMinutes)} − afspraken ${formatDuration(net.meetingMinutes)} = ${formatDuration(net.netMinutes)} netto voor taken. Ingepland ${tasks}, dus ${roomLabel(net.freeMinutes ?? 0, spread)}.`;
 }
 
 function formatDuration(minutes: number): string {

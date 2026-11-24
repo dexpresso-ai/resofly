@@ -226,6 +226,11 @@ export type DayAgenda = {
  * over middernacht loopt wordt per kalenderdag geknipt, zodat elke dag alleen
  * zijn eigen minuten telt.
  *
+ * Afspraken die over elkaar heen vallen tellen hun gezamenlijke tijd één keer
+ * (2026-11-24). Eerst werden ze opgeteld: dezelfde meeting in je Google-agenda
+ * én in de ResoFly-agenda, of twee afspraken tegelijk, haalden het dubbele van
+ * je netto tijd af. Je kunt een uur maar één keer kwijt.
+ *
  * Hele-dag-items tellen géén uren: ze claimen geen blok in je dag. Ze zouden
  * anders in hun eentje elke dagbalk volzetten. Ze verdwenen eerder helemaal,
  * waardoor een dag vol hele-dag-afspraken er leeg uitzag; nu komen ze apart
@@ -233,7 +238,11 @@ export type DayAgenda = {
  */
 export function groupEventMinutesByDay(dayKeys: string[], events: CalendarExternalEvent[]): Map<string, DayAgenda> {
   const byDay = new Map<string, DayAgenda>();
-  for (const key of dayKeys) byDay.set(key, { minutes: 0, items: [], allDay: [] });
+  const slotsByDay = new Map<string, BusySlot[]>();
+  for (const key of dayKeys) {
+    byDay.set(key, { minutes: 0, items: [], allDay: [] });
+    slotsByDay.set(key, []);
+  }
 
   for (const event of events) {
     if (event.all_day) {
@@ -260,9 +269,15 @@ export function groupEventMinutesByDay(dayKeys: string[], events: CalendarExtern
       const overlapEnd = end < dayEnd ? end : dayEnd;
       const minutes = Math.round((overlapEnd.getTime() - overlapStart.getTime()) / 60000);
       if (minutes <= 0) continue;
-      bucket.minutes += minutes;
+      const from = Math.round((overlapStart.getTime() - dayStart.getTime()) / 60000);
+      slotsByDay.get(key)!.push({ start: from, end: from + minutes });
       bucket.items.push(event);
     }
+  }
+
+  for (const [key, bucket] of byDay) {
+    // Op een dag van 25 uur (einde zomertijd) mag het laatste uur niet wegvallen.
+    bucket.minutes = mergeBusySlots(slotsByDay.get(key) ?? [], 25 * 60).reduce((sum, slot) => sum + slot.end - slot.start, 0);
   }
 
   for (const bucket of byDay.values()) {
@@ -453,10 +468,10 @@ export function applyTimeLocally(
 export type BusySlot = { start: number; end: number };
 
 /** Voegt overlappende stukken samen en sorteert ze. */
-export function mergeBusySlots(slots: BusySlot[]): BusySlot[] {
+export function mergeBusySlots(slots: BusySlot[], dayEnd = DAY_END_MINUTE): BusySlot[] {
   const sorted = slots
     .filter(slot => Number.isFinite(slot.start) && Number.isFinite(slot.end) && slot.end > slot.start)
-    .map(slot => ({ start: Math.max(0, slot.start), end: Math.min(DAY_END_MINUTE, slot.end) }))
+    .map(slot => ({ start: Math.max(0, slot.start), end: Math.min(dayEnd, slot.end) }))
     .sort((a, b) => a.start - b.start || a.end - b.end);
   const merged: BusySlot[] = [];
   for (const slot of sorted) {

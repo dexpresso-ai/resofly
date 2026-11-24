@@ -371,11 +371,11 @@ export const WORK_ACTIONS: ActionDef[] = [
   // ── Planning ──────────────────────────────────────────────────────────────
   {
     id: 'planner.set_day_capacity',
-    label: 'Mijn werkuren per dag in de weekplanner instellen',
+    label: 'Mijn werktijd per dag in de weekplanner instellen',
     module: 'projects',
     kind: 'write',
-    description: 'Stelt in hoeveel minuten per dag jij inplanbaar bent in de weekplanner (bijv. 6 uur = 360) en of het weekend meetelt. Geldt alleen voor jezelf.',
-    keywords: ['capaciteit', 'werkuren', 'uren per dag', 'weekplanner', 'beschikbaar', 'planning', 'weekend', 'dagcapaciteit'],
+    description: 'Stelt in hoeveel uur per dag jij werkt, voor de weekplanner, en of het weekend meetelt. Je afspraken gaan daar in de planner vanaf; wat overblijft is je netto tijd voor taken. Zonder instelling rekent de planner met 8 uur op werkdagen. Geldt alleen voor jezelf.',
+    keywords: ['capaciteit', 'werkuren', 'werktijd', 'netto tijd', 'uren per dag', 'weekplanner', 'beschikbaar', 'planning', 'weekend', 'dagcapaciteit'],
     input: {
       hours: { type: 'number', description: 'Uren per dag (mag decimaal).' },
       include_weekend: { type: 'boolean', description: 'Telt het weekend mee? Standaard nee.' },
@@ -387,7 +387,7 @@ export const WORK_ACTIONS: ActionDef[] = [
       if (hours <= 0 || hours > 16) throw new ActionError('Geef een aantal uren tussen 0 en 16.');
       const includeWeekend = bool(input, 'include_weekend', false);
       return {
-        title: `Weekplanner: ${hours.toLocaleString('nl-NL')} uur per dag`,
+        title: `Werktijd in de weekplanner: ${hours.toLocaleString('nl-NL')} uur per dag`,
         sub: includeWeekend ? 'ook in het weekend' : 'alleen op werkdagen',
         kind: 'agenda',
         payload: { user_id: ctx.userId, minutes: Math.round(hours * 60), include_weekend: includeWeekend },
