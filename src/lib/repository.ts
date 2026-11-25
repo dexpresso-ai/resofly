@@ -184,6 +184,7 @@ import type {
   ForecastVersion,
   PlannerNote,
   PlannerDayCapacity,
+  PlannerDayOff,
   ContractProject,
   Task,
   TaskAssignee,
@@ -1539,6 +1540,56 @@ export async function savePlannerDayCapacity(
     .single();
   if (error) throw error;
   return data as PlannerDayCapacity;
+}
+
+// ── Vrije dagen in de weekplanner ──────────────────────────────────────────
+
+const PLANNER_DAYS_OFF_MIGRATION_HINT =
+  'Voer de migratie 20261125090000_planner_vrije_dagen.sql uit in Supabase om vrije dagen in de weekplanner te activeren.';
+
+/**
+ * Jouw vrije dagen tussen `from` en `to` (jjjj-mm-dd, beide inbegrepen). De
+ * planner vraagt per week die je bekijkt, niet bij het opstarten: zo hoeft de
+ * kern van de werkruimte er niet op te wachten. De RLS laat alleen je eigen
+ * dagen door; het filter op user_id zegt hetzelfde nog eens.
+ */
+export async function selectPlannerDaysOff(organizationId: UUID, userId: UUID, from: string, to: string): Promise<PlannerDayOff[]> {
+  const { data, error } = await supabase
+    .from('planner_days_off')
+    .select('*')
+    .eq('organization_id', organizationId)
+    .eq('user_id', userId)
+    .gte('day', from)
+    .lte('day', to)
+    .order('day', { ascending: true });
+  if (error) {
+    const message = `${error.message ?? ''} ${error.details ?? ''}`;
+    // Staat de migratie er nog niet: dan is er gewoon geen vrije dag.
+    if (/planner_days_off|schema cache|does not exist|relation/i.test(message)) {
+      console.warn(`planner_days_off is nog niet beschikbaar. ${PLANNER_DAYS_OFF_MIGRATION_HINT}`, error);
+      return [];
+    }
+    throw error;
+  }
+  return (data ?? []) as PlannerDayOff[];
+}
+
+/** Zet een dag vrij of weer op werkdag. Dubbel vrijzetten doet niets. */
+export async function savePlannerDayOff(organizationId: UUID, userId: UUID, day: string, off: boolean): Promise<void> {
+  if (off) {
+    const { error } = await supabase
+      .from('planner_days_off')
+      .upsert({ organization_id: organizationId, user_id: userId, day }, { onConflict: 'organization_id,user_id,day', ignoreDuplicates: true });
+    if (error) throw error;
+    return;
+  }
+  const { error } = await supabase
+    .from('planner_days_off')
+    .delete()
+    .eq('organization_id', organizationId)
+    .eq('user_id', userId)
+    .eq('day', day);
+  if (error) throw error;
 }
 
 /**
