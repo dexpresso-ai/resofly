@@ -365,11 +365,13 @@ select pg_temp.gelijk(
 select pg_temp.gelijk(
   (select count(*) from pg_proc p
     where p.pronamespace = 'public'::regnamespace
-      and p.proname in ('my_organization_ids', 'my_module_organization_ids', 'my_readable_module_keys')
+      and p.proname in ('my_organization_ids', 'my_module_organization_ids', 'my_readable_module_keys',
+                        -- Sinds 20261125110000: de agenda's voor de opnames uit een privé-agenda.
+                        'my_readable_calendar_source_ids')
       and p.prosecdef and p.provolatile = 's' and p.proconfig = array['search_path=public']
       and not has_function_privilege('anon', p.oid, 'execute')
       and has_function_privilege('authenticated', p.oid, 'execute')),
-  3::bigint, 'de drie lijsten: stable, security definer, vaste search_path, dicht voor anon');
+  4::bigint, 'de vier lijsten: stable, security definer, vaste search_path, dicht voor anon');
 
 -- apply_module_gate geeft een nieuwe tabel meteen de snelle vorm, en die werkt.
 create table public.rls_proef (id uuid primary key default gen_random_uuid(), organization_id uuid not null);

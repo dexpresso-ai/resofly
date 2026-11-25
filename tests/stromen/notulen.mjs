@@ -11,7 +11,8 @@
 //
 //   npm run test:stromen -- notulen
 import { randomBytes, randomUUID } from 'node:crypto';
-import { roep } from './functies.mjs';
+import { roep, roepRequest } from './functies.mjs';
+import { API_URL } from './omgeving.mjs';
 import { post } from './nepdiensten.mjs';
 import { ai, gesprek, NOTULEN, onderteken, scribeWebhook } from './nep-ai.mjs';
 import { maakGebruiker, rest, sql, sqlRij, sqlRijen, uniek } from './supabase.mjs';
@@ -40,10 +41,21 @@ function opnameActie(token, body) {
   return roep('meeting-transcribe', { token, body });
 }
 
+/**
+ * De gedeelde teamagenda van een wereld. Een afspraakopname komt in de app
+ * altijd uit een agenda; sinds 25 november ziet een collega een opname zonder
+ * agenda niet meer (20261125110000_opname_prive_agenda.sql).
+ */
+function teamAgenda(w) {
+  w.teamAgenda ??= sql(`insert into public.calendar_sources (organization_id, user_id, provider, provider_calendar_id, name, visibility)
+                        values (${q(w.orgId)}, ${q(w.eigenaar.id)}, 'native', gen_random_uuid()::text, 'Team', 'organization') returning id`).split('\n')[0];
+  return w.teamAgenda;
+}
+
 /** Zoals de recorder na "Stop & verwerk": eerst de rij (met toestemming). */
 async function nieuweOpname(w, gebruiker, extra = {}) {
   const res = await opnameActie(gebruiker.token, {
-    action: 'create', organizationId: w.orgId, consentGiven: true,
+    action: 'create', organizationId: w.orgId, consentGiven: true, sourceId: teamAgenda(w),
     provider: 'native', eventRef: uniek('afspraak'), eventTitle: 'Kick-off website', clientId: w.klantA.id, ...extra,
   });
   return gelukt(res, 'opname aanmaken').id;
@@ -99,6 +111,7 @@ export default async function notulenScenario() {
     await webhookRoute();
     await gesprekEnRechten();
     await vanzelfInInhoud();
+    await priveAgenda();
   } finally {
     for (const [naam, waarde] of Object.entries(bewaard)) {
       if (waarde === undefined) delete process.env[naam]; else process.env[naam] = waarde;
@@ -648,5 +661,101 @@ async function vanzelfInInhoud() {
 
   await stap('alle meetings van klant A staan in één map', async () => {
     gelijk(meetingsMappen(w.orgId, w.klantA.id), 1, 'mappen Meetings bij klant A');
+  });
+}
+
+// ── 6. Een meeting uit een privé-agenda (sinds 25 november) ─────────────────
+// Wie Agenda kon lezen, las ook de titel, het transcript en de notulen van een
+// meeting uit de privé-agenda van een collega: via PostgREST, de API en de
+// handelingen van Gerrie. Met meeting-transcribe kon hij die notulen ook
+// mailen, overschrijven of de opname wissen, als hij het id had.
+
+/** Een handeling via de openbare API, zoals een koppeling hem aanroept. */
+async function apiHandeling(sleutel, id, invoer) {
+  const res = await roepRequest('api', new Request(`${API_URL}/functions/v1/api/v1/actions/${id}`, {
+    method: 'POST', headers: { authorization: `Bearer ${sleutel}`, 'content-type': 'application/json' }, body: JSON.stringify(invoer),
+  }));
+  const tekst = await res.text();
+  let json = null;
+  try { json = JSON.parse(tekst); } catch { /* geen json */ }
+  return { status: res.status, json, tekst };
+}
+
+async function priveAgenda() {
+  groep('Notulen: een meeting uit een privé-agenda');
+  delete process.env.ELEVENLABS_WEBHOOK_SECRET;
+  zetBudget({ gebruiker: 5, organisatie: 250 });
+  const w = await stap('wereld maken', () => maakWereld('notulen-prive'));
+  if (!w) return;
+  const prive = sql(`insert into public.calendar_sources (organization_id, user_id, provider, provider_calendar_id, name, visibility)
+                     values (${q(w.orgId)}, ${q(w.medewerker.id)}, 'native', gen_random_uuid()::text, 'Privé', 'private') returning id`).split('\n')[0];
+
+  const geheim = await stap('de medewerker neemt een meeting op uit zijn privé-agenda', async () => {
+    const id = await nieuweOpname(w, w.medewerker, { sourceId: prive, eventTitle: 'Gesprek met de bank' });
+    gelukt(await start(w.medewerker, w, id, upload(w, id), 0), 'uitschrijven');
+    gelijk(opname(id).status, 'done', 'klaar, met notulen');
+    return id;
+  });
+  const team = await stap('en een uit de teamagenda', async () => {
+    const id = await nieuweOpname(w, w.medewerker, { eventTitle: 'Weekstart' });
+    gelukt(await start(w.medewerker, w, id, upload(w, id), 0), 'uitschrijven');
+    return id;
+  });
+  if (!geheim || !team) return;
+
+  await stap('de beheerder ziet de privé-meeting niet in de database, de teammeeting wel', async () => {
+    const res = await rest(`meeting_recordings?select=id&organization_id=eq.${w.orgId}`, { token: w.beheerder.token });
+    gelijk(res.status, 200, 'status');
+    const ids = res.json.map((r) => r.id);
+    verwacht(!ids.includes(geheim), 'privé-meeting zichtbaar voor de beheerder');
+    verwacht(ids.includes(team), 'teammeeting niet zichtbaar');
+    const ookNiet = await rest(`meeting_recordings?select=transcript_text&id=eq.${geheim}`, { token: w.eigenaar.token });
+    gelijk(ookNiet.json, [], 'ook de eigenaar van de organisatie niet');
+  });
+
+  await stap('de medewerker zelf ziet hem wel', async () => {
+    const res = await rest(`meeting_recordings?select=id,event_title_snapshot&id=eq.${geheim}`, { token: w.medewerker.token });
+    gelijk(res.json, [{ id: geheim, event_title_snapshot: 'Gesprek met de bank' }], 'eigen opname');
+  });
+
+  await stap('de beheerder kan er niets mee: notulen, transcript, mailen, audio, Inhoud, wissen', async () => {
+    const voor = opname(geheim);
+    for (const [action, extra] of [
+      ['summarize', {}],
+      ['update', { transcriptText: 'Overschreven' }],
+      ['sendSummary', { recipients: [{ email: 'buiten@voorbeeld.nl' }], subject: 'Notulen', bodyText: 'Notulen' }],
+      ['deleteAudio', {}],
+      ['saveToContent', {}],
+      ['delete', {}],
+    ]) {
+      geweigerd(await opnameActie(w.beheerder.token, { action, organizationId: w.orgId, recordingId: geheim, ...extra }), action, [404]);
+    }
+    const na = opname(geheim);
+    gelijk([na.status, na.transcript_text, Boolean(na.storage_key)], [voor.status, voor.transcript_text, true], 'opname onveranderd');
+  });
+
+  await stap('een opname aan de privé-agenda van een collega hangen kan niet', async () => {
+    geweigerd(await opnameActie(w.beheerder.token, {
+      action: 'create', organizationId: w.orgId, consentGiven: true, provider: 'native', eventRef: uniek('afspraak'), sourceId: prive,
+    }), 'opname aanmaken', [404]);
+  });
+
+  await stap('via de API (de handelingen van Gerrie) ook niet', async () => {
+    const sleutel = gelukt(await roep('api-admin', {
+      token: w.beheerder.token, body: { action: 'createKey', organizationId: w.orgId, name: 'Notulen', access: 'read' },
+    }), 'sleutel aanmaken').secret;
+    for (const handeling of ['meeting_recording.list', 'meeting_recording.recent']) {
+      const res = await apiHandeling(sleutel, handeling, { limit: 20 });
+      gelijk(res.status, 200, handeling);
+      verwacht(!res.tekst.includes(geheim) && !res.tekst.includes('Gesprek met de bank'), `${handeling} toont de privé-meeting`);
+      verwacht(res.tekst.includes(team), `${handeling} toont de teammeeting niet`);
+    }
+  });
+
+  await stap('de medewerker kan zijn eigen opname gewoon bijwerken', async () => {
+    gelukt(await opnameActie(w.medewerker.token, {
+      action: 'update', organizationId: w.orgId, recordingId: geheim, transcriptText: 'Spreker 1: eigen correctie',
+    }), 'bijwerken');
+    gelijk(opname(geheim).transcript_text, 'Spreker 1: eigen correctie', 'transcript');
   });
 }

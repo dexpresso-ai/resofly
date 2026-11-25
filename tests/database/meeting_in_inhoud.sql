@@ -65,10 +65,16 @@ values (:'org_a', :'map', 'Kick-off — 24 november 2026', 'meeting') returning 
 insert into public.notes (organization_id, title) values (:'org_a', 'Andere notitie') returning id as andere_notitie \gset
 insert into public.notes (organization_id, title) values (:'org_b', 'Notitie elders') returning id as notitie_b \gset
 
-insert into public.meeting_recordings (organization_id, provider, event_ref, event_title_snapshot, consent_given, status, transcript_text, content_note_id)
-values (:'org_a', 'native', 'afspraak-1', 'Kick-off', true, 'done', 'Spreker 1: Welkom.', :'notitie') returning id as in_inhoud \gset
-insert into public.meeting_recordings (organization_id, provider, event_ref, event_title_snapshot, consent_given, status, transcript_text)
-values (:'org_a', 'native', 'afspraak-2', 'Intern overleg', true, 'done', 'Spreker 1: Alleen agenda.') returning id as alleen_agenda \gset
+-- Uit een met het team gedeelde agenda, zoals de app ze maakt. Sinds
+-- 20261125110000 ziet een collega een afspraakopname zonder (leesbare) agenda
+-- niet; dat toetst opname_prive_agenda.sql.
+insert into public.calendar_sources (organization_id, user_id, provider, provider_calendar_id, name, visibility)
+values (:'org_a', :'eigenaar', 'native', 'team', 'Team', 'organization') returning id as teamagenda \gset
+
+insert into public.meeting_recordings (organization_id, provider, source_id, event_ref, event_title_snapshot, consent_given, status, transcript_text, content_note_id)
+values (:'org_a', 'native', :'teamagenda', 'afspraak-1', 'Kick-off', true, 'done', 'Spreker 1: Welkom.', :'notitie') returning id as in_inhoud \gset
+insert into public.meeting_recordings (organization_id, provider, source_id, event_ref, event_title_snapshot, consent_given, status, transcript_text)
+values (:'org_a', 'native', :'teamagenda', 'afspraak-2', 'Intern overleg', true, 'done', 'Spreker 1: Alleen agenda.') returning id as alleen_agenda \gset
 
 -- ── 3. Wie ziet wat ─────────────────────────────────────────────────────────
 

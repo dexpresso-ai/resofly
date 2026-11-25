@@ -49,6 +49,7 @@ import { saveMeetingToContent } from '../_shared/meetingInhoud.ts';
 import { completeTranscription, runSummaryForRecording } from '../_shared/meetingPipeline.ts';
 import { validDay, validTime } from '../_shared/meetingNote.ts';
 import { newRecordingModule, recordingModule, type RecordingModule } from '../_shared/recordingModule.ts';
+import { RECORDING_PRIVACY_FIELDS, recordingSource, recordingVisibleTo, sourceReadableBy, type RecordingPrivacyFields } from '../_shared/recordingPrivacy.ts';
 import { transcriptionBudget, transcriptionCostUsd, transcriptionRefusal } from '../_shared/transcriptionUsage.ts';
 import { resolveSenderIdentity } from '../_shared/sendingDomain.ts';
 import { EMAIL_LOGO_SLOT_LIGHT } from '../_shared/emailTemplates/layout.ts';
@@ -95,8 +96,15 @@ Deno.serve(async (req) => {
     // notitie-opname aan Inhoud. Alle acties hieronder schrijven (of mailen) en
     // vragen dus schrijfrecht op die module; alleen een leesactie zou met
     // leesrecht volstaan.
-    const moduleKey = await resolveModuleKey(organizationId, action, body);
+    const { moduleKey, existing } = await resolveModuleKey(organizationId, action, body);
     await assertModuleAccess(admin, user.id, organizationId, moduleKey, WRITE_ACTIONS.has(action) ? 'write' : 'read');
+    // Een opname uit de privé-agenda van een collega bestaat voor deze
+    // gebruiker niet (sinds 25 november, _shared/recordingPrivacy.ts). Eerst
+    // kon wie Agenda mocht wijzigen die notulen mailen, opnieuw laten maken,
+    // het transcript overschrijven of de opname wissen, als hij het id had.
+    if (existing && !recordingVisibleTo(existing, user.id, await recordingSource(admin, organizationId, existing.source_id))) {
+      throw new HttpError('Opname niet gevonden in deze organisatie.', 404);
+    }
 
     switch (action) {
       case 'budget': return cors.json(req, await budgetStatus(organizationId, user.id));
@@ -172,6 +180,11 @@ async function createRecording(organizationId: string, userId: string, role: Org
   if (clientId) await assertOrgRow('clients', organizationId, clientId, 'Klant');
   if (projectId) await assertOrgRow('projects', organizationId, projectId, 'Project');
   if (sourceId) await assertOrgRow('calendar_sources', organizationId, sourceId, 'Agenda');
+  // En een agenda die je kunt lezen: een opname aan de privé-agenda van een
+  // collega hangen, kwam eerst gewoon door (sinds 25 november niet meer).
+  if (sourceId && !sourceReadableBy(await recordingSource(admin, organizationId, sourceId), userId)) {
+    throw new HttpError('Agenda niet gevonden in deze organisatie.', 404);
+  }
 
   // Zodra het transcript er is, zet de server de meeting vanzelf in Inhoud
   // (_shared/meetingInhoud.ts). Dan is er geen browser meer, dus wat de app nu
@@ -489,14 +502,16 @@ async function deleteRecording(organizationId: string, role: Awaited<ReturnType<
  * mailen of verwijderen. De extra lookup is de prijs van een poort die niet te
  * omzeilen is door een veld toe te voegen of weg te laten.
  */
-async function resolveModuleKey(organizationId: string, action: string, body: Record<string, unknown>): Promise<RecordingModule> {
+async function resolveModuleKey(organizationId: string, action: string, body: Record<string, unknown>): Promise<{ moduleKey: RecordingModule; existing: RecordingPrivacyFields | null }> {
   const recordingId = body.recordingId ? String(body.recordingId) : '';
   if (isUuid(recordingId)) {
+    // Ook wat de privacyregel nodig heeft (wie maakte hem, uit welke agenda).
     const { data } = await admin.from('meeting_recordings')
-      .select('call_id, note_id').eq('id', recordingId).eq('organization_id', organizationId).maybeSingle();
-    return recordingModule(data as { call_id: string | null; note_id: string | null } | null);
+      .select(RECORDING_PRIVACY_FIELDS).eq('id', recordingId).eq('organization_id', organizationId).maybeSingle();
+    const existing = (data as RecordingPrivacyFields | null) ?? null;
+    return { moduleKey: recordingModule(existing as { call_id: string | null; note_id: string | null } | null), existing };
   }
-  return newRecordingModule(action, body);
+  return { moduleKey: newRecordingModule(action, body), existing: null };
 }
 
 async function loadRecording(organizationId: string, recordingId: string) {

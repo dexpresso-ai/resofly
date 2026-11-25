@@ -5,6 +5,7 @@ import {
 } from './types.ts';
 import { isJitsiMeetingUrl, jitsiMeetingUrl } from '../jitsi.ts';
 import { isWriterRole, memberModuleLevel } from '../roles.ts';
+import { readableSourceIds, recordingSource, recordingVisibleTo, visibleRecordingsFilter } from '../recordingPrivacy.ts';
 import {
   accountSupportsService, calendarConferenceBlockedReason, calendarConferenceService, isVideoService, pickMeetingConnection,
   serviceLabel, serviceOfUrl, serviceProvider, videoServiceStateMessage, type VideoService,
@@ -267,10 +268,12 @@ interface RecordingRow {
   summary_recipients: Array<{ email: string; name: string | null }> | null;
   summary_sent_at: string | null; created_at: string;
   note_id: string | null;
+  call_id: string | null; content_note_id: string | null; created_by: string | null; source_id: string | null;
 }
 
 const RECORDING_FIELDS =
-  'id, event_title_snapshot, status, transcript_text, summary_text, provider, event_ref, summary_recipients, summary_sent_at, created_at, note_id';
+  'id, event_title_snapshot, status, transcript_text, summary_text, provider, event_ref, summary_recipients, summary_sent_at, created_at, note_id, ' +
+  'call_id, content_note_id, created_by, source_id';
 
 /**
  * Een opname voor de handelingen hieronder, die onder Agenda vallen. Sinds
@@ -282,7 +285,27 @@ const RECORDING_FIELDS =
 export async function agendaRecording(ctx: ActionCtx, recordingId: string): Promise<RecordingRow> {
   const recording = await row<RecordingRow>(ctx, 'meeting_recordings', recordingId, RECORDING_FIELDS, 'Opname');
   if (recording.note_id) throw new ActionError('Deze opname hoort bij een notitie. Open de notitie onder Documenten om hem te bekijken.');
+  // Uit de privé-agenda van een collega (sinds 25 november): dan bestaat hij
+  // voor deze aanroeper niet, met dezelfde melding als een onbekende opname.
+  // Zonder deze stap las, mailde of wiste iemand met Agenda via Gerrie, MCP of
+  // de API de notulen van een meeting die hij in de agenda nooit zag.
+  let source;
+  try {
+    source = await recordingSource(ctx.db, ctx.organizationId, recording.source_id);
+  } catch (e) {
+    throw new ActionError(e instanceof Error ? e.message : 'Agenda ophalen mislukt.');
+  }
+  if (!recordingVisibleTo(recording, ctx.userId, source)) throw new ActionError('Opname niet gevonden in deze organisatie.');
   return recording;
+}
+
+/** Het filter voor een lijst opnames: alleen wat de aanroeper mag zien (zie recordingPrivacy.ts). */
+async function visibleRecordings(ctx: ActionCtx): Promise<string> {
+  try {
+    return visibleRecordingsFilter(ctx.userId, await readableSourceIds(ctx.db, ctx.organizationId, ctx.userId));
+  } catch (e) {
+    throw new ActionError(e instanceof Error ? e.message : 'Agenda\'s ophalen mislukt.');
+  }
 }
 
 export const CALENDAR_ACTIONS: ActionDef[] = [
@@ -1604,10 +1627,13 @@ export const CALENDAR_ACTIONS: ActionDef[] = [
     },
     async read(ctx, input) {
       const limit = Math.min(Math.max(Number(input.limit) || 10, 1), 50);
+      const visible = await visibleRecordings(ctx);
       let query = orgQuery(ctx, 'meeting_recordings',
         'id, event_title_snapshot, client_id, project_id, status, error_message, duration_seconds, language, transcript_text, summary_text, summary_sent_at, summary_recipients, created_at')
         // Opnames bij een notitie vallen onder Inhoud (zie agendaRecording).
         .is('note_id', null)
+        // Niet uit de privé-agenda van een collega (recordingPrivacy.ts).
+        .or(visible)
         .order('created_at', { ascending: false }).limit(limit);
       const clientId = optId(input, 'client_id');
       if (clientId) query = query.eq('client_id', clientId);
@@ -1658,11 +1684,14 @@ export const CALENDAR_ACTIONS: ActionDef[] = [
     async read(ctx, input) {
       const limit = Math.min(Math.max(Number(input.limit) || 5, 1), 20);
       const since = optIsoDate(input, 'since') ?? new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10);
+      const visible = await visibleRecordings(ctx);
       let query = orgQuery(ctx, 'meeting_recordings',
         'id, event_title_snapshot, client_id, project_id, duration_seconds, summary_text, summary_json, summary_sent_at, summary_recipients, created_at')
         .eq('status', 'done').gte('created_at', `${since}T00:00:00Z`)
         // Opnames bij een notitie vallen onder Inhoud (zie agendaRecording).
         .is('note_id', null)
+        // Niet uit de privé-agenda van een collega (recordingPrivacy.ts).
+        .or(visible)
         .order('created_at', { ascending: false }).limit(limit);
       const clientId = optId(input, 'client_id');
       if (clientId) query = query.eq('client_id', clientId);
