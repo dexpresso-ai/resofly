@@ -10,6 +10,7 @@ import {
   dayTaskMinutes,
   DEFAULT_WORKDAY_MINUTES,
   isWeekendKey,
+  isWorkday,
   netDay,
   netWeek,
   ownCalendarEvents,
@@ -164,4 +165,46 @@ test('het venster van "Vul mijn week" groeit mee met een lange werkdag', () => {
   assert.equal(autoPlanWindowEnd(workdayFrom({ minutes: 360, include_weekend: false })), 17 * 60, 'korter dan acht uur: het venster blijft, de werktijd is de grens');
   assert.equal(autoPlanWindowEnd(workdayFrom({ minutes: 600, include_weekend: false })), 19 * 60);
   assert.equal(autoPlanWindowEnd(workdayFrom({ minutes: 1200, include_weekend: false })), 23 * 60);
+});
+
+// ── Vrije dagen (2026-11-25) ────────────────────────────────────────────────
+
+test('een vrije dag heeft geen werktijd en geen "vrij"; wat er toch staat telt als extra', () => {
+  const vrij = netDay('2026-11-27', workdayFrom(null), 60, 120, true);
+  assert.equal(vrij.counts, false);
+  assert.equal(vrij.dayOff, true);
+  assert.equal(vrij.workMinutes, 0);
+  assert.equal(vrij.netMinutes, 0);
+  assert.equal(vrij.freeMinutes, null);
+  assert.equal(netDay('2026-11-28', workdayFrom(null), 0, 0).dayOff, false, 'een weekenddag is geen vrije dag die je zelf koos');
+});
+
+test('de week met een vrije vrijdag: 32 uur werktijd, en de vrijdag staat apart', () => {
+  const workday = workdayFrom(null);
+  const off = new Set(['2026-11-27']);
+  const week = netWeek(WEEK.map(key => netDay(key, workday, 60, key === '2026-11-27' ? 90 : 120, off.has(key))));
+  assert.equal(week.workMinutes, 4 * 480);
+  assert.equal(week.workdays, 4);
+  assert.equal(week.daysOff, 1);
+  assert.equal(week.meetingMinutes, 4 * 60);
+  assert.equal(week.taskMinutes, 4 * 120);
+  assert.equal(week.offDayMinutes, 60 + 90 + 2 * (60 + 120), 'de vrijdag en het weekend');
+});
+
+test('een weekstrook slaat je vrije dag over', () => {
+  // Ma t/m vr, tien uur, woensdag vrij: vier werkdagen van 2u30.
+  const strook = task('s', { planned_date: '2026-11-23', planned_end_date: '2026-11-27', estimated_minutes: 600 });
+  const shares = spanShares(strook, WEEK, workdayFrom(null), [], new Set(['2026-11-25']));
+  assert.equal(shares.has('2026-11-25'), false);
+  assert.equal(shares.get('2026-11-23'), 150);
+  assert.equal([...shares.values()].reduce((a, b) => a + b, 0), 600);
+  const load = taskLoadByDay(WEEK, [strook], workdayFrom(null), noLinks, new Set(['2026-11-25']));
+  assert.equal(load.get('2026-11-25')?.spanMinutes, 0);
+});
+
+test('isWorkday en workMinutesOn kennen de vrije dagen', () => {
+  const off = new Set(['2026-11-24']);
+  assert.equal(isWorkday('2026-11-24', workdayFrom(null), off), false);
+  assert.equal(workMinutesOn('2026-11-24', workdayFrom(null), off), 0);
+  assert.equal(workMinutesOn('2026-11-25', workdayFrom(null), off), 480);
 });

@@ -702,6 +702,17 @@ export interface PlannerDayCapacity extends OrgScopedRow {
   created_at: string;
   updated_at: string;
 }
+/**
+ * Een dag die jij vrij zette in de weekplanner: daar is geen werktijd, dus
+ * geen netto tijd, en "Vul mijn week" slaat hem over. Persoonlijk, net als je
+ * werktijd (planner_days_off, 20261125090000).
+ */
+export interface PlannerDayOff extends OrgScopedRow {
+  user_id: UUID;
+  /** jjjj-mm-dd */
+  day: string;
+  created_at: string;
+}
 
 // ── Projectsjablonen ────────────────────────────────────────────────────────
 // Vaste werkwijze van een organisatie voor één soort project, één keer

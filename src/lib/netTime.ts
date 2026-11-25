@@ -50,14 +50,20 @@ export function isWeekendKey(dayKey: string): boolean {
   return weekday === 0 || weekday === 6;
 }
 
-/** Telt deze dag mee als werkdag? */
-export function isWorkday(dayKey: string, workday: Workday): boolean {
+/**
+ * Telt deze dag mee als werkdag? Niet in het weekend (tenzij dat meetelt), en
+ * niet op een dag die je zelf vrij zette (2026-11-25). Zo'n vrije dag telde
+ * eerst gewoon acht uur: de dagkop zei "8u vrij" op je vakantie, en "Vul mijn
+ * week" plande er werk op.
+ */
+export function isWorkday(dayKey: string, workday: Workday, daysOff?: ReadonlySet<string>): boolean {
+  if (daysOff?.has(dayKey)) return false;
   return workday.includeWeekend || !isWeekendKey(dayKey);
 }
 
 /** Werktijd van één dag: nul op een dag die niet meetelt. */
-export function workMinutesOn(dayKey: string, workday: Workday): number {
-  return isWorkday(dayKey, workday) ? workday.minutes : 0;
+export function workMinutesOn(dayKey: string, workday: Workday, daysOff?: ReadonlySet<string>): number {
+  return isWorkday(dayKey, workday, daysOff) ? workday.minutes : 0;
 }
 
 /**
@@ -129,13 +135,14 @@ function spanKeys(task: Task): string[] {
  * verdeeld over de werkdagen van de hele strook, niet over de dagen die toevallig
  * in beeld staan. Eerder viel een strook van twee weken met twintig uur in zijn
  * geheel in de eerste week, en verdween een deel in een weekend dat niet meetelt.
- * Heeft de strook geen enkele werkdag, dan over al zijn dagen.
+ * Heeft de strook geen enkele werkdag, dan over al zijn dagen. Een vrije dag
+ * in de strook krijgt niets: dat werk schuift naar de dagen dat je er bent.
  */
-export function spanShares(task: Task, dayKeys: string[], workday: Workday, links: CalendarEventLink[]): Map<string, number> {
+export function spanShares(task: Task, dayKeys: string[], workday: Workday, links: CalendarEventLink[], daysOff?: ReadonlySet<string>): Map<string, number> {
   const shares = new Map<string, number>();
   if (!isSpanningTask(task)) return shares;
   const all = spanKeys(task);
-  const working = all.filter(key => isWorkday(key, workday));
+  const working = all.filter(key => isWorkday(key, workday, daysOff));
   const over = working.length > 0 ? working : all;
   if (over.length === 0) return shares;
   // Gekoppelde afspraken binnen de strook staan al bij de afspraken.
@@ -161,13 +168,14 @@ export function taskLoadByDay(
   tasks: Task[],
   workday: Workday,
   linksFor: (taskId: string) => CalendarEventLink[],
+  daysOff?: ReadonlySet<string>,
 ): Map<string, DayTaskLoad> {
   const byDay = new Map<string, DayTaskLoad>();
   for (const key of dayKeys) byDay.set(key, { minutes: 0, spanMinutes: 0 });
   for (const task of tasks) {
     if (!task.planned_date) continue;
     if (isSpanningTask(task)) {
-      for (const [key, share] of spanShares(task, dayKeys, workday, linksFor(task.id))) byDay.get(key)!.spanMinutes += share;
+      for (const [key, share] of spanShares(task, dayKeys, workday, linksFor(task.id), daysOff)) byDay.get(key)!.spanMinutes += share;
       continue;
     }
     const bucket = byDay.get(task.planned_date);
@@ -180,6 +188,8 @@ export type NetDay = {
   key: string;
   /** Is het een werkdag? Zo niet, dan is er geen werktijd en dus geen "vrij". */
   counts: boolean;
+  /** Zette je deze dag zelf vrij? (Een weekenddag die niet meetelt is dat niet.) */
+  dayOff: boolean;
   workMinutes: number;
   meetingMinutes: number;
   taskMinutes: number;
@@ -189,14 +199,15 @@ export type NetDay = {
   freeMinutes: number | null;
 };
 
-export function netDay(key: string, workday: Workday, meetingMinutes: number, taskMinutes: number): NetDay {
-  const counts = isWorkday(key, workday);
+export function netDay(key: string, workday: Workday, meetingMinutes: number, taskMinutes: number, dayOff = false): NetDay {
+  const counts = !dayOff && isWorkday(key, workday);
   const work = counts ? workday.minutes : 0;
   const meetings = Math.max(0, meetingMinutes);
   const tasks = Math.max(0, taskMinutes);
   return {
     key,
     counts,
+    dayOff,
     workMinutes: work,
     meetingMinutes: meetings,
     taskMinutes: tasks,
@@ -213,8 +224,12 @@ export type NetWeek = {
   netMinutes: number;
   /** Netto min taken; negatief is te veel. */
   freeMinutes: number;
-  /** Afspraken en taken op dagen die niet meetellen (het weekend, tenzij dat meetelt). */
+  /** Afspraken en taken op dagen die niet meetellen: het weekend (tenzij dat
+   *  meetelt) en je vrije dagen. */
   offDayMinutes: number;
+  /** Hoeveel werkdagen er meetellen, en hoeveel je er vrij zette. */
+  workdays: number;
+  daysOff: number;
 };
 
 /**
@@ -231,8 +246,12 @@ export function netWeek(days: NetDay[]): NetWeek {
   let meetings = 0;
   let tasks = 0;
   let offDay = 0;
+  let workdays = 0;
+  let daysOff = 0;
   for (const day of days) {
+    if (day.dayOff) daysOff++;
     if (!day.counts) { offDay += day.meetingMinutes + day.taskMinutes; continue; }
+    workdays++;
     work += day.workMinutes;
     meetings += day.meetingMinutes;
     tasks += day.taskMinutes;
@@ -244,6 +263,8 @@ export function netWeek(days: NetDay[]): NetWeek {
     netMinutes: Math.max(0, work - meetings),
     freeMinutes: work - meetings - tasks,
     offDayMinutes: offDay,
+    workdays,
+    daysOff,
   };
 }
 
