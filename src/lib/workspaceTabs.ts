@@ -8,7 +8,7 @@ export const PAGE_TITLES: Record<string, string> = {
   dashboard: 'Dashboard', gerrie: 'Gerrie', weekplanner: 'Weekplanner', calendar: 'Agenda',
   'meeting-booking': 'Boekingslinks',
   time: 'Uren', stats: 'Rapportages', report: 'Rapportage', content: 'Inhoud', notes: 'Notities',
-  documents: 'Documenten', clients: 'Klanten', client: 'Klant', communication: 'Berichten', projects: 'Projecten',
+  documents: 'Documenten', meetings: 'Meetings', clients: 'Klanten', client: 'Klant', communication: 'Berichten', projects: 'Projecten',
   'project-planning': 'Projectplanning', tickets: 'Tickets', chat: 'Teamchat',
   marketing: 'Marketing', quotes: 'Offertes', contracts: 'Contracten', invoices: 'Facturen',
   suppliers: 'Leveranciers', 'purchase-invoices': 'Inkoopfacturen', ledger: 'Grootboek',

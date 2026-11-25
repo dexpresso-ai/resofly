@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
-import { Archive, BarChart3, BookOpen, BookUser, Boxes, Calculator, Calendar, CalendarClock, CalendarRange, ChevronDown, ChevronRight, ChevronUp, Clock, FileSignature, FileText, Files, FolderOpen, Hourglass, Inbox, Landmark, LayoutDashboard, Library, LineChart, Lock, LogOut, Megaphone, MessageSquare, Moon, Percent, Pin, PinOff, Receipt, ReceiptText, RefreshCw, Scale, Sparkles, StickyNote, Sun, Ticket, TrendingUp, Truck, Users, Wallet, X } from 'lucide-react';
+import { Archive, AudioLines, BarChart3, BookOpen, BookUser, Boxes, Calculator, Calendar, CalendarClock, CalendarRange, ChevronDown, ChevronRight, ChevronUp, Clock, FileSignature, FileText, Files, FolderOpen, Hourglass, Inbox, Landmark, LayoutDashboard, Library, LineChart, Lock, LogOut, Megaphone, MessageSquare, Moon, Percent, Pin, PinOff, Receipt, ReceiptText, RefreshCw, Scale, Sparkles, StickyNote, Sun, Ticket, TrendingUp, Truck, Users, Wallet, X } from 'lucide-react';
 import type { AppData, Organization, OrganizationRole } from '../types';
 import { GlobalSearch, type SearchResult } from './GlobalSearch';
 import { settingsMenuGroups } from './settingsMenuItems';
@@ -24,7 +24,7 @@ const LOOK_CHOICES: { look: Look; label: string; hint: string }[] = [
   { look: 'stroom', label: 'Stroom', hint: 'licht, glas en de stroom' },
 ];
 
-export type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'meeting-booking'|'time'|'stats'|'report'|'content'|'notes'|'documents'|'clients'|'client'|'communication'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'prepaid'|'pnl'|'forecast'|'vat-returns'|'corporate-tax'|'income-tax'|'dga'|'shareholders'|'owners'|'fiscal-years'|'annual-accounts'|'declarations'|'archive'|'settings'|'project'|'gallery';
+export type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'meeting-booking'|'time'|'stats'|'report'|'content'|'notes'|'documents'|'meetings'|'clients'|'client'|'communication'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'prepaid'|'pnl'|'forecast'|'vat-returns'|'corporate-tax'|'income-tax'|'dga'|'shareholders'|'owners'|'fiscal-years'|'annual-accounts'|'declarations'|'archive'|'settings'|'project'|'gallery';
 
 /**
  * Het menu in categorieën in plaats van dertien regels onder elkaar. Een groep
@@ -73,6 +73,10 @@ const navGroups = [
     ['content', Library, 'Alle inhoud'],
     ['notes', StickyNote, 'Notities'],
     ['documents', Files, 'Documenten'],
+    // Sinds 25 november: alle meetings in één tabel, met de knop om de audio
+    // te wissen. Een meeting stond eerst alleen bij zijn afspraak, of als
+    // notitie in een map Meetings per klant.
+    ['meetings', AudioLines, 'Meetings'],
   ] },
   { id: 'inzicht', label: 'Inzicht', items: [
     ['stats', BarChart3, 'Rapportages'],

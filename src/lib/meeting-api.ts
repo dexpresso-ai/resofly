@@ -2,6 +2,7 @@ import { supabase } from './supabase';
 import { throwFunctionError } from './functionErrors';
 import { deleteR2Object, getAccessToken, getWorkerBase } from './r2-api';
 import type { CalendarProvider, MeetingRecording, UUID } from '../types';
+import { MEETING_OVERVIEW_COLUMNS, type MeetingOverviewRow } from './meetingsOverview';
 
 /**
  * Frontend-koppeling voor meeting-opnames: audio uploaden naar R2 (privé) en de
@@ -183,6 +184,48 @@ export async function getRecordingInContentNote(organizationId: UUID, noteId: UU
     throw new Error(error.message);
   }
   return (data as MeetingRecording | null) ?? null;
+}
+
+/** Zoveel meetings per keer in Inhoud → Meetings; "Meer laden" haalt de volgende. */
+export const MEETING_PAGE_SIZE = 100;
+
+/**
+ * Een bladzijde meetings voor Inhoud → Meetings, nieuwste eerst, zonder
+ * transcript (dat laadt pas als je er een opent). Wat je mag lezen, beslist
+ * de database per opname (module gate); wie je in het overzicht ziet, de
+ * pagina (visibleInOverview). `before` is de created_at van de laatste rij
+ * van de vorige bladzijde.
+ */
+export async function listMeetingOverview(organizationId: UUID, before: string | null = null): Promise<{ rows: MeetingOverviewRow[]; more: boolean }> {
+  let query = supabase.from('meeting_recordings').select(MEETING_OVERVIEW_COLUMNS)
+    .eq('organization_id', organizationId)
+    .order('created_at', { ascending: false })
+    .limit(MEETING_PAGE_SIZE + 1);
+  if (before) query = query.lt('created_at', before);
+  const { data, error } = await query;
+  if (error) throw new Error(error.message);
+  const rows = ((data ?? []) as unknown as MeetingOverviewRow[]);
+  return { rows: rows.slice(0, MEETING_PAGE_SIZE), more: rows.length > MEETING_PAGE_SIZE };
+}
+
+/**
+ * De agenda's die jij kunt lezen: je eigen en de gedeelde (RLS op
+ * calendar_sources). Een afspraakopname uit een andere agenda (de privé-agenda
+ * van een collega) toont het overzicht niet; zie visibleInOverview.
+ */
+export async function listReadableCalendarSourceIds(organizationId: UUID): Promise<Set<string>> {
+  const { data, error } = await supabase.from('calendar_sources').select('id').eq('organization_id', organizationId);
+  if (error) throw new Error(error.message);
+  return new Set(((data ?? []) as { id: string }[]).map((row) => row.id));
+}
+
+/**
+ * Wist alleen de audio; transcript en notulen blijven staan. De server haalt
+ * het bestand uit R2 en telt het niet meer mee bij je opslag.
+ */
+export async function deleteRecordingAudio(organizationId: UUID, recordingId: UUID): Promise<{ audioDeletedAt: string | null; freedBytes: number }> {
+  const data = await invoke<{ audioDeletedAt?: string | null; freedBytes?: number }>(organizationId, { action: 'deleteAudio', recordingId });
+  return { audioDeletedAt: data.audioDeletedAt ?? null, freedBytes: Number(data.freedBytes) || 0 };
 }
 
 /** Verwijdert opname + transcript + notulen (audio uit R2 én de databaserij). */

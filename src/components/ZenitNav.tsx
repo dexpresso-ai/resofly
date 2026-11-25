@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { flushSync } from 'react-dom';
-import { Archive, BarChart3, BookOpen, BookUser, Boxes, Building2, Calculator, Calendar, CalendarClock, CalendarRange, Clock, FileSignature, FileText, Files, FolderKanban, FolderOpen, GanttChart, Hourglass, Inbox, Landmark, LayoutDashboard, Library, LineChart, Lock, LogOut, Megaphone, MessageSquare, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Percent, Plus, Receipt, ReceiptText, RefreshCw, Scale, Settings, Sparkles, StickyNote, Sun, SunMoon, Sunrise, Ticket, TrendingUp, Truck, Users, Wallet, X, type LucideIcon } from 'lucide-react';
+import { Archive, AudioLines, BarChart3, BookOpen, BookUser, Boxes, Building2, Calculator, Calendar, CalendarClock, CalendarRange, Clock, FileSignature, FileText, Files, FolderKanban, FolderOpen, GanttChart, Hourglass, Inbox, Landmark, LayoutDashboard, Library, LineChart, Lock, LogOut, Megaphone, MessageSquare, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Percent, Plus, Receipt, ReceiptText, RefreshCw, Scale, Settings, Sparkles, StickyNote, Sun, SunMoon, Sunrise, Ticket, TrendingUp, Truck, Users, Wallet, X, type LucideIcon } from 'lucide-react';
 import { Select } from './Ui';
 import { BrandMark } from './BrandMark';
 import { askGerrie } from './GerrieChat';
@@ -65,7 +65,7 @@ const MODULE_PAGES: Record<ModuleId, Page[]> = {
   gerrie: ['gerrie'],
   agenda: ['calendar', 'meeting-booking', 'weekplanner', 'time'],
   werk: ['clients', 'client', 'projects', 'project', 'gallery', 'project-planning', 'tickets', 'archive'],
-  documenten: ['content', 'notes', 'documents'],
+  documenten: ['content', 'notes', 'documents', 'meetings'],
   geld: FINANCE_PAGES,
   berichten: ['communication', 'chat', 'marketing'],
   inzicht: ['stats', 'report'],
@@ -139,10 +139,11 @@ function buildModules({ permissions, legalForm, decisionCount, ticketUnread, pur
     // Een eigen plek sinds 23 november, net als Agenda. Tot dan stond Inhoud als
     // één regel onder Inzicht, en een document vond je pas na een filter in de
     // verkenner.
-    { id: 'documenten', label: 'Documenten', Icon: Files, home: ['content', 'notes', 'documents'], badge: 0, groups: [{ items: keep([
+    { id: 'documenten', label: 'Documenten', Icon: Files, home: ['content', 'notes', 'documents', 'meetings'], badge: 0, groups: [{ items: keep([
       { page: 'content', label: 'Alle inhoud', Icon: Library },
       { page: 'notes', label: 'Notities', Icon: StickyNote },
       { page: 'documents', label: 'Documenten', Icon: Files },
+      { page: 'meetings', label: 'Meetings', Icon: AudioLines },
     ]) }] },
     { id: 'geld', label: 'Geld', Icon: Wallet, home: ['invoices', ...FINANCE_PAGES, 'declarations'], badge: purchaseInboxOpen, badgeTitle: purchaseTitle, groups: [
       { label: 'Verkoop', items: keep([

@@ -234,6 +234,9 @@ import './styles/werkruimte-cache.css';
 import './styles/weekplanner.css';
 // Dashboardblokken: inklappen en indelen (2026-11-24).
 import './styles/dashboard-blocks.css';
+// Inhoud → Meetings (2026-11-25): de tabel met alle meetings. Eigen klassen
+// (mtg-*) op de verkenner van Inhoud (.odrv*).
+import './styles/meetings.css';
 import type { SetupNext } from './features/OrganizationSetup';
 import { installChunkReload } from './lib/chunkReload';
 import { clearOpstartLijsten, saveOpstartLijst } from './lib/opstartverzoeken';
@@ -299,6 +302,7 @@ const TimeTracking = lazyPage(() => import('./features/TimeTracking'), 'TimeTrac
 const Tickets = lazyPage(() => import('./features/Tickets'), 'Tickets');
 const Marketing = lazyPage(() => import('./features/Marketing'), 'Marketing');
 const ContentLibrary = lazyPage(() => import('./features/ContentLibrary'), 'ContentLibrary');
+const MeetingsOverview = lazyPage(() => import('./features/MeetingsOverview'), 'MeetingsOverview');
 const Invoices = lazyPage(() => import('./features/Finance'), 'Invoices');
 const Quotes = lazyPage(() => import('./features/Finance'), 'Quotes');
 const LedgerPage = lazyPage(() => import('./features/Bookkeeping'), 'LedgerPage');
@@ -329,7 +333,7 @@ const CalendarPage = lazyPage(() => import('./features/CalendarPage'), 'Calendar
 const MeetingBookingManager = lazyPage(() => import('./features/MeetingBookingManager'), 'MeetingBookingManager');
 const GerrieCommandCenter = lazyPage(() => import('./features/GerrieCommandCenter'), 'GerrieCommandCenter');
 
-type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'meeting-booking'|'time'|'stats'|'report'|'content'|'notes'|'documents'|'clients'|'client'|'communication'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'prepaid'|'pnl'|'forecast'|'vat-returns'|'corporate-tax'|'income-tax'|'dga'|'shareholders'|'owners'|'fiscal-years'|'annual-accounts'|'declarations'|'archive'|'settings'|'project'|'gallery';
+type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'meeting-booking'|'time'|'stats'|'report'|'content'|'notes'|'documents'|'meetings'|'clients'|'client'|'communication'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'prepaid'|'pnl'|'forecast'|'vat-returns'|'corporate-tax'|'income-tax'|'dga'|'shareholders'|'owners'|'fiscal-years'|'annual-accounts'|'declarations'|'archive'|'settings'|'project'|'gallery';
 /**
  * Een nieuwe klant uit een mail in de opvangbak ("Nieuwe klant" in
  * InboundInbox). Na opslaan koppelt persistEdit de mail aan de nieuwe klant.
@@ -461,7 +465,7 @@ const START_PAGE: Page = (STANDALONE_APP?.home[0] as Page | undefined) ?? 'dashb
 const PAGE_CHUNKS: Partial<Record<Page, { preload: () => void }>> = {
   dashboard: Dashboard, gerrie: GerrieCommandCenter, weekplanner: WeekPlanner, calendar: CalendarPage,
   'meeting-booking': MeetingBookingManager, time: TimeTracking, stats: Reports, report: AiReportPage,
-  content: ContentLibrary, notes: ContentLibrary, documents: ContentLibrary, clients: Clients, client: ClientDetailPage,
+  content: ContentLibrary, notes: ContentLibrary, documents: ContentLibrary, meetings: MeetingsOverview, clients: Clients, client: ClientDetailPage,
   communication: CommunicationPage, projects: ProjectsListPage, 'project-planning': ProjectsPlanningPage,
   tickets: Tickets, marketing: Marketing, quotes: Quotes, contracts: Contracts, invoices: Invoices,
   suppliers: SuppliersPage, 'purchase-invoices': PurchaseInvoicesPage, ledger: LedgerPage, bank: BankPage,
@@ -5123,6 +5127,7 @@ function App() {
     if (page === 'gerrie') return <GerrieCommandCenter organizationId={activeOrg.id} canWrite={canWrite} openAgentId={view.openAgentId} onOpenAgentConsumed={() => setOpenAgentId(null)} conversationsFocus={view.gerrieConversationsFocus ?? null} onConversationsFocusConsumed={() => setGerrieConversationsFocus(null)} isAdmin={activeMembership?.role === 'owner' || activeMembership?.role === 'admin'} onOpenDecisionTarget={openDecisionTarget} currentUserId={currentUserId} teamMembers={workMembers} {...gerrieActions} />;
     if (page === 'marketing') return <Marketing data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}
       openCampaignId={view.pendingDraft?.kind === 'campaign' ? String(view.pendingDraft.payload.id ?? '') : null} onCampaignOpened={() => setPendingDraft(null)}/>;
+    if (page === 'meetings') return <MeetingsOverview organizationId={activeOrg.id} data={data} currentUserId={currentUserId} canWriteModule={(module) => orgCanWrite && permissions.canWrite(module)} onOpenNote={(item) => setEdit({kind:'note', item})}/>;
     if (page === 'content' || page === 'notes' || page === 'documents') return <ContentLibrary key={page} data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} initialView={page === 'notes' ? 'notes' : page === 'documents' ? 'documents' : 'all'} onNewNote={(t) => ensureCanWrite() && setEdit({kind:'note', defaults: { client_id: t?.client_id ?? null, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }})} onEditNote={(item)=>setEdit({kind:'note', item})} onNewDocument={(t) => ensureCanWrite() && setEdit({kind:'document', defaults: { client_id: t?.client_id ?? null, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }})} onNewOfficeDocument={(docType, title, t) => { if (!ensureCanWrite()) return; void createDocumentFromBlankOffice(docType, { title, client_id: t?.client_id ?? null, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }); }} onEditDocument={openDocument}/>;
     if (page === 'quotes') return <Quotes data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'quote'})} onEdit={(item)=>setEdit({kind:'quote', item})} onSubmitApproval={submitQuoteApproval} onApprove={approveQuote} onReject={rejectQuote} onWithdraw={withdrawQuote} onSend={sendQuote} onConvertToInvoice={convertQuoteToInvoice} onDownloadPdf={downloadQuotePdf}/>;
     if (page === 'contracts') return <Contracts data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} refreshKey={refreshRound}

@@ -149,7 +149,11 @@ export const EXPORT_FORMAT_VERSION = 1;
 // event_starts_at en event_ends_at op meeting_recordings: of de meeting na het
 // uitschrijven vanzelf in Inhoud komt, en de dag en tijd van de afspraak. Gaan
 // met de tabel mee.
-export const EXPORT_SCHEMA_VERSION = '20261124170000';
+// 20261125090000 (meeting-audio verwijderen) zet audio_deleted_at en
+// audio_deleted_by op meeting_recordings: wanneer en door wie de audio is
+// gewist. Gaan met de tabel mee. De nieuwe opruimreden voor storage_purge_queue
+// verandert niets aan de export (die tabel is 'intern').
+export const EXPORT_SCHEMA_VERSION = '20261125090000';
 
 export type TableKind =
   | 'export'

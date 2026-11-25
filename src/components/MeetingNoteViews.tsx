@@ -78,7 +78,7 @@ export function MeetingNoteViews({ organizationId, noteId, isMeeting, children }
  * de server ze, _shared/scribeTranscript.ts); de spreker wordt vet. Het is
  * tekst uit de opname: React zet hem als tekst neer, nooit als opmaak.
  */
-function TranscriptLines({ text }: { text: string }) {
+export function TranscriptLines({ text }: { text: string }) {
   return (
     <div className="meeting-note-lines">
       {text.split('\n').filter((line) => line.trim()).map((line, i) => {
