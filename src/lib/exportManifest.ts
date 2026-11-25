@@ -160,7 +160,8 @@ export const EXPORT_FORMAT_VERSION = 1;
 // meeting_recordings en vervangt functies en triggers; geen tabellen of kolommen.
 // 20261125120000 (onbeperkt AI-tegoed) zet een kolom op
 // organization_billing_profiles; die tabel is 'abonnement' en gaat niet mee.
-export const EXPORT_SCHEMA_VERSION = '20261125120000';
+// 20261125130000 zet die vlag voor nog een organisatie; geen schemawijziging.
+export const EXPORT_SCHEMA_VERSION = '20261125130000';
 
 export type TableKind =
   | 'export'

@@ -36,6 +36,14 @@ migratie:
 select public.set_organization_ai_unlimited('<organization_id>', true);   -- of false
 ```
 
+## Ook Gerjanvanlopik onbeperkt
+
+Dezelfde dag kreeg ook de organisatie **Gerjanvanlopik** de vlag, met
+`20261125130000_ai_onbeperkt_gerjanvanlopik.sql`. Die zoekt net zo op naam (exact, zonder
+op hoofdletters of spaties eromheen te letten) en slaat over wie de vlag al heeft. Lokaal
+geprobeerd: "Gerjanvanlopik" kreeg de vlag, "Gerjanvanlopik BV" niet, en een tweede run
+deed niets.
+
 ## Bestanden
 
 | Bestand | Wat |
