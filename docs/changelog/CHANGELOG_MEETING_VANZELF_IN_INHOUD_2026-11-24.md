@@ -116,6 +116,11 @@ Op de opnamekaart zie je waar je aan toe bent:
   wat ze uit `_shared` laden): geen fouten. esm.sh en deno.land zijn in de sessie
   niet bereikbaar; daarom Deno 2.9 uit npm, met supabase-js 2.45.0 (dezelfde versie
   als de esm.sh-import) via een import map. CI draait de echte lijst bij de push.
+- `npm run test:mobile -- --theme=both`, de volledige ronde: 920 pagina's gemeten,
+  0 met problemen.
 - In Chromium tegen de nagebootste backend van de schermtest: de drie standen op de
   kaart (komt vanzelf, staat erin, de knop), telefoon en desktop, licht en donker;
   geen JavaScript-fouten en geen zijwaartse overloop.
+- Niet hier getest: een echte opname met ElevenLabs op staging. Doe na de uitrol een
+  korte opname bij een gedeelde afspraak met een klant, en kijk of hij in de map
+  Meetings van die klant staat.
