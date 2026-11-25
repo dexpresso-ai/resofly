@@ -11,9 +11,12 @@
 //     plafond, een bewuste keuze);
 //   - daarnaast een plafond per organisatie (GERRIE_MONTHLY_ORG_COST_EUR);
 //   - kan het verbruik niet worden gelezen, dan nee: liever even geen AI dan
-//     onbegrensde kosten.
+//     onbegrensde kosten;
+//   - een organisatie met ai_unlimited (migratie 20261125120000) heeft geen
+//     plafond, ook niet per gebruiker. Zonder die uitzondering bleef het eigen
+//     tegoed een teamlid tegenhouden, en was "onbeperkt" niet onbeperkt.
 // De rekenregels zijn puur (aiBudget.test.ts); checkAiBudget leest het
-// verbruik via ai_usage_month_totals (migratie 20261101100000).
+// verbruik en de vlag via ai_usage_month_totals.
 // ============================================================
 
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
@@ -39,8 +42,13 @@ export interface AiBudget {
   scope: 'user' | 'org' | 'error' | null;
 }
 
-/** Het oordeel bij een verbruik. Een plafond van 0 telt niet mee. */
-export function aiBudgetVerdict(userEur: number, userLimit: number, orgEur: number, orgLimit: number): AiBudget {
+/**
+ * Het oordeel bij een verbruik. Een plafond van 0 telt niet mee. Is de
+ * organisatie onbeperkt, dan geldt geen enkel plafond; limitEur 0 laat de
+ * tegoed-meter in de app verdwijnen.
+ */
+export function aiBudgetVerdict(userEur: number, userLimit: number, orgEur: number, orgLimit: number, orgUnlimited = false): AiBudget {
+  if (orgUnlimited) return { allowed: true, usedEur: 0, limitEur: 0, scope: null };
   const remaining = (used: number, limit: number) => (limit > 0 ? (limit - used) / limit : Number.POSITIVE_INFINITY);
   const userLeft = remaining(userEur, userLimit);
   const orgLeft = remaining(orgEur, orgLimit);
@@ -69,6 +77,6 @@ export async function checkAiBudget(admin: SupabaseClient, userId: string | null
     console.warn('AI-budget niet te lezen; geweigerd', error.message);
     return { allowed: false, usedEur: 0, limitEur: 0, scope: 'error' };
   }
-  const row = (Array.isArray(data) ? data[0] : data) as { user_usd?: number | string; org_usd?: number | string } | null;
-  return aiBudgetVerdict(Number(row?.user_usd ?? 0) * usdToEur, userLimit, Number(row?.org_usd ?? 0) * usdToEur, orgLimit);
+  const row = (Array.isArray(data) ? data[0] : data) as { user_usd?: number | string; org_usd?: number | string; org_unlimited?: boolean } | null;
+  return aiBudgetVerdict(Number(row?.user_usd ?? 0) * usdToEur, userLimit, Number(row?.org_usd ?? 0) * usdToEur, orgLimit, row?.org_unlimited === true);
 }

@@ -158,7 +158,9 @@ export const EXPORT_FORMAT_VERSION = 1;
 // verandert niets aan de export (die tabel is 'intern').
 // 20261125110000 (opnames uit een privé-agenda) zet een leespolicy op
 // meeting_recordings en vervangt functies en triggers; geen tabellen of kolommen.
-export const EXPORT_SCHEMA_VERSION = '20261125110000';
+// 20261125120000 (onbeperkt AI-tegoed) zet een kolom op
+// organization_billing_profiles; die tabel is 'abonnement' en gaat niet mee.
+export const EXPORT_SCHEMA_VERSION = '20261125120000';
 
 export type TableKind =
   | 'export'
