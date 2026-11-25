@@ -34,3 +34,16 @@ test('ruimte: ja, en de meter volgt wat het krapst zit', () => {
 test('geen plafonds: altijd ja', () => {
   assert.equal(aiBudgetVerdict(1000, 0, 1000, 0).allowed, true);
 });
+
+test('onbeperkte organisatie: ja, ook als het eigen tegoed en dat van de organisatie op zijn', () => {
+  const v = aiBudgetVerdict(25, 25, 250, 250, true);
+  assert.equal(v.allowed, true);
+  assert.equal(v.scope, null);
+  // Plafond 0: de app toont dan geen tegoed-meter (remainingFraction = null).
+  assert.equal(v.limitEur, 0);
+  assert.equal(v.usedEur, 0);
+});
+
+test('zonder de vlag blijven de plafonds gelden', () => {
+  assert.equal(aiBudgetVerdict(25, 25, 10, 250, false).allowed, false);
+});
