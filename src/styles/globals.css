@@ -2592,13 +2592,11 @@ body::before{
 .mr-audio{margin-top:10px}
 .mr-audio audio{width:100%;height:34px}
 .mr-sent-note{display:flex;align-items:center;gap:6px;margin:8px 0 0;font-size:12.5px;color:var(--accent-ink)}
-/* Meeting in Inhoud: de vraag na het transcriberen (2026-11-24) */
-.mr-inhoud-vraag{margin-top:12px;padding:12px;border:1px solid rgba(var(--accent-rgb),.28);border-radius:11px;background:rgba(var(--accent-rgb),.07)}
-.mr-inhoud-tekst{margin:0;display:flex;flex-direction:column;gap:3px;font-size:13px;line-height:1.5;color:var(--text)}
-.mr-inhoud-tekst span{color:var(--muted)}
-.mr-inhoud-vraag .mr-actions{margin-top:10px}
+/* Meeting in Inhoud (2026-11-24): komt vanzelf, staat erin, of de knop als het vanzelf niet ging */
 .mr-inhoud-later .mr-actions{margin-top:10px}
 .mr-inhoud-klaar{flex-wrap:wrap}
+.mr-inhoud-straks{color:var(--muted)}
+.mr-inhoud-straks svg{flex:none}
 .mr-link{background:none;border:0;padding:0;font:inherit;color:var(--accent-ink);text-decoration:underline;cursor:pointer}
 .mr-link:hover{text-decoration:none}
 /* Meeting in Inhoud: wisselen tussen notulen en transcript in de notitie */

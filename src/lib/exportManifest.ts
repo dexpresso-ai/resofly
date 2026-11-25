@@ -145,6 +145,10 @@ export const EXPORT_FORMAT_VERSION = 1;
 // ingangsdatum), current_account_id en timeline_since op partnership_partners
 // en source op fiscal_year_partner_shares. Alles gaat mee: zonder de tijdlijn
 // komt de verdeling van een jaar met in- of uittreden elders anders uit.
+// 20261124170000 (meeting vanzelf in Inhoud) zet save_to_content, meeting_date,
+// event_starts_at en event_ends_at op meeting_recordings: of de meeting na het
+// uitschrijven vanzelf in Inhoud komt, en de dag en tijd van de afspraak. Gaan
+// met de tabel mee.
 // 20261125090000 (weekplanner: vrije dagen) zet planner_days_off erbij: de
 // dagen die je zelf vrij zette. Gaat mee, net als je werktijd
 // (planner_day_capacity) en je actiepunten.

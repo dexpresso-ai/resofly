@@ -1,13 +1,18 @@
 /**
- * Een meeting uit de agenda in Inhoud: titel, datum en tekst van de notitie.
+ * Een meeting uit de agenda in Inhoud: titel, datum en tekst van de notitie,
+ * en wanneer de server hem vanzelf in Inhoud zet.
  * Draaien met:  npm test
  *
  * Gaat dit mis, dan vind je de meeting in de map Meetings niet terug op naam
- * en datum, of komt tekst uit de opname als opmaak in de notitie.
+ * en datum, komt tekst uit de opname als opmaak in de notitie, of zet de
+ * server een meeting in Inhoud voor iemand die dat niet mag (of uit een
+ * privé-agenda).
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { dutchDate, meetingDay, meetingNoteContent, meetingNoteTitle, NOTULEN_VOLGEN } from './meetingNote.ts';
+import {
+  autoSaveRefusal, dutchDate, meetingDay, meetingNoteContent, meetingNoteTitle, NOTULEN_VOLGEN, validDay, validTime,
+} from './meetingNote.ts';
 
 test('de titel: eerst de afspraak, dan de datum in gewone woorden', () => {
   assert.equal(meetingNoteTitle('Kennismaking Bakkerij Jansen', '2026-11-24'), 'Kennismaking Bakkerij Jansen — 24 november 2026');
@@ -56,4 +61,54 @@ test('zonder notulen: de losse tekst als die er is, anders "notulen volgen"', ()
   assert.equal(meetingNoteContent(null, 'Eerste regel\nTweede\n\nNieuwe alinea'), '<p>Eerste regel<br>Tweede</p><p>Nieuwe alinea</p>');
   assert.equal(meetingNoteContent(null, null), NOTULEN_VOLGEN);
   assert.equal(meetingNoteContent({ samenvatting: ' ', besproken: [] }), NOTULEN_VOLGEN);
+});
+
+test('de dag en de tijd uit de aanvraag: alleen wat echt een dag of tijdstip is', () => {
+  assert.equal(validDay('2026-11-24'), '2026-11-24');
+  assert.equal(validDay('2028-02-29'), '2028-02-29');
+  assert.equal(validDay('2026-02-29'), null);
+  assert.equal(validDay('2026-11-24T10:00:00Z'), null);
+  assert.equal(validDay(''), null);
+  assert.equal(validDay(null), null);
+  assert.equal(validTime('2026-11-24T09:30:00+01:00'), '2026-11-24T08:30:00.000Z');
+  assert.equal(validTime('2026-11-24'), '2026-11-24T00:00:00.000Z');
+  assert.equal(validTime('morgen'), null);
+  assert.equal(validTime('  '), null);
+  assert.equal(validTime(1764000000000), null);
+});
+
+/** Een meeting bij een gedeelde afspraak, opgenomen door een medewerker met alle rechten. */
+const vanzelf = {
+  saveToContent: true, callId: null, noteId: null, createdBy: 'maker',
+  member: { role: 'member', module_access: {} }, sourceVisibility: 'organization',
+};
+
+test('vanzelf in Inhoud: bij een gedeelde afspraak, voor wie Agenda én Inhoud mag wijzigen', () => {
+  assert.equal(autoSaveRefusal(vanzelf), null);
+  assert.equal(autoSaveRefusal({ ...vanzelf, member: { role: 'owner', module_access: { content: 'none' } } }), null);
+  assert.equal(autoSaveRefusal({ ...vanzelf, member: { role: 'admin', module_access: null } }), null);
+  assert.equal(autoSaveRefusal({ ...vanzelf, member: { role: 'member', module_access: { calendar: 'write', content: 'write' } } }), null);
+});
+
+test('niet vanzelf: als het niet gevraagd is, of bij een gesprek of notitie', () => {
+  assert.equal(autoSaveRefusal({ ...vanzelf, saveToContent: false }), 'not_requested');
+  assert.equal(autoSaveRefusal({ ...vanzelf, callId: 'gesprek' }), 'not_requested');
+  assert.equal(autoSaveRefusal({ ...vanzelf, noteId: 'notitie' }), 'not_requested');
+});
+
+test('niet vanzelf: de maker is geen lid meer of mag het niet (meer)', () => {
+  assert.equal(autoSaveRefusal({ ...vanzelf, createdBy: null }), 'no_creator');
+  assert.equal(autoSaveRefusal({ ...vanzelf, member: null }), 'no_creator');
+  assert.equal(autoSaveRefusal({ ...vanzelf, member: { role: 'viewer', module_access: {} } }), 'no_rights');
+  assert.equal(autoSaveRefusal({ ...vanzelf, member: { role: 'accountant', module_access: {} } }), 'no_rights');
+  assert.equal(autoSaveRefusal({ ...vanzelf, member: { role: 'member', module_access: { content: 'read' } } }), 'no_rights');
+  assert.equal(autoSaveRefusal({ ...vanzelf, member: { role: 'member', module_access: { content: 'none' } } }), 'no_rights');
+  assert.equal(autoSaveRefusal({ ...vanzelf, member: { role: 'member', module_access: { calendar: 'read' } } }), 'no_rights');
+  // Een rol die de code niet kent, krijgt niets.
+  assert.equal(autoSaveRefusal({ ...vanzelf, member: { role: 'superuser', module_access: {} } }), 'no_rights');
+});
+
+test('niet vanzelf: uit een privé-agenda, of als de agenda onbekend is', () => {
+  assert.equal(autoSaveRefusal({ ...vanzelf, sourceVisibility: 'private' }), 'private_calendar');
+  assert.equal(autoSaveRefusal({ ...vanzelf, sourceVisibility: null }), 'private_calendar');
 });

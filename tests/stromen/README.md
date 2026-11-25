@@ -59,9 +59,13 @@ en `notulen`. Dat laatste gaat over opnames:
   webhook, een foutmelding en een webhook die eerder komt dan het `request_id`;
 - het AI-budget: de transcriptie in `ai_usage`, tegoed op voor gebruiker of organisatie, een
   bewaarde opname die later alsnog gaat, en notulen die wachten;
-- telefoongesprekken en wie wat mag.
+- telefoongesprekken en wie wat mag;
+- een meeting uit de agenda die na het uitschrijven vanzelf in de map Meetings van de klant komt
+  (of onder Geen klant): synchroon en via de webhook, met het tegoed op, de knop voor een oude
+  opname of een gewiste notitie, en niet uit een privé-agenda of voor wie Inhoud niet mag wijzigen.
 
-Zie `docs/changelog/CHANGELOG_TRANSCRIPTIE_AI_BUDGET_2026-11-08.md`.
+Zie `docs/changelog/CHANGELOG_TRANSCRIPTIE_AI_BUDGET_2026-11-08.md` en
+`docs/changelog/CHANGELOG_MEETING_VANZELF_IN_INHOUD_2026-11-24.md`.
 
 En `rapportages`: de rapportages met Gerrie (Statistieken → Rapportages), met een streamende
 nep-Claude die tools aanroept zoals het echte model (in het scenario zelf; niet-streamende

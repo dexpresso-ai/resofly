@@ -38,17 +38,32 @@ export interface MeetingRecorderEvent {
 }
 
 /**
- * Een meeting uit de agenda in Inhoud zetten (sinds 24 november). Na het
- * transcriberen vraagt de kaart: "Ook opslaan in Inhoud?" Zo ja, dan komt er
- * bij de klant (of onder Geen klant) een map Meetings met een notitie
- * "<titel> — <datum>". Alleen meegeven als de gebruiker Inhoud mag wijzigen.
+ * Een meeting uit de agenda in Inhoud (sinds 24 november). Zodra het
+ * transcript er is, zet de server hem vanzelf bij de klant (of onder Geen
+ * klant) in de map Meetings, als notitie "<titel> — <datum>", en hangt hem
+ * onder Notities bij de afspraak. Dat gebeurt ook als dit venster dan al dicht
+ * is; daarom gaan de dag en de tijd van de afspraak mee bij het aanmaken van
+ * de opname.
+ *
+ * Eerst vroeg de kaart erom ("Ook opslaan in Inhoud?"), maar die vraag kwam
+ * alleen als je de afspraak open had toen het transcript binnenkwam. Liep het
+ * uitschrijven op de achtergrond, dan stond de meeting nergens in Inhoud.
+ *
+ * Alleen meegeven bij een gedeelde afspraak, als de gebruiker Agenda én Inhoud
+ * mag wijzigen.
  */
 export interface SaveToContentOptions {
-  /** Waar hij komt, in gewone woorden: "bij Bakkerij Jansen" of "onder Geen klant". */
-  placeLabel: string;
   /** De dag van de afspraak (JJJJ-MM-DD), voor in de titel. */
   meetingDate: string | null;
-  /** Na het opslaan: de notitie aan de afspraak hangen en de werkruimte verversen. */
+  /** Begin en eind van de afspraak, voor de koppeling onder Notities. */
+  eventStartsAt: string | null;
+  eventEndsAt: string | null;
+  /**
+   * Kent de app deze notitie al? De server maakt hem buiten de app om; tot de
+   * werkruimte ververst, staat hij niet in de lijst, en deed "Openen" niets.
+   */
+  isNoteLoaded?: (noteId: UUID) => boolean;
+  /** De meeting staat in Inhoud (vanzelf of met de knop): de werkruimte verversen. */
   onSaved?: (noteId: UUID) => void | Promise<void>;
   /** Opent de notitie. */
   onOpenNote?: (noteId: UUID) => void;
@@ -58,7 +73,7 @@ interface Props {
   organizationId: UUID;
   canWrite: boolean;
   event: MeetingRecorderEvent;
-  /** Alleen bij een afspraak: de vraag "Ook opslaan in Inhoud?" na het transcriberen. */
+  /** Alleen bij een afspraak: de meeting komt na het transcriberen vanzelf in Inhoud. */
   saveToContent?: SaveToContentOptions;
   /**
    * Notities en documenten waaraan de notulen kunnen worden toegevoegd, en wat
@@ -100,6 +115,8 @@ export function MeetingRecorder({ organizationId, canWrite, event, saveToContent
   // aanpaste, kreeg die anders niet mee; daarom de laatste waarden uit een ref.
   const latestEvent = useRef(event);
   latestEvent.current = event;
+  const latestSaveToContent = useRef(saveToContent);
+  latestSaveToContent.current = saveToContent;
   const ensureNoteRef = useRef(ensureNoteId);
   ensureNoteRef.current = ensureNoteId;
   /** De notitie waar de lopende opname aan hangt (bij een nieuwe notitie pas bekend na het opslaan). */
@@ -252,12 +269,21 @@ export function MeetingRecorder({ organizationId, canWrite, event, saveToContent
       const file = new File([blob], `meeting-${Date.now()}.${ext}`, { type: mime });
 
       const ev = latestEvent.current;
+      // Alleen een meeting uit de agenda gaat vanzelf naar Inhoud: een notitie
+      // staat er al, een gesprek hoort bij het klantdossier.
+      const toContent = !forNote && !ev.callId ? latestSaveToContent.current : undefined;
       recordingId = await createRecording(organizationId, forNote
         ? { eventTitle: ev.eventTitle, clientId: ev.clientId, projectId: ev.projectId, noteId: noteIdRef.current }
         : {
             provider: ev.provider, sourceId: ev.sourceId, eventRef: ev.eventRef,
             eventTitle: ev.eventTitle, clientId: ev.clientId, projectId: ev.projectId,
             callId: ev.callId ?? null,
+            ...(toContent ? {
+              saveToContent: true,
+              meetingDate: toContent.meetingDate,
+              eventStartsAt: toContent.eventStartsAt,
+              eventEndsAt: toContent.eventEndsAt,
+            } : {}),
           });
       const storageKey = await uploadMeetingAudio(file, organizationId, recordingId);
       await startTranscription(organizationId, {
@@ -602,8 +628,8 @@ function RecordingCard({ rec, busy, canWrite, organizationId, attendees, where, 
         </div>
       )}
 
-      {saveToContent && canWrite && rec.transcript_text && rec.status !== 'transcribing' && (
-        <InhoudVraag rec={rec} organizationId={organizationId} options={saveToContent}
+      {saveToContent && canWrite && (
+        <InhoudStatus rec={rec} organizationId={organizationId} options={saveToContent}
           onSaved={(noteId) => onPatch({ content_note_id: noteId })} />
       )}
 
@@ -677,46 +703,52 @@ function RecordingCard({ rec, busy, canWrite, organizationId, attendees, where, 
   );
 }
 
-/** Wie "Nee, niet nu" zei, krijgt de vraag bij deze opname niet opnieuw; de knop blijft. */
-const NEE_KEY = (recordingId: UUID) => `resofly.meetingInhoud.nee.${recordingId}`;
-
-function readNee(recordingId: UUID): boolean {
-  try { return window.localStorage.getItem(NEE_KEY(recordingId)) === '1'; } catch { return false; }
-}
-
 /**
- * Na het transcriberen: "Ook opslaan in Inhoud?" Bij ja zet de server de
- * meeting in de map Meetings bij de klant. Bij nee blijft er een knop staan,
- * zodat je later alsnog kunt. Staat hij er al, dan zegt de kaart waar.
+ * Waar staat deze meeting in Inhoud? Zodra het transcript er is, zet de server
+ * hem vanzelf in de map Meetings bij de klant (save_to_content). De kaart zegt
+ * dat vooraf, en daarna waar hij staat, met een knop om hem te openen.
+ *
+ * De knop "Opslaan in Inhoud" blijft voor een opname van vóór 24 november
+ * (die vroeg er niet om), als de notitie in Inhoud is gewist, of als het
+ * vanzelf niet lukte: dan is de opname klaar en staat hij er nog steeds niet.
  */
-function InhoudVraag({ rec, organizationId, options, onSaved }: {
+function InhoudStatus({ rec, organizationId, options, onSaved }: {
   rec: MeetingRecording; organizationId: UUID; options: SaveToContentOptions;
   onSaved: (noteId: UUID) => void;
 }) {
-  const [nee, setNee] = useState(() => readNee(rec.id));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const noteId = rec.content_note_id ?? null;
+
+  // De server maakte de notitie buiten de app om. Kent de app hem nog niet,
+  // dan één keer verversen: anders stond hij niet onder Notities bij de
+  // afspraak en deed "Openen" niets. Eén keer per notitie, zodat een notitie
+  // die je niet mag zien geen eindeloze reeks verversingen geeft.
+  const refreshedFor = useRef<UUID | null>(null);
+  const { isNoteLoaded, onSaved: refresh } = options;
+  useEffect(() => {
+    if (!noteId || refreshedFor.current === noteId) return;
+    if (isNoteLoaded?.(noteId) !== false) return;
+    refreshedFor.current = noteId;
+    void Promise.resolve(refresh?.(noteId)).catch(() => undefined);
+  }, [noteId, isNoteLoaded, refresh]);
 
   async function save() {
     setSaving(true); setError(null);
     try {
-      const saved = await saveRecordingToContent(organizationId, rec.id, options.meetingDate);
+      const saved = await saveRecordingToContent(organizationId, rec.id, {
+        meetingDate: options.meetingDate, eventStartsAt: options.eventStartsAt, eventEndsAt: options.eventEndsAt,
+      });
+      refreshedFor.current = saved.noteId;
       onSaved(saved.noteId);
-      // Koppelen aan de afspraak en verversen mag mislukken: de meeting staat
-      // dan toch al in Inhoud.
+      // Verversen mag mislukken: de meeting staat dan toch al in Inhoud.
       try { await options.onSaved?.(saved.noteId); } catch { /* zie hierboven */ }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Opslaan in Inhoud mislukt.');
     } finally { setSaving(false); }
   }
 
-  function notNow() {
-    setNee(true);
-    try { window.localStorage.setItem(NEE_KEY(rec.id), '1'); } catch { /* alleen voor deze keer dan */ }
-  }
-
-  if (rec.content_note_id) {
-    const noteId = rec.content_note_id;
+  if (noteId) {
     return (
       <p className="mr-sent-note mr-inhoud-klaar">
         {/* Niet de klant noemen: die kan na het opslaan aan de afspraak veranderd
@@ -727,30 +759,26 @@ function InhoudVraag({ rec, organizationId, options, onSaved }: {
     );
   }
 
-  const button = (
-    <Button variant={nee ? undefined : 'primary'} disabled={saving} onClick={() => void save()}>
-      {saving ? <><Loader2 size={14} className="spin" /> Opslaan…</> : <><FolderInput size={14} /> Opslaan in Inhoud</>}
-    </Button>
-  );
-
-  if (nee) {
+  // Is hij nog niet klaar, dan komt hij vanzelf. Met een foutmelding op
+  // 'uploaded' wacht hij op AI-tegoed; ook dan gaat het vanzelf, zodra iemand
+  // hem laat uitschrijven. Pas als de opname klaar is en de meeting er dan nog
+  // niet staat, lukte het vanzelf niet: dan de knop.
+  const waiting = rec.status === 'uploaded' || !isTerminalStatus(rec);
+  if (rec.save_to_content && waiting) {
     return (
-      <div className="mr-inhoud-later">
-        <div className="mr-actions">{button}</div>
-        {error && <p className="mr-error">{error}</p>}
-      </div>
+      <p className="mr-sent-note mr-inhoud-straks">
+        <FolderInput size={13} /> <span>Komt na het uitschrijven vanzelf in Inhoud, in de map Meetings.</span>
+      </p>
     );
   }
 
+  if (!rec.transcript_text || rec.status === 'transcribing') return null;
   return (
-    <div className="mr-inhoud-vraag" role="group" aria-labelledby={`mr-inhoud-${rec.id}`}>
-      <p className="mr-inhoud-tekst">
-        <strong id={`mr-inhoud-${rec.id}`}>Ook opslaan in Inhoud?</strong>
-        <span>De meeting komt dan {options.placeLabel} in de map Meetings, met de notulen en het volledige transcript.</span>
-      </p>
+    <div className="mr-inhoud-later">
       <div className="mr-actions">
-        {button}
-        <Button variant="ghost" disabled={saving} onClick={notNow}>Nee, niet nu</Button>
+        <Button disabled={saving} onClick={() => void save()}>
+          {saving ? <><Loader2 size={14} className="spin" /> Opslaan…</> : <><FolderInput size={14} /> Opslaan in Inhoud</>}
+        </Button>
       </div>
       {error && <p className="mr-error">{error}</p>}
     </div>
