@@ -156,7 +156,9 @@ export const EXPORT_FORMAT_VERSION = 1;
 // audio_deleted_by op meeting_recordings: wanneer en door wie de audio is
 // gewist. Gaan met de tabel mee. De nieuwe opruimreden voor storage_purge_queue
 // verandert niets aan de export (die tabel is 'intern').
-export const EXPORT_SCHEMA_VERSION = '20261125100000';
+// 20261125110000 (opnames uit een privé-agenda) zet een leespolicy op
+// meeting_recordings en vervangt functies en triggers; geen tabellen of kolommen.
+export const EXPORT_SCHEMA_VERSION = '20261125110000';
 
 export type TableKind =
   | 'export'

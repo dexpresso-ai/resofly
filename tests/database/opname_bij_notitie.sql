@@ -66,8 +66,13 @@ insert into public.organization_members (organization_id, user_id, email, role, 
 insert into public.notes (organization_id, title) values (:'org_a', 'Ingesproken notitie') returning id as notitie \gset
 insert into public.notes (organization_id, title) values (:'org_b', 'Notitie elders') returning id as notitie_b \gset
 
-insert into public.meeting_recordings (organization_id, provider, event_ref, event_title_snapshot, consent_given, status)
-values (:'org_a', 'native', 'afspraak-1', 'Kick-off', true, 'done') returning id as afspraak_opname \gset
+-- Uit een met het team gedeelde agenda, zoals de app hem maakt. Sinds
+-- 20261125110000 ziet een collega een afspraakopname zonder (leesbare) agenda
+-- niet; dat toetst opname_prive_agenda.sql.
+insert into public.calendar_sources (organization_id, user_id, provider, provider_calendar_id, name, visibility)
+values (:'org_a', :'eigenaar', 'native', 'team', 'Team', 'organization') returning id as teamagenda \gset
+insert into public.meeting_recordings (organization_id, provider, source_id, event_ref, event_title_snapshot, consent_given, status)
+values (:'org_a', 'native', :'teamagenda', 'afspraak-1', 'Kick-off', true, 'done') returning id as afspraak_opname \gset
 insert into public.meeting_recordings (organization_id, note_id, event_title_snapshot, consent_given, status, transcript_text)
 values (:'org_a', :'notitie', 'Ingesproken notitie', true, 'done', 'Wat ik insprak.') returning id as notitie_opname \gset
 

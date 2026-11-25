@@ -14,6 +14,7 @@ import {
   meetingTitle, notulenState, shortDay, sortMeetings, visibleInOverview, type MeetingKind, type MeetingOverviewRow,
 } from './meetingsOverview.ts';
 import { audioDeleteDecision } from '../../supabase/functions/_shared/meetingAudio.ts';
+import { recordingVisibleTo } from '../../supabase/functions/_shared/recordingPrivacy.ts';
 
 const ME = 'u-ik';
 const COLLEGA = 'u-collega';
@@ -129,4 +130,27 @@ test('filteren op soort en audio, en de nieuwste meeting bovenaan', () => {
   assert.deepEqual(filterMeetings(rows, { query: '', audio: 'with-audio', kinds: all }, none).map((r) => r.id), ['a', 'c']);
   assert.deepEqual(filterMeetings(rows, { query: '', audio: 'all', kinds: new Set<MeetingKind>(['gesprek']) }, none).map((r) => r.id), ['c']);
   assert.deepEqual(audioTotals(rows), { count: 2, bytes: 2_000_000 });
+});
+
+test('de app en de server beslissen hetzelfde over wie een meeting ziet', () => {
+  // Elke combinatie: soort, maker, agenda (privé van mij, gedeeld, weg), en wie kijkt.
+  const sources: Record<string, { user_id: string; visibility: string } | null> = {
+    [MINE_PRIVATE]: { user_id: ME, visibility: 'private' },
+    [SHARED]: { user_id: ME, visibility: 'organization' },
+    [THEIRS_PRIVATE]: { user_id: COLLEGA, visibility: 'private' },
+  };
+  const readableBy = (userId: string) => new Set(Object.entries(sources)
+    .filter(([, s]) => s && (s.visibility === 'organization' || s.user_id === userId)).map(([id]) => id));
+  for (const kind of [{}, { call_id: 'c' }, { note_id: 'n' }, { content_note_id: 'cn' }]) {
+    for (const created_by of [ME, COLLEGA]) {
+      for (const source_id of [MINE_PRIVATE, SHARED, THEIRS_PRIVATE, null]) {
+        for (const viewer of [ME, COLLEGA]) {
+          const rec = row({ ...kind, created_by, source_id });
+          const app = visibleInOverview(rec, { userId: viewer, readableSourceIds: readableBy(viewer) });
+          const server = recordingVisibleTo(rec, viewer, source_id ? sources[source_id] : null);
+          assert.equal(app, server, JSON.stringify({ kind, created_by, source_id, viewer }));
+        }
+      }
+    }
+  }
 });

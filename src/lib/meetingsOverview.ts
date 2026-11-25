@@ -37,16 +37,17 @@ export const KIND_LABEL: Record<MeetingKind, string> = { afspraak: 'Afspraak', g
 /**
  * Staat deze meeting in het overzicht?
  *
- * De database laat wie Agenda kan lezen élke afspraakopname van de organisatie
- * lezen, ook die uit de privé-agenda van een collega. In de agenda zag je die
- * nooit: daar opent een opname alleen bij een afspraak die je kunt zien. Een
- * overzicht van alles zou die titels en transcripten wel tonen. Daarom hier
- * dezelfde grens als in de agenda: een afspraakopname uit een agenda die je
- * kunt lezen (je eigen agenda's en de gedeelde; RLS op calendar_sources), of
- * die je zelf maakte, of die al in de gedeelde Inhoud staat.
+ * Een afspraakopname uit een agenda die je kunt lezen (je eigen agenda's en de
+ * gedeelde; RLS op calendar_sources), die je zelf maakte, of die al in de
+ * gedeelde Inhoud staat. Een gesprek hoort bij het klantdossier en een
+ * notitie-opname bij Inhoud: die zijn er voor iedereen die ze mag lezen.
  *
- * Een gesprek hoort bij het klantdossier en een notitie-opname bij Inhoud:
- * die zijn er voor iedereen die ze mag lezen.
+ * Eerst liet de database wie Agenda kon lezen élke afspraakopname lezen, ook
+ * die uit de privé-agenda van een collega; dit filter hield ze uit het
+ * overzicht. Sinds 20261125110000 dwingt de database dezelfde regel zelf af
+ * (de policy "prive agenda select"), net als de server
+ * (supabase/functions/_shared/recordingPrivacy.ts). Het filter blijft als
+ * tweede slot; meetingsOverview.test.ts houdt app en server gelijk.
  */
 export function visibleInOverview(
   rec: Pick<MeetingRecording, 'call_id' | 'note_id' | 'content_note_id' | 'created_by' | 'source_id'>,

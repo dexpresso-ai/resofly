@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { CLIENT_ACTIONS, activeFolderShare } from './actions/clients.ts';
 import { FINANCE_ACTIONS } from './actions/finance.ts';
 import { CALENDAR_ACTIONS } from './actions/calendar.ts';
+import { REMOVAL_ACTIONS } from './actions/removal.ts';
 import { ActionError, type ActionCtx, type ActionDef } from './actions/types.ts';
 
 /**
@@ -50,9 +51,28 @@ function fakeDb(tables: Record<string, Row[]>) {
         chain.gte = (column: string, value: string) => { list = list.filter((r) => String(r[column]) >= value); return chain; };
         chain.lte = (column: string, value: string) => { list = list.filter((r) => String(r[column]) <= value); return chain; };
         chain.or = (expression: string) => {
-          // Alleen de vorm "kolom.eq.waarde,kolom.eq.waarde" (genoeg voor deze tests).
-          const terms = expression.split(',').map((term) => term.split('.eq.'));
-          list = list.filter((r) => terms.some(([column, value]) => String(r[column]) === value));
+          // De vormen "kolom.eq.waarde", "kolom.is.null", "kolom.not.is.null" en
+          // "kolom.in.(a,b)", met komma's ertussen (genoeg voor deze tests).
+          // Splitsen op de komma's buiten de haakjes van een in-lijst.
+          const terms: string[] = [];
+          let depth = 0, start = 0;
+          for (let i = 0; i < expression.length; i++) {
+            if (expression[i] === '(') depth++;
+            else if (expression[i] === ')') depth--;
+            else if (expression[i] === ',' && depth === 0) { terms.push(expression.slice(start, i)); start = i + 1; }
+          }
+          terms.push(expression.slice(start));
+          const matches = (r: Row, term: string): boolean => {
+            const [column, ...rest] = term.split('.');
+            const op = rest.join('.');
+            const value = r[column] ?? null;
+            if (op === 'not.is.null') return value !== null;
+            if (op === 'is.null') return value === null;
+            if (op.startsWith('eq.')) return String(value) === op.slice(3);
+            if (op.startsWith('in.(')) return op.slice(4, -1).split(',').includes(String(value));
+            throw new Error(`onbekend or-filter in de nep-database: ${term}`);
+          };
+          list = list.filter((r) => terms.some((term) => matches(r, term)));
           return chain;
         };
         chain.limit = (n: number) => { max = n; return chain; };
@@ -264,15 +284,71 @@ test('koppelingen van notities met afspraken: alleen wat je in de app ook ziet',
 
 test('notulen mailen: geen genodigden van andermans privé-afspraak', async () => {
   const send = action(CALENDAR_ACTIONS, 'meeting_recording.send_summary');
-  const recording = (eventRef: string) => ({
+  // Een opname heeft de agenda van zijn afspraak (source_id) en een maker.
+  const recording = (eventRef: string, sourceId: string, createdBy: string) => ({
     id: uuid(99), event_title_snapshot: 'Overleg', status: 'done', transcript_text: 't', summary_text: 'Notulen',
-    provider: 'native', event_ref: eventRef, summary_recipients: null,
+    provider: 'native', event_ref: eventRef, summary_recipients: null, source_id: sourceId, created_by: createdBy,
   });
-  const secret = { ...calendarTables(), meeting_recordings: [recording('uid-geheim')] };
+  // Ik nam zelf op bij een afspraak uit de privé-agenda van een collega: de
+  // opname is van mij, maar de genodigden van die afspraak blijven geheim.
+  const secret = { ...calendarTables(), meeting_recordings: [recording('uid-geheim', SRC.colleaguePrivate, ME)] };
   await assert.rejects(send.plan!(ctxFor(secret), { recording_id: uuid(99) }), notFound(/geen ontvangers/));
-  const team = { ...calendarTables(), meeting_recordings: [recording('uid-team')] };
+  const team = { ...calendarTables(), meeting_recordings: [recording('uid-team', SRC.colleagueShared, COLLEAGUE)] };
   const plan = await send.plan!(ctxFor(team), { recording_id: uuid(99) });
   assert.deepEqual(plan.payload.recipients, ['collega@resofly.nl']);
+});
+
+// Sinds 25 november: een opname uit de privé-agenda van een collega bestaat
+// voor jou niet, ook niet via Gerrie, MCP of de API (recordingPrivacy.ts).
+function recordingTables(): Record<string, Row[]> {
+  const rec = (n: number, title: string, extra: Row) => ({
+    id: uuid(n), event_title_snapshot: title, status: 'done', transcript_text: 't', summary_text: `Notulen ${title}`,
+    summary_json: null, provider: 'native', event_ref: `uid-${n}`, summary_recipients: null, summary_sent_at: null,
+    client_id: null, project_id: null, created_at: '2026-10-02T09:00:00Z', note_id: null, call_id: null, content_note_id: null,
+    source_id: null, created_by: COLLEAGUE, ...extra,
+  });
+  return {
+    ...calendarTables(),
+    meeting_recordings: [
+      rec(110, 'Sollicitatie Jansen', { source_id: SRC.colleaguePrivate }),
+      rec(111, 'Teamoverleg', { source_id: SRC.colleagueShared }),
+      rec(112, 'Zelf opgenomen', { source_id: SRC.colleaguePrivate, created_by: ME }),
+      rec(113, 'Al in Inhoud', { source_id: SRC.colleaguePrivate, content_note_id: uuid(120) }),
+      rec(114, 'Belletje klant', { provider: null, event_ref: null, call_id: uuid(121) }),
+      rec(115, 'Agenda weg', { source_id: null }),
+      rec(116, 'Mijn privé', { source_id: SRC.minePrivate, created_by: ME }),
+    ],
+  };
+}
+
+test('opnames uit de privé-agenda van een collega: niet in de lijsten van Gerrie', async () => {
+  for (const id of ['meeting_recording.list', 'meeting_recording.recent']) {
+    const result = await action(CALENDAR_ACTIONS, id).read!(ctxFor(recordingTables()), { since: '2026-09-01', limit: 20 }) as { recordings: Row[] };
+    const titles = result.recordings.map((r) => r.event_title).sort();
+    assert.deepEqual(titles, ['Al in Inhoud', 'Belletje klant', 'Mijn privé', 'Teamoverleg', 'Zelf opgenomen'], id);
+  }
+  // De collega zelf ziet zijn privé-meeting wel, en de opname zonder agenda die hij maakte.
+  const own = await action(CALENDAR_ACTIONS, 'meeting_recording.list').read!(ctxFor(recordingTables(), { userId: COLLEAGUE }), { limit: 20 }) as { recordings: Row[] };
+  const ownTitles = own.recordings.map((r) => r.event_title);
+  assert.ok(ownTitles.includes('Sollicitatie Jansen') && ownTitles.includes('Agenda weg'), ownTitles.join(', '));
+  assert.ok(!ownTitles.includes('Mijn privé'), 'en niet die uit mijn privé-agenda');
+});
+
+test('opnames uit de privé-agenda van een collega: niet mailen, bijwerken, opnieuw maken of wissen', async () => {
+  for (const id of ['meeting_recording.send_summary', 'meeting_recording.update_transcript', 'meeting_recording.regenerate_summary']) {
+    const def = action(CALENDAR_ACTIONS, id);
+    for (const n of [110, 115]) {
+      await assert.rejects(def.plan!(ctxFor(recordingTables()), { recording_id: uuid(n), transcript_text: 'x' }),
+        notFound(/^Opname niet gevonden in deze organisatie\.$/), `${id} op opname ${n}`);
+    }
+  }
+  const remove = action(REMOVAL_ACTIONS, 'meeting_recording.delete');
+  await assert.rejects(remove.plan!(ctxFor(recordingTables()), { recording_id: uuid(110) }), notFound(/^Opname niet gevonden in deze organisatie\.$/));
+  // Wat je wel mag zien, gaat gewoon.
+  const ok = await remove.plan!(ctxFor(recordingTables()), { recording_id: uuid(111) });
+  assert.match(ok.title, /Teamoverleg/);
+  const mine = await action(CALENDAR_ACTIONS, 'meeting_recording.regenerate_summary').plan!(ctxFor(recordingTables()), { recording_id: uuid(112) });
+  assert.match(JSON.stringify(mine), /Zelf opgenomen/);
 });
 
 test('een agenda-link die al bestaat: alleen in je eigen lijst gezocht', async () => {
