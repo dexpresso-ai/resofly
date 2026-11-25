@@ -84,6 +84,10 @@ export const PAGE_MODULE: Record<string, ModuleKey> = {
   content: 'content',
   notes: 'content',
   documents: 'content',
+  // Inhoud → Meetings (2026-11-25). Wat je daar ziet, beslist de database per
+  // opname (module gate op meeting_recordings): Agenda voor een afspraak,
+  // Inhoud voor een meeting die in Inhoud staat of een notitie-opname.
+  meetings: 'content',
   clients: 'clients',
   client: 'clients',
   // Berichten leest klantmail en de opvangbak: dezelfde tabellen (en dus

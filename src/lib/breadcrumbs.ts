@@ -54,7 +54,7 @@ const PAGE_SECTIONS: Record<string, string> = {
   // In het menu onder Financiën, ook voor wie verder niets van Financiën ziet.
   declarations: 'Financiën',
   communication: 'Communicatie', chat: 'Communicatie', marketing: 'Communicatie',
-  content: 'Documenten', notes: 'Documenten', documents: 'Documenten',
+  content: 'Documenten', notes: 'Documenten', documents: 'Documenten', meetings: 'Documenten',
   stats: 'Inzicht', report: 'Inzicht',
 };
 

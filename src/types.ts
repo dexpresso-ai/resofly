@@ -3803,10 +3803,17 @@ export interface MeetingRecording extends OrgScopedRow {
   /** Begin en eind van de afspraak, voor de koppeling onder Notities. */
   event_starts_at?: string | null;
   event_ends_at?: string | null;
+  /** Leeg zodra de audio is gewist (audio_deleted_at), of nog niet geüpload. */
   storage_key: string | null;
   mime_type: string | null;
   size_bytes: number | null;
   duration_seconds: number | null;
+  /**
+   * Wanneer de audio is gewist (Inhoud → Meetings, sinds 2026-11-25). Transcript
+   * en notulen blijven staan; storage_key en size_bytes zijn dan leeg.
+   */
+  audio_deleted_at?: string | null;
+  audio_deleted_by?: UUID | null;
   consent_given: boolean;
   consent_at: string | null;
   status: MeetingRecordingStatus;

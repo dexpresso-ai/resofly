@@ -1083,6 +1083,16 @@ function edgeFunction(name, body, options = {}) {
     if (action === 'createFeedLink') return { ok: true, feedLink: { ...seed.calendarFeedLink, id: 'feed-nieuw', label: String(body.label || 'Deellink'), detail: body.detail === 'details' ? 'details' : 'busy', last_used_at: null }, token: 'Q7v_-'.repeat(8) + 'abc' };
     return { ok: true, connections: [], sources: [seed.calendarSource], calendars: [seed.calendarSource], events: [], attendees: [], links: [], slots: [], ics: [] };
   }
+  // Inhoud → Meetings (2026-11-25): alleen de audio wissen. In het geheugen,
+  // zodat de tabel na het klikken "Verwijderd" toont, net als echt.
+  if (name === 'meeting-transcribe' && body?.action === 'deleteAudio') {
+    const rec = seed.meetingRecordings.find(r => r.id === body.recordingId);
+    if (!rec) return { ok: false, error: 'Opname niet gevonden in deze organisatie.' };
+    if (!rec.storage_key) return { ok: true, audioDeletedAt: rec.audio_deleted_at, freedBytes: 0 };
+    const freedBytes = rec.size_bytes ?? 0;
+    Object.assign(rec, { storage_key: null, size_bytes: null, audio_deleted_at: new Date().toISOString(), audio_deleted_by: seed.ids.USER });
+    return { ok: true, audioDeletedAt: rec.audio_deleted_at, freedBytes, removedNow: true };
+  }
   if (name === 'meeting-booking') {
     // De boekingslinks van de eerste klant; een andere klant heeft er geen.
     if (body?.action === 'listLinks') return { ok: true, links: body.clientId && body.clientId !== seed.clients[0].id ? [] : pub.bookingAdminLinks };

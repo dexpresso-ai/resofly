@@ -2,7 +2,7 @@ import { Calendar, FolderKanban, FolderOpen, LayoutDashboard, Receipt, ReceiptTe
 import { FULL_PERMISSIONS, type Permissions } from '../lib/permissions';
 import { PAGE_ICON } from './TabBar';
 
-type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'meeting-booking'|'time'|'stats'|'report'|'content'|'notes'|'documents'|'clients'|'client'|'communication'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'prepaid'|'pnl'|'forecast'|'vat-returns'|'corporate-tax'|'income-tax'|'dga'|'shareholders'|'owners'|'fiscal-years'|'annual-accounts'|'declarations'|'archive'|'settings'|'project'|'gallery';
+type Page = 'dashboard'|'gerrie'|'weekplanner'|'calendar'|'meeting-booking'|'time'|'stats'|'report'|'content'|'notes'|'documents'|'meetings'|'clients'|'client'|'communication'|'projects'|'project-planning'|'tickets'|'chat'|'marketing'|'quotes'|'contracts'|'invoices'|'suppliers'|'purchase-invoices'|'ledger'|'bank'|'assets'|'prepaid'|'pnl'|'forecast'|'vat-returns'|'corporate-tax'|'income-tax'|'dga'|'shareholders'|'owners'|'fiscal-years'|'annual-accounts'|'declarations'|'archive'|'settings'|'project'|'gallery';
 
 // Welke pagina's onder welke onderbalk-knop vallen (voor de actief-markering).
 // Zelfde groepering als de zijbalk, zodat bv. de Grootboek-pagina "Financiën" oplicht.

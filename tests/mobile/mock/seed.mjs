@@ -712,6 +712,49 @@ export function forecastCashPosition() {
   };
 }
 
+// Inhoud → Meetings (2026-11-25): opnames van afspraken, een telefoongesprek
+// en een notitie, met en zonder audio, in elke stand. De eerste staat in
+// Inhoud (de notitie "Notulen kick-off huisstijl"). Eén komt uit de privé-
+// agenda van een collega: die hoort het overzicht níet te tonen.
+const MTG_KEY = (id) => `${ORG}/meeting_recording/${id}/meeting.webm`;
+const mtgSummary = {
+  samenvatting: 'Kick-off van de nieuwe huisstijl: kleuren, tone of voice en de planning tot de fotoshoot.',
+  besproken: ['Kleurpalet: warm geel met donkerblauw', 'Tone of voice: nuchter en vakkundig', 'Drie vestigingen, één uitstraling'],
+  besluiten: ['Logo blijft herkenbaar; geen volledig nieuw beeldmerk'],
+  actiepunten: ['Joost stuurt de oude logo\'s', 'Studio maakt drie schetsen voor vrijdag'],
+  vervolgafspraken: ['Fotoshoot in oktober'],
+};
+const mtgTranscript = [
+  'Spreker 1: Fijn dat jullie er zijn. Zullen we beginnen met de kleuren?',
+  'Spreker 2: Ja, we willen het geel houden, dat kennen de klanten.',
+  'Spreker 1: Helder. Dan zetten we er een donkerblauw naast voor de rust.',
+  'Spreker 2: En de toon moet nuchter blijven, geen schreeuwerige teksten.',
+].join('\n');
+const mtgSecretSource = 'a9000000-0000-4000-8000-000000000001';
+const mtg = (id, extra) => ({
+  id, organization_id: ORG, created_by: USER, provider: 'native', source_id: calendarSource.id, event_ref: `ev-${id.slice(0, 8)}`,
+  event_title_snapshot: null, client_id: null, project_id: null, call_id: null, note_id: null, content_note_id: null,
+  save_to_content: false, meeting_date: null, event_starts_at: null, event_ends_at: null,
+  storage_key: MTG_KEY(id), mime_type: 'audio/webm', size_bytes: 38_400_000, duration_seconds: 3120,
+  audio_deleted_at: null, audio_deleted_by: null, consent_given: true, consent_at: iso(day(-1)),
+  status: 'done', error_message: null, elevenlabs_request_id: null, language: 'nl',
+  transcript_text: mtgTranscript, transcript_json: null, transcription_cost_usd: 0.2,
+  summary_text: mtgSummary.samenvatting, summary_json: mtgSummary, summary_sent_at: null, summary_recipients: null,
+  created_at: iso(day(-1)), updated_at: iso(day(-1)),
+  ...extra,
+});
+export const meetingRecordings = [
+  mtg('a9100000-0000-4000-8000-000000000001', { event_title_snapshot: 'Kick-off huisstijl De Korenaar', client_id: clients[0].id, project_id: projects[0].id, content_note_id: notes[0].id, meeting_date: dkey(day(-1)), created_at: iso(day(-1)) }),
+  mtg('a9100000-0000-4000-8000-000000000002', { event_title_snapshot: 'Weekstart team', meeting_date: dkey(day(-3)), created_at: iso(day(-3)), size_bytes: 12_600_000, duration_seconds: 1260 }),
+  mtg('a9100000-0000-4000-8000-000000000003', { event_title_snapshot: 'Voortgang website Fysio Centrum Zuid met een hele lange titel die niet op één regel past', client_id: clients[1].id, meeting_date: dkey(day(-6)), created_at: iso(day(-6)), storage_key: null, size_bytes: null, audio_deleted_at: iso(day(-2)), audio_deleted_by: USER }),
+  mtg('a9100000-0000-4000-8000-000000000004', { provider: null, source_id: null, event_ref: null, call_id: 'a9200000-0000-4000-8000-000000000001', event_title_snapshot: 'Offerte doorgenomen', client_id: clients[0].id, created_at: iso(day(-8)), size_bytes: 4_200_000, duration_seconds: 252 }),
+  mtg('a9100000-0000-4000-8000-000000000005', { event_title_snapshot: 'Kennismaking Zonnetje', client_id: clients[3].id, meeting_date: dkey(day(-9)), created_at: iso(day(-9)), status: 'transcribed', error_message: null, summary_text: null, summary_json: null, size_bytes: 21_000_000 }),
+  mtg('a9100000-0000-4000-8000-000000000006', { event_title_snapshot: 'Evaluatie winteractie', client_id: clients[2].id, meeting_date: dkey(day(-12)), created_at: iso(day(-12)), status: 'uploaded', error_message: 'Het AI-tegoed van deze maand is op.', transcript_text: null, summary_text: null, summary_json: null, size_bytes: 27_500_000 }),
+  mtg('a9100000-0000-4000-8000-000000000007', { provider: null, source_id: null, event_ref: null, note_id: notes[1].id, event_title_snapshot: 'Idee: seizoenscampagne', client_id: notes[1].client_id, created_at: iso(day(-15)), size_bytes: 2_100_000, duration_seconds: 140 }),
+  mtg('a9100000-0000-4000-8000-000000000008', { event_title_snapshot: 'Menukaart Bloem', client_id: clients[4].id, meeting_date: dkey(day(-40)), created_at: iso(day(-40)), size_bytes: 45_800_000, duration_seconds: 3700 }),
+  mtg('a9100000-0000-4000-8000-000000000009', { event_title_snapshot: 'Privé: gesprek met de bank', created_by: USER2, source_id: mtgSecretSource, meeting_date: dkey(day(-2)), created_at: iso(day(-2)) }),
+];
+
 export const tables = {
   ai_consents: aiConsents,
   ai_agents: aiAgents, ai_agent_runs: aiAgentRuns, ai_agent_run_events: aiAgentRunEvents,
@@ -746,6 +789,7 @@ export const tables = {
     { id: uid('z'), ...base(), ticket_id: tickets[0].id, author_type: 'client', author_user_id: null, author_name: 'Maria Jansen', body: 'Vooral op de pagina met afspraken duurt het lang.', is_internal: false },
     { id: uid('z'), ...base(), ticket_id: tickets[0].id, author_type: 'user', author_user_id: USER, author_name: 'Gerjan', body: 'We kijken naar de afbeeldingen, die zijn te groot.', is_internal: true },
   ],
+  meeting_recordings: meetingRecordings, calendar_sources: [calendarSource, googleCalendarSource],
   notes, documents, content_folders: folders, folders, note_calendar_links: [], calendar_event_links: [], time_entries: timeEntries, quotes, quote_approval_events: [], quote_email_deliveries: [], quote_versions: [], invoices, invoice_workflow_events: [], invoice_email_deliveries: [], invoice_payment_records: [], invoice_versions: [], invoice_refunds: [], credit_notes: [], invoice_chargebacks: [], dunning_notices: [], ledger_accounts: [], vat_codes: [], journal_entries: [], journal_lines: [], closed_periods: [], fiscal_years: [], suppliers, purchase_invoices: purchaseInvoices, purchase_invoice_inbox: purchaseInvoiceInbox, fixed_assets: [], asset_depreciations: [], prepaid_expenses: [], prepaid_expense_releases: [], vat_returns: [], bank_accounts: [], bank_statements: [], bank_transactions: [], bank_rules: [], bank_requisitions: [], attachments, drive_shares: [], galleries: [], saved_reports: [], forecasts, forecast_versions: forecastVersions, ai_reports: aiReports, ai_report_messages: aiReportMessages, ai_report_versions: aiReportVersions, planner_notes: plannerNotes, planner_day_capacity: [], planner_days_off: plannerDaysOff, company_settings: [companySettings], chat_conversations: chatConversations, chat_participants: chatParticipants, chat_messages: chatMessages, chat_message_reactions: chatReactions, chat_conversation_prefs: chatPrefs, chat_member_status: chatStatuses, chat_saved_messages: [], project_members: projectMembers, task_assignees: taskAssignees, project_templates: [], project_template_tasks: [], contract_projects: [], email_campaigns: emailCampaigns, email_campaign_stats: emailCampaignStats, email_campaign_recipients: [], email_flows: [], email_suppressions: [], organization_invitations: [], audit_logs: auditLogs, contracts: [],
   client_email_threads: clientEmailThreads, client_email_folders: clientEmailFolders, client_emails: clientEmails, client_email_reads: clientEmailReads, client_email_unread: clientEmailUnread, client_email_thread_overview: clientEmailThreadOverview,
   inbound_messages: inboundMessages, organization_inbound_aliases: [inboundAlias], organization_email_domains: sendingDomains,

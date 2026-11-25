@@ -182,6 +182,24 @@ const PAGES = {
   // weergavetabs niet over twee regels duwen.
   'calendar-workweek': { page: 'calendar', prepare: 'button.tb-vbtn[title^="Werkweek"]' },
   content: 'content', notes: 'notes', documents: 'documents', stats: 'stats',
+  // Inhoud → Meetings (2026-11-25): de tabel met alle meetings, één meeting
+  // open (de notulen en het transcript), een selectie met de knop om de audio
+  // te wissen, en de vraag of dat echt moet. De lange titel en de grootte van
+  // de audio mogen op de telefoon niet zijwaarts uit beeld lopen.
+  meetings: 'meetings',
+  'meetings-detail': {
+    page: 'meetings', prepare: '.mtg-row', contained: '.mtg-detail-modal',
+    mustShow: [{ selector: '.mtg-detail-modal .mtg-facts', label: 'de gegevens van de meeting' }, { selector: '.mtg-detail-modal .modal-foot .btn-danger', text: 'Audio verwijderen', label: 'de knop Audio verwijderen' }],
+  },
+  'meetings-transcript': {
+    page: 'meetings', prepare: ['.mtg-row', '#mtg-tab-transcript'], contained: '.mtg-detail-modal',
+    mustShow: [{ selector: '.mtg-detail-modal .meeting-note-lines', label: 'het transcript' }],
+  },
+  'meetings-selectie': {
+    page: 'meetings', prepare: '.mtg-thead .mtg-check',
+    mustShow: [{ selector: '.mtg-selbar .btn-danger', text: 'Audio verwijderen', label: 'de knop Audio verwijderen' }],
+  },
+  'meetings-wissen': { page: 'meetings', prepare: ['.mtg-thead .mtg-check', '.mtg-selbar .btn-danger'], contained: '.mtg-confirm-modal' },
   // Rapportages met Gerrie (2026-11-09): het overzicht, de rapportbouwer van
   // voorheen (tweede tabblad), één rapportage met het kader, en dezelfde
   // rapportage met het gesprek open (op telefoon en tablet een paneel).
@@ -661,6 +679,9 @@ const FIRST_ITEM = {
   project: { selector: '.client-tabs-bar', maxTop: 496 },
   'project-planning': { selector: '.ptl-board', maxTop: 496 },
   content: { selector: '.odrv-tr', maxTop: 336 },
+  // Inhoud → Meetings (2026-11-25): de eerste meeting onder het zoekveld en de
+  // balk met Alle · Met audio. Gemeten: 258px; de grens ligt 20% hoger.
+  meetings: { selector: '.mtg-row', maxTop: 310 },
   // Teamchat opent op de telefoon in de gesprekslijst (één venster tegelijk).
   // Bovenaan je avatar en de keuzestrook (Activiteit · Chat · Kanalen ·
   // Bestanden · Opgeslagen, sinds 2026-11-12 in de huisstijl van ResoFly), dan

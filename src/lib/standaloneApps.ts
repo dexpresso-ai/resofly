@@ -130,10 +130,10 @@ export const STANDALONE_APPS: readonly StandaloneApp[] = [
     description: 'Je notities, documenten en bestanden, per klant en project in mappen.',
     manifest: '/apps/documenten.webmanifest',
     icon: '/icons/app-documenten-192.png',
-    pages: ['content', 'notes', 'documents'],
+    pages: ['content', 'notes', 'documents', 'meetings'],
     // De verkenner met alles erin: daar staan ook de bestanden en de mappen.
-    home: ['content', 'notes', 'documents'],
-    dock: [{ page: 'content', label: 'Alles' }, { page: 'notes', label: 'Notities' }, { page: 'documents', label: 'Documenten' }],
+    home: ['content', 'notes', 'documents', 'meetings'],
+    dock: [{ page: 'content', label: 'Alles' }, { page: 'notes', label: 'Notities' }, { page: 'documents', label: 'Documenten' }, { page: 'meetings', label: 'Meetings' }],
   },
 ];
 

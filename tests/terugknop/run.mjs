@@ -75,6 +75,8 @@ async function where(t) {
     page: document.querySelector('section.content:not([hidden])')?.dataset.page ?? null,
     tabs: document.querySelectorAll('section.content').length,
     modal: Boolean(document.querySelector('.modal-bg')),
+    // Twee vensters op elkaar: een meeting en de vraag om de audio te wissen (2026-11-25).
+    modals: document.querySelectorAll('.modal-bg').length,
     // De vensters van de boekhouding (Vennoten, Boekjaren) zijn een .bk-modal.
     bkModal: Boolean(document.querySelector('.bk-modal')),
     menu: Boolean(document.querySelector('.znav.is-open')),
@@ -172,6 +174,21 @@ await scenario('terug sluit een bewerkvenster, en daarna pas de pagina', 'ticket
   // Geen geschiedenis, dus omhoog langs het kruimelpad: naar het dashboard.
   await back(t);
   await expectState(t, 'omhoog', { page: 'dashboard', steps: 0 });
+});
+
+// Inhoud → Meetings (2026-11-25): een meeting open, en daarop de vraag of de
+// audio weg mag. Terug sluit eerst de vraag, dan de meeting, dan de pagina.
+await scenario('Meetings: terug sluit de vraag, dan de meeting, dan de pagina', 'meetings', async (t) => {
+  await tap(t, '.mtg-row .mtg-title');
+  await expectState(t, 'meeting open', { page: 'meetings', modals: 1, steps: 2 });
+  await tap(t, '.mtg-detail-modal .modal-foot .btn-danger');
+  await expectState(t, 'vraag open', { page: 'meetings', modals: 2, steps: 3 });
+  await back(t);
+  await expectState(t, 'terug: vraag dicht', { page: 'meetings', modals: 1, steps: 2 });
+  await back(t);
+  await expectState(t, 'terug: meeting dicht', { page: 'meetings', modals: 0, steps: 1 });
+  await back(t);
+  await expectState(t, 'omhoog naar het dashboard', { page: 'dashboard', modals: 0, steps: 0 });
 });
 
 await scenario('een venster dicht met het kruisje haalt zijn stap weg', 'tickets', async (t) => {

@@ -53,6 +53,8 @@ const PAGES = {
   // De raming van de inkomstenbelasting haalt alles in één aanroep op
   // (get_income_tax_inputs): geen enkele zware groep.
   'income-tax': 'income-tax',
+  // Inhoud → Meetings (2026-11-25) haalt zijn eigen meetings op, zonder groep.
+  meetings: 'meetings',
 };
 
 const args = Object.fromEntries(process.argv.slice(2).map(a => { const m = /^--([^=]+)(?:=(.*))?$/.exec(a); return m ? [m[1], m[2] ?? 'true'] : [a, 'true']; }));

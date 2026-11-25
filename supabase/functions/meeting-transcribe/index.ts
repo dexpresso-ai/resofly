@@ -20,7 +20,11 @@
 //                Dat gebeurt vanzelf zodra het transcript er is, als de opname
 //                daarom vroeg (save_to_content bij 'create'). Deze actie is de
 //                knop voor een oudere opname, of als de notitie is gewist.
-//  - delete    : verwijder de opname-rij (de R2-audio wist de frontend zelf).
+//  - deleteAudio : wis alleen de audio (R2), houd transcript en notulen
+//                (Inhoud → Meetings, sinds 25 november). Alleen met transcript.
+//  - delete    : verwijder de opname-rij (de R2-audio wist de frontend zelf;
+//                sinds 25 november ruimt de opruimwachtrij hem ook op als dat
+//                mislukte, zie 20261125100000_meeting_audio_verwijderen.sql).
 //
 // AI-budget: transcriptie en notulen vallen onder hetzelfde maandtegoed als
 // Gerrie (_shared/aiBudget.ts). De transcriptie wordt afgerekend in ai_usage
@@ -39,6 +43,8 @@ import {
   type HttpStatus, type OrganizationRole,
 } from '../_shared/edgeAuth.ts';
 import { elevenlabsConfigured, requestTranscription } from '../_shared/elevenlabs.ts';
+import { deleteStorageObject } from '../_shared/fileTransferServer.ts';
+import { audioDeleteDecision } from '../_shared/meetingAudio.ts';
 import { saveMeetingToContent } from '../_shared/meetingInhoud.ts';
 import { completeTranscription, runSummaryForRecording } from '../_shared/meetingPipeline.ts';
 import { validDay, validTime } from '../_shared/meetingNote.ts';
@@ -69,7 +75,7 @@ const MAX_AUDIO_BYTES = 200 * 1024 * 1024;
 
 // Deze acties wijzigen iets of versturen mail — daarvoor is schrijfrecht op de
 // module nodig, niet alleen leesrecht.
-const WRITE_ACTIONS = new Set(['create', 'start', 'summarize', 'update', 'sendSummary', 'saveToContent', 'delete']);
+const WRITE_ACTIONS = new Set(['create', 'start', 'summarize', 'update', 'sendSummary', 'saveToContent', 'deleteAudio', 'delete']);
 
 // Supabase Edge Runtime heeft een ingebouwde `Deno.serve` — geen deno.land/std
 // nodig, wat het bundelen niet meer laat afhangen van een externe fetch.
@@ -100,6 +106,7 @@ Deno.serve(async (req) => {
       case 'update': return cors.json(req, await updateRecording(organizationId, role, body));
       case 'sendSummary': return cors.json(req, await sendSummary(organizationId, role, body));
       case 'saveToContent': return cors.json(req, await saveToContent(organizationId, user.id, role, body));
+      case 'deleteAudio': return cors.json(req, await deleteAudio(organizationId, user.id, role, body));
       case 'delete': return cors.json(req, await deleteRecording(organizationId, role, body));
       default: throw new HttpError(`Onbekende actie: ${action}`, 400);
     }
@@ -396,6 +403,63 @@ async function saveToContent(organizationId: string, userId: string, role: Organ
     meetingDate: body.meetingDate, eventStartsAt: body.eventStartsAt, eventEndsAt: body.eventEndsAt,
   });
   return { ok: true, ...saved };
+}
+
+/**
+ * Wist alleen de audio van een opname; transcript en notulen blijven staan
+ * (Inhoud → Meetings, sinds 25 november). Een uur vergaderen is al gauw 30 tot
+ * 60 MB, en na het uitschrijven heb je die zelden nog nodig.
+ *
+ * De poort hierboven vroeg schrijfrecht op de module van de opname (Agenda,
+ * Klanten of Inhoud), net als bij het wissen van de hele opname.
+ *
+ * Eerst de rij, dan R2. Andersom kon een mislukte update een sleutel laten
+ * staan naar een bestand dat al weg was: de kaart bood dan audio aan die niet
+ * meer afspeelde. Nu zet de trigger op de rij de sleutel in de opruimwachtrij
+ * (20261125100000); lukt het meteen wissen hieronder niet, dan haalt de
+ * nachtelijke opruimtaak hem alsnog weg.
+ */
+async function deleteAudio(organizationId: string, userId: string, role: OrganizationRole, body: Record<string, unknown>) {
+  assertWriteRole(role);
+  const recordingId = String(body.recordingId || '');
+  if (!isUuid(recordingId)) throw new HttpError('Ongeldige recordingId.', 400);
+
+  const { data: rec, error } = await admin.from('meeting_recordings')
+    .select('id, status, storage_key, size_bytes, transcript_text, audio_deleted_at')
+    .eq('id', recordingId).eq('organization_id', organizationId).maybeSingle();
+  if (error || !rec) throw new HttpError('Opname niet gevonden in deze organisatie.', 404);
+  const row = rec as { status: string; storage_key: string | null; size_bytes: number | null; transcript_text: string | null; audio_deleted_at: string | null };
+
+  const decision = audioDeleteDecision(row);
+  if (decision.kind === 'gone') return { ok: true, audioDeletedAt: row.audio_deleted_at, freedBytes: 0 };
+  if (decision.kind === 'refused') throw new HttpError(decision.message, 409);
+  const key = row.storage_key!;
+
+  // Voorwaardelijk op de sleutel van daarnet: wist iemand anders hem
+  // tegelijk, dan telt dat als gelukt en wist deze aanvraag niets dubbel.
+  const deletedAt = new Date().toISOString();
+  const { data: claimed, error: updateError } = await admin.from('meeting_recordings')
+    .update({ storage_key: null, size_bytes: null, audio_deleted_at: deletedAt, audio_deleted_by: userId })
+    .eq('id', recordingId).eq('organization_id', organizationId).eq('storage_key', key)
+    .select('id');
+  if (updateError) throw new HttpError(`Audio verwijderen mislukt: ${updateError.message}`, 500);
+  if (!claimed?.length) {
+    const { data: now } = await admin.from('meeting_recordings').select('audio_deleted_at')
+      .eq('id', recordingId).eq('organization_id', organizationId).maybeSingle();
+    return { ok: true, audioDeletedAt: (now as { audio_deleted_at: string | null } | null)?.audio_deleted_at ?? null, freedBytes: 0 };
+  }
+
+  let removedNow = false;
+  try {
+    await deleteStorageObject(organizationId, key);
+    removedNow = true;
+    // Weg is weg: de regel in de wachtrij is dan niet meer nodig.
+    await admin.from('storage_purge_queue').delete()
+      .eq('organization_id', organizationId).eq('storage_key', key).eq('reason', 'meeting_recording');
+  } catch (e) {
+    console.warn('meeting-transcribe deleteAudio: R2 later via de wachtrij', e instanceof Error ? e.message : e);
+  }
+  return { ok: true, audioDeletedAt: deletedAt, freedBytes: row.size_bytes ?? 0, removedNow };
 }
 
 async function deleteRecording(organizationId: string, role: Awaited<ReturnType<typeof requireOrganizationAccess>>, body: Record<string, unknown>) {

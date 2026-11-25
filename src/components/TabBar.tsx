@@ -1,5 +1,5 @@
 import { useEffect, useRef, type ReactNode } from 'react';
-import { Archive, BarChart3, FileBarChart, Images, BookOpen, Boxes, Calculator, Calendar, CalendarClock, CalendarRange, Clock, FileSignature, FileText, Files, FolderOpen, GanttChart, Hourglass, Inbox, Landmark, LayoutDashboard, Library, LineChart, Megaphone, MessageSquare, Percent, Plus, Receipt, ReceiptText, Scale, Settings, Sparkles, StickyNote, Ticket, TrendingUp, Truck, Users, Wallet, X } from 'lucide-react';
+import { Archive, AudioLines, BarChart3, FileBarChart, Images, BookOpen, Boxes, Calculator, Calendar, CalendarClock, CalendarRange, Clock, FileSignature, FileText, Files, FolderOpen, GanttChart, Hourglass, Inbox, Landmark, LayoutDashboard, Library, LineChart, Megaphone, MessageSquare, Percent, Plus, Receipt, ReceiptText, Scale, Settings, Sparkles, StickyNote, Ticket, TrendingUp, Truck, Users, Wallet, X } from 'lucide-react';
 import type { AppData } from '../types';
 import { viewTitle } from '../lib/workspaceTabs';
 import { useBuildingReports } from '../lib/aiReports';
@@ -20,7 +20,7 @@ export const PAGE_ICON: Record<string, typeof LayoutDashboard> = {
   'meeting-booking': CalendarClock, time: Clock, stats: BarChart3, report: FileBarChart, content: Library, notes: StickyNote,
   // Berichten had hier geen icoon en viel terug op FileText, net als Offertes.
   // In de duimbalk van de app Communicatie (2026-11-12) stond er zo een raster.
-  documents: Files, clients: Users, client: Users, communication: Inbox, projects: FolderOpen, project: FolderOpen,
+  documents: Files, meetings: AudioLines, clients: Users, client: Users, communication: Inbox, projects: FolderOpen, project: FolderOpen,
   'project-planning': GanttChart, tickets: Ticket, chat: MessageSquare, marketing: Megaphone, quotes: FileText,
   contracts: FileSignature, invoices: Receipt, suppliers: Truck, 'purchase-invoices': FileText, ledger: BookOpen,
   bank: Landmark, assets: Boxes, prepaid: Hourglass, pnl: TrendingUp, forecast: LineChart, 'vat-returns': Percent, 'corporate-tax': Landmark, 'income-tax': Calculator, dga: Users, shareholders: Users, owners: Wallet, 'fiscal-years': CalendarClock,

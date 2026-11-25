@@ -152,7 +152,11 @@ export const EXPORT_FORMAT_VERSION = 1;
 // 20261125090000 (weekplanner: vrije dagen) zet planner_days_off erbij: de
 // dagen die je zelf vrij zette. Gaat mee, net als je werktijd
 // (planner_day_capacity) en je actiepunten.
-export const EXPORT_SCHEMA_VERSION = '20261125090000';
+// 20261125100000 (meeting-audio verwijderen) zet audio_deleted_at en
+// audio_deleted_by op meeting_recordings: wanneer en door wie de audio is
+// gewist. Gaan met de tabel mee. De nieuwe opruimreden voor storage_purge_queue
+// verandert niets aan de export (die tabel is 'intern').
+export const EXPORT_SCHEMA_VERSION = '20261125100000';
 
 export type TableKind =
   | 'export'
