@@ -145,7 +145,10 @@ export const EXPORT_FORMAT_VERSION = 1;
 // ingangsdatum), current_account_id en timeline_since op partnership_partners
 // en source op fiscal_year_partner_shares. Alles gaat mee: zonder de tijdlijn
 // komt de verdeling van een jaar met in- of uittreden elders anders uit.
-export const EXPORT_SCHEMA_VERSION = '20261124120000';
+// 20261125090000 (weekplanner: vrije dagen) zet planner_days_off erbij: de
+// dagen die je zelf vrij zette. Gaat mee, net als je werktijd
+// (planner_day_capacity) en je actiepunten.
+export const EXPORT_SCHEMA_VERSION = '20261125090000';
 
 export type TableKind =
   | 'export'
@@ -255,6 +258,7 @@ export const EXPORT_MANIFEST: Readonly<Record<string, TableRule>> = {
   time_entries: { kind: 'export', list: 'uren' },
   time_entry_invoices: { kind: 'export', orderBy: ['time_entry_id'] },
   planner_day_capacity: { kind: 'export' },
+  planner_days_off: { kind: 'export' },
   planner_notes: { kind: 'export' },
 
   // ── Documenten, notities en bestanden ────────────────────────────────────

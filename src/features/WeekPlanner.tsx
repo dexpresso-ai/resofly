@@ -1,8 +1,9 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type React from 'react';
-import { CalendarCog, CalendarDays, Check, CheckSquare, ChevronDown, ChevronLeft, ChevronRight, ChevronsDownUp, ChevronsUpDown, Flag, Inbox, ListTodo, MessageSquare, PanelLeftClose, PanelLeftOpen, Play, Plus, RotateCcw, Search, SlidersHorizontal, Square, Users, Wand2, X } from 'lucide-react';
+import { CalendarCog, CalendarDays, Check, CheckSquare, ChevronDown, ChevronLeft, ChevronRight, ChevronsDownUp, ChevronsUpDown, Flag, Inbox, ListTodo, MessageSquare, Palmtree, PanelLeftClose, PanelLeftOpen, Play, Plus, RotateCcw, Search, SlidersHorizontal, Square, Users, Wand2, X } from 'lucide-react';
 import type { AppData, CalendarEventLink, CalendarExternalEvent, OrganizationMember, PlannerDayCapacity, PlannerNote, Priority, Task, TaskStatus, UUID } from '../types';
 import { getCachedCalendarEvents, listCalendarEventsCached, loadCalendarIntegrations } from '../lib/calendar-api';
+import { savePlannerDayOff, selectPlannerDaysOff } from '../lib/repository';
 import { vividCalendarColor } from '../lib/calendarColors';
 import { memberColor, memberInitials, memberShortName } from '../lib/members';
 import { Select } from '../components/Ui';
@@ -16,7 +17,7 @@ import { addDays, DAY_NAMES_NL, formatISODate, isoWeekNumber, isSameDay, parseIS
 import { clockLabel, comparePlannedTasks, DEFAULT_BLOCK_MINUTES, edgeScrollDelta, groupEventMinutesByDay, hasPlannedTime, isSpanningTask, layoutWeekBars, PANE_EDGE_SCROLL_ZONE_PX, parseDurationInput, proposeTimeBlocks, shiftDateKey, snapMinute, sortForAutoPlan, taskBlockMinutes } from '../lib/planning';
 import { groupAssigneesByTask, scopeTasks } from '../lib/workweek';
 import { calendarEventKey, calendarLinkKey, formatLinkShort, groupLinksByTask, groupTrackedMinutesByEventKey, localDayKey } from '../lib/calendar-links';
-import { autoPlanWindowEnd, dayTaskMinutes, hasEstimate, netDay, netWeek, ownCalendarEvents, spanShares, taskEstimateMinutes, taskLoadByDay, workdayFrom, type NetDay } from '../lib/netTime';
+import { autoPlanWindowEnd, dayTaskMinutes, hasEstimate, isWorkday, netDay, netWeek, ownCalendarEvents, spanShares, taskEstimateMinutes, taskLoadByDay, workdayFrom, type NetDay } from '../lib/netTime';
 import type { BusySlot, PlanProposal, WeekBar } from '../lib/planning';
 import { priorityLabel } from '../lib/format';
 
@@ -434,6 +435,53 @@ export function WeekPlanner({
   const weekEnd = days[6];
   const dayKeys = useMemo(() => new Set(days.map(formatISODate)), [days]);
 
+  // ── Vrije dagen (2026-11-25) ──────────────────────────────────────────
+  // Dagen die je zelf vrij zette: daar is geen werktijd, en "Vul mijn week"
+  // slaat ze over. Per week geladen, niet bij het opstarten; bewaard in
+  // planner_days_off, alleen voor jou.
+  const [daysOff, setDaysOff] = useState<Set<string>>(() => new Set());
+  const weekFirstKey = formatISODate(days[0]);
+  const weekLastKey = formatISODate(weekEnd);
+  // Een andere organisatie heeft haar eigen vrije dagen.
+  useEffect(() => { setDaysOff(new Set()); }, [organizationId]);
+  useEffect(() => {
+    if (!currentUserId) return;
+    let cancelled = false;
+    selectPlannerDaysOff(organizationId, currentUserId, weekFirstKey, weekLastKey)
+      .then(rows => {
+        if (cancelled) return;
+        setDaysOff(prev => {
+          const next = new Set([...prev].filter(key => key < weekFirstKey || key > weekLastKey));
+          for (const row of rows) next.add(row.day);
+          return next;
+        });
+      })
+      // Niet bereikbaar: dan is er geen vrije dag, en rekent de planner gewoon door.
+      .catch(() => { /* de planner werkt door zonder vrije dagen */ });
+    return () => { cancelled = true; };
+  }, [organizationId, currentUserId, weekFirstKey, weekLastKey]);
+  /** Alleen in "Mijn week": in het team zijn het andermans dagen. */
+  const myDaysOff = scope === 'mine' ? daysOff : undefined;
+  /** Een dag vrij zetten of weer werkdag maken. Meteen in beeld; lukt het
+   *  opslaan niet, dan gaat hij terug en staat er waarom. */
+  const toggleDayOff = useCallback(async (key: string) => {
+    if (!currentUserId || !canWrite) return;
+    const off = !daysOff.has(key);
+    const flip = (value: boolean) => setDaysOff(prev => {
+      const next = new Set(prev);
+      if (value) next.add(key); else next.delete(key);
+      return next;
+    });
+    flip(off);
+    setError(null);
+    try {
+      await savePlannerDayOff(organizationId, currentUserId, key, off);
+    } catch (err) {
+      flip(!off);
+      setError(err instanceof Error ? err.message : 'Vrije dag opslaan mislukt');
+    }
+  }, [canWrite, currentUserId, daysOff, organizationId]);
+
   // ── Agenda-afspraken van de zichtbare week ────────────────────────────
   // De planner rekende met acht lege uren per dag; de agenda wist hij niets van.
   // Nu telt de balk eerst je afspraken en dan pas je taken.
@@ -580,7 +628,7 @@ export function WeekPlanner({
 
     // Weekstroken verdelen hun uren over de werkdagen van de hele strook.
     for (const task of spanningTasks) {
-      for (const [key, share] of spanShares(task, orderedKeys, workday, linksByTask.get(task.id) ?? [])) {
+      for (const [key, share] of spanShares(task, orderedKeys, workday, linksByTask.get(task.id) ?? [], myDaysOff)) {
         const bucket = byDay.get(key);
         if (bucket) bucket.spanMinutes += share;
       }
@@ -605,7 +653,7 @@ export function WeekPlanner({
     const busiestMinutes = Math.max(0, ...Array.from(byDay.values()).map(bucket => bucket.minutes + bucket.agendaMinutes + bucket.spanMinutes));
 
     return { byDay, unscheduled, outsideThisWeek, weekBucket, busiestMinutes, spanningTasks };
-  }, [agendaByDay, dayKeys, days, filteredTasks, linksByTask, scope, workday]);
+  }, [agendaByDay, dayKeys, days, filteredTasks, linksByTask, myDaysOff, scope, workday]);
 
   // ── Netto tijd ────────────────────────────────────────────────────────
   // Werktijd − afspraken = netto tijd; netto tijd − taken = vrij. Gerekend over
@@ -616,12 +664,12 @@ export function WeekPlanner({
     .filter(task => task.status !== 'done' && !(task.project_id && archivedProjectIds.has(task.project_id))),
   [archivedProjectIds, assigneesByTask, currentUserId, data.tasks]);
   const linksFor = useCallback((taskId: string) => linksByTask.get(taskId) ?? [], [linksByTask]);
-  const myLoad = useMemo(() => taskLoadByDay(days.map(formatISODate), myOpenTasks, workday, linksFor), [days, linksFor, myOpenTasks, workday]);
+  const myLoad = useMemo(() => taskLoadByDay(days.map(formatISODate), myOpenTasks, workday, linksFor, daysOff), [days, daysOff, linksFor, myOpenTasks, workday]);
   const netByDay = useMemo(() => new Map<string, NetDay>(days.map(day => {
     const key = formatISODate(day);
     const load = myLoad.get(key);
-    return [key, netDay(key, workday, agendaByDay.get(key)?.minutes ?? 0, (load?.minutes ?? 0) + (load?.spanMinutes ?? 0))];
-  })), [agendaByDay, days, myLoad, workday]);
+    return [key, netDay(key, workday, agendaByDay.get(key)?.minutes ?? 0, (load?.minutes ?? 0) + (load?.spanMinutes ?? 0), daysOff.has(key))];
+  })), [agendaByDay, days, daysOff, myLoad, workday]);
   const net = useMemo(() => netWeek([...netByDay.values()]), [netByDay]);
   /** Hoeveel van je open taken deze week staan, en hoeveel daarvan zonder schatting. */
   const myWeek = useMemo(() => {
@@ -1743,6 +1791,34 @@ export function WeekPlanner({
   };
 
   /** Onder de dagnaam in de kop: aantal, netto tijd, wat er vrij is en de drukte-balk. */
+  /**
+   * De knop om een dag vrij te zetten, naast het plusje. Alleen op dagen die
+   * meetellen (een weekend dat niet meetelt is al vrij) en alleen in "Mijn
+   * week". Staat de dag vrij, dan blijft de knop zichtbaar en zet hij hem terug.
+   */
+  const dayOffButton = (day: Date) => {
+    const key = formatISODate(day);
+    const off = daysOff.has(key);
+    if (scope !== 'mine' || !canWrite || !currentUserId) return null;
+    if (!off && !isWorkday(key, workday)) return null;
+    const name = `${DAY_FULL_NL[(day.getDay() + 6) % 7]} ${day.getDate()}`;
+    return <button
+      type="button"
+      className={`wp-day-offbtn${off ? ' is-on' : ''}`}
+      aria-pressed={off}
+      aria-label={off ? `${name} is een vrije dag; weer werkdag maken` : `${name} als vrije dag`}
+      title={off ? 'Vrije dag. Klik om er weer een werkdag van te maken' : 'Vrije dag: geen werktijd, en Vul mijn week slaat hem over'}
+      onClick={() => { void toggleDayOff(key); }}
+    ><Palmtree size={12} aria-hidden="true"/></button>;
+  };
+  /** "Vrije dag", met wat er tóch staat erachter: dat werk moet een andere dag. */
+  const dayOffLabel = (fig: { meetings: number; tasks: number; spread: boolean }) => {
+    const total = fig.meetings + fig.tasks;
+    return <span className="wp-day-offlabel">
+      Vrije dag{total > 0 && <b className="is-warn"> · {fig.spread ? '±' : ''}{formatDuration(total)}</b>}
+    </span>;
+  };
+
   const dayHeaderExtra = (day: Date) => {
     const key = formatISODate(day);
     const bucket = byDay.get(key) ?? EMPTY_BUCKET;
@@ -1756,12 +1832,15 @@ export function WeekPlanner({
           afspraken plus taken, zonder maat ernaast. */}
       <div className="wp-dh-stats" title={fig.net ? netDayTitle(fig.net, fig.spread) : undefined}>
         {bucket.count > 0 && <span className="wp-day-count">{bucket.count}</span>}
-        {fig.net?.counts
+        {fig.net?.dayOff
+          ? dayOffLabel(fig)
+          : fig.net?.counts
           ? <>
             <span className="wp-day-net"><b>{formatDuration(fig.net.netMinutes)}</b><span className="wp-day-net-word"> netto</span></span>
             <span className={`wp-day-room${fig.net.freeMinutes! < 0 ? ' is-over' : ''}`}>{roomLabel(fig.net.freeMinutes!, fig.spread)}</span>
           </>
           : <span className={`wp-day-total${total > 0 ? '' : ' is-empty'}`}>{total > 0 ? `${fig.spread ? '±' : ''}${formatDuration(total)}` : '—'}</span>}
+        {dayOffButton(day)}
         {canWrite && <button
           type="button"
           className="wp-day-add"
@@ -1845,7 +1924,7 @@ export function WeekPlanner({
     // telden alleen de blokken in beeld; een weekstrook van twintig uur nam
     // geen minuut in en het voorstel zette er een volle week overheen.
     const fixed = myOpenTasks.filter(task => !candidateIds.has(task.id));
-    const fixedLoad = taskLoadByDay(orderedDayKeys, fixed, workday, linksFor);
+    const fixedLoad = taskLoadByDay(orderedDayKeys, fixed, workday, linksFor, daysOff);
     const busy = new Map<string, BusySlot[]>();
     const used = new Map<string, number>();
     for (const key of orderedDayKeys) {
@@ -1867,7 +1946,11 @@ export function WeekPlanner({
     // Het weekend telt mee als je werktijd dat zegt én het in beeld staat: een
     // voorstel op een dag die je niet ziet, kun je niet beoordelen.
     const includeWeekend = workday.includeWeekend && (showWeekend || isNarrow);
-    const skipDays = new Set(days.filter(day => !includeWeekend && (day.getDay() === 0 || day.getDay() === 6)).map(formatISODate));
+    // Je vrije dagen slaat het voorstel altijd over.
+    const skipDays = new Set([
+      ...days.filter(day => !includeWeekend && (day.getDay() === 0 || day.getDay() === 6)).map(formatISODate),
+      ...orderedDayKeys.filter(key => daysOff.has(key)),
+    ]);
     const now = new Date();
     const { proposals, unplaced } = proposeTimeBlocks({
       dayKeys: orderedDayKeys, busy, candidates, todayKey,
@@ -1928,9 +2011,8 @@ export function WeekPlanner({
   const meter = scope === 'mine'
     ? weekMeter(net.meetingMinutes, net.taskMinutes, net.workMinutes)
     : weekMeter(0, teamWeekMinutes, null);
-  const workdayCount = days.filter(day => netByDay.get(formatISODate(day))?.counts).length;
   /** De som van de week, voluit: voor de tooltip en de schermlezer. */
-  const netWeekTitle = `Werktijd ${formatDuration(net.workMinutes)} (${formatDuration(workday.minutes)} × ${workdayCount} ${workdayCount === 1 ? 'werkdag' : 'werkdagen'}${workday.isDefault ? ', de standaard' : ''}) − afspraken ${formatDuration(net.meetingMinutes)} = ${formatDuration(net.netMinutes)} netto voor taken. Ingepland ${formatDuration(net.taskMinutes)}, dus ${roomLabel(net.freeMinutes)}.${net.offDayMinutes > 0 ? ` Daarnaast ${formatDuration(net.offDayMinutes)} op dagen die niet meetellen.` : ''}`;
+  const netWeekTitle = `Werktijd ${formatDuration(net.workMinutes)} (${formatDuration(workday.minutes)} × ${net.workdays} ${net.workdays === 1 ? 'werkdag' : 'werkdagen'}${workday.isDefault ? ', de standaard' : ''}${net.daysOff > 0 ? `; ${net.daysOff === 1 ? '1 vrije dag' : `${net.daysOff} vrije dagen`}` : ''}) − afspraken ${formatDuration(net.meetingMinutes)} = ${formatDuration(net.netMinutes)} netto voor taken. Ingepland ${formatDuration(net.taskMinutes)}, dus ${roomLabel(net.freeMinutes)}.${net.offDayMinutes > 0 ? ` Daarnaast ${formatDuration(net.offDayMinutes)} op dagen die niet meetellen.` : ''}`;
   const showCarryOver = canWrite && overdueTasks.length > 0 && !carryOverDismissed.includes(formatISODate(anchor));
   const hasNudges = showCarryOver || unplannedDeadlines.length > 0 || hiddenWeekend > 0;
 
@@ -2071,6 +2153,12 @@ export function WeekPlanner({
               </button>
             </div>}
             {scope === 'mine' && <CapacityControl capacity={data.plannerCapacity} canWrite={canWrite} onSave={onSaveCapacity}/>}
+            {scope === 'mine' && currentUserId && <DaysOffControl
+              days={days.filter(day => isWorkday(formatISODate(day), workday) || daysOff.has(formatISODate(day)))}
+              daysOff={daysOff}
+              canWrite={canWrite}
+              onToggle={key => { void toggleDayOff(key); }}
+            />}
             {gridView && <p className="wp-pop-hint">Zoomen in het rooster: Ctrl + scrollen, of knijpen op een touchscreen.</p>}
           </div>}</PlannerPopover>
 
@@ -2105,7 +2193,8 @@ export function WeekPlanner({
             ? <span className="wp-stat is-free"><i aria-hidden="true"/><b>{formatDuration(net.freeMinutes)}</b> vrij</span>
             : <span className="wp-stat is-over"><b>{formatDuration(-net.freeMinutes)}</b> te veel</span>}
           {myWeek.noEstimate > 0 && <span className="wp-stat is-minor is-warn">{myWeek.noEstimate === 1 ? '1 taak zonder schatting' : `${myWeek.noEstimate} zonder schatting`}</span>}
-          {net.offDayMinutes > 0 && <span className="wp-stat is-minor">+{formatDuration(net.offDayMinutes)} in het weekend</span>}
+          {net.daysOff > 0 && <span className="wp-stat is-dayoff"><Palmtree size={12} aria-hidden="true"/>{net.daysOff === 1 ? '1 vrije dag' : `${net.daysOff} vrije dagen`}</span>}
+          {net.offDayMinutes > 0 && <span className="wp-stat is-minor">+{formatDuration(net.offDayMinutes)} {net.daysOff > 0 ? 'buiten je werkdagen' : 'in het weekend'}</span>}
         </div> : <div className="wp-pulse-stats">
           {/* Het team heeft geen gezamenlijke werktijd en jouw afspraken horen
               hier niet: alleen de taken in beeld. */}
@@ -2194,7 +2283,7 @@ export function WeekPlanner({
               type="button"
               role="tab"
               aria-selected={key === mobileDay}
-              className={`wp-daystrip-day ${key === mobileDay ? 'is-on' : ''} ${isSameDay(day, todayLocal) ? 'is-today' : ''} ${isDropHere ? 'is-drop' : ''} ${fig.net?.freeMinutes != null && fig.net.freeMinutes < 0 ? 'is-over' : ''}`}
+              className={`wp-daystrip-day ${key === mobileDay ? 'is-on' : ''} ${isSameDay(day, todayLocal) ? 'is-today' : ''} ${isDropHere ? 'is-drop' : ''} ${fig.net?.freeMinutes != null && fig.net.freeMinutes < 0 ? 'is-over' : ''} ${fig.net?.dayOff ? 'is-off' : ''}`}
               title={fig.net ? netDayTitle(fig.net, fig.spread) : undefined}
               ref={el => registerZone(`${STRIP_PREFIX}${key}`, el)}
               onClick={() => setMobileDay(key)}
@@ -2248,6 +2337,7 @@ export function WeekPlanner({
             onToggleTaskDone={task => { void onSetTaskStatus(task, task.status === 'done' ? 'todo' : 'done'); }}
             renderTaskBar={bandChip}
             renderDayHeader={dayHeaderExtra}
+            dayClassName={day => (myDaysOff?.has(formatISODate(day)) ? 'wp-col-off' : undefined)}
             previewBlocks={previewBlocks}
             draft={gridDraft}
             ghostTaskId={drag?.moved ? drag.taskId : null}
@@ -2305,7 +2395,7 @@ export function WeekPlanner({
             const marker = insertMarkerFor(key);
             const fig = dayFigures(key);
             const folded = collapsedDays.includes(i);
-            const state = `${isToday ? 'is-today ' : ''}${marker !== null ? 'is-drop' : ''}`;
+            const state = `${isToday ? 'is-today ' : ''}${marker !== null ? 'is-drop ' : ''}${fig.net?.dayOff ? 'is-off' : ''}`;
             // Zeven <section>-landmarks in één scherm maakt de landmarkslijst
             // onbruikbaar; dit is een uitklapper, geen sectie. De knop noemt de dag
             // en wijst met aria-controls naar het vak dat hij opent.
@@ -2340,7 +2430,9 @@ export function WeekPlanner({
                     ± staat er zodra een weekstrook meetelt — dat deel is een
                     verdeling over zijn dagen, geen gemeten tijd. */}
                 {bucket.count > 0 && <span className="wp-day-count">{bucket.count}</span>}
-                {fig.net?.counts
+                {fig.net?.dayOff
+                  ? dayOffLabel(fig)
+                  : fig.net?.counts
                   ? <span className="wp-day-net" title={netDayTitle(fig.net, fig.spread)}><b>{formatDuration(fig.net.netMinutes)}</b> netto</span>
                   : fig.meetings + fig.tasks > 0 && <span className="wp-day-total" title={fig.net ? netDayTitle(fig.net, fig.spread) : undefined}>{fig.spread ? '±' : ''}{formatDuration(fig.meetings + fig.tasks)}</span>}
 
@@ -2357,6 +2449,7 @@ export function WeekPlanner({
                   {roomLabel(fig.net.freeMinutes!, fig.spread)}
                 </div>}
 
+                {dayOffButton(day)}
                 {canWrite && <button
                   type="button"
                   className="wp-day-add"
@@ -2773,6 +2866,49 @@ function CapacityControl({ capacity, canWrite, onSave }: {
         Terug naar 8 uur
       </button>}
     </div>}
+  </section>;
+}
+
+/**
+ * Vrije dagen van de week in beeld, als knoppen om aan en uit te zetten. Dezelfde
+ * keuze als het palmboompje in elke dagkop, maar hier voor de hele week in één
+ * keer: wie een week vakantie heeft, klikt vijf knoppen naast elkaar in plaats
+ * van vijf dagkoppen langs.
+ */
+function DaysOffControl({ days, daysOff, canWrite, onToggle }: {
+  days: Date[];
+  daysOff: ReadonlySet<string>;
+  canWrite: boolean;
+  onToggle: (key: string) => void;
+}) {
+  const count = days.filter(day => daysOff.has(formatISODate(day))).length;
+  return <section className="wp-cap wp-daysoff" aria-label="Vrije dagen deze week">
+    <div className="wp-cap-head">
+      <span>Vrije dagen deze week</span>
+      <b className={count > 0 ? 'is-on' : ''}>{count === 0 ? 'geen' : count === 1 ? '1 dag' : `${count} dagen`}</b>
+    </div>
+    <p className="wp-cap-hint">
+      Op een vrije dag heb je geen werktijd: de planner rekent er niet mee, en
+      Vul mijn week zet er niets op.
+    </p>
+    <div className="wp-daysoff-days" role="group" aria-label="Vrije dagen">
+      {days.map(day => {
+        const key = formatISODate(day);
+        const off = daysOff.has(key);
+        return <button
+          key={key}
+          type="button"
+          className={`wp-daysoff-day${off ? ' is-on' : ''}`}
+          aria-pressed={off}
+          aria-label={`${DAY_FULL_NL[(day.getDay() + 6) % 7]} ${day.getDate()}${off ? ', vrije dag' : ''}`}
+          disabled={!canWrite}
+          onClick={() => onToggle(key)}
+        >
+          <span>{DAY_NAMES_NL[(day.getDay() + 6) % 7]}</span>
+          <b>{day.getDate()}</b>
+        </button>;
+      })}
+    </div>
   </section>;
 }
 

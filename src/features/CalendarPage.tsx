@@ -1019,6 +1019,9 @@ type TimeBlockGridProps = {
   renderTaskBar?: (task: Task, bar: { continuesLeft: boolean; continuesRight: boolean; span: number }) => ReactNode;
   /** Extra inhoud onder de dagnaam in de kop, bijvoorbeeld de drukte-balk van de planner. */
   renderDayHeader?: (day: Date) => ReactNode;
+  /** Extra klasse op de kop en de kolom van een dag: de planner arceert zo een
+   *  vrije dag. De agenda gebruikt het niet. */
+  dayClassName?: (day: Date) => string | undefined;
   /** Voorbeeldblokken die meetekenen in de kolommen. */
   previewBlocks?: PreviewBlock[];
   /** Een getekende tijdselectie die open blijft staan met een formulier erin. */
@@ -1031,7 +1034,7 @@ type TimeBlockGridProps = {
   ghostTaskId?: string | null;
 };
 
-export const TimeBlockGrid = forwardRef<TimeBlockGridHandle, TimeBlockGridProps>(function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinutesFor, linkedTaskFor, canWrite, writeableSources, onSelectSlot, onSelectDays, onEditTask, onOpenEvent, onMoveEvent, onOpenDay, bookingMode = false, bookingSlots = [], onRemoveBookingSlot, readOnlyEvents = false, zoom = 1, onZoomChange, fitWindow = DEFAULT_FIT, autoScrollKey = 0, taskBand = 'deadline', bandLabel = 'Hele dag', taskColorFor, taskMetaFor, onMoveTask, onTaskBlockPointerDown, onTaskMenu, onToggleTaskDone, renderTaskBar, renderDayHeader, previewBlocks = [], draft = null, allowSelect, ghostTaskId = null }, ref) {
+export const TimeBlockGrid = forwardRef<TimeBlockGridHandle, TimeBlockGridProps>(function TimeBlockGrid({ days, events, tasks, sourceColors, trackedMinutesFor, linkedTaskFor, canWrite, writeableSources, onSelectSlot, onSelectDays, onEditTask, onOpenEvent, onMoveEvent, onOpenDay, bookingMode = false, bookingSlots = [], onRemoveBookingSlot, readOnlyEvents = false, zoom = 1, onZoomChange, fitWindow = DEFAULT_FIT, autoScrollKey = 0, taskBand = 'deadline', bandLabel = 'Hele dag', taskColorFor, taskMetaFor, onMoveTask, onTaskBlockPointerDown, onTaskMenu, onToggleTaskDone, renderTaskBar, renderDayHeader, dayClassName, previewBlocks = [], draft = null, allowSelect, ghostTaskId = null }, ref) {
   const [drag, setDrag] = useState<DragState | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   // Loopt de tijdselectie via een vinger? Dan houden we de pagina stil.
@@ -1781,7 +1784,8 @@ export const TimeBlockGrid = forwardRef<TimeBlockGridHandle, TimeBlockGridProps>
                 <span className={`tb-dh-num${td ? ' tb-today-num' : ''}`}>{day.getDate()}</span>
               </>;
               const extra = renderDayHeader?.(day);
-              return <div className={`tb-dh${td ? ' tb-today' : ''}`} key={formatISODate(day)}>
+              const extraClass = dayClassName?.(day);
+              return <div className={`tb-dh${td ? ' tb-today' : ''}${extraClass ? ` ${extraClass}` : ''}`} key={formatISODate(day)}>
                 {onOpenDay
                   ? <button type="button" className="tb-dh-hit" onClick={() => onOpenDay(day)} title="Open dagweergave">{inner}</button>
                   : inner}
@@ -1858,7 +1862,7 @@ export const TimeBlockGrid = forwardRef<TimeBlockGridHandle, TimeBlockGridProps>
               const isToday = today(day);
               const nowFrac = isToday ? dateToVisibleDayFraction(day, now) : 0;
               return (
-                <div className={`tb-col${isToday ? ' tb-today-col' : ''}`} key={di} ref={el => { colRefs.current[di] = el; }} style={{ gridColumn: di + 2, gridRow: `1 / span ${TOTAL_SLOTS}` }}
+                <div className={`tb-col${isToday ? ' tb-today-col' : ''}${dayClassName?.(day) ? ` ${dayClassName(day)}` : ''}`} key={di} ref={el => { colRefs.current[di] = el; }} style={{ gridColumn: di + 2, gridRow: `1 / span ${TOTAL_SLOTS}` }}
                   onPointerDown={canSelect ? e => beginSelection(e, di) : undefined}>
                   {daySel && di >= daySel.lo && di <= daySel.hi && <div className="tb-daysel" aria-hidden="true" />}
                   {hourLabels.map((h, si) => {
