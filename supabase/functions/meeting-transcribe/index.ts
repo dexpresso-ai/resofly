@@ -24,7 +24,7 @@
 //                (Inhoud → Meetings, sinds 25 november). Alleen met transcript.
 //  - delete    : verwijder de opname-rij (de R2-audio wist de frontend zelf;
 //                sinds 25 november ruimt de opruimwachtrij hem ook op als dat
-//                mislukte, zie 20261125090000_meeting_audio_verwijderen.sql).
+//                mislukte, zie 20261125100000_meeting_audio_verwijderen.sql).
 //
 // AI-budget: transcriptie en notulen vallen onder hetzelfde maandtegoed als
 // Gerrie (_shared/aiBudget.ts). De transcriptie wordt afgerekend in ai_usage
@@ -416,7 +416,7 @@ async function saveToContent(organizationId: string, userId: string, role: Organ
  * Eerst de rij, dan R2. Andersom kon een mislukte update een sleutel laten
  * staan naar een bestand dat al weg was: de kaart bood dan audio aan die niet
  * meer afspeelde. Nu zet de trigger op de rij de sleutel in de opruimwachtrij
- * (20261125090000); lukt het meteen wissen hieronder niet, dan haalt de
+ * (20261125100000); lukt het meteen wissen hieronder niet, dan haalt de
  * nachtelijke opruimtaak hem alsnog weg.
  */
 async function deleteAudio(organizationId: string, userId: string, role: OrganizationRole, body: Record<string, unknown>) {

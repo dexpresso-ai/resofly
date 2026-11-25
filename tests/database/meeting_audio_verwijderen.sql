@@ -1,5 +1,5 @@
 -- ============================================================
--- Databasetest: de audio van een meeting wissen (20261125090000)
+-- Databasetest: de audio van een meeting wissen (20261125100000)
 --
 -- Draait op een database met alle migraties (supabase db start), in één
 -- transactie die altijd wordt teruggedraaid:

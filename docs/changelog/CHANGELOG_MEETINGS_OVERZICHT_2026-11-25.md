@@ -64,7 +64,7 @@ Meer dan honderd meetings? Onderaan haalt **Oudere meetings laden** de volgende 
 
 ## Wat er veranderd is
 
-- `supabase/migrations/20261125090000_meeting_audio_verwijderen.sql`:
+- `supabase/migrations/20261125100000_meeting_audio_verwijderen.sql`:
   - `audio_deleted_at` en `audio_deleted_by` op `meeting_recordings`, met de check
     `meeting_recordings_audio_gewist_zonder_sleutel` (gewist = geen sleutel, geen grootte);
   - trigger `meeting_recordings_purge_audio`: een sleutel onder
@@ -87,7 +87,7 @@ Meer dan honderd meetings? Onderaan haalt **Oudere meetings laden** de volgende 
   `permissions.ts` (module Inhoud) en `standaloneApps.ts` (app Documenten).
 - `src/components/MeetingNoteViews.tsx`: `TranscriptLines` is nu gedeeld.
 - `src/types.ts`: de twee nieuwe velden. `src/lib/exportManifest.ts`: schemaversie naar
-  20261125090000 (de kolommen gaan met de tabel mee).
+  20261125100000 (de kolommen gaan met de tabel mee).
 
 ## Getest
 
