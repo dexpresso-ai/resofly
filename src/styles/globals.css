@@ -120,8 +120,36 @@ html,body,#root{height:100%}body{background:var(--bg);color:var(--text);font-fam
 .status-pill.archived{background:rgba(var(--accent-rgb),.12);color:var(--accent-ink)}
 .archive-list{display:grid;gap:.8rem}.archive-item{justify-content:space-between;gap:1rem}.archive-info small{color:var(--muted)}
 
-/* Task subtasks and comments */
-.task-detail-editor{grid-column:1/-1;display:grid;grid-template-columns:1fr 1fr;gap:10px}
+/* Taakvenster: zes kolommen. Korte velden staan compact naast elkaar (titel 4,
+   status en prioriteit elk 1; klant en project elk 3; toegewezen 4 met tags 2;
+   datums en duur in rijen van drie). Al het overige krijgt de volle breedte:
+   beschrijving, subtaken, comments, agenda en bijlagen. In het oude raster van
+   twee kolommen stond de beschrijving in een halve kolom.
+   align-items:start: .field is zelf een grid; uitgerekt tot de hoogte van een
+   buur met meer uitleg werd het invoervak hoger en zakte het uit de rij. */
+.form-grid.task-form-grid{grid-template-columns:repeat(6,minmax(0,1fr));align-items:start}
+.task-form-grid>*{grid-column:1/-1;min-width:0}
+.task-form-grid>.tf-title,.task-form-grid>.tf-wide{grid-column:span 4}
+.task-form-grid>.tf-narrow{grid-column:span 1}
+.task-form-grid>.tf-half{grid-column:span 3}
+.task-form-grid>.tf-third{grid-column:span 2}
+.task-form-grid>.tf-description .form-textarea{min-height:120px}
+/* Smaller dan een laptop: een status-keuzelijst van een zesde zou "Normaal"
+   afkappen. De titel krijgt een eigen rij, status en prioriteit delen de volgende. */
+@media(max-width:900px){
+  .task-form-grid>.tf-title{grid-column:1/-1}
+  .task-form-grid>.tf-narrow{grid-column:span 3}
+}
+/* Telefoon: één kolom, alleen status en prioriteit naast elkaar (kort, geen uitleg). */
+@media(max-width:760px){
+  .form-grid.task-form-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .task-form-grid>.tf-wide,.task-form-grid>.tf-half,.task-form-grid>.tf-third{grid-column:1/-1}
+  .task-form-grid>.tf-narrow{grid-column:span 1}
+}
+
+/* Subtaken en comments onder elkaar, elk over de volle breedte van het venster.
+   Naast elkaar kreeg elk de helft, te krap voor een subtaak of een update. */
+.task-detail-editor{grid-column:1/-1;display:grid;grid-template-columns:minmax(0,1fr);gap:10px}
 .task-editor-section{background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:12px;min-width:0}
 .tes-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
 .tes-head div{display:flex;flex-direction:column;gap:2px}
@@ -138,7 +166,6 @@ html,body,#root{height:100%}body{background:var(--bg);color:var(--text);font-fam
 .comment-item p{font-size:12px;line-height:1.55;color:var(--muted2);white-space:pre-wrap}
 .task-empty-line{font-size:11px;color:var(--muted);border:1px dashed var(--border);border-radius:7px;padding:10px;text-align:center}
 .wp-task-counts{color:var(--muted);font-size:10px}
-@media(max-width:900px){.task-detail-editor{grid-template-columns:1fr}}
 
 /* ── Tickettijdlijn (gedeelde notities medewerker ↔ klant) ────────────── */
 /* De editor draait in een 2-koloms .form-grid; de tijdlijn moet de volle
@@ -11052,7 +11079,9 @@ body.pgal-shielded .pgal-shield{position:fixed;inset:0;z-index:300;display:flex;
 
 /* Taakvenster: sectie Agenda. */
 .task-agenda{grid-column:1/-1}
-.task-agenda-actions{display:flex;gap:6px;flex-wrap:wrap}
+/* .tes-head div (de kop met titel en teller) zette ook deze knoppen onder elkaar.
+   Ze horen naast elkaar; past het niet, dan lopen ze door naar een volgende regel. */
+.task-agenda-actions,.tes-head .task-agenda-actions{display:flex;flex-direction:row;justify-content:flex-end;gap:6px;flex-wrap:wrap}
 .task-agenda-actions .btn{display:inline-flex;align-items:center;gap:5px}
 .task-agenda-list{display:flex;flex-direction:column;gap:6px}
 .task-agenda-row,.task-agenda-option{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;gap:10px;align-items:center;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg2);font-size:12px;color:var(--text);text-align:left}
