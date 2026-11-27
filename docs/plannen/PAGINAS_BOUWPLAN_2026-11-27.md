@@ -41,6 +41,7 @@ Exporteren drukt.
 | De PDF-export: zoals het scherm, of opgemaakt in de huisstijl? | In de huisstijl: "Inderdaad het tweede." Dit gaat alleen over de export; de pagina zelf blijft een webpagina. |
 | Bedrijfshandboek in fase 1? | "Ja bedrijfshandboek nemen we mee. Eigen logo en structuur in de drive." |
 | Pagina's ook als openbare website, vindbaar voor iedereen? | "Voor later in de toekomst wil ik dat wel." Zie §17. |
+| Wie mag een pagina openbaar publiceren? | "alleen owner en admin mogen publishen" |
 
 Zo lees ik twee van die antwoorden. Klopt dat niet, dan past dit plan zich aan:
 
@@ -471,5 +472,13 @@ de klantadressen (`workers/client-domains`) serveert dan ook deze pagina's.
 - Een vrijgave is "deze versie voor deze ontvanger". Openbaar wordt later één soort ontvanger
   erbij, geen nieuw model.
 
-**Open punt:** wie mag publiceren? Voorstel: alleen Owner en Admin, omdat openbaar verder reikt dan
-delen met één klant.
+**Wie mag publiceren:** alleen Owner en Admin. Dat is vastgelegd op 27 november 2026: "alleen
+owner en admin mogen publishen". Openbaar reikt verder dan delen met één klant.
+
+- **De database dwingt het af, niet alleen het scherm.** Publiceren, "Bijwerken op website" en
+  offline halen lopen via een RPC die de rol controleert.
+- **Gerrie en de agents kunnen publiceren hoogstens voorstellen.** Een voorstel loopt met de rechten
+  van wie het goedkeurt (regel 2), dus alleen een Owner of Admin kan het laten gebeuren.
+- **Een gewoon teamlid** ziet wel dat een pagina openbaar staat, maar kan dat niet veranderen.
+- **Test:** een Member en een Viewer kunnen niet publiceren of bijwerken, ook niet rechtstreeks
+  tegen de database.
