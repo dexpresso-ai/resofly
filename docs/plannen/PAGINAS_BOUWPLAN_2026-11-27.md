@@ -498,11 +498,11 @@ akkoord is.
 
 | Stap | Wat | Status |
 | --- | --- | --- |
-| 0 | Gedeelde mappen vullen zich niet meer vanzelf (§7). | gebouwd op 27 november, op de branch; zie `docs/changelog/CHANGELOG_GEDEELDE_MAPPEN_2026-11-27.md` |
-| 1A-1 | Datamodel en migraties: de kolommen op `documents`, `document_versions`, de triggers (boom, overerving, organisatie, controle op `body`), `claim_page_edit`, de zoekindex met zoek-RPC, de logboekvelden. Met databasetests, nog zonder scherm. | gebouwd op 27 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_DATAMODEL_2026-11-27.md` |
-| 1A-2 | Laden en zoeken: de kolomlijst in `loadCoreData`, `excerpt` in de kaarten, GlobalSearch en `content.search` via de zoek-RPC. In één stap, anders breekt zoeken (§6). | gebouwd op 27 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_LADEN_ZOEKEN_2026-11-27.md`. Gerrie zoekt bewust nog zoals voorheen (zie daar) |
-| 1A-3a | De editor: Tiptap als eigen stuk bundel, het pagina-scherm, de basisblokken, opslaan met `edit_version`, één tegelijk bewerken. | gebouwd op 27 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_EDITOR_2026-11-27.md` |
-| 1A-3b | Het versiepaneel (bekijken en terugzetten) en een eigen adres per pagina. | gebouwd op 27 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_VERSIES_ADRES_2026-11-27.md` |
+| 0 | Gedeelde mappen vullen zich niet meer vanzelf (§7). | gebouwd en op staging gezet op 27 november; zie `docs/changelog/CHANGELOG_GEDEELDE_MAPPEN_2026-11-27.md` |
+| 1A-1 | Datamodel en migraties: de kolommen op `documents`, `document_versions`, de triggers (boom, overerving, organisatie, controle op `body`), `claim_page_edit`, de zoekindex met zoek-RPC, de logboekvelden. Met databasetests, nog zonder scherm. | gebouwd en op staging gezet op 27 november; zie `docs/changelog/CHANGELOG_PAGINAS_DATAMODEL_2026-11-27.md` |
+| 1A-2 | Laden en zoeken: de kolomlijst in `loadCoreData`, `excerpt` in de kaarten, GlobalSearch en `content.search` via de zoek-RPC. In één stap, anders breekt zoeken (§6). | gebouwd en op staging gezet op 27 november; zie `docs/changelog/CHANGELOG_PAGINAS_LADEN_ZOEKEN_2026-11-27.md`. Gerrie zoekt bewust nog zoals voorheen (zie daar) |
+| 1A-3a | De editor: Tiptap als eigen stuk bundel, het pagina-scherm, de basisblokken, opslaan met `edit_version`, één tegelijk bewerken. | gebouwd en op staging gezet op 27 november; zie `docs/changelog/CHANGELOG_PAGINAS_EDITOR_2026-11-27.md` |
+| 1A-3b | Het versiepaneel (bekijken en terugzetten) en een eigen adres per pagina. | gebouwd en op staging gezet op 27 november; zie `docs/changelog/CHANGELOG_PAGINAS_VERSIES_ADRES_2026-11-27.md` |
 | 1A-4 | De overige blokken: gewone tabel, afbeelding, bestand, callout, uitklapper, inhoudsopgave, subpagina. Het slash-menu en de +-knop op de telefoon. | gepland |
 | 1A-5 | De drive: de boom, het eigen dossier met logo, "Pagina" in het Nieuw-menu, slepen, de prullenbak. De tekstdocumenten omzetten. | gepland |
 | 1B-1 | Proef: huisstijlletters en emoji in een PDF via Collabora (§9). | gepland |
@@ -537,18 +537,24 @@ akkoord is.
 
 **Stand op 27 november 2026, einde van de eerste bouwsessie (overdracht):**
 
-- **Gebouwd, op de branch `claude/affectionate-meitner-arfqck`:** stap 0, 1A-1, 1A-2, 1A-3a
-  en 1A-3b. Niets staat op staging; mergen gebeurt pas als de gebruiker het zegt.
+- **Op staging sinds 27 november:** stap 0, 1A-1, 1A-2, 1A-3a en 1A-3b, gemerged op
+  verzoek van de gebruiker (merge `416b997`). Verder bouwen gebeurt op de branch
+  `claude/affectionate-meitner-arfqck`; mergen pas als de gebruiker het zegt.
+  - Frontend checks op de branch: groen, met typecheck, unit tests, de schermtests, `deno
+    check` en de migraties vanaf nul met de databasetests.
+  - Deploy Supabase (staging): groen. Beide migraties zijn toegepast, de edge functions
+    staan erop en de rooktest is geslaagd.
+  - De browsercontrole van "ongedaan maken" is daarna gedraaid: `tests/stromen/ui.mjs
+    documenten`, 16 stappen, 0 fout. Laden telt niet mee in de geschiedenis
+    (`addToHistory: false`); zonder die regel maakte Ctrl+Z direct na het openen de pagina
+    leeg.
 - **Volgende stap: 1A-4**, de overige blokken: tabel, afbeelding, bestand, callout,
   uitklapper, inhoudsopgave en subpagina, plus het slash-menu en de +-knop.
-- **Nog open:**
-  - **De browsercontrole van "ongedaan maken".** Laden telt niet meer mee in de
-    geschiedenis (`addToHistory: false`). Zonder die regel maakte Ctrl+Z direct na het
-    openen de pagina leeg. De controles staan in `tests/stromen/ui.mjs documenten`, maar
-    zijn nog niet gedraaid: de Docker-daemon was gestopt.
-  - **`deno check` van de gewijzigde edge functions** (`file-share`, `file-transfer`, de
-    acties, de mailsjablonen) is nog niet gedraaid, omdat deno.land in de cloudsessie
-    geblokkeerd is. Dat kan in CI: de workflow `frontend-checks` op de branch.
+- **Nog open:** hoeveel bestaande mapdelingen de datastap van `20261127120000` omzette.
+  `supabase db push` toont geen aantallen, en een cloudsessie kan staging niet lezen. In
+  de werkruimte van de ResoFly-koppeling liepen geen delingen. Voor de andere organisaties:
+  nakijken in de app, zie "Nakijken op staging" in
+  `docs/changelog/CHANGELOG_GEDEELDE_MAPPEN_2026-11-27.md`.
 - **Tip voor de volgende sessie:**
   - Start `dockerd` pas vlak voor de database- en UI-tests: een achtergrondtaak stopt na
     twee uur.
