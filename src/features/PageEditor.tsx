@@ -25,6 +25,9 @@
 //  - Sluiten in een vaste volgorde: laatste wijziging opslaan, een versie
 //    vastleggen (alleen als er deze keer iets is opgeslagen), de claim
 //    loslaten. Mislukt het opslaan, dan blijft de editor open.
+//  - Een pagina met een blok dat deze versie van de app niet kent, gaat niet
+//    open om te bewerken (pageBodyCheck.ts). Tiptap maakte er stilletjes een
+//    lege pagina van, en de eerste toets schreef die over de echte heen.
 // ============================================================
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -36,6 +39,7 @@ import {
 } from 'lucide-react';
 import { pageEditorExtensions } from '../lib/pageEditorExtensions';
 import { isAllowedPageLink } from '../lib/pageSchema';
+import { pageBodyFit } from '../lib/pageBodyCheck';
 import {
   claimPageEdit, listPageVersions, loadPage, loadPageVersion, releasePageEdit, restorePageVersion, savePage, savePageVersion,
   type PageVersionSummary,
@@ -49,7 +53,16 @@ const CLAIM_FRESH_MS = 75_000;
 /** Tijdens een lange sessie elk kwartier een versie. */
 const VERSION_EVERY_MS = 15 * 60_000;
 
-type Mode = 'laden' | 'bewerken' | 'lezen' | 'conflict' | 'geen_recht' | 'fout';
+type Mode = 'laden' | 'bewerken' | 'lezen' | 'conflict' | 'geen_recht' | 'fout' | 'onbekend';
+
+const TOO_NEW_MESSAGE = 'Deze pagina heeft blokken die deze versie van de app nog niet kent. Ververs de app om hem te openen; er gaat niets verloren.';
+
+/** De opgeslagen pagina past niet in deze editor (pageBodyCheck.ts). */
+class PageTooNewError extends Error {
+  constructor(reason: string) {
+    super(`De pagina past niet in deze editor (${reason}).`);
+  }
+}
 type SaveState = 'opgeslagen' | 'wijzigingen' | 'bezig' | 'fout';
 
 function snapshotOf(title: string, body: JSONContent): string {
@@ -120,6 +133,12 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
     const ed = editorRef.current;
     if (!ed) return;
     const row = await loadPage(documentId, organizationId);
+    const fit = pageBodyFit(ed.schema, row.body);
+    if (!fit.ok) {
+      // Niets in de editor zetten: Tiptap zou er een lege pagina van maken.
+      setTitle(row.title);
+      throw new PageTooNewError(fit.reason);
+    }
     // Niet in de geschiedenis van "ongedaan maken": anders maakte Ctrl+Z direct
     // na het openen de pagina leeg (en sloeg dat op), en haalde het na
     // "Terugzetten" of "Opnieuw laden" de vervangen tekst terug. setContent zet
@@ -130,6 +149,20 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
     baselineRef.current = snapshotOf(row.title.trim() || 'Naamloze pagina', ed.getJSON());
     setSaveState('opgeslagen');
   }, [documentId, organizationId]);
+
+  /** Past de pagina niet in deze editor: alleen lezen, geen claim, niets opslaan. */
+  const stopIfTooNew = useCallback(async (error: unknown): Promise<boolean> => {
+    if (!(error instanceof PageTooNewError)) return false;
+    editorRef.current?.setEditable(false, false);
+    setHolder(null);
+    setMode('onbekend');
+    setMessage(TOO_NEW_MESSAGE);
+    if (claimedEverRef.current && !releasedRef.current) {
+      releasedRef.current = true;
+      await releasePageEdit(documentId).catch(() => {});
+    }
+    return true;
+  }, [documentId]);
 
   const tryClaim = useCallback(async () => {
     const ed = editorRef.current;
@@ -142,7 +175,12 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
         releasedRef.current = false;
         if (modeRef.current === 'lezen') {
           // De pagina kwam vrij: eerst vers laden, dan pas verder schrijven.
-          await loadFresh();
+          try {
+            await loadFresh();
+          } catch (error) {
+            if (await stopIfTooNew(error)) return;
+            throw error;
+          }
         }
         if (modeRef.current === 'lezen' || modeRef.current === 'laden') {
           setHolder(null);
@@ -160,7 +198,7 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
       // Geen verbinding: niets veranderen. Zonder verse claim slaat de editor
       // vanzelf niet meer op (CLAIM_FRESH_MS).
     }
-  }, [canWrite, documentId, loadFresh]);
+  }, [canWrite, documentId, loadFresh, stopIfTooNew]);
 
   const doSave = useCallback(async (): Promise<boolean> => {
     const ed = editorRef.current;
@@ -248,12 +286,13 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
         if (modeRef.current === 'laden') setMode('lezen');
       } catch (error) {
         if (cancelled) return;
+        if (await stopIfTooNew(error)) return;
         setMode('fout');
         setMessage((error as { message?: string } | null)?.message || 'Deze pagina kon niet worden geopend.');
       }
     })();
     return () => { cancelled = true; };
-  }, [editor, loadFresh, tryClaim, canWrite]);
+  }, [editor, loadFresh, tryClaim, canWrite, stopIfTooNew]);
 
   // De hartslag, en meteen claimen als het tabblad weer zichtbaar wordt.
   useEffect(() => {
@@ -319,6 +358,7 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
       setMode('lezen');
       await tryClaim();
     } catch (error) {
+      if (await stopIfTooNew(error)) return;
       setMode('fout');
       setMessage((error as { message?: string } | null)?.message || 'Opnieuw laden is niet gelukt.');
     }
@@ -340,6 +380,7 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
       setMessage(`Versie ${version.version} is teruggezet.`);
       setVersionsOpen(false);
     } catch (error) {
+      if (await stopIfTooNew(error)) return;
       setMessage((error as { message?: string } | null)?.message || 'Terugzetten is niet gelukt.');
     }
   };
@@ -357,6 +398,7 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
 
   const editable = mode === 'bewerken';
   const statusText = mode === 'laden' ? 'Laden…'
+    : mode === 'onbekend' ? 'Alleen lezen'
     : mode === 'lezen' ? (holder ? `${nameOf(holder)} bewerkt deze pagina` : 'Alleen lezen')
       : mode === 'bewerken' ? (saveState === 'bezig' ? 'Opslaan…' : saveState === 'wijzigingen' ? 'Niet opgeslagen' : saveState === 'fout' ? 'Niet opgeslagen' : 'Opgeslagen')
         : 'Niet opgeslagen';
@@ -377,9 +419,10 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
 
       {editable && editor && <Toolbar editor={editor} />}
 
-      {(message || (mode === 'lezen' && holder)) && <div className={`page-editor-banner${mode === 'conflict' || mode === 'geen_recht' || mode === 'fout' ? ' is-warning' : ''}`}>
+      {(message || (mode === 'lezen' && holder)) && <div className={`page-editor-banner${mode === 'conflict' || mode === 'geen_recht' || mode === 'fout' || mode === 'onbekend' ? ' is-warning' : ''}`}>
         <span>{message ?? `${nameOf(holder as string)} bewerkt deze pagina. Je kunt meelezen; zodra die klaar is, kun je verder.`}</span>
         {mode === 'conflict' && <button type="button" className="btn" onClick={() => void reloadAfterConflict()}>Opnieuw laden</button>}
+        {mode === 'onbekend' && <button type="button" className="btn" onClick={() => window.location.reload()}>App verversen</button>}
         {closeAnyway && <button type="button" className="btn" onClick={() => void close(true)}>Toch sluiten</button>}
       </div>}
 
@@ -546,11 +589,20 @@ function VersionsPanel({ documentId, organizationId, canRestore, nameOf, onResto
   );
 }
 
-/** Een versie alleen-lezen, met dezelfde blokken als de editor. */
+/** Een versie alleen-lezen, met dezelfde blokken als de editor. Past hij
+ *  niet in deze editor, dan zeggen we dat, in plaats van een lege pagina. */
 function VersionPreview({ title, body }: { title: string; body: unknown }) {
-  const editor = useEditor({ extensions: pageEditorExtensions({ placeholder: '' }), editable: false, content: body as JSONContent }, [body]);
+  const editor = useEditor({ extensions: pageEditorExtensions({ placeholder: '' }), editable: false, content: '' }, []);
+  const [fits, setFits] = useState(true);
+  useEffect(() => {
+    if (!editor) return;
+    const fit = pageBodyFit(editor.schema, body);
+    setFits(fit.ok);
+    editor.commands.setContent(fit.ok ? body as JSONContent : '', { emitUpdate: false });
+  }, [editor, body]);
   return <div className="page-versions-sheet">
     <h2 className="page-versions-title">{title || 'Naamloze pagina'}</h2>
+    {!fits && <p className="page-versions-empty">{TOO_NEW_MESSAGE}</p>}
     <EditorContent editor={editor} className="page-prose" />
   </div>;
 }

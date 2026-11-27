@@ -503,7 +503,8 @@ akkoord is.
 | 1A-2 | Laden en zoeken: de kolomlijst in `loadCoreData`, `excerpt` in de kaarten, GlobalSearch en `content.search` via de zoek-RPC. In één stap, anders breekt zoeken (§6). | gebouwd en op staging gezet op 27 november; zie `docs/changelog/CHANGELOG_PAGINAS_LADEN_ZOEKEN_2026-11-27.md`. Gerrie zoekt bewust nog zoals voorheen (zie daar) |
 | 1A-3a | De editor: Tiptap als eigen stuk bundel, het pagina-scherm, de basisblokken, opslaan met `edit_version`, één tegelijk bewerken. | gebouwd en op staging gezet op 27 november; zie `docs/changelog/CHANGELOG_PAGINAS_EDITOR_2026-11-27.md` |
 | 1A-3b | Het versiepaneel (bekijken en terugzetten) en een eigen adres per pagina. | gebouwd en op staging gezet op 27 november; zie `docs/changelog/CHANGELOG_PAGINAS_VERSIES_ADRES_2026-11-27.md` |
-| 1A-4 | De overige blokken: gewone tabel, afbeelding, bestand, callout, uitklapper, inhoudsopgave, subpagina. Het slash-menu en de +-knop op de telefoon. | gepland |
+| 1A-4a | Eerst een grendel: een pagina met een blok dat de editor niet kent, gaat niet open om te bewerken. Dan de blokken zonder opslag: gewone tabel, callout, uitklapper, inhoudsopgave. Het blokmenu: `/` in de tekst en de +-knop, ook op de telefoon. Een migratie die de maten van tabelcellen en de soort callout nakijkt. | in aanbouw |
+| 1A-4b | De blokken met opslag en verwijzingen: afbeelding, bestand uit het dossier, subpagina (§8). Met een migratie die afdwingt dat een bijlage van dezelfde organisatie en hetzelfde dossier is. | gepland |
 | 1A-5 | De drive: de boom, het eigen dossier met logo, "Pagina" in het Nieuw-menu, slepen, de prullenbak. De tekstdocumenten omzetten. | gepland |
 | 1B-1 | Proef: huisstijlletters en emoji in een PDF via Collabora (§9). | gepland |
 | 1B-2 | Export: `page-export`, de DOCX-module, het interne PDF-pad, het exportvenster, vastleggen in het dossier, de Word-kopie. | gepland |
