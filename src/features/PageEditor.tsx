@@ -62,11 +62,15 @@ const VERSION_EVERY_MS = 15 * 60_000;
 type Mode = 'laden' | 'bewerken' | 'lezen' | 'conflict' | 'geen_recht' | 'fout' | 'onbekend';
 
 const TOO_NEW_MESSAGE = 'Deze pagina heeft blokken die deze versie van de app nog niet kent. Ververs de app om hem te openen; er gaat niets verloren.';
+const BROKEN_MESSAGE = 'De inhoud van deze pagina klopt niet, daarom kun je hem niet bewerken. Er wordt niets opgeslagen.';
 
-/** De opgeslagen pagina past niet in deze editor (pageBodyCheck.ts). */
+/** De opgeslagen pagina past niet in deze editor (pageBodyCheck.ts). Alleen
+ *  bij onbekende blokken helpt verversen; een kapotte pagina blijft kapot. */
 class PageTooNewError extends Error {
-  constructor(reason: string) {
+  readonly canRefresh: boolean;
+  constructor(reason: string, canRefresh: boolean) {
     super(`De pagina past niet in deze editor (${reason}).`);
+    this.canRefresh = canRefresh;
   }
 }
 type SaveState = 'opgeslagen' | 'wijzigingen' | 'bezig' | 'fout';
@@ -101,6 +105,7 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
   const [closeAnyway, setCloseAnyway] = useState(false);
   const [versionsOpen, setVersionsOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [refreshHelps, setRefreshHelps] = useState(true);
 
   const modeRef = useRef<Mode>('laden');
   const titleRef = useRef('');
@@ -196,7 +201,7 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
     if (!fit.ok) {
       // Niets in de editor zetten: Tiptap zou er een lege pagina van maken.
       setTitle(row.title);
-      throw new PageTooNewError(fit.reason);
+      throw new PageTooNewError(fit.reason, fit.unknown.length > 0);
     }
     // Niet in de geschiedenis van "ongedaan maken": anders maakte Ctrl+Z direct
     // na het openen de pagina leeg (en sloeg dat op), en haalde het na
@@ -215,7 +220,8 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
     editorRef.current?.setEditable(false, false);
     setHolder(null);
     setMode('onbekend');
-    setMessage(TOO_NEW_MESSAGE);
+    setRefreshHelps(error.canRefresh);
+    setMessage(error.canRefresh ? TOO_NEW_MESSAGE : BROKEN_MESSAGE);
     if (claimedEverRef.current && !releasedRef.current) {
       releasedRef.current = true;
       await releasePageEdit(documentId).catch(() => {});
@@ -485,7 +491,7 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
       {(message || (mode === 'lezen' && holder)) && <div className={`page-editor-banner${mode === 'conflict' || mode === 'geen_recht' || mode === 'fout' || mode === 'onbekend' ? ' is-warning' : ''}`}>
         <span>{message ?? `${nameOf(holder as string)} bewerkt deze pagina. Je kunt meelezen; zodra die klaar is, kun je verder.`}</span>
         {mode === 'conflict' && <button type="button" className="btn" onClick={() => void reloadAfterConflict()}>Opnieuw laden</button>}
-        {mode === 'onbekend' && <button type="button" className="btn" onClick={() => window.location.reload()}>App verversen</button>}
+        {mode === 'onbekend' && refreshHelps && <button type="button" className="btn" onClick={() => window.location.reload()}>App verversen</button>}
         {closeAnyway && <button type="button" className="btn" onClick={() => void close(true)}>Toch sluiten</button>}
       </div>}
 
@@ -643,7 +649,9 @@ function Toolbar({ editor, onInsert }: { editor: Editor; onInsert: (anchor: DOMR
     { label: 'Takenlijst', icon: <ListChecks size={16} />, active: state.task, run: () => chain().toggleTaskList().run() },
     { label: 'Citaat', icon: <Quote size={16} />, active: state.quote, run: () => chain().toggleBlockquote().run() },
     { label: 'Code', icon: <Braces size={16} />, active: state.code, run: () => chain().toggleCodeBlock().run() },
-    { label: 'Scheidingslijn', icon: <Minus size={16} />, run: () => chain().setHorizontalRule().run() },
+    // Via runPageBlock: Tiptap zette na de lijn de selectie op het blok erna,
+    // en de volgende toets overschreef dat (zie cursorOnText in PageBlockMenu).
+    { label: 'Scheidingslijn', icon: <Minus size={16} />, run: () => { runPageBlock(editor, 'scheidingslijn'); } },
     'sep',
     { label: 'Ongedaan maken', icon: <Undo2 size={16} />, disabled: !state.canUndo, run: () => chain().undo().run() },
     { label: 'Opnieuw', icon: <Redo2 size={16} />, disabled: !state.canRedo, run: () => chain().redo().run() },
@@ -778,16 +786,16 @@ function VersionsPanel({ documentId, organizationId, canRestore, nameOf, onResto
  *  niet in deze editor, dan zeggen we dat, in plaats van een lege pagina. */
 function VersionPreview({ title, body }: { title: string; body: unknown }) {
   const editor = useEditor({ extensions: pageEditorExtensions({ placeholder: '' }), editable: false, content: '' }, []);
-  const [fits, setFits] = useState(true);
+  const [problem, setProblem] = useState<string | null>(null);
   useEffect(() => {
     if (!editor) return;
     const fit = pageBodyFit(editor.schema, body);
-    setFits(fit.ok);
+    setProblem(fit.ok ? null : fit.unknown.length > 0 ? TOO_NEW_MESSAGE : BROKEN_MESSAGE);
     editor.commands.setContent(fit.ok ? body as JSONContent : '', { emitUpdate: false });
   }, [editor, body]);
   return <div className="page-versions-sheet">
     <h2 className="page-versions-title">{title || 'Naamloze pagina'}</h2>
-    {!fits && <p className="page-versions-empty">{TOO_NEW_MESSAGE}</p>}
+    {problem && <p className="page-versions-empty">{problem}</p>}
     <EditorContent editor={editor} className="page-prose" />
   </div>;
 }

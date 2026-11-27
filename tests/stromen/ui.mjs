@@ -2257,6 +2257,39 @@ async function scenarioDocumenten() {
     await kijker.page.screenshot({ path: path.join(os.tmpdir(), 'stromen-ui-blokken-lezen.png') });
     await sluitPagina(kijker.page);
   });
+
+  await uiStap('een lijn via de werkbalk of met --- boven een tabel: typen komt op een eigen regel, de tabel blijft heel', async () => {
+    if (!blokPagina) throw new Error('geen pagina');
+    const { page } = await openBlokPagina(w.medewerker, 'medewerker');
+    await wachtOpgeslagen(page, 'de editor kwam niet in bewerken');
+    // "Na de lijn" staat direct boven de tabel (stap hiervoor).
+    await editorVak(page).locator('p').filter({ hasText: 'Na de lijn' }).first().click();
+    await page.keyboard.press('End');
+    await page.locator('.page-editor-toolbar').getByRole('button', { name: 'Scheidingslijn', exact: true }).click();
+    await page.keyboard.type('Na de knop');
+    await wachtTot(async () => (await editorVak(page).locator('p').filter({ hasText: 'Na de knop' }).count()) === 1, { melding: 'de tekst na de knop staat niet op een eigen regel' });
+    verwacht(tekst(await editorVak(page).locator('table').first().innerText()).includes('Bedrag'), 'de tabel na de knop is overschreven');
+    // De derde ingang: --- aan het begin van een regel.
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('---');
+    await page.keyboard.type('Na de streepjes');
+    await wachtTot(async () => (await editorVak(page).locator('p').filter({ hasText: 'Na de streepjes' }).count()) === 1, { melding: 'de tekst na --- staat niet op een eigen regel' });
+    verwacht(tekst(await editorVak(page).locator('table').first().innerText()).includes('Bedrag'), 'de tabel na --- is overschreven');
+    gelijk(await editorVak(page).locator('hr').count(), 3, 'drie lijnen: menu, werkbalk en ---');
+    await wachtOpgeslagen(page);
+    // Licht thema: kaders, kopcellen en het menu ook eens zo bekeken.
+    await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'light'));
+    await editorVak(page).locator('td').filter({ hasText: 'Koffie' }).first().click();
+    await page.screenshot({ path: path.join(os.tmpdir(), 'stromen-ui-blokken-licht.png') });
+    await page.keyboard.press('Control+End');
+    await page.keyboard.type('/');
+    await page.locator('.page-block-menu').waitFor({ timeout: 5000 });
+    await page.screenshot({ path: path.join(os.tmpdir(), 'stromen-ui-blokken-licht-menu.png') });
+    await page.keyboard.press('Escape');
+    await page.keyboard.press('Backspace');
+    await wachtOpgeslagen(page);
+    await sluitPagina(page);
+  });
 }
 
 // ── Bank: mutaties met de hand boeken ──────────────────────────────────────

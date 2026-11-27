@@ -34,10 +34,15 @@ en §18). Afbeelding, bestand en subpagina volgen in 1A-4b.
     schreef die lege pagina dan over de echte heen.
   - Nu zie je de melding "Ververs de app" met een knop. De pagina blijft alleen-lezen,
     zonder claim, en er wordt niets opgeslagen.
+  - Is de inhoud kapot, dan helpt verversen niet. Dan zegt de app dat de inhoud niet klopt,
+    zonder knop.
   - Hetzelfde geldt voor vers laden en terugzetten, en voor de voorvertoning van een versie.
 - **Na een scheidingslijn of inhoudsopgave staat de cursor op een tekstregel.**
   - Wat misging: Tiptap zette de selectie op het blok erna. Onder een lijn boven een tabel
     werd de hele tabel geselecteerd, en de volgende toets overschreef hem.
+  - Dat gold ook voor de knop Scheidingslijn in de werkbalk (sinds 1A-3a, boven een lijst
+    of citaat). Die gaat nu dezelfde weg als het menu.
+  - `---` aan het begin van een regel deed het al goed.
 
 ## Hoe het werkt
 
@@ -97,7 +102,7 @@ en §18). Afbeelding, bestand en subpagina volgen in 1A-4b.
     onbekende soort callout worden geweigerd.
 
   De migratie is twee keer achter elkaar toegepast.
-- **`tests/stromen/ui.mjs documenten`**, in Chromium: 22 stappen, waarvan 6 nieuw.
+- **`tests/stromen/ui.mjs documenten`**, in Chromium: 23 stappen, waarvan 7 nieuw.
   1. `/tab` maakt een tabel met kopregel. Daarna typen, een rij erbij, rechts uitlijnen en
      een kolom breder slepen; alles staat zo in `body`.
   2. Callout (als waarschuwing), uitklapper en inhoudsopgave via het menu.
@@ -113,10 +118,14 @@ en §18). Afbeelding, bestand en subpagina volgen in 1A-4b.
      - de +-knop opent het paneel, en terug sluit het menu;
      - een lijn boven de tabel geeft een eigen regel, en de tabel blijft heel;
      - de brede tabel schuift binnen de pagina, ook voor de kijker die alleen leest.
+  7. Een lijn via de werkbalk en met `---` boven een tabel: typen komt op een eigen regel,
+     en de tabel blijft heel. Daarna schermafdrukken in het lichte thema.
 - **Terugknop:** `npm run test:terugknop`, 18 gelukt.
 - **Build:** de tabel- en uitklapcode zit alleen in het stuk bundel `PageEditor`.
 - **Niet lokaal gedraaid:**
   - `npm run test:mobile` (de lay-out van de pagina's buiten de editor is niet veranderd);
   - `deno check` (geen edge function gewijzigd).
 
-  CI draait beide.
+  De workflow Frontend checks draait niet vanzelf op een branch, alleen bij een push naar
+  staging of een pull request. Daarom is hij op de branch met de hand gestart; zie de
+  commit van deze changelog.
