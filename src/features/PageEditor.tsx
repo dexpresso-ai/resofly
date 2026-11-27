@@ -120,7 +120,11 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
     const ed = editorRef.current;
     if (!ed) return;
     const row = await loadPage(documentId, organizationId);
-    ed.commands.setContent(row.body as JSONContent, { emitUpdate: false });
+    // Niet in de geschiedenis van "ongedaan maken": anders maakte Ctrl+Z direct
+    // na het openen de pagina leeg (en sloeg dat op), en haalde het na
+    // "Terugzetten" of "Opnieuw laden" de vervangen tekst terug. setContent zet
+    // alleen preventUpdate, niet addToHistory (nagekeken in @tiptap/core 3.35.1).
+    ed.chain().setMeta('addToHistory', false).setContent(row.body as JSONContent, { emitUpdate: false }).run();
     setTitle(row.title);
     versionRef.current = row.edit_version;
     baselineRef.current = snapshotOf(row.title.trim() || 'Naamloze pagina', ed.getJSON());

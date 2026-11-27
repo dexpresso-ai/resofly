@@ -1864,7 +1864,12 @@ async function scenarioDocumenten() {
     await page.locator('.page-editor').waitFor({ timeout: 20000 });
     await wachtTot(async () => (await page.locator('.page-editor .tiptap').innerText().catch(() => '')).includes('Koffie is gratis.'), { melding: 'de tekst staat niet in de editor' });
     await wachtTot(async () => tekst(await paginaStatus(page).innerText().catch(() => '')) === 'Opgeslagen', { melding: 'de editor kwam niet in bewerken' });
+    // Ongedaan maken gaat niet terug tot vóór het laden: anders maakte Ctrl+Z de pagina leeg.
+    gelijk(await page.getByRole('button', { name: 'Ongedaan maken', exact: true }).isDisabled(), true, 'ongedaan maken direct na openen');
+    await page.locator('.page-editor .tiptap').click();
+    await page.keyboard.press('Control+z');
     await page.waitForTimeout(2500);
+    verwacht((await page.locator('.page-editor .tiptap').innerText()).includes('Koffie is gratis.'), 'Ctrl+Z na openen haalde de tekst weg');
     await page.locator('.page-editor-close').click();
     await page.locator('.page-editor').waitFor({ state: 'detached', timeout: 15000 });
     const na = sqlRij(`select edit_version, updated_at::text as gewijzigd from public.documents where id = ${q(pagina.id)}`);
@@ -1947,6 +1952,7 @@ async function scenarioDocumenten() {
     await wachtTot(async () => !(await page.locator('.page-editor .tiptap').innerText().catch(() => 'Tweede alinea.')).includes('Tweede alinea.'), { melding: 'niet teruggezet' });
     const rij = sqlRij(`select content from public.documents where id = ${q(pagina.id)}`);
     verwacht(!rij.content.includes('Tweede alinea.'), `de database heeft nog de nieuwe tekst: ${rij.content}`);
+    gelijk(await page.getByRole('button', { name: 'Ongedaan maken', exact: true }).isDisabled(), true, 'ongedaan maken na terugzetten');
     const laatste = sqlRij(`select reason from public.document_versions where document_id = ${q(pagina.id)} order by version desc limit 1`);
     gelijk(laatste.reason, 'teruggezet', 'de laatste versie');
     const bewaard = sqlRij(`select count(*)::int as n from public.document_versions where document_id = ${q(pagina.id)} and body::text like '%Tweede alinea.%'`);

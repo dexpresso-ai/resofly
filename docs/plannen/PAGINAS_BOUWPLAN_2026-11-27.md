@@ -534,3 +534,25 @@ akkoord is.
 - **De editor:** de licentie per Tiptap-extensie nakijken. De namen van de blokken moeten
   precies die van `src/lib/pageSchema.ts` zijn. De editor blijft een eigen stuk bundel,
   dat pas laadt als je een pagina opent.
+
+**Stand op 27 november 2026, einde van de eerste bouwsessie (overdracht):**
+
+- **Gebouwd, op de branch `claude/affectionate-meitner-arfqck`:** stap 0, 1A-1, 1A-2, 1A-3a
+  en 1A-3b. Niets staat op staging; mergen gebeurt pas als de gebruiker het zegt.
+- **Volgende stap: 1A-4**, de overige blokken: tabel, afbeelding, bestand, callout,
+  uitklapper, inhoudsopgave en subpagina, plus het slash-menu en de +-knop.
+- **Nog open:**
+  - **De browsercontrole van "ongedaan maken".** Laden telt niet meer mee in de
+    geschiedenis (`addToHistory: false`). Zonder die regel maakte Ctrl+Z direct na het
+    openen de pagina leeg. De controles staan in `tests/stromen/ui.mjs documenten`, maar
+    zijn nog niet gedraaid: de Docker-daemon was gestopt.
+  - **`deno check` van de gewijzigde edge functions** (`file-share`, `file-transfer`, de
+    acties, de mailsjablonen) is nog niet gedraaid, omdat deno.land in de cloudsessie
+    geblokkeerd is. Dat kan in CI: de workflow `frontend-checks` op de branch.
+- **Tip voor de volgende sessie:**
+  - Start `dockerd` pas vlak voor de database- en UI-tests: een achtergrondtaak stopt na
+    twee uur.
+  - Docker Hub kan downloads weigeren (429). Images die al lokaal staan, starten dan nog
+    wel.
+  - Na een `npm install` de testpakketten opnieuw zetten:
+    `npm install --no-save xss@1.0.15 fast-xml-parser@4.5.0`.
