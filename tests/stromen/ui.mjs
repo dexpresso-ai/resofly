@@ -1915,6 +1915,64 @@ async function scenarioDocumenten() {
     await page.screenshot({ path: path.join(os.tmpdir(), 'stromen-ui-pagina-telefoon.png') });
     await page.locator('.page-editor-close').click();
   });
+
+  // ── Versies en een eigen adres (stap 1A-3b) ───────────────────────────────
+  await uiStap('versies: een oude versie bekijken en terugzetten, en wat er stond blijft bewaard', async () => {
+    if (!pagina) throw new Error('geen pagina');
+    const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+    const page = lid.page;
+    await naarKlantdossier(lid, w.klantA.name);
+    await paginaRij(page).click();
+    await wachtTot(async () => tekst(await paginaStatus(page).innerText().catch(() => '')) === 'Opgeslagen', { melding: 'niet in bewerken' });
+    await page.locator('.page-editor .tiptap').click();
+    await page.keyboard.press('Control+End');
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('Tweede alinea.');
+    await wachtTot(async () => tekst(await paginaStatus(page).innerText().catch(() => '')) === 'Opgeslagen', { melding: 'niet opgeslagen', timeout: 15000 });
+    await page.locator('.page-editor-close').click();
+    await page.locator('.page-editor').waitFor({ state: 'detached', timeout: 15000 });
+
+    await paginaRij(page).click();
+    await wachtTot(async () => tekst(await paginaStatus(page).innerText().catch(() => '')) === 'Opgeslagen', { melding: 'niet in bewerken' });
+    await page.locator('.page-editor-action').filter({ hasText: 'Versies' }).click();
+    const items = page.locator('.page-versions-item');
+    await items.first().waitFor({ timeout: 10000 });
+    verwacht((await items.count()) >= 2, `te weinig versies: ${await items.count()}`);
+    await items.filter({ hasText: 'Versie 1' }).first().click();
+    const voorbeeld = page.locator('.page-versions-sheet');
+    await wachtTot(async () => (await voorbeeld.innerText().catch(() => '')).includes('Koffie is gratis.'), { melding: 'geen voorvertoning' });
+    verwacht(!(await voorbeeld.innerText()).includes('Tweede alinea.'), 'de voorvertoning toont de nieuwe tekst');
+    // De testomgeving accepteert het bevestigingsvenster zelf.
+    await page.getByRole('button', { name: 'Deze versie terugzetten', exact: true }).click();
+    await wachtTot(async () => !(await page.locator('.page-editor .tiptap').innerText().catch(() => 'Tweede alinea.')).includes('Tweede alinea.'), { melding: 'niet teruggezet' });
+    const rij = sqlRij(`select content from public.documents where id = ${q(pagina.id)}`);
+    verwacht(!rij.content.includes('Tweede alinea.'), `de database heeft nog de nieuwe tekst: ${rij.content}`);
+    const laatste = sqlRij(`select reason from public.document_versions where document_id = ${q(pagina.id)} order by version desc limit 1`);
+    gelijk(laatste.reason, 'teruggezet', 'de laatste versie');
+    const bewaard = sqlRij(`select count(*)::int as n from public.document_versions where document_id = ${q(pagina.id)} and body::text like '%Tweede alinea.%'`);
+    verwacht(bewaard.n >= 1, 'de tekst van vóór het terugzetten is niet als versie bewaard');
+    await page.locator('.page-editor-close').click();
+    await page.locator('.page-editor').waitFor({ state: 'detached', timeout: 15000 });
+  });
+
+  await uiStap('een eigen adres: de link opent de pagina, en na sluiten is het adres weg', async () => {
+    if (!pagina) throw new Error('geen pagina');
+    const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+    const page = lid.page;
+    await naarKlantdossier(lid, w.klantA.name);
+    await paginaRij(page).click();
+    await page.locator('.page-editor').waitFor({ timeout: 20000 });
+    await wachtTot(async () => page.url().includes(`pagina=${pagina.id}`), { melding: `geen adres: ${page.url()}` });
+    const adres = page.url();
+    await page.locator('.page-editor-close').click();
+    await page.locator('.page-editor').waitFor({ state: 'detached', timeout: 15000 });
+    await wachtTot(async () => !page.url().includes('pagina='), { melding: `adres blijft staan: ${page.url()}` });
+    await page.goto(adres);
+    await page.locator('.page-editor').waitFor({ timeout: 30000 });
+    await wachtTot(async () => (await page.locator('.page-editor-title').inputValue().catch(() => '')) === paginaTitel, { melding: 'de link opende een andere pagina' });
+    await page.locator('.page-editor-close').click();
+    await page.locator('.page-editor').waitFor({ state: 'detached', timeout: 15000 });
+  });
 }
 
 // ── Bank: mutaties met de hand boeken ──────────────────────────────────────

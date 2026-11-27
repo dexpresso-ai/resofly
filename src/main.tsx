@@ -673,6 +673,30 @@ function takeBootRound() {
   return BOOT_ROUND;
 }
 
+/** Een eigen adres per pagina (stap 1A-3b): /?pagina=<id>. Anders dan bij de
+ *  chat blijft het in de adresbalk staan zolang de pagina open is, zodat je het
+ *  kunt kopiëren en verversen dezelfde pagina weer opent. Dicht = weg. */
+function readPageDeepLink(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const id = new URL(window.location.href).searchParams.get('pagina');
+    return id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id) ? id : null;
+  } catch {
+    return null;
+  }
+}
+function setPageParam(id: string | null): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const url = new URL(window.location.href);
+    if (id) url.searchParams.set('pagina', id); else url.searchParams.delete('pagina');
+    const next = `${url.pathname}${url.search}${url.hash}`;
+    // De state blijft staan: de terugknop (lib/backButton.ts) bewaart daar zijn stap.
+    if (next !== `${window.location.pathname}${window.location.search}${window.location.hash}`) window.history.replaceState(window.history.state, '', next);
+  } catch {
+    /* zonder history: dan geen adres */
+  }
+}
 /** Een pushmelding van de teamchat opent /?chat=<gesprek>. Eén keer lezen en
  *  meteen uit de adresbalk halen, zodat verversen niet opnieuw springt. */
 function readChatDeepLink(): string | null {
@@ -1519,6 +1543,27 @@ function App() {
     if (permissions.canRead('chat')) openTeamChat(chatDeepLink);
     setChatDeepLink(null);
   }, [chatDeepLink, loading, activeOrganization?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Een eigen adres per pagina (stap 1A-3b): /?pagina=<id> opent die pagina
+  // zodra de werkruimte er staat. Hier en niet verderop: na de vroege returns
+  // mag geen hook meer staan (een hook daar liet de app eerder zwart).
+  const [pageDeepLink, setPageDeepLink] = useState<string | null>(() => readPageDeepLink());
+  useEffect(() => {
+    if (!pageDeepLink || loading || !activeOrganization || data === emptyData || tabsLoadedForRef.current !== activeOrganization.id) return;
+    const doc = data.documents.find(d => d.id === pageDeepLink && d.format === 'page');
+    if (doc) setPageEditDoc(doc);
+    else {
+      setPageParam(null);
+      setError('Deze pagina bestaat niet (meer), of je hebt er geen toegang toe.');
+    }
+    setPageDeepLink(null);
+  }, [pageDeepLink, loading, activeOrganization?.id, data]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Zolang een pagina open is, staat zijn adres in de adresbalk.
+  useEffect(() => {
+    if (!pageEditDoc) return;
+    setPageParam(pageEditDoc.id);
+    return () => setPageParam(null);
+  }, [pageEditDoc?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Terug van Google of Microsoft na een agendakoppeling: hier afronden, met de
   // sessie van wie er is ingelogd (de server koppelt alleen voor wie startte).

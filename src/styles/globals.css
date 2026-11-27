@@ -13659,3 +13659,27 @@ button.alog-feed-row:hover{background:var(--bg3)}
   .page-editor-sheet{padding:24px 16px 120px}
   .page-editor-title{font-size:26px}
 }
+/* Het versiepaneel en de knoppen in de balk (stap 1A-3b). Rechts naast de tekst
+   op een groot scherm, over het hele scherm op een telefoon. */
+.page-editor-action{display:inline-flex;align-items:center;gap:6px;height:34px;padding:0 10px;border:1px solid var(--border2);border-radius:10px;background:transparent;color:var(--muted2);font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;flex:0 0 auto}
+.page-editor-action:hover,.page-editor-action.is-active{color:var(--text);border-color:rgba(var(--accent-rgb),.4)}
+.page-versions{position:fixed;top:52px;right:0;bottom:0;z-index:2001;width:min(440px,100vw);display:flex;flex-direction:column;background:var(--bg);border-left:1px solid var(--border);box-shadow:-18px 0 40px rgba(0,0,0,.18)}
+.page-versions-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 14px;border-bottom:1px solid var(--border)}
+.page-versions-list{list-style:none;margin:0;padding:6px;overflow-y:auto;max-height:38vh;flex:0 0 auto;border-bottom:1px solid var(--border)}
+.page-versions-item{display:flex;flex-direction:column;align-items:flex-start;gap:2px;width:100%;padding:9px 10px;border:none;border-radius:10px;background:transparent;color:inherit;text-align:left;cursor:pointer;font:inherit}
+.page-versions-item:hover{background:var(--bg2)}
+.page-versions-item.is-active{background:rgba(var(--accent-rgb),.12)}
+.page-versions-num{font-weight:600;font-size:13.5px}
+.page-versions-meta{font-size:12px;color:var(--muted2)}
+.page-versions-empty{padding:14px;color:var(--muted2);font-size:13px;margin:0}
+.page-versions-preview{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
+.page-versions-preview-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;padding:10px 14px;font-size:12.5px;color:var(--muted2)}
+.page-versions-preview-head .btn{min-height:34px;padding:8px 13px}
+.page-versions-sheet{flex:1 1 auto;min-height:0;overflow-y:auto;padding:4px 18px 40px}
+.page-versions-title{font-size:20px;margin:0 0 10px}
+.page-versions-sheet .tiptap{min-height:0}
+@media (max-width:640px){
+  .page-editor-action span{display:none}
+  .page-editor-action{padding:0 9px}
+  .page-versions{top:0;width:100vw;border-left:none}
+}

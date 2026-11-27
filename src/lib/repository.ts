@@ -1997,6 +1997,39 @@ export async function savePageVersion(documentId: UUID, reason: 'sessie' | 'vast
   if (error) throw error;
 }
 
+/** Eén versie van een pagina, zonder inhoud: voor de lijst in het versiepaneel (stap 1A-3b). */
+export type PageVersionSummary = { id: UUID; version: number; reason: string; created_by: UUID | null; created_at: string };
+
+export async function listPageVersions(documentId: UUID, organizationId: UUID): Promise<PageVersionSummary[]> {
+  const { data, error } = await supabase
+    .from('document_versions')
+    .select('id,version,reason,created_by,created_at')
+    .eq('document_id', documentId)
+    .eq('organization_id', organizationId)
+    .order('version', { ascending: false })
+    .limit(100);
+  if (error) throw error;
+  return (data ?? []) as PageVersionSummary[];
+}
+
+/** De inhoud van één versie, voor de voorvertoning. */
+export async function loadPageVersion(versionId: UUID, organizationId: UUID): Promise<{ title: string; body: unknown; version: number }> {
+  const { data, error } = await supabase
+    .from('document_versions')
+    .select('title,body,version')
+    .eq('id', versionId)
+    .eq('organization_id', organizationId)
+    .single();
+  if (error) throw error;
+  return data as { title: string; body: unknown; version: number };
+}
+
+/** Een oude versie terugzetten (restore_page_version): dat is zelf weer een nieuwe versie. */
+export async function restorePageVersion(versionId: UUID): Promise<void> {
+  const { error } = await supabase.rpc('restore_page_version', { p_version_id: versionId });
+  if (error) throw error;
+}
+
 /** Een nieuwe, lege pagina op deze plek. */
 export async function createPage(
   organizationId: UUID, target: { client_id?: UUID | null; project_id?: UUID | null; folder_id?: UUID | null; title?: string },

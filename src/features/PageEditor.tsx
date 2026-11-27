@@ -31,12 +31,15 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { EditorContent, useEditor, useEditorState } from '@tiptap/react';
 import type { Editor, JSONContent } from '@tiptap/react';
 import {
-  Bold, Braces, Heading1, Heading2, Heading3, Italic, Link2, List, ListChecks, ListOrdered, Minus, Pilcrow,
+  Bold, Braces, Copy, Heading1, Heading2, Heading3, History, Italic, Link2, List, ListChecks, ListOrdered, Minus, Pilcrow,
   Quote, Redo2, Strikethrough, Underline as UnderlineIcon, Undo2, X,
 } from 'lucide-react';
 import { pageEditorExtensions } from '../lib/pageEditorExtensions';
 import { isAllowedPageLink } from '../lib/pageSchema';
-import { claimPageEdit, loadPage, releasePageEdit, savePage, savePageVersion } from '../lib/repository';
+import {
+  claimPageEdit, listPageVersions, loadPage, loadPageVersion, releasePageEdit, restorePageVersion, savePage, savePageVersion,
+  type PageVersionSummary,
+} from '../lib/repository';
 import { useBackStep } from '../lib/useBackStep';
 
 const SAVE_DELAY_MS = 1500;
@@ -51,6 +54,15 @@ type SaveState = 'opgeslagen' | 'wijzigingen' | 'bezig' | 'fout';
 
 function snapshotOf(title: string, body: JSONContent): string {
   return JSON.stringify({ title, body });
+}
+
+const REASON_LABEL: Record<string, string> = {
+  sessie: 'Bewerkt', vrijgave: 'Vrijgegeven', vastgelegd: 'Vastgelegd', teruggezet: 'Teruggezet', voor_gerrie: 'Voor Gerrie',
+};
+
+function whenLabel(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('nl-NL', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
 export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClose }: {
@@ -68,6 +80,8 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
   const [holder, setHolder] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [closeAnyway, setCloseAnyway] = useState(false);
+  const [versionsOpen, setVersionsOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   const modeRef = useRef<Mode>('laden');
   const titleRef = useRef('');
@@ -306,6 +320,37 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
     }
   };
 
+  /** Een oude versie terugzetten. Eerst wat er nu staat opslaan en als versie
+   *  vastleggen, zodat het niet verloren gaat; dan terugzetten en vers laden. */
+  const restoreVersion = async (version: PageVersionSummary) => {
+    if (modeRef.current !== 'bewerken') return;
+    if (!window.confirm(`Versie ${version.version} terugzetten? Wat er nu staat, blijft als versie bewaard.`)) return;
+    if (timerRef.current) { window.clearTimeout(timerRef.current); timerRef.current = null; }
+    const saved = await queueSave();
+    if (!saved) return;
+    try {
+      await savePageVersion(documentId).catch(() => {});
+      await restorePageVersion(version.id);
+      await loadFresh();
+      savedThisSessionRef.current = true;
+      setMessage(`Versie ${version.version} is teruggezet.`);
+      setVersionsOpen(false);
+    } catch (error) {
+      setMessage((error as { message?: string } | null)?.message || 'Terugzetten is niet gelukt.');
+    }
+  };
+
+  const copyLink = async () => {
+    const url = `${window.location.origin}${window.location.pathname}?pagina=${encodeURIComponent(documentId)}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      window.prompt('Kopieer de link naar deze pagina:', url);
+    }
+  };
+
   const editable = mode === 'bewerken';
   const statusText = mode === 'laden' ? 'Laden…'
     : mode === 'lezen' ? (holder ? `${nameOf(holder)} bewerkt deze pagina` : 'Alleen lezen')
@@ -318,6 +363,12 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
         <button type="button" className="page-editor-close" onClick={() => void close()} aria-label="Pagina sluiten"><X size={18} /></button>
         <span className="page-editor-crumb" title={title}>{title || 'Pagina'}</span>
         <span className={`page-editor-status is-${mode === 'bewerken' ? saveState : mode}`} role="status">{statusText}</span>
+        <button type="button" className="page-editor-action" onClick={() => void copyLink()} title="Een link naar deze pagina, voor collega's">
+          <Copy size={15} /><span>{copied ? 'Gekopieerd' : 'Link'}</span>
+        </button>
+        <button type="button" className={`page-editor-action${versionsOpen ? ' is-active' : ''}`} onClick={() => setVersionsOpen(open => !open)} aria-expanded={versionsOpen}>
+          <History size={15} /><span>Versies</span>
+        </button>
       </div>
 
       {editable && editor && <Toolbar editor={editor} />}
@@ -327,6 +378,15 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
         {mode === 'conflict' && <button type="button" className="btn" onClick={() => void reloadAfterConflict()}>Opnieuw laden</button>}
         {closeAnyway && <button type="button" className="btn" onClick={() => void close(true)}>Toch sluiten</button>}
       </div>}
+
+      {versionsOpen && <VersionsPanel
+        documentId={documentId}
+        organizationId={organizationId}
+        canRestore={editable}
+        nameOf={nameOf}
+        onRestore={version => void restoreVersion(version)}
+        onClose={() => setVersionsOpen(false)}
+      />}
 
       <div className="page-editor-scroll">
         <div className="page-editor-sheet">
@@ -421,4 +481,72 @@ function Toolbar({ editor }: { editor: Editor }) {
           >{tool.icon}</button>)}
     </div>
   );
+}
+
+/** Het versiepaneel (stap 1A-3b): de lijst, een voorvertoning, en terugzetten. */
+function VersionsPanel({ documentId, organizationId, canRestore, nameOf, onRestore, onClose }: {
+  documentId: string;
+  organizationId: string;
+  canRestore: boolean;
+  nameOf: (userId: string) => string;
+  onRestore: (version: PageVersionSummary) => void;
+  onClose: () => void;
+}) {
+  const [versions, setVersions] = useState<PageVersionSummary[] | null>(null);
+  const [selected, setSelected] = useState<PageVersionSummary | null>(null);
+  const [preview, setPreview] = useState<{ title: string; body: unknown } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    listPageVersions(documentId, organizationId)
+      .then(rows => { if (!cancelled) setVersions(rows); })
+      .catch(err => { if (!cancelled) setError((err as { message?: string } | null)?.message || 'De versies konden niet worden geladen.'); });
+    return () => { cancelled = true; };
+  }, [documentId, organizationId]);
+
+  useEffect(() => {
+    if (!selected) { setPreview(null); return; }
+    let cancelled = false;
+    loadPageVersion(selected.id, organizationId)
+      .then(row => { if (!cancelled) setPreview(row); })
+      .catch(err => { if (!cancelled) setError((err as { message?: string } | null)?.message || 'Deze versie kon niet worden geladen.'); });
+    return () => { cancelled = true; };
+  }, [selected, organizationId]);
+
+  return (
+    <aside className="page-versions" aria-label="Versies">
+      <div className="page-versions-head">
+        <strong>Versies</strong>
+        <button type="button" className="page-editor-close" onClick={onClose} aria-label="Versies sluiten"><X size={16} /></button>
+      </div>
+      {error && <p className="page-versions-empty">{error}</p>}
+      {!error && versions === null && <p className="page-versions-empty">Laden…</p>}
+      {!error && versions?.length === 0 && <p className="page-versions-empty">Nog geen versies. Een versie komt er bij als je de pagina sluit na het bewerken.</p>}
+      {versions && versions.length > 0 && <ol className="page-versions-list">
+        {versions.map(version => <li key={version.id}>
+          <button type="button" className={`page-versions-item${selected?.id === version.id ? ' is-active' : ''}`} onClick={() => setSelected(version)}>
+            <span className="page-versions-num">Versie {version.version}</span>
+            <span className="page-versions-meta">{REASON_LABEL[version.reason] ?? version.reason} · {version.created_by ? nameOf(version.created_by) : 'onbekend'} · {whenLabel(version.created_at)}</span>
+          </button>
+        </li>)}
+      </ol>}
+      {selected && <div className="page-versions-preview">
+        <div className="page-versions-preview-head">
+          <span>Zo zag versie {selected.version} eruit</span>
+          {canRestore && <button type="button" className="btn btn-primary" onClick={() => onRestore(selected)}>Deze versie terugzetten</button>}
+        </div>
+        {preview ? <VersionPreview title={preview.title} body={preview.body} /> : <p className="page-versions-empty">Laden…</p>}
+      </div>}
+    </aside>
+  );
+}
+
+/** Een versie alleen-lezen, met dezelfde blokken als de editor. */
+function VersionPreview({ title, body }: { title: string; body: unknown }) {
+  const editor = useEditor({ extensions: pageEditorExtensions({ placeholder: '' }), editable: false, content: body as JSONContent }, [body]);
+  return <div className="page-versions-sheet">
+    <h2 className="page-versions-title">{title || 'Naamloze pagina'}</h2>
+    <EditorContent editor={editor} className="page-prose" />
+  </div>;
 }
