@@ -27,7 +27,8 @@ Exporteren drukt.
    pagina de versie die gedeeld is. Dat gaat ook gelden voor bestanden in een gedeelde map
    (stap 0).
 5. **Fasering**: stap 0 en fase 1 leveren dit alles. Fase 2 maakt pagina's slim (vermeldingen,
-   levende blokken, Gerrie per blok), fase 3 brengt samen typen en reacties van de klant.
+   levende blokken, Gerrie per blok), fase 3 brengt samen typen en reacties van de klant. Later
+   kan een pagina ook als openbare website op internet staan (§17).
 
 ## 1. Vastgelegde keuzes (27 november 2026)
 
@@ -39,6 +40,7 @@ Exporteren drukt.
 | Lezen klanten mee? | "Nee klanten mogen pas meelezen zodra document wordt gedeeld door eigenaar." Later: "Inderdaad ook klantbestanden worden pas gedeeld, wanneer de gebruiker van de app de deel functie gebruikt." |
 | De PDF-export: zoals het scherm, of opgemaakt in de huisstijl? | In de huisstijl: "Inderdaad het tweede." Dit gaat alleen over de export; de pagina zelf blijft een webpagina. |
 | Bedrijfshandboek in fase 1? | "Ja bedrijfshandboek nemen we mee. Eigen logo en structuur in de drive." |
+| Pagina's ook als openbare website, vindbaar voor iedereen? | "Voor later in de toekomst wil ik dat wel." Zie §17. |
 
 Zo lees ik twee van die antwoorden. Klopt dat niet, dan past dit plan zich aan:
 
@@ -245,8 +247,11 @@ eigen changelog.
 - **Subpagina's:** het deelvenster toont de boom, en je vinkt aan welke meegaan (elk een eigen
   deling). Een subpagina die er later bij komt, is niet gedeeld.
 - **Weergave in het portaal en bij een geheime link:** de klant leest een webpagina, geen PDF.
-  Het is de vrijgegeven versie, op de server omgezet naar HTML en gesaneerd. Dat doet één module (`renderPageHtml`), die ook de app en het
-  exportvoorbeeld gebruiken. Een afbeelding wordt alleen geserveerd als hij in die versie staat.
+  - Het is de vrijgegeven versie, op de server omgezet naar HTML en gesaneerd.
+  - Dat doet één module (`renderPageHtml`), die ook de app en het exportvoorbeeld gebruiken.
+  - Die module heeft geen browser nodig. Zo draait hij ook in een edge function, en later in de
+    Worker van de klantadressen (§17).
+  - Een afbeelding wordt alleen geserveerd als hij in die versie staat.
 
 ## 8. Afbeeldingen en bestanden in een pagina
 
@@ -375,6 +380,8 @@ portaal en bij een geheime link.
 - ingesloten video's en ontwerpen: een vaste lijst domeinen, in een sandbox, met de CSP erop
   aangepast.
 
+**Later, openbaar publiceren:** pagina's als website op internet (§17).
+
 ## 14. Tests
 
 - **Unit** (`npm test`):
@@ -421,3 +428,48 @@ portaal en bij een geheime link.
 - **Kolommen:** in fase 1 of in fase 2?
 - **Tussenversies:** hoe lang bewaren we die? Vrijgegeven versies blijven altijd.
 - **Collabora:** hoeveel instances bij meer gebruik?
+
+## 17. Later: pagina's als openbare website
+
+Vastgelegd op 27 november 2026: "Voor later in de toekomst wil ik dat wel." Het is nog niet
+ingepland. Dit is de richting, zodat fase 1 de deur openhoudt.
+
+**Wat:** een pagina, met de subpagina's die je kiest, als website die iedereen kan lezen en vinden.
+Denk aan een kennisbank, veelgestelde vragen, je werkwijze of vacatures.
+
+**Waar:** op het eigen adres van de organisatie, in haar huisstijl. Dat is `<naam>.resofly.com` of
+een eigen domein via Cloudflare for SaaS (zie `EIGEN_SUBDOMEIN_PLAN_2026-11-08.md`). De Worker van
+de klantadressen (`workers/client-domains`) serveert dan ook deze pagina's.
+
+**Regels:**
+
+- **Publiceren is vrijgeven,** net als bij een klant. Het internet ziet alleen de vrijgegeven
+  versie; wat je daarna wijzigt, staat pas online na "Bijwerken op website".
+- **Alleen pagina's uit het eigen dossier.** Een pagina uit een klant- of projectdossier kan nooit
+  openbaar. Dat is de AVG, en dezelfde gedachte als "een klantdocument kan niet via een losse
+  link".
+- **Geen levende blokken en geen vermeldingen** van klanten of contactpersonen (fase 2) op een
+  openbare pagina.
+- **Vindbaar maken:**
+  - echte HTML van de server, niet de app;
+  - een titel en een beschrijving;
+  - de cover als voorbeeldplaatje als iemand de link deelt;
+  - een sitemap en leesbare adressen (`/werkwijze/oplevering`);
+  - een keuze "niet vindbaar voor zoekmachines".
+- **Offline halen:** Cloudflare bewaart de pagina's in een cache. Haal je een pagina offline, dan
+  verdwijnt hij van de site en uit die cache. Wat eenmaal openbaar was, kan wel al gekopieerd
+  zijn; de app zegt dat bij het publiceren.
+- **Misbruik:** een openbare pagina op een adres van ResoFly kan voor phishing gebruikt worden.
+  Daarom:
+  - geen formulieren en geen scripts in pagina's (de controle op `body` laat ze al niet toe);
+  - een knop om een pagina te melden;
+  - een regel in de voorwaarden om een pagina offline te halen.
+
+**Wat fase 1 er nu al voor doet:**
+
+- `renderPageHtml` heeft geen browser nodig (§7), dus de Worker kan hem later gebruiken.
+- Een vrijgave is "deze versie voor deze ontvanger". Openbaar wordt later één soort ontvanger
+  erbij, geen nieuw model.
+
+**Open punt:** wie mag publiceren? Voorstel: alleen Owner en Admin, omdat openbaar verder reikt dan
+delen met één klant.
