@@ -499,7 +499,7 @@ akkoord is.
 | Stap | Wat | Status |
 | --- | --- | --- |
 | 0 | Gedeelde mappen vullen zich niet meer vanzelf (§7). | gebouwd op 27 november, op de branch; zie `docs/changelog/CHANGELOG_GEDEELDE_MAPPEN_2026-11-27.md` |
-| 1A-1 | Datamodel en migraties: de kolommen op `documents`, `document_versions`, de triggers (boom, overerving, organisatie, controle op `body`), `claim_page_edit`, de zoekindex met zoek-RPC, de logboekvelden. Met databasetests, nog zonder scherm. | gepland |
+| 1A-1 | Datamodel en migraties: de kolommen op `documents`, `document_versions`, de triggers (boom, overerving, organisatie, controle op `body`), `claim_page_edit`, de zoekindex met zoek-RPC, de logboekvelden. Met databasetests, nog zonder scherm. | in aanbouw (27 november) |
 | 1A-2 | Laden en zoeken: de kolomlijst in `loadCoreData`, `excerpt` in de kaarten, GlobalSearch en `content.search` via de zoek-RPC. In één stap, anders breekt zoeken (§6). | gepland |
 | 1A-3 | De editor: Tiptap als eigen stuk bundel, het pagina-scherm met eigen adres, de basisblokken, opslaan met `edit_version`, één tegelijk bewerken, versies. | gepland |
 | 1A-4 | De overige blokken: gewone tabel, afbeelding, bestand, callout, uitklapper, inhoudsopgave, subpagina. Het slash-menu en de +-knop op de telefoon. | gepland |
@@ -507,3 +507,15 @@ akkoord is.
 | 1B-1 | Proef: huisstijlletters en emoji in een PDF via Collabora (§9). | gepland |
 | 1B-2 | Export: `page-export`, de DOCX-module, het interne PDF-pad, het exportvenster, vastleggen in het dossier, de Word-kopie. | gepland |
 | 1C | Pagina's delen: vrijgeven, "Bijwerken bij klant", subpagina's, de weergave in het portaal en bij een geheime link. | gepland |
+
+**Afwijkingen van §3 en §5, vastgelegd bij de bouw van 1A-1 (27 november):**
+
+- **Wie bewerkt, staat in een eigen tabel** (`document_edit_claims`), niet in `editing_by` en
+  `editing_seen_at` op `documents`. Een trigger zet `updated_at` bij elke wijziging van een
+  document. Een hartslag elke 30 seconden zou "laatst gewijzigd" dan steeds laten verspringen
+  en het logboek vullen.
+- **De zoekindex is een expressie-index**, geen kolom `search`. Een kolom zou tot stap 1A-2 bij
+  elke start meeladen (`select('*')`), en hij zou mee moeten in het logboek en de export.
+- **`content` en `excerpt` houdt de database bij.** Bij een pagina maakt een trigger de
+  platte tekst uit `body`, en bij elk document de korte tekst voor de tegels. Zo kloppen ze
+  ook als Gerrie, de API of de Word-editor schrijft.
