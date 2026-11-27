@@ -30,21 +30,27 @@
 //    lege pagina van, en de eerste toets schreef die over de echte heen.
 // ============================================================
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { EditorContent, useEditor, useEditorState } from '@tiptap/react';
 import type { Editor, JSONContent } from '@tiptap/react';
 import {
-  Bold, Braces, Copy, Heading1, Heading2, Heading3, History, Italic, Link2, List, ListChecks, ListOrdered, Minus, Pilcrow,
-  Quote, Redo2, Strikethrough, Underline as UnderlineIcon, Undo2, X,
+  AlignCenter, AlignLeft, AlignRight, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, BetweenHorizontalEnd, BetweenHorizontalStart,
+  BetweenVerticalEnd, BetweenVerticalStart, Bold, Braces, Copy, Heading1, Heading2, Heading3, History, Info, Italic, Lightbulb, Link2,
+  List, ListChecks, ListOrdered, Minus, OctagonAlert, PanelTop, Pilcrow, Plus, Quote, Redo2, Strikethrough, TableCellsMerge,
+  TableCellsSplit, Trash2, TriangleAlert, Underline as UnderlineIcon, Undo2, X,
 } from 'lucide-react';
+import { isInTable, moveTableColumn, moveTableRow, selectedRect } from '@tiptap/pm/tables';
 import { pageEditorExtensions } from '../lib/pageEditorExtensions';
-import { isAllowedPageLink } from '../lib/pageSchema';
+import { calloutVariant, isAllowedPageLink, type CalloutVariant } from '../lib/pageSchema';
 import { pageBodyFit } from '../lib/pageBodyCheck';
 import {
   claimPageEdit, listPageVersions, loadPage, loadPageVersion, releasePageEdit, restorePageVersion, savePage, savePageVersion,
   type PageVersionSummary,
 } from '../lib/repository';
 import { useBackStep } from '../lib/useBackStep';
+import {
+  BlockMenu, closeSlashMenu, pageBlocksFor, runPageBlock, slashMenuExtension, type BlockMenuState, type SlashBridge,
+} from './PageBlockMenu';
 
 const SAVE_DELAY_MS = 1500;
 const HEARTBEAT_MS = 30_000;
@@ -114,13 +120,66 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
   const setMode = (next: Mode) => { modeRef.current = next; setModeState(next); };
   const setTitle = (next: string) => { titleRef.current = next; setTitleState(next); };
 
+  // Het blokmenu: `/` in de tekst en de +-knop (PageBlockMenu.tsx). menuRef
+  // loopt synchroon mee, zodat Enter direct na een pijltje het goede blok kiest.
+  const [blockMenu, setBlockMenu] = useState<BlockMenuState | null>(null);
+  const menuRef = useRef<BlockMenuState | null>(null);
+  const showMenu = (next: BlockMenuState | null) => { menuRef.current = next; setBlockMenu(next); };
+  const slashBridge = useRef<SlashBridge | null>(null);
+  const extensions = useMemo(() => [...pageEditorExtensions(), slashMenuExtension(slashBridge)], []);
+
   const editor = useEditor({
-    extensions: pageEditorExtensions(),
+    extensions,
     editable: false,
     content: '',
     onUpdate: () => scheduleRef.current(),
   });
   editorRef.current = editor;
+
+  slashBridge.current = {
+    open: props => showMenu({ source: 'slash', items: props.items, active: 0, anchor: props.clientRect?.() ?? null, pick: block => props.command(block) }),
+    update: props => {
+      const previous = menuRef.current;
+      const active = previous?.source === 'slash' ? Math.min(previous.active, Math.max(0, props.items.length - 1)) : 0;
+      showMenu({ source: 'slash', items: props.items, active, anchor: props.clientRect?.() ?? null, pick: block => props.command(block) });
+    },
+    keyDown: event => {
+      const menu = menuRef.current;
+      if (!menu || menu.source !== 'slash') return false;
+      const count = menu.items.length;
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        if (count) showMenu({ ...menu, active: (menu.active + (event.key === 'ArrowDown' ? 1 : count - 1)) % count });
+        return true;
+      }
+      if (event.key === 'Enter' || event.key === 'Tab') {
+        const block = menu.items[menu.active];
+        if (!block) return false;
+        menu.pick(block);
+        return true;
+      }
+      return false;
+    },
+    close: () => { if (menuRef.current?.source === 'slash') showMenu(null); },
+  };
+
+  const closeBlockMenu = () => {
+    const menu = menuRef.current;
+    if (menu?.source === 'slash' && editorRef.current) closeSlashMenu(editorRef.current);
+    showMenu(null);
+  };
+
+  const openPlusMenu = (anchor: DOMRect) => {
+    const ed = editorRef.current;
+    if (!ed || modeRef.current !== 'bewerken') return;
+    if (menuRef.current) { closeBlockMenu(); return; }
+    showMenu({
+      source: 'plus',
+      items: pageBlocksFor(ed, ''),
+      active: -1,
+      anchor,
+      pick: block => { showMenu(null); runPageBlock(ed, block.key); },
+    });
+  };
 
   const currentSnapshot = useCallback((): string | null => {
     const ed = editorRef.current;
@@ -397,6 +456,9 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
   };
 
   const editable = mode === 'bewerken';
+  useEffect(() => {
+    if (!editable && menuRef.current) showMenu(null);
+  }, [editable]);
   const statusText = mode === 'laden' ? 'Laden…'
     : mode === 'onbekend' ? 'Alleen lezen'
     : mode === 'lezen' ? (holder ? `${nameOf(holder)} bewerkt deze pagina` : 'Alleen lezen')
@@ -417,7 +479,8 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
         </button>
       </div>
 
-      {editable && editor && <Toolbar editor={editor} />}
+      {editable && editor && <Toolbar editor={editor} onInsert={openPlusMenu} />}
+      {editable && blockMenu && <BlockMenu menu={blockMenu} onHover={index => { if (menuRef.current) showMenu({ ...menuRef.current, active: index }); }} onClose={closeBlockMenu} />}
 
       {(message || (mode === 'lezen' && holder)) && <div className={`page-editor-banner${mode === 'conflict' || mode === 'geen_recht' || mode === 'fout' || mode === 'onbekend' ? ' is-warning' : ''}`}>
         <span>{message ?? `${nameOf(holder as string)} bewerkt deze pagina. Je kunt meelezen; zodra die klaar is, kun je verder.`}</span>
@@ -453,27 +516,80 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
   );
 }
 
-function Toolbar({ editor }: { editor: Editor }) {
+type Tool = { label: string; icon: JSX.Element; active?: boolean; disabled?: boolean; run: () => void } | 'sep';
+
+function ToolButtons({ tools }: { tools: Tool[] }) {
+  return <>{tools.map((tool, index) => tool === 'sep'
+    ? <span key={`sep-${index}`} className="page-editor-sep" aria-hidden="true" />
+    : <button
+        key={tool.label}
+        type="button"
+        className={`page-editor-tool${tool.active ? ' is-active' : ''}`}
+        title={tool.label}
+        aria-label={tool.label}
+        aria-pressed={tool.active ?? undefined}
+        disabled={tool.disabled}
+        // Muisklik houdt de cursor in de tekst.
+        onMouseDown={event => event.preventDefault()}
+        onClick={tool.run}
+      >{tool.icon}</button>)}</>;
+}
+
+const CALLOUT_CHOICES: Array<{ variant: CalloutVariant; label: string; icon: JSX.Element }> = [
+  { variant: 'info', label: 'Info', icon: <Info size={16} /> },
+  { variant: 'tip', label: 'Tip', icon: <Lightbulb size={16} /> },
+  { variant: 'let-op', label: 'Let op', icon: <TriangleAlert size={16} /> },
+  { variant: 'waarschuwing', label: 'Waarschuwing', icon: <OctagonAlert size={16} /> },
+];
+
+/** Waar de cursor in een tabel staat, voor verplaatsen (null buiten een tabel). */
+function tablePlace(editor: Editor): { top: number; bottom: number; left: number; right: number; rows: number; cols: number; header: boolean } | null {
+  const { state } = editor;
+  if (!isInTable(state)) return null;
+  try {
+    const rect = selectedRect(state);
+    const firstCell = rect.table.firstChild?.firstChild;
+    return {
+      top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right,
+      rows: rect.map.height, cols: rect.map.width,
+      header: firstCell?.type.name === 'tableHeader',
+    };
+  } catch {
+    return null;
+  }
+}
+
+function Toolbar({ editor, onInsert }: { editor: Editor; onInsert: (anchor: DOMRect) => void }) {
   const state = useEditorState({
     editor,
-    selector: ({ editor: ed }) => ({
-      p: ed.isActive('paragraph'),
-      h1: ed.isActive('heading', { level: 1 }),
-      h2: ed.isActive('heading', { level: 2 }),
-      h3: ed.isActive('heading', { level: 3 }),
-      bold: ed.isActive('bold'),
-      italic: ed.isActive('italic'),
-      underline: ed.isActive('underline'),
-      strike: ed.isActive('strike'),
-      link: ed.isActive('link'),
-      bullet: ed.isActive('bulletList'),
-      ordered: ed.isActive('orderedList'),
-      task: ed.isActive('taskList'),
-      quote: ed.isActive('blockquote'),
-      code: ed.isActive('codeBlock'),
-      canUndo: ed.can().undo(),
-      canRedo: ed.can().redo(),
-    }),
+    selector: ({ editor: ed }) => {
+      const place = tablePlace(ed);
+      const cellAlign = (ed.getAttributes('tableCell').align ?? ed.getAttributes('tableHeader').align ?? null) as string | null;
+      return {
+        p: ed.isActive('paragraph'),
+        h1: ed.isActive('heading', { level: 1 }),
+        h2: ed.isActive('heading', { level: 2 }),
+        h3: ed.isActive('heading', { level: 3 }),
+        bold: ed.isActive('bold'),
+        italic: ed.isActive('italic'),
+        underline: ed.isActive('underline'),
+        strike: ed.isActive('strike'),
+        link: ed.isActive('link'),
+        bullet: ed.isActive('bulletList'),
+        ordered: ed.isActive('orderedList'),
+        task: ed.isActive('taskList'),
+        quote: ed.isActive('blockquote'),
+        code: ed.isActive('codeBlock'),
+        canUndo: ed.can().undo(),
+        canRedo: ed.can().redo(),
+        table: place,
+        canMerge: place ? ed.can().mergeCells() : false,
+        canSplit: place ? ed.can().splitCell() : false,
+        cellAlign,
+        callout: ed.isActive('callout') ? calloutVariant(ed.getAttributes('callout').variant) : null,
+        details: ed.isActive('details'),
+      };
+    },
   });
   const chain = () => editor.chain().focus();
   const setLink = () => {
@@ -488,7 +604,28 @@ function Toolbar({ editor }: { editor: Editor }) {
     }
     chain().extendMarkRange('link').setLink({ href: value }).run();
   };
-  const tools: Array<{ label: string; icon: JSX.Element; active?: boolean; disabled?: boolean; run: () => void } | 'sep'> = [
+  // Rijen en kolommen verplaatsen: prosemirror-tables kent het, Tiptap heeft
+  // er geen opdracht voor. Eén stap per klik, binnen de tabel.
+  const moveRow = (step: -1 | 1) => {
+    const place = tablePlace(editor);
+    if (!place) return;
+    const from = step < 0 ? place.top : place.bottom - 1;
+    const to = from + step;
+    if (to < 0 || to >= place.rows) return;
+    moveTableRow({ from, to })(editor.state, editor.view.dispatch);
+    editor.commands.focus();
+  };
+  const moveColumn = (step: -1 | 1) => {
+    const place = tablePlace(editor);
+    if (!place) return;
+    const from = step < 0 ? place.left : place.right - 1;
+    const to = from + step;
+    if (to < 0 || to >= place.cols) return;
+    moveTableColumn({ from, to })(editor.state, editor.view.dispatch);
+    editor.commands.focus();
+  };
+
+  const tools: Tool[] = [
     { label: 'Tekst', icon: <Pilcrow size={16} />, active: state.p, run: () => chain().setParagraph().run() },
     { label: 'Kop 1', icon: <Heading1 size={16} />, active: state.h1, run: () => chain().toggleHeading({ level: 1 }).run() },
     { label: 'Kop 2', icon: <Heading2 size={16} />, active: state.h2, run: () => chain().toggleHeading({ level: 2 }).run() },
@@ -510,23 +647,70 @@ function Toolbar({ editor }: { editor: Editor }) {
     { label: 'Ongedaan maken', icon: <Undo2 size={16} />, disabled: !state.canUndo, run: () => chain().undo().run() },
     { label: 'Opnieuw', icon: <Redo2 size={16} />, disabled: !state.canRedo, run: () => chain().redo().run() },
   ];
+
+  const place = state.table;
+  const tableTools: Tool[] = place ? [
+    { label: 'Rij erboven', icon: <BetweenHorizontalStart size={16} />, run: () => chain().addRowBefore().run() },
+    { label: 'Rij eronder', icon: <BetweenHorizontalEnd size={16} />, run: () => chain().addRowAfter().run() },
+    { label: 'Kolom links', icon: <BetweenVerticalStart size={16} />, run: () => chain().addColumnBefore().run() },
+    { label: 'Kolom rechts', icon: <BetweenVerticalEnd size={16} />, run: () => chain().addColumnAfter().run() },
+    'sep',
+    { label: 'Rij omhoog', icon: <ArrowUp size={16} />, disabled: place.top <= 0, run: () => moveRow(-1) },
+    { label: 'Rij omlaag', icon: <ArrowDown size={16} />, disabled: place.bottom >= place.rows, run: () => moveRow(1) },
+    { label: 'Kolom naar links', icon: <ArrowLeft size={16} />, disabled: place.left <= 0, run: () => moveColumn(-1) },
+    { label: 'Kolom naar rechts', icon: <ArrowRight size={16} />, disabled: place.right >= place.cols, run: () => moveColumn(1) },
+    'sep',
+    { label: 'Kopregel', icon: <PanelTop size={16} />, active: place.header, run: () => chain().toggleHeaderRow().run() },
+    { label: 'Cellen samenvoegen', icon: <TableCellsMerge size={16} />, disabled: !state.canMerge, run: () => chain().mergeCells().run() },
+    { label: 'Cel splitsen', icon: <TableCellsSplit size={16} />, disabled: !state.canSplit, run: () => chain().splitCell().run() },
+    'sep',
+    { label: 'Links uitlijnen', icon: <AlignLeft size={16} />, active: !state.cellAlign || state.cellAlign === 'left', run: () => chain().setCellAttribute('align', null).run() },
+    { label: 'Midden uitlijnen', icon: <AlignCenter size={16} />, active: state.cellAlign === 'center', run: () => chain().setCellAttribute('align', 'center').run() },
+    { label: 'Rechts uitlijnen', icon: <AlignRight size={16} />, active: state.cellAlign === 'right', run: () => chain().setCellAttribute('align', 'right').run() },
+    'sep',
+    { label: 'Rij verwijderen', icon: <Trash2 size={16} />, disabled: place.rows <= 1, run: () => chain().deleteRow().run() },
+    { label: 'Kolom verwijderen', icon: <Trash2 size={16} />, disabled: place.cols <= 1, run: () => chain().deleteColumn().run() },
+    { label: 'Tabel verwijderen', icon: <Trash2 size={16} />, run: () => chain().deleteTable().run() },
+  ] : [];
+
+  const calloutTools: Tool[] = state.callout ? [
+    ...CALLOUT_CHOICES.map(choice => ({
+      label: choice.label,
+      icon: choice.icon,
+      active: state.callout === choice.variant,
+      run: () => { chain().updateAttributes('callout', { variant: choice.variant }).run(); },
+    })),
+    'sep' as const,
+    { label: 'Kader weghalen', icon: <Trash2 size={16} />, run: () => chain().lift('callout').run() },
+  ] : [];
+
   return (
-    <div className="page-editor-toolbar" role="toolbar" aria-label="Opmaak">
-      {tools.map((tool, index) => tool === 'sep'
-        ? <span key={`sep-${index}`} className="page-editor-sep" aria-hidden="true" />
-        : <button
-            key={tool.label}
-            type="button"
-            className={`page-editor-tool${tool.active ? ' is-active' : ''}`}
-            title={tool.label}
-            aria-label={tool.label}
-            aria-pressed={tool.active ?? undefined}
-            disabled={tool.disabled}
-            // Muisklik houdt de cursor in de tekst.
-            onMouseDown={event => event.preventDefault()}
-            onClick={tool.run}
-          >{tool.icon}</button>)}
-    </div>
+    <>
+      <div className="page-editor-toolbar" role="toolbar" aria-label="Opmaak">
+        <button
+          type="button"
+          className="page-editor-tool page-editor-insert"
+          title="Blok invoegen (of typ / in de tekst)"
+          aria-label="Blok invoegen"
+          onMouseDown={event => event.preventDefault()}
+          onClick={event => onInsert(event.currentTarget.getBoundingClientRect())}
+        ><Plus size={18} /></button>
+        <span className="page-editor-sep" aria-hidden="true" />
+        <ToolButtons tools={tools} />
+      </div>
+      {place && <div className="page-editor-subbar" role="toolbar" aria-label="Tabel">
+        <span className="page-editor-subbar-label">Tabel</span>
+        <ToolButtons tools={tableTools} />
+      </div>}
+      {state.callout && <div className="page-editor-subbar" role="toolbar" aria-label="Callout">
+        <span className="page-editor-subbar-label">Callout</span>
+        <ToolButtons tools={calloutTools} />
+      </div>}
+      {state.details && !place && !state.callout && <div className="page-editor-subbar" role="toolbar" aria-label="Uitklapper">
+        <span className="page-editor-subbar-label">Uitklapper</span>
+        <ToolButtons tools={[{ label: 'Uitklapper weghalen', icon: <Trash2 size={16} />, run: () => chain().unsetDetails().run() }]} />
+      </div>}
+    </>
   );
 }
 
