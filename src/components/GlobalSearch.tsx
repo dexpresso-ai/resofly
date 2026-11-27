@@ -4,6 +4,7 @@ import { CheckSquare, ChevronRight, FileText, FolderOpen, Receipt, Search, Searc
 import type { AppData, Client, InternalDocument, Invoice, Note, Project, Quote, Supplier, Task, Ticket as TicketType } from '../types';
 import { euro, total } from '../lib/format';
 import { customFieldsSearchText } from './CustomFields';
+import { searchDocumentsText } from '../lib/repository';
 
 export type SearchResultKind = 'client' | 'project' | 'task' | 'ticket' | 'note' | 'document' | 'quote' | 'invoice' | 'supplier';
 
@@ -116,7 +117,7 @@ export function searchWorkspace(data: AppData, term: string, canOpenPage?: (page
     }
   }
   for (const d of data.documents) {
-    if (matches(term, d.title, plain(d.content))) {
+    if (matches(term, d.title, d.excerpt)) {
       const ctx = d.client_id ? clientById.get(d.client_id)?.name : d.project_id ? projectById.get(d.project_id)?.name : null;
       out.push({ kind: 'document', id: d.id, title: d.title || 'Document', subtitle: ctx ?? 'Document', item: d });
     }
@@ -144,8 +145,10 @@ export function searchWorkspace(data: AppData, term: string, canOpenPage?: (page
   return canOpenPage ? out.filter(result => canOpenPage(KIND_PAGE[result.kind])) : out;
 }
 
-export function GlobalSearch({ data, onNavigate, canOpenPage, variant = 'field', onAsk }: {
+export function GlobalSearch({ data, onNavigate, canOpenPage, variant = 'field', onAsk, organizationId }: {
   data: AppData;
+  /** Voor het zoeken in de tekst van documenten, in de database (stap 1A-2). */
+  organizationId?: string | null;
   onNavigate: (result: SearchResult) => void;
   /** Modulerechten: alleen resultaten die het teamlid ook mag openen. Zonder: alles. */
   canOpenPage?: (page: string) => boolean;
@@ -166,7 +169,47 @@ export function GlobalSearch({ data, onNavigate, canOpenPage, variant = 'field',
 
   const term = query.trim().toLowerCase();
 
-  const results = useMemo<SearchResult[]>(() => searchWorkspace(data, term, canOpenPage), [term, data, canOpenPage]);
+  const baseResults = useMemo<SearchResult[]>(() => searchWorkspace(data, term, canOpenPage), [term, data, canOpenPage]);
+
+  // De tekst van documenten zit sinds stap 1A-2 niet meer in wat de app laadt:
+  // de database zoekt erin (search_documents). Titels en de korte tekst vindt
+  // searchWorkspace zelf; dit vult aan met wat alleen in de tekst staat.
+  // Eén vraag per zoekwoord: het effect hangt alleen aan het woord, de
+  // organisatie en een ja/nee voor de rechten. De treffers onthouden voor welk
+  // woord ze waren, zodat die van een vorig woord nooit bij een nieuw verschijnen.
+  const mayOpenDocuments = !canOpenPage || canOpenPage('documents');
+  const lookupRef = useRef(data);
+  lookupRef.current = data;
+  const [textHits, setTextHits] = useState<{ term: string; hits: SearchResult[] }>({ term: '', hits: [] });
+  useEffect(() => {
+    if (!organizationId || !mayOpenDocuments || term.length < 2) return;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      searchDocumentsText(organizationId, term)
+        .then(hits => {
+          if (cancelled) return;
+          const current = lookupRef.current;
+          const byId = new Map(current.documents.map(d => [d.id, d] as const));
+          const naam = (id: string | null, lijst: Array<{ id: string; name: string }>) => (id ? lijst.find(x => x.id === id)?.name ?? null : null);
+          setTextHits({ term, hits: hits.flatMap(hit => {
+            const item = byId.get(hit.id);
+            if (!item) return [];
+            const subtitle = naam(hit.client_id, current.clients) ?? naam(hit.project_id, current.projects) ?? 'Document';
+            return [{ kind: 'document' as const, id: hit.id, title: hit.title || 'Document', subtitle, item }];
+          }) });
+        })
+        // Een zoekvraag die mislukt, mag de zoekbalk niet in de weg zitten.
+        .catch(() => { if (!cancelled) setTextHits({ term, hits: [] }); });
+    }, 200);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [term, organizationId, mayOpenDocuments]);
+
+  const results = useMemo<SearchResult[]>(() => {
+    const extra = textHits.term === term ? textHits.hits : [];
+    if (extra.length === 0) return baseResults;
+    const seen = new Set(baseResults.filter(r => r.kind === 'document').map(r => r.id));
+    return [...baseResults, ...extra.filter(hit => !seen.has(hit.id))];
+  }, [baseResults, textHits, term]);
 
   const countByKind = useMemo(() => {
     const counts = {} as Record<SearchResultKind, number>;

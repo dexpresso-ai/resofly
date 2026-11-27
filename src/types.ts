@@ -775,7 +775,14 @@ export interface NoteHandwriting extends NoteHandwritingSummary {
   pages: unknown;
 }
 export interface InternalDocument extends OrgScopedRow {
-  client_id: UUID | null; project_id: UUID | null; folder_id: UUID | null; title: string; content: string; document_type: DocumentType; created_at: string; updated_at: string;
+  client_id: UUID | null; project_id: UUID | null; folder_id: UUID | null; title: string; document_type: DocumentType; created_at: string; updated_at: string;
+  /** De tekst. Zit sinds stap 1A-2 niet meer in de kern: alleen gevuld als je het document opende (loadContentHtml). */
+  content?: string;
+  /** Pagina's (20261127130000): de soort, de inhoud als JSON (alleen geladen bij openen), de boom en het uiterlijk. */
+  format?: 'html' | 'page' | 'office'; body?: unknown; parent_id?: UUID | null; position?: number; icon?: string | null;
+  cover?: Record<string, unknown> | null; full_width?: boolean;
+  /** De eerste 200 tekens zonder HTML, door de database bijgehouden: voor tegels, lijsten en zoeken in de app. */
+  excerpt?: string; archived_at?: string | null; archived_by?: UUID | null;
   /** Word-modus: is `storage_key` gezet, dan is dit een .docx op R2 (Collabora/WOPI) i.p.v. rich-text; `content` is dan een tekst-spiegel voor previews/zoeken. */
   storage_key?: string | null; mime_type?: string | null; size_bytes?: number | null; edit_version?: number; last_edited_by?: UUID | null; last_edited_at?: string | null;
 }
@@ -3936,6 +3943,7 @@ export type EmailTemplateKey =
   | 'meetingBooking.linkSent'
   | 'meetingBooking.confirmed'
   | 'file.shared'
+  | 'file.added'
   | 'file.transfer'
   | 'portal.ticket.received'
   | 'portal.ticket.created'

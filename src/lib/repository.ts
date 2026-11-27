@@ -1,5 +1,7 @@
 import type { DriveDragItem, DriveLocation } from './driveDnd';
 import type { ExportPageRequest } from './dataExport';
+import type { FolderShareGap } from './shares';
+import { DOCUMENT_CORE_COLUMNS } from './documentColumns';
 import { supabase, supabaseAuth } from './supabase';
 import { recordInvitationBlockedBySeats } from '../services/licenseService';
 import { deleteR2Object } from './r2-api';
@@ -1916,10 +1918,152 @@ export async function markTicketRead(ticketId: UUID): Promise<void> {
 }
 
 export async function selectDocuments(organizationId: UUID): Promise<InternalDocument[]> {
-  return selectOptional<InternalDocument>('documents', organizationId, {
+  const opts = {
     orderBy: 'created_at', ascending: false,
     hint: 'Voer de migratie 20260604000000_internal_documents.sql uit om interne documenten te activeren.',
+  };
+  try {
+    // Zonder tekst en zonder pagina-inhoud (stap 1A-2, src/lib/documentColumns.ts).
+    return await selectOptional<InternalDocument>('documents', organizationId, { ...opts, columns: DOCUMENT_CORE_COLUMNS });
+  } catch (error) {
+    // Even na een uitrol kan de app nieuwer zijn dan de database (de migratie
+    // 20261127130000 nog niet gedraaid): dan zoals vroeger, alles.
+    const fout = error as { code?: string; message?: string } | null;
+    if (['format', 'excerpt', 'parent_id'].some(column => isMissingColumn(fout, column))) {
+      return selectOptional<InternalDocument>('documents', organizationId, opts);
+    }
+    throw error;
+  }
+}
+
+/** Een pagina zoals de editor hem nodig heeft: met de inhoud (body). */
+export type PageRow = {
+  id: UUID; organization_id: UUID; title: string; body: unknown; edit_version: number; updated_at: string;
+  format: string; client_id: UUID | null; project_id: UUID | null; folder_id: UUID | null; parent_id: UUID | null;
+};
+
+/** Eén pagina met inhoud, vers uit de database (stap 1A-3a). */
+export async function loadPage(documentId: UUID, organizationId: UUID): Promise<PageRow> {
+  const { data, error } = await supabase
+    .from('documents')
+    .select('id,organization_id,title,body,edit_version,updated_at,format,client_id,project_id,folder_id,parent_id')
+    .eq('id', documentId)
+    .eq('organization_id', organizationId)
+    .single();
+  if (error) throw error;
+  return data as PageRow;
+}
+
+/**
+ * Een pagina opslaan, maar alleen als niemand er intussen iets in schreef:
+ * edit_version moet nog zijn wat de editor kent. De database verhoogt hem bij
+ * elke nieuwe inhoud of titel (20261127130000). Geeft `ok: false` als iemand
+ * anders (Gerrie, de API, een overname) ertussen kwam; dan niet overschrijven.
+ */
+export async function savePage(
+  documentId: UUID, organizationId: UUID, values: { title: string; body: unknown }, knownVersion: number,
+): Promise<{ ok: true; editVersion: number; updatedAt: string } | { ok: false }> {
+  const { data, error } = await supabase
+    .from('documents')
+    .update({ title: values.title, body: values.body })
+    .eq('id', documentId)
+    .eq('organization_id', organizationId)
+    .eq('edit_version', knownVersion)
+    .select('edit_version,updated_at')
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return { ok: false };
+  const row = data as { edit_version: number; updated_at: string };
+  return { ok: true, editVersion: row.edit_version, updatedAt: row.updated_at };
+}
+
+/** Claimen of de hartslag geven (claim_page_edit). `claimed` is false als een ander bewerkt. */
+export async function claimPageEdit(documentId: UUID): Promise<{ claimed: boolean; userId: UUID | null; seenAt: string | null }> {
+  const { data, error } = await supabase.rpc('claim_page_edit', { p_document_id: documentId });
+  if (error) throw error;
+  const row = (Array.isArray(data) ? data[0] : data) as { claimed?: boolean; user_id?: UUID; seen_at?: string } | null;
+  return { claimed: Boolean(row?.claimed), userId: row?.user_id ?? null, seenAt: row?.seen_at ?? null };
+}
+
+/** Loslaten als je de pagina sluit. Beste moeite: lukt het niet, dan vervalt de claim na twee minuten. */
+export async function releasePageEdit(documentId: UUID): Promise<void> {
+  const { error } = await supabase.rpc('release_page_edit', { p_document_id: documentId });
+  if (error) throw error;
+}
+
+/** Een versie vastleggen van wat er nu staat (save_page_version). */
+export async function savePageVersion(documentId: UUID, reason: 'sessie' | 'vastgelegd' = 'sessie'): Promise<void> {
+  const { error } = await supabase.rpc('save_page_version', { p_document_id: documentId, p_reason: reason });
+  if (error) throw error;
+}
+
+/** Eén versie van een pagina, zonder inhoud: voor de lijst in het versiepaneel (stap 1A-3b). */
+export type PageVersionSummary = { id: UUID; version: number; reason: string; created_by: UUID | null; created_at: string };
+
+export async function listPageVersions(documentId: UUID, organizationId: UUID): Promise<PageVersionSummary[]> {
+  const { data, error } = await supabase
+    .from('document_versions')
+    .select('id,version,reason,created_by,created_at')
+    .eq('document_id', documentId)
+    .eq('organization_id', organizationId)
+    .order('version', { ascending: false })
+    .limit(100);
+  if (error) throw error;
+  return (data ?? []) as PageVersionSummary[];
+}
+
+/** De inhoud van één versie, voor de voorvertoning. */
+export async function loadPageVersion(versionId: UUID, organizationId: UUID): Promise<{ title: string; body: unknown; version: number }> {
+  const { data, error } = await supabase
+    .from('document_versions')
+    .select('title,body,version')
+    .eq('id', versionId)
+    .eq('organization_id', organizationId)
+    .single();
+  if (error) throw error;
+  return data as { title: string; body: unknown; version: number };
+}
+
+/** Een oude versie terugzetten (restore_page_version): dat is zelf weer een nieuwe versie. */
+export async function restorePageVersion(versionId: UUID): Promise<void> {
+  const { error } = await supabase.rpc('restore_page_version', { p_version_id: versionId });
+  if (error) throw error;
+}
+
+/** Een nieuwe, lege pagina op deze plek. */
+export async function createPage(
+  organizationId: UUID, target: { client_id?: UUID | null; project_id?: UUID | null; folder_id?: UUID | null; title?: string },
+): Promise<InternalDocument> {
+  return insertRow<InternalDocument>('documents', organizationId, {
+    title: target.title?.trim() || 'Nieuwe pagina',
+    format: 'page',
+    body: { type: 'doc', content: [{ type: 'paragraph' }] },
+    document_type: 'general',
+    client_id: target.client_id ?? null,
+    project_id: target.project_id ?? null,
+    folder_id: target.folder_id ?? null,
   });
+}
+
+/** Een gevonden document: wat search_documents teruggeeft. Nooit HTML, alleen de korte tekst. */
+export type DocumentSearchHit = {
+  id: UUID; title: string; excerpt: string; format: string; parent_id: UUID | null;
+  client_id: UUID | null; project_id: UUID | null; folder_id: UUID | null; updated_at: string; rank: number;
+};
+
+/**
+ * Zoeken in de titel én de tekst van documenten, in de database (stap 1A-2):
+ * de tekst zit niet meer in wat de app bij het opstarten laadt. Elk woord telt
+ * als begin van een woord; de rechten van wie zoekt gelden (RLS).
+ */
+export async function searchDocumentsText(organizationId: UUID, query: string, limit = 20): Promise<DocumentSearchHit[]> {
+  const { data, error } = await supabase.rpc('search_documents', { p_organization_id: organizationId, p_query: query, p_limit: limit });
+  if (error) {
+    // Nog niet gemigreerd: niets vinden is beter dan een zoekbalk met een fout.
+    if (/search_documents|schema cache|does not exist/i.test(error.message)) return [];
+    throw error;
+  }
+  return (data ?? []) as DocumentSearchHit[];
 }
 
 export async function selectFolders(organizationId: UUID): Promise<ContentFolder[]> {
@@ -2706,6 +2850,50 @@ export async function updateDriveShare(
   values: { can_download?: boolean; expires_at?: string | null },
 ): Promise<DriveShare> {
   return updateRow<DriveShare>('drive_shares', shareId, values, organizationId);
+}
+
+/**
+ * Wat er direct in deze map staat en nog niet gedeeld is, per lopende
+ * mapdeling die de map omvat (de map zelf of een map erboven). Een map delen
+ * legt sinds 20261127120000 vast wat er op dat moment in staat; wat er later
+ * bij komt, ziet de ontvanger pas na "Ook delen".
+ */
+export async function loadFolderShareGaps(folderId: UUID): Promise<FolderShareGap[]> {
+  const { data, error } = await supabase.rpc('drive_share_folder_gaps', { p_folder_id: folderId });
+  if (error) {
+    // Nog niet gemigreerd: zonder melding is beter dan een drive die niet opent.
+    if (/drive_share_folder_gaps|schema cache|does not exist/i.test(error.message)) return [];
+    throw error;
+  }
+  return (data ?? []) as FolderShareGap[];
+}
+
+/**
+ * De melding bij "Ook delen": een mail aan de ontvanger over wat er nieuw in de
+ * gedeelde map staat. Alleen over items die echt in de deling staan; het
+ * delen zelf is dan al gebeurd (addItemsToDriveShare).
+ */
+export async function notifyDriveShareAdded(
+  organizationId: UUID,
+  shareId: UUID,
+  items: ReadonlyArray<Pick<FolderShareGap, 'item_type' | 'item_id'>>,
+): Promise<{ notified: boolean; notifyError: string | null }> {
+  const { data, error } = await supabase.functions.invoke('file-share', {
+    body: { action: 'notifyAdded', organizationId, shareId, items },
+  });
+  if (error) await throwFunctionError(error, 'De melding versturen is niet gelukt.');
+  if (!data?.ok) throw new Error(data?.error || 'De melding versturen is niet gelukt.');
+  return data.result as { notified: boolean; notifyError: string | null };
+}
+
+/** "Ook delen": zet deze items in een lopende mapdeling. Geeft terug hoeveel er nieuw bij kwamen. */
+export async function addItemsToDriveShare(
+  shareId: UUID,
+  items: ReadonlyArray<Pick<FolderShareGap, 'item_type' | 'item_id'>>,
+): Promise<number> {
+  const { data, error } = await supabase.rpc('drive_share_add_items', { p_share_id: shareId, p_items: items });
+  if (error) throw error;
+  return Number(data ?? 0);
 }
 export const selectLedgerAccounts = (organizationId: UUID) =>
   selectOptional<LedgerAccount>('ledger_accounts', organizationId, { orderBy: 'code', ascending: true, hint: BOOKKEEPING_MIGRATION_HINT });

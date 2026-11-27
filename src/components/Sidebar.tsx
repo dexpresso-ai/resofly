@@ -323,7 +323,7 @@ export function Sidebar({
       </div>
     </div>
     <nav className="sidebar-nav">
-      <GlobalSearch data={data} onNavigate={onSearchNavigate} canOpenPage={permissions.canOpenPage} />
+      <GlobalSearch data={data} organizationId={activeOrganizationId} onNavigate={onSearchNavigate} canOpenPage={permissions.canOpenPage} />
       {navGroups.map(group => {
         const visibleItems = group.items.filter(([key]) => canOpenNavItem(key, permissions));
         if (visibleItems.length === 0) return null;

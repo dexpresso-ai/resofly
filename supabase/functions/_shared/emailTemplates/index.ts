@@ -2,7 +2,7 @@ import { renderContractSentEmail } from './contractSent.ts';
 import { renderContractSignedClientEmail } from './contractSignedClient.ts';
 import { renderContractSignedInternalEmail } from './contractSignedInternal.ts';
 import { renderCreditNoteSentEmail } from './creditNoteSent.ts';
-import { renderFileSharedEmail } from './fileShared.ts';
+import { renderFileAddedEmail, renderFileSharedEmail } from './fileShared.ts';
 import { renderFileTransferCodeEmail, renderFileTransferEmail } from './fileTransfer.ts';
 import { renderInvoiceDunningWik14Email } from './invoiceDunningWik14.ts';
 import { renderInvoiceReminderEmail } from './invoiceReminder.ts';
@@ -36,6 +36,8 @@ export function renderEmailTemplate<K extends EmailTemplateKey>(templateKey: K, 
       return renderContractSignedInternalEmail(data as EmailTemplateInputMap['contract.signed.internal']);
     case 'file.shared':
       return renderFileSharedEmail(data as EmailTemplateInputMap['file.shared']);
+    case 'file.added':
+      return renderFileAddedEmail(data as EmailTemplateInputMap['file.added']);
     case 'file.transfer':
       return renderFileTransferEmail(data as EmailTemplateInputMap['file.transfer']);
     case 'file.transferCode':

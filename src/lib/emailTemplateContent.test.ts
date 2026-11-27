@@ -11,6 +11,11 @@ import {
   FILE_TRANSFER_DEFAULTS,
   FILE_TRANSFER_PLACEHOLDERS,
 } from '../../supabase/functions/_shared/emailTemplates/fileTransfer.ts';
+import {
+  FILE_ADDED_DEFAULTS,
+  FILE_ADDED_PLACEHOLDERS,
+  renderFileAddedEmail,
+} from '../../supabase/functions/_shared/emailTemplates/fileShared.ts';
 
 /**
  * De e-mailteksten-editor (Instellingen → E-mail) toont per mail de
@@ -87,4 +92,34 @@ test('elke mail in de editor mag in de database (template_key-CHECK van de laats
   for (const template of EMAIL_TEMPLATES) {
     assert.ok(allowed.includes(template.key), `${template.key} ontbreekt in de template_key-CHECK`);
   }
+});
+
+test('nieuw in een gedeelde map: editor en mailtemplate hebben dezelfde standaardtekst en plaatshouders', () => {
+  const meta = EMAIL_TEMPLATES.find((t) => t.key === 'file.added');
+  assert.ok(meta, 'file.added staat niet in de editor');
+  assert.deepEqual(meta.defaults, {
+    subject: FILE_ADDED_DEFAULTS.subject,
+    intro: FILE_ADDED_DEFAULTS.intro,
+    closing: FILE_ADDED_DEFAULTS.closing,
+    cta_label: FILE_ADDED_DEFAULTS.ctaLabel,
+  });
+  assert.deepEqual(meta.placeholders.map((p) => p.token), [...FILE_ADDED_PLACEHOLDERS]);
+  for (const field of Object.values(meta.defaults)) {
+    for (const token of tokensIn(field)) {
+      assert.ok((FILE_ADDED_PLACEHOLDERS as readonly string[]).includes(token), `{{${token}}} staat niet in de lijst`);
+    }
+  }
+});
+
+test('nieuw in een gedeelde map: namen worden ge-escaped en een lange lijst wordt afgekort', () => {
+  const names = ['<script>x</script>.pdf', ...Array.from({ length: 12 }, (_, i) => `bestand-${i + 1}.pdf`)];
+  const mail = renderFileAddedEmail({
+    folderName: 'Oplevering', addedNames: names, addedSentence: '13 bestanden', url: 'https://voorbeeld.test/portaal',
+    recipientName: 'Jan', senderName: 'Sanne',
+  });
+  assert.equal(mail.subject, 'Nieuw in “Oplevering”');
+  assert.ok(!mail.html.includes('<script>x</script>'), 'naam niet ge-escaped');
+  assert.ok(mail.html.includes('&lt;script&gt;'), 'naam staat er niet ge-escaped in');
+  assert.ok(mail.html.includes('en nog 3'), 'de rest wordt niet samengevat');
+  assert.ok(mail.text.includes('Sanne heeft 13 bestanden toegevoegd aan “Oplevering”.'), mail.text);
 });

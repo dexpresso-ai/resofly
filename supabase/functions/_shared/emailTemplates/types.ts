@@ -13,6 +13,7 @@ export type EmailTemplateKey =
   | 'contract.signed.client'
   | 'contract.signed.internal'
   | 'file.shared'
+  | 'file.added'
   | 'file.transfer'
   | 'file.transferCode'
   | 'portal.ticketUpdate';
@@ -31,6 +32,7 @@ export type EmailTemplateContentKey =
   | 'contract.sent'
   | 'contract.signed.client'
   | 'file.shared'
+  | 'file.added'
   | 'file.transfer'
   | PortalTicketTemplateKey;
 
@@ -294,6 +296,23 @@ export type ContractSignedInternalEmailInput = {
 };
 
 /** "Iemand deelt een map/bestand/notitie/document met je" — portaal, collega of deellink. */
+/** "Ook delen": er staat iets nieuws in een map die al met de ontvanger gedeeld is. */
+export type FileAddedEmailInput = {
+  /** Naam van de gedeelde map. */
+  folderName: string;
+  /** De namen van wat er nieuw bij kwam, zoals ze in de drive heten. */
+  addedNames: string[];
+  /** Hoeveel er van elke soort bij kwam, voor de zin "2 bestanden en 1 notitie". */
+  addedSentence: string;
+  url: string;
+  accessHint?: string | null;
+  recipientName?: string | null;
+  senderName?: string | null;
+  clientName?: string | null;
+  company?: FileSharedEmailInput['company'];
+  content?: FileSharedEmailInput['content'];
+};
+
 export type FileSharedEmailInput = {
   /** Naam van het gedeelde item, zoals het in de drive heet. */
   itemName: string;
@@ -360,6 +379,7 @@ export type EmailTemplateInputMap = {
   'contract.signed.client': ContractSignedClientEmailInput;
   'contract.signed.internal': ContractSignedInternalEmailInput;
   'file.shared': FileSharedEmailInput;
+  'file.added': FileAddedEmailInput;
   'file.transfer': FileTransferEmailInput;
   'file.transferCode': FileTransferCodeEmailInput;
   'portal.ticketUpdate': PortalTicketUpdateEmailInput;

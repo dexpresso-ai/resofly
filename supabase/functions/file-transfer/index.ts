@@ -430,11 +430,16 @@ async function addLeaf(ctx: Ctx, transfer: TransferRow, leaf: Leaf, position: nu
   if (leaf.type === 'document') {
     const doc = await must(admin
       .from('documents')
-      .select('id,title,content,storage_key,size_bytes')
+      .select('id,title,content,storage_key,size_bytes,format')
       .eq('id', leaf.id)
       .eq('organization_id', ctx.organizationId)
-      .maybeSingle()) as { id: string; title: string | null; content: string | null; storage_key: string | null; size_bytes: number | null } | null;
+      .maybeSingle()) as { id: string; title: string | null; content: string | null; storage_key: string | null; size_bytes: number | null; format?: string | null } | null;
     if (!doc) return { added: false, skipped: { name: 'document', reason: 'Dit document bestaat niet meer.' } };
+    // Een pagina gaat pas naar buiten met de export naar Word en PDF (stap 1B).
+    // Tot dan zou dit de levende tekst als bestand meesturen.
+    if (doc.format === 'page') {
+      return { added: false, skipped: { name: cleanFileName(doc.title, 'Pagina'), reason: 'Een pagina versturen kan nog niet; dat komt met de export naar Word en PDF.' } };
+    }
     if (doc.storage_key) {
       if (!(await storageKeyBelongsOnlyTo(admin, ctx.organizationId, doc.storage_key, { table: 'documents', id: doc.id }))) {
         return { added: false, skipped: { name: cleanFileName(doc.title, 'Document'), reason: 'Dit document kan niet worden meegestuurd.' } };

@@ -143,6 +143,7 @@ const EMAIL_TEMPLATES: Array<{ key: string; label: string; fields: string[] }> =
   { key: 'meetingBooking.linkSent', label: 'Boekingslink versturen', fields: ['subject', 'intro', 'cta_label'] },
   { key: 'meetingBooking.confirmed', label: 'Boeking bevestigd', fields: ['subject', 'intro', 'closing'] },
   { key: 'file.shared', label: 'Bestand gedeeld', fields: ['subject', 'intro', 'closing', 'cta_label'] },
+  { key: 'file.added', label: 'Nieuw in een gedeelde map', fields: ['subject', 'intro', 'closing', 'cta_label'] },
   { key: 'file.transfer', label: 'Bestanden verstuurd', fields: ['subject', 'intro', 'closing', 'cta_label'] },
   { key: 'portal.ticket.received', label: 'Ticketmelding · ontvangen (bevestiging)', fields: ['subject', 'intro', 'closing', 'cta_label'] },
   { key: 'portal.ticket.created', label: 'Ticketmelding · nieuw ticket', fields: ['subject', 'intro', 'closing', 'cta_label'] },

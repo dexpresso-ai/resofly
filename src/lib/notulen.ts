@@ -73,7 +73,9 @@ export function contentTargetsFrom(
   const rows: ContentTarget[] = [
     ...notes.map(note => ({ kind: 'note' as const, id: note.id, title: note.title, hint: hintOf('note', note.client_id), updatedAt: note.updated_at })),
     ...documents
-      .filter(doc => !doc.storage_key)
+      // Geen Word-documenten, en geen pagina's: daar komt de tekst uit de blokken,
+      // en de database weigert een wijziging van alleen de tekst (20261127130000).
+      .filter(doc => !doc.storage_key && doc.format !== 'page')
       .map(doc => ({ kind: 'document' as const, id: doc.id, title: doc.title, hint: hintOf('document', doc.client_id), updatedAt: doc.updated_at })),
   ];
   return rows

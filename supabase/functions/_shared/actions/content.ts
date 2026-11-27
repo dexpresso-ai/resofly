@@ -582,7 +582,11 @@ export const CONTENT_ACTIONS: ActionDef[] = [
         title: `${item.label} "${item.name}" delen`,
         sub: joinShort([`met ${labels.join(', ')}`, expires ? `tot ${expires}` : 'zonder einddatum', canDownload ? 'downloaden mag' : 'alleen bekijken'], 160),
         kind: 'mail',
-        warning: `${labels.length === 1 ? 'De ontvanger ziet' : 'De ontvangers zien'} ${item.label.toLowerCase() === 'map' ? 'deze map en alles wat erin komt' : 'dit'} vanaf nu en krijgt een melding per e-mail.`,
+        // Een map is sinds 20261127120000 niet meer live: de ontvanger ziet wat
+        // er bij het delen in staat. Wat er later bij komt, deel je apart.
+        warning: item.label.toLowerCase() === 'map'
+          ? `${labels.length === 1 ? 'De ontvanger ziet' : 'De ontvangers zien'} vanaf nu wat er nu in deze map staat en ${labels.length === 1 ? 'krijgt' : 'krijgen'} een melding per e-mail. Wat er later in de map komt, deel je apart.`
+          : `${labels.length === 1 ? 'De ontvanger ziet' : 'De ontvangers zien'} dit vanaf nu en ${labels.length === 1 ? 'krijgt' : 'krijgen'} een melding per e-mail.`,
         payload: {
           item_type: itemType, item_id: itemId, item_name: item.name, recipients, recipient_labels: labels,
           // Een dag; de browser maakt er het eind van die dag van, in de eigen tijdzone —
@@ -702,8 +706,13 @@ async function planContentUpdate(ctx: ActionCtx, input: Record<string, unknown>,
   const itemId = id(input, isNote ? 'note_id' : 'document_id');
   const table = isNote ? 'notes' : 'documents';
   const label = isNote ? 'Notitie' : 'Document';
-  const current = await row<{ title: string | null; content: string | null; client_id: string | null; project_id: string | null; storage_key?: string | null }>(
-    ctx, table, itemId, isNote ? 'title, content, client_id, project_id' : 'title, content, client_id, project_id, storage_key', label);
+  const current = await row<{ title: string | null; content: string | null; client_id: string | null; project_id: string | null; storage_key?: string | null; format?: string | null }>(
+    ctx, table, itemId, isNote ? 'title, content, client_id, project_id' : 'title, content, client_id, project_id, storage_key, format', label);
+  // Bij een pagina komt de tekst uit de blokken; de database weigert een wijziging
+  // van alleen de tekst (20261127130000). Voorstellen per blok komen later.
+  if (!isNote && current.format === 'page' && typeof input.content === 'string' && input.content.trim()) {
+    throw new ActionError('Tekst toevoegen aan een pagina kan nog niet via Gerrie. Open de pagina en typ het erbij; de titel aanpassen kan wel.');
+  }
 
   const patch: Record<string, unknown> = {};
   const changes: string[] = [];
