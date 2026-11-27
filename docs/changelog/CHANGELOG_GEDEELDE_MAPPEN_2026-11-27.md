@@ -100,5 +100,8 @@ De migratie zet de huidige inhoud van bestaande mapdelingen op de lijst. Dat is 
 deze sessie niet op staging te zien. Controleer het in de app:
 
 1. Open een map die al met een klant gedeeld was.
-2. Er hoort geen balk te staan, en geen label "Niet gedeeld".
-3. In het portaal van die klant staat dezelfde inhoud als voorheen.
+2. Er hoort geen balk te staan, en geen label "Niet gedeeld". Dat betekent dat alles wat
+   erin staat op de lijst van de deling staat.
+3. Wil je het portaal zelf zien, log dan in als die contactpersoon, of open de geheime link
+   van een deling met een los adres. Het voorbeeld van het portaal in de app toont
+   voorbeeldgegevens, geen echte delingen.
