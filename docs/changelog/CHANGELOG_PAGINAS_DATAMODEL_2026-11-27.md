@@ -51,6 +51,16 @@ dat komt vanaf stap 1A-2.
   - Het geeft de korte tekst terug, nooit HTML, en zoekt met de rechten van wie zoekt.
   - Wat in de prullenbak ligt, telt niet mee.
 - **Het logboek** kent de nieuwe velden. `body` komt erin als "gewijzigd", zonder de tekst.
+- **Bij een pagina loopt `edit_version` op** als de inhoud of de titel verandert, ook bij
+  terugzetten. Zo ziet de app bij opslaan dat iemand anders intussen schreef (Gerrie, de API,
+  een overname). Tot nu toe verhoogde alleen de Word-editor dat nummer.
+- **Bij een pagina alleen de tekst (`content`) wijzigen kan niet.** Die tekst maakt de
+  database uit de blokken, dus zo'n wijziging zou "gelukt" melden en niets doen. Het
+  aanvullen door Gerrie (`document.update`) moet voor pagina's daarom via de blokken gaan.
+  Dat is een taak voor de stap die pagina's in de app zet.
+- **Een pagina delen kan pas vanaf stap 1C**, met de vrijgegeven versie. Tot dan neemt een
+  gedeelde map geen pagina's mee, en weigert de database een deling van een pagina
+  ("Een pagina delen kan nog niet"). Anders zag een klant de live tekst.
 
 ## Afwijkingen van het plan
 
@@ -74,12 +84,21 @@ Ze staan ook in §18 van het plan.
   `drive_shares.document_version_id`.
 - **Een nieuw bloktype**, zoals vermeldingen in fase 2, vraagt een nieuwe migratie voor
   `page_body_allowed` en een regel in `pageSchema.ts`.
+- **De database controleert de soort van elk blok en elke opmaak**, de links en de
+  verwijzingen naar een bestand of pagina. Twee dingen controleert hij niet:
+  - de overige eigenschappen, zoals het niveau van een kop of de variant van een callout;
+  - of een `attachmentId` of `pageId` bij dezelfde organisatie en klant hoort.
+
+  `renderPageHtml` (1C) en het portaal moeten per blok alleen bekende eigenschappen
+  doorlaten en die verwijzingen nakijken.
+- **De weigering voor het delen van een pagina** (`drive_shares_no_pages_yet`) en het
+  overslaan van pagina's in een gedeelde map vervangt stap 1C door de vrijgave.
 
 ## Getest
 
 - `supabase/migrations/20261127130000_paginas_datamodel.sql`: twee keer achter elkaar, en in
   de keten vanaf nul.
-- `tests/database/paginas_datamodel.sql`, 39 controles:
+- `tests/database/paginas_datamodel.sql`, 44 controles:
   - een pagina maken, en de korte tekst bij een tekstdocument;
   - een onbekend blok, een javascript-link, een plaatje van buiten, een afbeelding zonder
     bestand, iets anders dan een document en onbekende opmaak worden geweigerd;
@@ -90,8 +109,12 @@ Ze staan ook in §18 van het plan.
   - versies, geen dubbele, zelf schrijven kan niet, en terugzetten;
   - zoeken met en zonder rechten, vanuit een andere organisatie, met een lege vraag, en
     met de prullenbak.
+  - `edit_version` loopt op bij een nieuwe inhoud en bij terugzetten, en alleen `content`
+    wijzigen bij een pagina wordt geweigerd;
+  - een gedeelde map neemt geen pagina mee, en een pagina zelf delen kan nog niet.
 - `src/lib/pageSchema.test.ts`: de lijsten gelijk aan de migratie, en de regel voor links.
 - `npm test` (2317), waaronder de rechten op functies en de export.
-- `npm run test:database`: alle 15 bestanden.
+- `npm run test:database`: alle 15 bestanden, na de keten vanaf nul.
+- `search_documents` gebruikt de index (`EXPLAIN`: Bitmap Index Scan op `idx_documents_search`).
 - `tests/stromen/documenten.mjs` (48 stappen) en `ui.mjs documenten` (9 stappen): het
   bestaande gedrag van documenten, Word-documenten en delen is ongewijzigd.

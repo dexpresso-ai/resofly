@@ -29,6 +29,13 @@
 --      (geen extra kolom: die zou tot 1A-2 bij elke start meeladen).
 --   8. Het logboek kent de nieuwe velden. body en content komen erin als
 --      "gewijzigd", zonder de tekst.
+--   9. Bij een pagina loopt edit_version op als de inhoud of de titel
+--      verandert, zodat de app ziet dat iemand anders intussen schreef. Een
+--      wijziging van alleen content wordt geweigerd: die tekst komt uit body,
+--      en zou anders stil verdwijnen (zoals bij "tekst aanvullen" van Gerrie).
+--  10. Een pagina delen kan pas vanaf stap 1C, met de vrijgegeven versie. Tot
+--      dan neemt een gedeelde map geen pagina's mee, en weigert de database
+--      een deling van een pagina. Anders zag een klant de live tekst.
 --
 -- Veilig om meermaals te draaien.
 -- ============================================================
@@ -531,7 +538,7 @@ end;
 $$;
 
 revoke all on function public.save_page_version(uuid, text) from public, anon;
-grant execute on function public.save_page_version(uuid, text) to authenticated, service_role;
+grant execute on function public.save_page_version(uuid, text) to authenticated;
 
 -- Een oude versie terugzetten: de pagina krijgt die inhoud, en dat is zelf weer
 -- een nieuwe versie. Er gaat niets verloren.
@@ -620,6 +627,129 @@ $$;
 
 revoke all on function public.search_documents(uuid, text, integer) from public, anon;
 grant execute on function public.search_documents(uuid, text, integer) to authenticated, service_role;
+
+-- ── 9. Bij een pagina: het versienummer, en alleen via body ────────────────
+
+create or replace function public.documents_page_guard()
+returns trigger
+language plpgsql
+as $$
+begin
+  if new.format = 'page' and old.format = 'page' then
+    -- De tekst van een pagina komt uit body. Wie alleen content wijzigt, zou
+    -- "gelukt" horen terwijl er niets verandert.
+    if new.content is distinct from old.content and new.body is not distinct from old.body then
+      raise exception 'Een pagina wijzig je via de blokken (body), niet via de tekst (content).' using errcode = '22023';
+    end if;
+    if new.body is distinct from old.body or new.title is distinct from old.title then
+      new.edit_version := coalesce(old.edit_version, 0) + 1;
+    end if;
+  end if;
+  return new;
+end;
+$$;
+
+revoke all on function public.documents_page_guard() from public, anon, authenticated;
+
+-- Vóór documents_page_text (alfabetisch: guard < text), dat content opnieuw maakt.
+drop trigger if exists documents_page_guard on public.documents;
+create trigger documents_page_guard
+  before update of body, content, title on public.documents
+  for each row execute function public.documents_page_guard();
+
+-- ── 10. Pagina's delen kan pas vanaf stap 1C ───────────────────────────────
+-- Tot de vrijgave er is, deelt niets een pagina: een gedeelde map neemt ze
+-- niet mee (zelfde functie als in 20261127120000, met één regel erbij), en een
+-- deling van een pagina wordt geweigerd.
+
+create or replace function public.drive_folder_tree_items(p_organization_id uuid, p_folder_id uuid)
+returns table (
+  item_type text,
+  item_id uuid,
+  folder_id uuid,
+  name text,
+  mime_type text,
+  size_bytes bigint,
+  storage_key text,
+  modified timestamptz,
+  path text
+)
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  v_client uuid;
+begin
+  select ctx.client_id into v_client
+  from public.drive_item_client_safe(p_organization_id, 'folder', p_folder_id) ctx;
+
+  return query
+  with recursive tree as (
+    select f.id, f.name, ''::text as path, 0 as depth
+    from public.content_folders f
+    where f.id = p_folder_id and f.organization_id = p_organization_id
+    union all
+    select c.id, c.name, case when t.path = '' then t.name else t.path || ' / ' || t.name end, t.depth + 1
+    from public.content_folders c
+    join tree t on c.parent_id = t.id
+    where t.depth < 20
+      and c.organization_id = p_organization_id
+      and coalesce((select p.client_id from public.projects p where p.id = c.project_id), c.client_id)
+          is not distinct from v_client
+  )
+  select 'attachment'::text, a.id, t.id, a.name, a.mime_type, a.size_bytes::bigint, a.storage_key,
+         a.created_at,
+         case when t.path = '' then t.name else t.path || ' / ' || t.name end
+  from tree t
+  join public.attachments a
+    on a.entity_type = 'folder' and a.entity_id = t.id
+   and a.organization_id = p_organization_id
+  union all
+  select 'note'::text, n.id, t.id, n.title, 'text/html'::text, 0::bigint, null::text,
+         coalesce(n.updated_at, n.created_at),
+         case when t.path = '' then t.name else t.path || ' / ' || t.name end
+  from tree t
+  join public.notes n on n.folder_id = t.id and n.organization_id = p_organization_id
+   and coalesce((select p.client_id from public.projects p where p.id = n.project_id), n.client_id)
+       is not distinct from v_client
+  union all
+  select 'document'::text, d.id, t.id, d.title,
+         coalesce(d.mime_type, 'text/html'), coalesce(d.size_bytes, 0)::bigint, d.storage_key,
+         coalesce(d.updated_at, d.created_at),
+         case when t.path = '' then t.name else t.path || ' / ' || t.name end
+  from tree t
+  join public.documents d on d.folder_id = t.id and d.organization_id = p_organization_id
+   and d.format <> 'page'
+   and coalesce((select p.client_id from public.projects p where p.id = d.project_id), d.client_id)
+       is not distinct from v_client;
+end;
+$$;
+
+revoke all on function public.drive_folder_tree_items(uuid, uuid) from public, anon, authenticated;
+
+create or replace function public.drive_shares_no_pages_yet()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if new.item_type = 'document'
+     and exists (select 1 from public.documents d where d.id = new.item_id and d.format = 'page') then
+    raise exception 'Een pagina delen kan nog niet; dat komt met de vrijgave van een versie.' using errcode = '22023';
+  end if;
+  return new;
+end;
+$$;
+
+revoke all on function public.drive_shares_no_pages_yet() from public, anon, authenticated;
+
+drop trigger if exists drive_shares_no_pages_yet on public.drive_shares;
+create trigger drive_shares_no_pages_yet
+  before insert or update of item_type, item_id on public.drive_shares
+  for each row execute function public.drive_shares_no_pages_yet();
 
 -- ── 8. Het logboek ──────────────────────────────────────────────────────────
 -- De definitie uit 20261111220000, met bij documents de nieuwe velden erbij.

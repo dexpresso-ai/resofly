@@ -183,9 +183,12 @@ begin
   return v;
 end $$;
 
+select edit_version as ev0 from public.documents where id = :'wortel' \gset
 select pg_temp.gelijk(pg_temp.versie(:'eigenaar', :'wortel'), 1, 'de eerste versie');
 select pg_temp.gelijk(pg_temp.versie(:'eigenaar', :'wortel'), 1, 'zonder wijziging geen nieuwe versie');
 update public.documents set body = pg_temp.alinea('Koffie kost nu een euro.') where id = :'wortel';
+select pg_temp.gelijk((select edit_version from public.documents where id = :'wortel'), :'ev0'::integer + 1, 'een nieuwe inhoud verhoogt edit_version');
+select pg_temp.weigert(format('update public.documents set content = %L where id = %L', 'Andere tekst', :'wortel'), 'via de blokken', 'bij een pagina alleen content wijzigen kan niet');
 select pg_temp.gelijk(pg_temp.versie(:'eigenaar', :'wortel'), 2, 'na een wijziging versie 2');
 select pg_temp.weigert(format('select pg_temp.versie(%L, %L)', :'lezer', :'wortel'), 'Je mag deze pagina niet bewerken', 'wie alleen mag lezen, legt geen versie vast');
 reset role;
@@ -201,6 +204,7 @@ select pg_temp.beheer();
 select pg_temp.gelijk(:'teruggezet'::integer, 3, 'terugzetten is zelf versie 3');
 select pg_temp.gelijk((select content from public.documents where id = :'wortel'), 'Welkom Koffie is gratis in de keuken. vet', 'en de pagina heeft weer de oude tekst');
 select pg_temp.gelijk((select reason from public.document_versions where document_id = :'wortel' and version = 3), 'teruggezet', 'met de reden erbij');
+select pg_temp.gelijk((select edit_version from public.documents where id = :'wortel'), :'ev0'::integer + 2, 'terugzetten verhoogt edit_version ook');
 
 -- ── 6. Zoeken ───────────────────────────────────────────────────────────────
 create function pg_temp.zoek(p_user uuid, p_org uuid, p_vraag text) returns text language plpgsql as $$
@@ -221,6 +225,17 @@ select pg_temp.gelijk(pg_temp.zoek(:'eigenaar_b', :'org_a', 'koff'), '', 'een an
 select pg_temp.gelijk(pg_temp.zoek(:'eigenaar', :'org_a', '<>&'), '', 'een vraag zonder woorden vindt niets, zonder fout');
 update public.documents set archived_at = now() where id = :'kleinkind';
 select pg_temp.gelijk(pg_temp.zoek(:'eigenaar', :'org_a', 'klacht'), '', 'wat in de prullenbak ligt, vind je niet');
+
+-- ── 7. Een pagina delen kan pas vanaf stap 1C ──────────────────────────────
+insert into public.content_folders (organization_id, name) values (:'org_a', 'Intern') returning id as intern \gset
+select pg_temp.pagina(:'eigenaar', :'org_a', 'Concept', pg_temp.alinea('Nog niet klaar.'), null, null, :'intern') as concept \gset
+insert into public.documents (organization_id, created_by, title, content, folder_id)
+values (:'org_a', :'eigenaar', 'Huisregels', '<p>Koffie is gratis.</p>', :'intern') returning id as huisregels \gset
+insert into public.drive_shares (organization_id, created_by, item_type, item_id, item_name, recipient_kind, recipient_email, token_hash)
+values (:'org_a', :'eigenaar', 'folder', :'intern', 'Intern', 'link', 'gast@paginas.test', 'hash-p') returning id as mapdeling \gset
+select pg_temp.gelijk((select string_agg(name, ',' order by name) from public.drive_share_items(:'mapdeling')), 'Huisregels', 'een gedeelde map neemt geen pagina mee');
+select pg_temp.weigert(format('insert into public.drive_shares (organization_id, created_by, item_type, item_id, item_name, recipient_kind, recipient_email, token_hash) values (%L, %L, %L, %L, %L, %L, %L, %L)',
+  :'org_a', :'eigenaar', 'document', :'concept', 'Concept', 'link', 'gast@paginas.test', 'hash-q'), 'Een pagina delen kan nog niet', 'een pagina zelf delen kan nog niet');
 
 \o
 \echo Alle controles van paginas_datamodel.sql geslaagd.
