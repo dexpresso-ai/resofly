@@ -232,8 +232,11 @@ eigen changelog.
 - Een nieuwe tabel `drive_share_entries` (deling, soort, item, wie, wanneer). Deel je een map,
   dan komt daarin wat er op dat moment in staat. `drive_share_items` leest voortaan die lijst
   (met de klantcontrole die er al is) en niet meer de map zelf.
-- Zet je iets in een gedeelde map, dan vraagt de app: "Ook delen met [klant]?" Het vinkje staat
-  standaard uit. Wat niet gedeeld is, krijgt in de drive het label "Niet gedeeld".
+- Zet je iets in een gedeelde map, dan krijgt het in de drive het label "Niet gedeeld".
+- Bovenaan de map staat dan een balk ("2 bestanden in deze gedeelde map zijn nog niet gedeeld met
+  …"), met de knop "Ook delen".
+- Een balk in plaats van een vraag na elke upload. Hij vangt elke weg waarlangs iets in de map komt
+  (uploaden, een nieuw Word-bestand, verplaatsen, een notitie), en hij zit niet in de weg.
 - Bestaande mapdelingen (alleen op staging; er is nog geen productie) krijgen één keer hun
   huidige inhoud in `drive_share_entries`. Zo verdwijnt er bij de klant niets.
 - Een bestandsoverdracht (`drive_folder_leaves`) blijft zoals hij is: verzenden is al een
@@ -482,3 +485,25 @@ owner en admin mogen publishen". Openbaar reikt verder dan delen met één klant
 - **Een gewoon teamlid** ziet wel dat een pagina openbaar staat, maar kan dat niet veranderen.
 - **Test:** een Member en een Viewer kunnen niet publiceren of bijwerken, ook niet rechtstreeks
   tegen de database.
+
+## 18. Bouwvolgorde in tussenstappen
+
+Vastgelegd op 27 november 2026: "Bouw deze functionaliteiten in, conform plan. En zorg ervoor dat
+je alles keurig goed de fases opdeelt".
+
+Elke stap is klein genoeg voor één werksessie, en wordt los opgeleverd: code, tests, changelog,
+gepusht. Pas daarna begint de volgende, het liefst in een nieuw gesprek, met dit plan en de
+changelog als overdracht. Een stap gaat naar staging zodra de tests groen zijn en de gebruiker
+akkoord is.
+
+| Stap | Wat | Status |
+| --- | --- | --- |
+| 0 | Gedeelde mappen vullen zich niet meer vanzelf (§7). | in aanbouw (27 november) |
+| 1A-1 | Datamodel en migraties: de kolommen op `documents`, `document_versions`, de triggers (boom, overerving, organisatie, controle op `body`), `claim_page_edit`, de zoekindex met zoek-RPC, de logboekvelden. Met databasetests, nog zonder scherm. | gepland |
+| 1A-2 | Laden en zoeken: de kolomlijst in `loadCoreData`, `excerpt` in de kaarten, GlobalSearch en `content.search` via de zoek-RPC. In één stap, anders breekt zoeken (§6). | gepland |
+| 1A-3 | De editor: Tiptap als eigen stuk bundel, het pagina-scherm met eigen adres, de basisblokken, opslaan met `edit_version`, één tegelijk bewerken, versies. | gepland |
+| 1A-4 | De overige blokken: gewone tabel, afbeelding, bestand, callout, uitklapper, inhoudsopgave, subpagina. Het slash-menu en de +-knop op de telefoon. | gepland |
+| 1A-5 | De drive: de boom, het eigen dossier met logo, "Pagina" in het Nieuw-menu, slepen, de prullenbak. De tekstdocumenten omzetten. | gepland |
+| 1B-1 | Proef: huisstijlletters en emoji in een PDF via Collabora (§9). | gepland |
+| 1B-2 | Export: `page-export`, de DOCX-module, het interne PDF-pad, het exportvenster, vastleggen in het dossier, de Word-kopie. | gepland |
+| 1C | Pagina's delen: vrijgeven, "Bijwerken bij klant", subpagina's, de weergave in het portaal en bij een geheime link. | gepland |
