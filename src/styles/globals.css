@@ -13755,3 +13755,11 @@ button.alog-feed-row:hover{background:var(--bg3)}
 @media (max-width:640px){
   .page-editor-parent span{display:none}
 }
+/* Stap 1A-4b: een afbeelding uit ResoFly, met een melding als hij laadt of weg is. */
+.page-prose .tiptap .page-image{margin:1em 0}
+.page-image img{display:block;max-width:100%;height:auto;border-radius:10px}
+.page-image.is-loading img,.page-image.is-missing img{display:none}
+.page-image-note{font-size:13px;color:var(--muted2)}
+.page-image.is-loading,.page-image.is-missing{padding:18px;border:1px dashed var(--border2);border-radius:12px;background:var(--bg2);text-align:center}
+.page-image.is-missing .page-image-note{font-style:italic}
+.page-prose .tiptap .page-image.ProseMirror-selectednode img{outline:2px solid rgba(var(--accent-rgb),.6);outline-offset:2px}

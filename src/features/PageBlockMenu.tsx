@@ -16,14 +16,13 @@ import { Extension } from '@tiptap/core';
 import type { ChainedCommands, Editor, Range } from '@tiptap/core';
 import { Suggestion, exitSuggestion } from '@tiptap/suggestion';
 import type { SuggestionProps } from '@tiptap/suggestion';
-import { NodeSelection, PluginKey, TextSelection } from '@tiptap/pm/state';
-import type { Transaction } from '@tiptap/pm/state';
+import { PluginKey } from '@tiptap/pm/state';
 import {
-  Braces, FileText, Heading1, Heading2, Heading3, List, ListChecks, ListCollapse, ListOrdered, ListTree, MessageSquareText, Minus,
-  Pilcrow, Quote, Table2,
+  Braces, FileText, Heading1, Heading2, Heading3, Image as ImageIcon, List, ListChecks, ListCollapse, ListOrdered, ListTree,
+  MessageSquareText, Minus, Pilcrow, Quote, Table2,
 } from 'lucide-react';
 import { filterPageBlocks, type PageBlock, type PageBlockKey } from '../lib/pageBlocks';
-import { pageLinksOf } from '../lib/pageEditorExtensions';
+import { cursorOnText, imageFilesOf, insertImages, pageLinksOf, pageMediaOf } from '../lib/pageEditorExtensions';
 import { useBackStep } from '../lib/useBackStep';
 
 const ICONS: Record<PageBlockKey, JSX.Element> = {
@@ -39,38 +38,11 @@ const ICONS: Record<PageBlockKey, JSX.Element> = {
   uitklapper: <ListCollapse size={17} />,
   inhoudsopgave: <ListTree size={17} />,
   subpagina: <FileText size={17} />,
+  afbeelding: <ImageIcon size={17} />,
   citaat: <Quote size={17} />,
   code: <Braces size={17} />,
   scheidingslijn: <Minus size={17} />,
 };
-
-/**
- * Na een blok zonder tekst hoort de cursor op een tekstregel. Tiptap zette na
- * een scheidingslijn de selectie óp het blok dat erna kwam (een tabel, een
- * callout), en na een inhoudsopgave op de inhoudsopgave zelf: de volgende
- * toets overschreef dan dat blok. prosemirror-tables maakte van zo'n tabel
- * zelfs een selectie van alle cellen.
- */
-function cursorOnText(where: 'na-dit-blok' | 'voor-het-volgende') {
-  return ({ tr, dispatch }: { tr: Transaction; dispatch?: unknown }): boolean => {
-    if (!dispatch || !(tr.selection instanceof NodeSelection)) return true;
-    // Na een inhoudsopgave of subpagina is het geselecteerde blok het nieuwe
-    // zelf: erachter verder. Na een lijn is het het blok dáárna: ervoor verder.
-    return placeTextCursor(tr, where === 'na-dit-blok' ? tr.selection.to : tr.selection.from);
-  };
-}
-
-function placeTextCursor(tr: Transaction, pos: number): boolean {
-  const paragraph = tr.doc.type.schema.nodes.paragraph;
-  const next = tr.doc.resolve(pos).nodeAfter;
-  if (next?.isTextblock) {
-    tr.setSelection(TextSelection.create(tr.doc, pos + 1));
-  } else {
-    tr.insert(pos, paragraph.create());
-    tr.setSelection(TextSelection.create(tr.doc, pos + 1));
-  }
-  return true;
-}
 
 /** Wat elk blok doet, op een keten die echt draait of alleen kijkt (can). */
 function blockChain(chain: ChainedCommands, key: PageBlockKey): ChainedCommands {
@@ -89,6 +61,8 @@ function blockChain(chain: ChainedCommands, key: PageBlockKey): ChainedCommands 
     // Alleen om te kijken of het kan: de echte subpagina maakt runPageBlock,
     // eerst in de database en dan pas het blok.
     case 'subpagina': return chain.insertContent({ type: 'subpage', attrs: { pageId: PROBE_PAGE_ID } });
+    // Idem: de echte afbeelding komt na het kiezen en uploaden (pickImages).
+    case 'afbeelding': return chain.insertContent({ type: 'image', attrs: { attachmentId: PROBE_PAGE_ID } });
     case 'citaat': return chain.toggleBlockquote();
     case 'code': return chain.setCodeBlock();
     case 'scheidingslijn': return chain.setHorizontalRule().command(cursorOnText('voor-het-volgende'));
@@ -106,6 +80,7 @@ export function canRunPageBlock(editor: Editor, key: PageBlockKey): boolean {
   if (editor.isActive('table') && NOT_IN_TABLE.has(key)) return false;
   if (editor.isActive('callout') && NOT_IN_CALLOUT.has(key)) return false;
   if (key === 'subpagina' && !pageLinksOf(editor)) return false;
+  if (key === 'afbeelding' && !pageMediaOf(editor)) return false;
   try {
     return blockChain(editor.can().chain(), key).run();
   } catch {
@@ -146,9 +121,32 @@ function insertSubpage(editor: Editor, range?: Range): boolean {
   return true;
 }
 
+/** Een afbeelding van de computer kiezen, uploaden en invoegen. */
+function pickImages(editor: Editor, range?: Range): boolean {
+  if (!pageMediaOf(editor)) return false;
+  if (range) editor.chain().focus().deleteRange(range).run();
+  // In de pagina hangen zolang je kiest: een los invoerveld kon de browser
+  // opruimen voordat de keuze binnen was, en dan kwam er niets.
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'image/png,image/jpeg,image/gif,image/webp,image/avif';
+  input.multiple = true;
+  input.hidden = true;
+  document.body.append(input);
+  input.addEventListener('change', () => {
+    const files = imageFilesOf(input.files);
+    input.remove();
+    void insertImages(editor, files);
+  });
+  input.addEventListener('cancel', () => input.remove());
+  input.click();
+  return true;
+}
+
 /** Voert het blok uit. Met `range` (na `/`) eerst de schuine streep en het zoekwoord weg. */
 export function runPageBlock(editor: Editor, key: PageBlockKey, range?: Range): boolean {
   if (key === 'subpagina') return insertSubpage(editor, range);
+  if (key === 'afbeelding') return pickImages(editor, range);
   let chain = editor.chain().focus();
   if (range) chain = chain.deleteRange(range);
   const done = blockChain(chain, key).run();

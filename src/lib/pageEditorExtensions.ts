@@ -16,6 +16,8 @@
 import { Extension, Node, mergeAttributes } from '@tiptap/core';
 import type { Editor, NodeViewRenderer } from '@tiptap/core';
 import type { Node as PmNode } from '@tiptap/pm/model';
+import { NodeSelection, Plugin, TextSelection } from '@tiptap/pm/state';
+import type { Transaction } from '@tiptap/pm/state';
 import { columnResizing } from '@tiptap/pm/tables';
 import { StarterKit } from '@tiptap/starter-kit';
 import { TaskItem, TaskList } from '@tiptap/extension-list';
@@ -29,7 +31,7 @@ import { calloutVariant, isAllowedPageLink } from './pageSchema.ts';
 export const PAGE_BLOCKS_WITH_ID = [
   'paragraph', 'heading', 'bulletList', 'orderedList', 'listItem', 'taskList', 'taskItem',
   'blockquote', 'codeBlock', 'horizontalRule',
-  'table', 'callout', 'details', 'tableOfContents', 'subpage',
+  'table', 'callout', 'details', 'tableOfContents', 'subpage', 'image',
 ] as const;
 
 /** De smalste kolom van een tabel, ook bij slepen. */
@@ -278,6 +280,194 @@ export const Subpage = Node.create({
 });
 
 /**
+ * Na een blok zonder tekst hoort de cursor op een tekstregel. Tiptap zette na
+ * een scheidingslijn de selectie óp het blok dat erna kwam (een tabel, een
+ * callout), en na een inhoudsopgave op de inhoudsopgave zelf: de volgende
+ * toets overschreef dan dat blok. prosemirror-tables maakte van zo'n tabel
+ * zelfs een selectie van alle cellen.
+ */
+export function cursorOnText(where: 'na-dit-blok' | 'voor-het-volgende') {
+  return ({ tr, dispatch }: { tr: Transaction; dispatch?: unknown }): boolean => {
+    if (!dispatch || !(tr.selection instanceof NodeSelection)) return true;
+    // Na een inhoudsopgave, subpagina of afbeelding is het geselecteerde blok
+    // het nieuwe zelf: erachter verder. Na een lijn is het het blok dáárna: ervoor verder.
+    return placeTextCursor(tr, where === 'na-dit-blok' ? tr.selection.to : tr.selection.from);
+  };
+}
+
+function placeTextCursor(tr: Transaction, pos: number): boolean {
+  const paragraph = tr.doc.type.schema.nodes.paragraph;
+  const next = tr.doc.resolve(pos).nodeAfter;
+  if (next?.isTextblock) {
+    tr.setSelection(TextSelection.create(tr.doc, pos + 1));
+  } else {
+    tr.insert(pos, paragraph.create());
+    tr.setSelection(TextSelection.create(tr.doc, pos + 1));
+  }
+  return true;
+}
+
+/**
+ * Wat een afbeelding nodig heeft van de editor eromheen (PageEditor zet dit in
+ * editor.storage.image.media).
+ */
+export type PageMedia = {
+  /** Een adres om te tonen (een blob-URL), of null als de afbeelding er niet (meer) is. */
+  imageUrl: (attachmentId: string) => Promise<string | null>;
+  /** Een bestand bij deze pagina zetten; geeft het id van de bijlage, of null als het niet lukte. */
+  upload: (file: File) => Promise<string | null>;
+};
+
+export function pageMediaOf(editor: Editor): PageMedia | null {
+  const storage = (editor.storage as unknown as Record<string, { media?: PageMedia | null } | undefined>).image;
+  return storage?.media ?? null;
+}
+
+/** Plaatjes die een browser zelf toont; SVG bewust niet (er kan code in staan). */
+const IMAGE_TYPES = /^image\/(png|jpe?g|gif|webp|avif)$/;
+
+export function imageFilesOf(list: FileList | File[] | null | undefined): File[] {
+  return Array.from(list ?? []).filter(file => IMAGE_TYPES.test(file.type));
+}
+
+/** Uploaden en invoegen, op `pos` of waar de cursor staat. Eén voor één, in volgorde. */
+export async function insertImages(editor: Editor, files: File[], pos?: number): Promise<void> {
+  const media = pageMediaOf(editor);
+  if (!media) return;
+  let at = pos;
+  for (const file of files) {
+    const attachmentId = await media.upload(file);
+    if (!attachmentId || editor.isDestroyed || !editor.isEditable) return;
+    const content = { type: 'image', attrs: { attachmentId, alt: '' } };
+    const chain = editor.chain().focus();
+    if (typeof at === 'number') chain.insertContentAt(at, content);
+    else chain.insertContent(content);
+    // De cursor achter de afbeelding, op tekst: bleef de afbeelding
+    // geselecteerd, dan verving de volgende toets of het volgende plaatje hem.
+    chain.command(cursorOnText('na-dit-blok')).run();
+    at = undefined;
+  }
+}
+
+/**
+ * Een afbeelding: een bestand in ResoFly (attachmentId), nooit een adres. Een
+ * adres van buiten zou in een klantpagina een volgpixel zijn; de database
+ * weigert src (page_body_problem). Het adres om te tonen is een blob-URL die
+ * alleen in de weergave leeft, niet in body: anders zou elke opening de pagina
+ * wijzigen en opslaan.
+ */
+const imageView: NodeViewRenderer = ({ editor, node }) => {
+  const dom = document.createElement('figure');
+  dom.className = 'page-image';
+  dom.contentEditable = 'false';
+  const img = document.createElement('img');
+  img.draggable = false;
+  img.alt = typeof node.attrs.alt === 'string' ? node.attrs.alt : '';
+  const note = document.createElement('figcaption');
+  note.className = 'page-image-note';
+  dom.append(img, note);
+  let current: string | null = typeof node.attrs.attachmentId === 'string' ? node.attrs.attachmentId : null;
+  let alive = true;
+  const show = (state: 'laden' | 'klaar' | 'weg' | 'fout', url?: string) => {
+    dom.classList.toggle('is-loading', state === 'laden');
+    dom.classList.toggle('is-missing', state === 'weg' || state === 'fout');
+    note.textContent = state === 'laden' ? 'Afbeelding laden…'
+      : state === 'weg' ? 'Afbeelding niet gevonden'
+        : state === 'fout' ? 'De afbeelding kon niet worden geladen' : '';
+    if (url) img.src = url;
+    else img.removeAttribute('src');
+  };
+  const load = (attachmentId: string | null) => {
+    const media = pageMediaOf(editor);
+    if (!attachmentId || !media) { show('weg'); return; }
+    show('laden');
+    media.imageUrl(attachmentId).then(url => {
+      if (!alive || current !== attachmentId) return;
+      show(url ? 'klaar' : 'weg', url ?? undefined);
+    }, () => {
+      if (alive && current === attachmentId) show('fout');
+    });
+  };
+  load(current);
+  return {
+    dom,
+    update: updated => {
+      if (updated.type.name !== 'image') return false;
+      img.alt = typeof updated.attrs.alt === 'string' ? updated.attrs.alt : '';
+      const next = typeof updated.attrs.attachmentId === 'string' ? updated.attrs.attachmentId : null;
+      if (next !== current) { current = next; load(current); }
+      return true;
+    },
+    ignoreMutation: () => true,
+    destroy: () => { alive = false; },
+  };
+};
+
+export const PageImage = Node.create({
+  name: 'image',
+  group: 'block',
+  atom: true,
+  selectable: true,
+  draggable: false,
+  addStorage() {
+    return { media: null as PageMedia | null };
+  },
+  addAttributes() {
+    return {
+      attachmentId: {
+        default: null,
+        parseHTML: (element: HTMLElement) => element.getAttribute('data-attachment-id'),
+        renderHTML: (attributes: Record<string, unknown>) => ({ 'data-attachment-id': attributes.attachmentId }),
+      },
+      alt: {
+        default: '',
+        parseHTML: (element: HTMLElement) => element.getAttribute('alt') ?? '',
+        renderHTML: (attributes: Record<string, unknown>) => ({ alt: typeof attributes.alt === 'string' ? attributes.alt : '' }),
+      },
+    };
+  },
+  parseHTML() {
+    // Alleen een afbeelding uit ResoFly, met een geldig id. Een geplakt plaatje
+    // van buiten (<img src="https://…">) wordt niets: het adres mag niet in de
+    // pagina, en zonder bestand weigerde de database elke volgende opslag.
+    return [{
+      tag: 'img[data-attachment-id]',
+      getAttrs: (element: HTMLElement) => (UUID_PATTERN.test(element.getAttribute('data-attachment-id') ?? '') ? null : false),
+    }];
+  },
+  renderHTML({ HTMLAttributes }) {
+    return ['img', mergeAttributes(HTMLAttributes, { class: 'page-image' })];
+  },
+  addNodeView() {
+    return imageView;
+  },
+  addProseMirrorPlugins() {
+    const editor = this.editor;
+    return [new Plugin({
+      props: {
+        // Een plaatje plakken of erop slepen: uploaden als bijlage van deze pagina.
+        handlePaste: (view, event) => {
+          const files = imageFilesOf(event.clipboardData?.files);
+          if (files.length === 0 || !view.editable || !pageMediaOf(editor)) return false;
+          event.preventDefault();
+          void insertImages(editor, files);
+          return true;
+        },
+        handleDrop: (view, event, _slice, moved) => {
+          if (moved) return false;
+          const files = imageFilesOf((event as DragEvent).dataTransfer?.files);
+          if (files.length === 0 || !view.editable || !pageMediaOf(editor)) return false;
+          event.preventDefault();
+          const pos = view.posAtCoords({ left: (event as DragEvent).clientX, top: (event as DragEvent).clientY })?.pos;
+          void insertImages(editor, files, pos);
+          return true;
+        },
+      },
+    })];
+  },
+});
+
+/**
  * Kolombreedtes slepen. Tiptap zet dit alleen aan als de editor bij het maken
  * al bewerkbaar is (Table.addProseMirrorPlugins in 3.35.1); de onze begint op
  * alleen-lezen tot de claim er is, dus dan kon slepen nooit. Deze plugin staat
@@ -328,6 +518,7 @@ export function pageEditorExtensions(options: { placeholder?: string } = {}) {
     Callout,
     TableOfContents,
     Subpage,
+    PageImage,
     UniqueID.configure({ types: [...PAGE_BLOCKS_WITH_ID] }),
     Placeholder.configure({ placeholder: options.placeholder ?? 'Typ hier, of typ / voor een tabel, callout of ander blok.' }),
   ];

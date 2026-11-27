@@ -2340,6 +2340,97 @@ async function scenarioDocumenten() {
     gelijk(await titelVan(opnieuw), blokTitel, 'klikken op een verdwenen subpagina opende iets');
     await sluitPagina(opnieuw);
   });
+  // ── Afbeeldingen (stap 1A-4b) ──────────────────────────────────────────────
+  /** De media-worker voor dit tabblad: uploads in nep-R2, en weer ophalen met de sleutel. */
+  const mediaVoor = async (page) => {
+    const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': 'GET, POST, OPTIONS' };
+    await page.route(/\/__media\/(upload|file\/.+)$/, async (route) => {
+      const verzoek = route.request();
+      if (verzoek.method() === 'OPTIONS') { await route.fulfill({ status: 204, headers: cors }); return; }
+      const url = new URL(verzoek.url());
+      if (url.pathname.endsWith('/upload')) {
+        const kop = verzoek.headers();
+        const naam = decodeURIComponent(kop['x-file-name'] ?? 'bestand');
+        const sleutel = `${kop['x-organization-id']}/${kop['x-entity-type']}/${kop['x-entity-id']}/${randomUUID()}-${naam}`;
+        post.r2.set(sleutel, new Uint8Array(verzoek.postDataBuffer() ?? Buffer.alloc(0)));
+        await route.fulfill({ status: 200, contentType: 'application/json', headers: cors, body: JSON.stringify({ ok: true, key: sleutel }) });
+        return;
+      }
+      const bytes = post.r2.get(decodeURIComponent(url.pathname.replace(/^.*\/__media\/file\//, '')));
+      if (!bytes) { await route.fulfill({ status: 404, headers: cors, body: 'niet gevonden' }); return; }
+      await route.fulfill({ status: 200, contentType: 'image/png', headers: cors, body: Buffer.from(bytes) });
+    });
+  };
+  const openMetMedia = async () => {
+    const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+    await mediaVoor(lid.page);
+    await naarKlantdossier(lid, w.klantA.name);
+    await blokRij(lid.page).click();
+    await lid.page.locator('.page-editor').waitFor({ timeout: 20000 });
+    await wachtOpgeslagen(lid.page, 'de editor kwam niet in bewerken');
+    return lid.page;
+  };
+  const geladen = (beelden) => beelden.evaluateAll((imgs) => imgs.length > 0 && imgs.every((img) => img.complete && img.naturalWidth > 0));
+
+  await uiStap('afbeeldingen: kiezen via /afbeelding en plakken; een plaatje van buiten wordt niets; een verdwenen afbeelding zegt het', async () => {
+    if (!blokPagina) throw new Error('geen pagina');
+    const page = await openMetMedia();
+    await editorVak(page).locator('h2').filter({ hasText: 'Planning' }).click();
+    await page.keyboard.press('Control+End');
+    await page.keyboard.type('/afb');
+    const menu = page.locator('.page-block-menu');
+    await menu.waitFor({ timeout: 10000 });
+    await wachtTot(async () => tekst(await menu.locator('.page-block-item.is-active .page-block-label').innerText().catch(() => '')) === 'Afbeelding', { melding: 'Afbeelding staat niet bovenaan' });
+    const [kiezer] = await Promise.all([page.waitForEvent('filechooser'), page.keyboard.press('Enter')]);
+    await kiezer.setFiles({ name: 'foto.png', mimeType: 'image/png', buffer: PNG });
+    const beeld = editorVak(page).locator('.page-image img');
+    await wachtTot(async () => (await beeld.count()) === 1 && (await geladen(beeld)), { melding: 'de afbeelding staat niet in beeld' });
+    await wachtOpgeslagen(page);
+    const bijlage = sqlRij(`select id, entity_type from public.attachments where organization_id = ${q(w.orgId)} and entity_id = ${q(blokPagina.id)} and name = 'foto.png'`);
+    verwacht(bijlage, 'geen bijlage bij de pagina');
+    gelijk(bijlage.entity_type, 'document', 'de afbeelding is een bijlage van de pagina');
+    gelijk(telBlok(blokPagina.id, `@.type == "image" && @.attrs.attachmentId == "${bijlage.id}"`), 1, 'het blok wijst naar de bijlage');
+    gelijk(telBlok(blokPagina.id, '@.type == "image" && exists(@.attrs.src)'), 0, 'geen adres in body');
+    // Na het invoegen staat de cursor onder de afbeelding: typen vervangt hem niet.
+    await page.keyboard.type('Onder de foto');
+    await wachtTot(async () => (await editorVak(page).locator('p').filter({ hasText: 'Onder de foto' }).count()) === 1, { melding: 'de tekst kwam niet onder de afbeelding' });
+    gelijk(await beeld.count(), 1, 'de afbeelding staat er nog na typen');
+    // Een plaatje als bestand plakken wordt een tweede afbeelding.
+    await page.evaluate((png) => {
+      const bytes = Uint8Array.from(atob(png), (teken) => teken.charCodeAt(0));
+      const data = new DataTransfer();
+      data.items.add(new File([bytes], 'geplakt.png', { type: 'image/png' }));
+      document.querySelector('.page-editor .tiptap').dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+    }, PNG.toString('base64'));
+    await wachtTot(async () => (await beeld.count()) === 2 && (await geladen(beeld)), { melding: 'een geplakt plaatje werd geen afbeelding' });
+    // Een plaatje van buiten (HTML met een adres) wordt niets; de tekst eromheen wel.
+    await page.evaluate(() => {
+      const data = new DataTransfer();
+      data.setData('text/html', '<p>Van internet</p><img src="https://volg.test/pixel.png" alt="volg">');
+      data.setData('text/plain', 'Van internet');
+      document.querySelector('.page-editor .tiptap').dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+    });
+    await wachtTot(async () => (await editorVak(page).locator('p').filter({ hasText: 'Van internet' }).count()) === 1, { melding: 'de geplakte tekst kwam er niet bij' });
+    gelijk(await beeld.count(), 2, 'afbeeldingen na een plaatje van buiten');
+    await wachtOpgeslagen(page);
+    verwacht(!JSON.stringify(blokRijInDb().body).includes('volg.test'), 'het adres van buiten staat in body');
+    await sluitPagina(page);
+    // Opnieuw openen: de afbeeldingen komen terug van de worker, en openen verandert niets.
+    const voor = blokRijInDb();
+    const terug = await openMetMedia();
+    const beeldTerug = editorVak(terug).locator('.page-image img');
+    await wachtTot(async () => (await beeldTerug.count()) === 2 && (await geladen(beeldTerug)), { melding: 'de afbeeldingen komen niet terug' });
+    await terug.waitForTimeout(1500);
+    await sluitPagina(terug);
+    const na = blokRijInDb();
+    gelijk([na.edit_version, na.gewijzigd], [voor.edit_version, voor.gewijzigd], 'openen met afbeeldingen verandert niets');
+    // Een verdwenen afbeelding: het blok zegt het.
+    sql(`delete from public.attachments where id = ${q(bijlage.id)}`);
+    const zonder = await openMetMedia();
+    const weg = editorVak(zonder).locator('.page-image.is-missing');
+    await wachtTot(async () => tekst(await weg.innerText().catch(() => '')) === 'Afbeelding niet gevonden', { melding: 'een verdwenen afbeelding toont geen melding' });
+    await sluitPagina(zonder);
+  });
 }
 
 // ── Bank: mutaties met de hand boeken ──────────────────────────────────────

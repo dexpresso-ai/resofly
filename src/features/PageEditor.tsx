@@ -40,11 +40,12 @@ import {
   TableCellsSplit, Trash2, TriangleAlert, Underline as UnderlineIcon, Undo2, X,
 } from 'lucide-react';
 import { isInTable, moveTableColumn, moveTableRow, selectedRect } from '@tiptap/pm/tables';
-import { pageEditorExtensions, type PageLinks } from '../lib/pageEditorExtensions';
+import { pageEditorExtensions, type PageLinks, type PageMedia } from '../lib/pageEditorExtensions';
+import { fetchStoredFileBlob, uploadToR2 } from '../lib/r2';
 import { calloutVariant, isAllowedPageLink, type CalloutVariant } from '../lib/pageSchema';
 import { pageBodyFit } from '../lib/pageBodyCheck';
 import {
-  claimPageEdit, createPage, listPageVersions, loadPage, loadPageVersion, pageTitle, releasePageEdit, restorePageVersion, savePage,
+  attachmentStorageKey, claimPageEdit, createPage, listPageVersions, loadPage, loadPageVersion, pageTitle, releasePageEdit, restorePageVersion, savePage,
   savePageVersion, type PageVersionSummary,
 } from '../lib/repository';
 import { useBackStep } from '../lib/useBackStep';
@@ -432,6 +433,14 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
   // en de claim los is.
   const closeRef = useRef(close);
   closeRef.current = close;
+  const linksRef = useRef<PageLinks | null>(null);
+  const mediaRef = useRef<PageMedia | null>(null);
+  /** De voorvertoning van een versie: titels en afbeeldingen wel, openen en uploaden niet. */
+  const connectPreview = useCallback((preview: Editor) => {
+    const store = preview.storage as unknown as Record<string, Record<string, unknown>>;
+    if (linksRef.current) store.subpage.links = { ...linksRef.current, open: () => {}, create: async () => null };
+    if (mediaRef.current) store.image.media = { ...mediaRef.current, upload: async () => null };
+  }, []);
   useEffect(() => {
     if (!editor) return;
     const titles = new Map<string, Promise<string | null>>();
@@ -458,6 +467,48 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
       },
     };
     (editor.storage as unknown as Record<string, { links: PageLinks | null }>).subpage.links = links;
+    linksRef.current = links;
+  }, [editor, documentId, organizationId]);
+
+  // Afbeeldingen (stap 1A-4b): tonen via een blob-URL (de worker wil een
+  // Bearer-token, dat kan een <img> niet sturen), uploaden als bijlage van deze
+  // pagina. De blob-URL's gaan weg als de editor sluit.
+  useEffect(() => {
+    if (!editor) return;
+    const urls = new Map<string, Promise<string | null>>();
+    const made: string[] = [];
+    const remember = (blob: Blob) => { const url = URL.createObjectURL(blob); made.push(url); return url; };
+    const media: PageMedia = {
+      imageUrl: attachmentId => {
+        let url = urls.get(attachmentId);
+        if (!url) {
+          url = (async () => {
+            // Niet te zien (weg, of geen recht): null, en het blok zegt "niet gevonden".
+            const key = await attachmentStorageKey(attachmentId, organizationId);
+            if (!key) return null;
+            const blob = await fetchStoredFileBlob(key);
+            return blob ? remember(blob) : null;
+          })();
+          urls.set(attachmentId, url);
+          url.catch(() => urls.delete(attachmentId));
+        }
+        return url;
+      },
+      upload: async file => {
+        try {
+          const attachment = await uploadToR2(file, organizationId, { entity_type: 'document', entity_id: documentId });
+          // Meteen tonen wat er net is gekozen, zonder het terug te halen.
+          urls.set(attachment.id, Promise.resolve(remember(file)));
+          return attachment.id;
+        } catch (error) {
+          setMessage((error as { message?: string } | null)?.message || 'De afbeelding kon niet worden geüpload.');
+          return null;
+        }
+      },
+    };
+    (editor.storage as unknown as Record<string, { media: PageMedia | null }>).image.media = media;
+    mediaRef.current = media;
+    return () => { for (const url of made) URL.revokeObjectURL(url); };
   }, [editor, documentId, organizationId]);
 
   // De titel van de bovenliggende pagina, voor de knop omhoog.
@@ -557,6 +608,7 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
       </div>}
 
       {versionsOpen && <VersionsPanel
+        connectPreview={connectPreview}
         documentId={documentId}
         organizationId={organizationId}
         canRestore={editable}
@@ -785,7 +837,8 @@ function Toolbar({ editor, onInsert }: { editor: Editor; onInsert: (anchor: DOMR
 }
 
 /** Het versiepaneel (stap 1A-3b): de lijst, een voorvertoning, en terugzetten. */
-function VersionsPanel({ documentId, organizationId, canRestore, nameOf, onRestore, onClose }: {
+function VersionsPanel({ connectPreview, documentId, organizationId, canRestore, nameOf, onRestore, onClose }: {
+  connectPreview: (preview: Editor) => void;
   documentId: string;
   organizationId: string;
   canRestore: boolean;
@@ -837,7 +890,7 @@ function VersionsPanel({ documentId, organizationId, canRestore, nameOf, onResto
           <span>Zo zag versie {selected.version} eruit</span>
           {canRestore && <button type="button" className="btn btn-primary" onClick={() => onRestore(selected)}>Deze versie terugzetten</button>}
         </div>
-        {preview ? <VersionPreview title={preview.title} body={preview.body} /> : <p className="page-versions-empty">Laden…</p>}
+        {preview ? <VersionPreview title={preview.title} body={preview.body} connect={connectPreview} /> : <p className="page-versions-empty">Laden…</p>}
       </div>}
     </aside>
   );
@@ -845,15 +898,17 @@ function VersionsPanel({ documentId, organizationId, canRestore, nameOf, onResto
 
 /** Een versie alleen-lezen, met dezelfde blokken als de editor. Past hij
  *  niet in deze editor, dan zeggen we dat, in plaats van een lege pagina. */
-function VersionPreview({ title, body }: { title: string; body: unknown }) {
+function VersionPreview({ title, body, connect }: { title: string; body: unknown; connect: (preview: Editor) => void }) {
   const editor = useEditor({ extensions: pageEditorExtensions({ placeholder: '' }), editable: false, content: '' }, []);
   const [problem, setProblem] = useState<string | null>(null);
   useEffect(() => {
     if (!editor) return;
+    // Vóór de inhoud: de blokken halen bij het tekenen hun titel en afbeelding op.
+    connect(editor);
     const fit = pageBodyFit(editor.schema, body);
     setProblem(fit.ok ? null : fit.unknown.length > 0 ? TOO_NEW_MESSAGE : BROKEN_MESSAGE);
     editor.commands.setContent(fit.ok ? body as JSONContent : '', { emitUpdate: false });
-  }, [editor, body]);
+  }, [editor, body, connect]);
   return <div className="page-versions-sheet">
     <h2 className="page-versions-title">{title || 'Naamloze pagina'}</h2>
     {problem && <p className="page-versions-empty">{problem}</p>}

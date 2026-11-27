@@ -7329,6 +7329,22 @@ export async function deleteAttachment(att: { id: UUID; storage_key: string; org
  * Voor het verwijderen vanuit Gerrie: de sleutel komt uit de database van nu,
  * niet uit een voorstel van eerder.
  */
+/**
+ * De opslagsleutel van een bijlage, of null als hij niet (meer) bestaat of je
+ * hem niet mag zien. Voor een afbeelding in een pagina (stap 1A-4b): een
+ * verdwenen bestand is daar gewoon "niet gevonden", geen fout.
+ */
+export async function attachmentStorageKey(id: UUID, organizationId: UUID): Promise<string | null> {
+  const { data, error } = await supabase
+    .from('attachments')
+    .select('storage_key')
+    .eq('id', id)
+    .eq('organization_id', organizationId)
+    .maybeSingle();
+  if (error) throw error;
+  return (data as { storage_key: string } | null)?.storage_key ?? null;
+}
+
 export async function loadAttachmentRef(id: UUID, organizationId: UUID): Promise<{ id: UUID; storage_key: string; organization_id: UUID; entity_type: string; entity_id: UUID }> {
   const { data, error } = await supabase
     .from('attachments')

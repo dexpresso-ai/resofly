@@ -505,7 +505,8 @@ akkoord is.
 | 1A-3b | Het versiepaneel (bekijken en terugzetten) en een eigen adres per pagina. | gebouwd en op staging gezet op 27 november; zie `docs/changelog/CHANGELOG_PAGINAS_VERSIES_ADRES_2026-11-27.md` |
 | 1A-4a | Eerst een grendel: een pagina met een blok dat de editor niet kent, gaat niet open om te bewerken. Dan de blokken zonder opslag: gewone tabel, callout, uitklapper, inhoudsopgave. Het blokmenu: `/` in de tekst en de +-knop, ook op de telefoon. Een migratie die de maten van tabelcellen en de soort callout nakijkt. | gebouwd op 27 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_BLOKKEN_2026-11-27.md` |
 | 1A-4b-1 | De subpagina (maken met `/pagina`, openen, omhoog, de terugknop langs de weg), en een migratie die afdwingt dat afbeeldingen, bestanden en subpagina's bij dezelfde organisatie en hetzelfde dossier horen (§8). | gebouwd op 27 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_SUBPAGINAS_2026-11-27.md` |
-| 1A-4b-2 | Afbeelding (uploaden, plakken, slepen) en bestand uit het dossier, met voorvertoning (§8). | gepland |
+| 1A-4b-2 | Afbeelding: uploaden, plakken, slepen (§8). | gebouwd op 27 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_AFBEELDINGEN_2026-11-27.md` |
+| 1A-4b-3 | Bestand uit het dossier (of van de computer), met naam, grootte en downloaden (§8). | gepland |
 | 1A-5 | De drive: de boom, het eigen dossier met logo, "Pagina" in het Nieuw-menu, slepen, de prullenbak. De tekstdocumenten omzetten. | gepland |
 | 1B-1 | Proef: huisstijlletters en emoji in een PDF via Collabora (§9). | gepland |
 | 1B-2 | Export: `page-export`, de DOCX-module, het interne PDF-pad, het exportvenster, vastleggen in het dossier, de Word-kopie. | gepland |
@@ -559,7 +560,8 @@ akkoord is.
   - Kolommen schuiven naar fase 2, zoals §3 toeliet.
 - **Daarna gebouwd, op de branch:** 1A-4b-1, de subpagina en de controle op verwijzingen
   (migratie 20261127150000).
-- **Volgende stap: 1A-4b-2**, afbeelding en bestand. Wat al vaststaat (uitgezocht op 27
+- **Daarna gebouwd, op de branch:** 1A-4b-2, afbeeldingen.
+- **Volgende stap: 1A-4b-3**, het bestandsblok. Wat al vaststaat (uitgezocht op 27
   november):
   - **Uploaden:** via `uploadToR2` (`src/lib/r2.ts`) met entity_type `document` en de pagina
     als entity_id, daarna `createAttachment`. Hooguit 25 MB.
