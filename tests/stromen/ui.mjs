@@ -1602,7 +1602,9 @@ const KWAAD = '<p>Gewone tekst</p><img src="x" onerror="window.__xss=(window.__x
 async function naarKlantdossier(scherm, klantNaam) {
   const page = scherm.page;
   await sluitAlles(scherm);
-  await page.locator('.sidebar-nav .nav-item').filter({ hasText: /^Inhoud/ }).first().click();
+  // Sinds 23 november heet de verkenner in het menu "Alle inhoud", onder het
+  // kopje Documenten. Daarvoor "Inhoud"; toen liep deze hulp daarop vast.
+  await page.locator('.sidebar-nav .nav-item').filter({ hasText: /^Alle inhoud/ }).first().click();
   await rustig(scherm);
   // Stond Inhoud al open in dit dossier, dan blijft hij daar: niets te doen.
   const huidig = inhoud(page).locator('.odrv-crumbs .odrv-crumb-current').first();
@@ -1738,6 +1740,51 @@ async function scenarioDocumenten() {
     await venster.waitFor({ timeout: 10000 });
     gelijk(await venster.getByRole('button', { name: 'Opslaan' }).count(), 0, 'Opslaan voor de kijker');
     gelijk(await venster.getByRole('button', { name: 'Verwijderen' }).count(), 0, 'Verwijderen voor de kijker');
+  });
+
+  // Een gedeelde map vult zich niet meer vanzelf (20261127120000): wat er later
+  // in komt, toont de drive als "Niet gedeeld", met een balk boven de map.
+  await uiStap('een gedeelde map: wat er later in komt, staat als "Niet gedeeld" met een balk, en "Ook delen" deelt het', async () => {
+    const mapNaam = `Oplevering ${Date.now().toString(36)}`;
+    const notitie = (titelNotitie, folderId) => ({
+      organization_id: w.orgId, created_by: w.medewerker.id, client_id: w.klantA.id, folder_id: folderId, title: titelNotitie, content: '<p>Tekst.</p>',
+    });
+    const map = gelukt(await rest('content_folders', { method: 'POST', token: w.medewerker.token, prefer: 'return=representation', body: { organization_id: w.orgId, client_id: w.klantA.id, name: mapNaam } }), 'map')[0];
+    gelukt(await rest('notes', { method: 'POST', token: w.medewerker.token, prefer: 'return=representation', body: notitie('Eerste versie', map.id) }), 'eerste notitie');
+    const deel = gelukt(await roep('file-share', { token: w.medewerker.token, body: { action: 'share', organizationId: w.orgId, itemType: 'folder', itemId: map.id, recipients: [{ kind: 'client' }] } }), 'map delen').results?.[0];
+    verwacht(deel && !deel.error, `delen mislukt: ${JSON.stringify(deel).slice(0, 200)}`);
+    const later = gelukt(await rest('notes', { method: 'POST', token: w.medewerker.token, prefer: 'return=representation', body: notitie('Tweede versie', map.id) }), 'tweede notitie')[0];
+
+    const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+    const page = lid.page;
+    await naarKlantdossier(lid, w.klantA.name);
+    await inhoud(page).locator('.odrv-row').filter({ hasText: mapNaam }).first().click();
+    const balk = inhoud(page).locator('.odrv-share-gap');
+    await balk.waitFor({ timeout: 15000 });
+    const zin = tekst(await balk.innerText());
+    verwacht(zin.includes('1 notitie in deze map is nog niet gedeeld met'), `balk: ${zin}`);
+    gelijk(await inhoud(page).locator('.odrv-row').filter({ hasText: 'Tweede versie' }).first().locator('.odrv-unshared').count(), 1, 'label bij de nieuwe notitie');
+    gelijk(await inhoud(page).locator('.odrv-row').filter({ hasText: 'Eerste versie' }).first().locator('.odrv-unshared').count(), 0, 'geen label bij wat al gedeeld is');
+    // Op een telefoon past de balk: de zin breekt af en de knop blijft in beeld.
+    const breed = page.viewportSize();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await rustig(lid);
+    const vak = await balk.boundingBox();
+    const knop = await balk.getByRole('button', { name: 'Ook delen' }).boundingBox();
+    verwacht(vak && knop && vak.x >= 0 && vak.x + vak.width <= 390 && knop.x + knop.width <= 390, `balk past niet op een telefoon: ${JSON.stringify({ vak, knop })}`);
+    // En het label valt niet weg achter een afgekapte naam: het staat binnen de cel.
+    const nieuweRij = inhoud(page).locator('.odrv-row').filter({ hasText: 'Tweede versie' }).first();
+    const cel = await nieuweRij.locator('.odrv-td-name').boundingBox();
+    const label = await nieuweRij.locator('.odrv-unshared').boundingBox();
+    verwacht(cel && label && label.x + label.width <= cel.x + cel.width + 1, `label valt weg op een telefoon: ${JSON.stringify({ cel, label })}`);
+    await page.screenshot({ path: path.join(os.tmpdir(), 'stromen-ui-balk-telefoon.png') });
+    if (breed) await page.setViewportSize(breed);
+    await rustig(lid);
+    await balk.getByRole('button', { name: 'Ook delen' }).click();
+    await balk.waitFor({ state: 'detached', timeout: 15000 });
+    gelijk(await inhoud(page).locator('.odrv-unshared').count(), 0, 'geen label meer');
+    const regel = sqlRij(`select added_by from public.drive_share_entries where share_id = ${q(deel.share.id)} and item_id = ${q(later.id)}`);
+    gelijk(regel?.added_by, w.medewerker.id, 'gedeeld, op naam van wie klikte');
   });
 }
 

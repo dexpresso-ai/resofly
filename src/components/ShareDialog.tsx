@@ -227,7 +227,7 @@ export function ShareDialog({
   >
     <p className="share-lede">
       <strong>{target.name}</strong>
-      {target.type === 'folder' && <span> — alles wat in deze map zit gaat mee, submappen inbegrepen.</span>}
+      {target.type === 'folder' && <span> — alles wat er nu in deze map zit gaat mee, submappen inbegrepen. Wat je er later in zet, deel je apart.</span>}
     </p>
 
     {isClientRelated

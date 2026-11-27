@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import type { AppData, Attachment, ContentFolder, InternalDocument, Note, Project } from '../types';
 import { dateNL } from '../lib/format';
-import { insertRow, updateRow, deleteContentFolder, deleteAttachment, deleteEntityCascade, moveDriveItem, renameAttachment } from '../lib/repository';
+import { insertRow, updateRow, deleteContentFolder, deleteAttachment, deleteEntityCascade, moveDriveItem, renameAttachment, addItemsToDriveShare, loadFolderShareGaps } from '../lib/repository';
 import { uploadToR2, downloadAttachment } from '../lib/r2';
 import { createOfficeSession, createOfficeDocument, isOfficeEditable, NEW_OFFICE_LABEL, type NewOfficeType, type OfficeSession } from '../lib/office';
 import { OfficeEditor } from './OfficeEditor';
@@ -20,7 +20,7 @@ import { ShareDialog } from '../components/ShareDialog';
 import { SharedOverview, SharedOverviewButton } from '../components/SharedOverview';
 import { SendFilesDialog } from '../components/SendFilesDialog';
 import type { TransferSource } from '../lib/transfers-api';
-import { shareKey, sharedItemKeys, type ShareTarget } from '../lib/shares';
+import { folderShareGapText, isShareActive, shareKey, sharedItemKeys, summarizeFolderShareGaps, type FolderShareGap, type ShareTarget } from '../lib/shares';
 import {
   activeDriveDrag, beginDriveDrag, dragHasDriveItems, dragHasFiles, driveItemLocation, endDriveDrag, itemCountLabel,
   planDriveMove, readDriveDrag, type DriveDragItem, type DriveLocation,
@@ -86,6 +86,8 @@ type Row = {
   keepExtension?: boolean;
   /** Staat er een lopende deling op dit item? Toont het personen-icoontje in de rij. */
   shared?: boolean;
+  /** Staat het in een gedeelde map, maar ziet de ontvanger het nog niet? Toont "Niet gedeeld". */
+  unshared?: boolean;
   /** Wat deze rij is als je hem vastpakt. Ontbreekt = niet te selecteren en niet te slepen
    *  (klant- en projectmappen zijn navigatie, geen inhoud). */
   drag?: DriveDragItem;
@@ -216,6 +218,45 @@ export function ContentLibrary({
   const clientsById = useMemo(() => new Map(data.clients.map(c => [c.id, c] as const)), [data.clients]);
   const foldersById = useMemo(() => new Map(data.folders.map(f => [f.id, f] as const)), [data.folders]);
   const sharedKeys = useMemo(() => sharedItemKeys(data), [data]);
+
+  // Een gedeelde map vult zich niet meer vanzelf (20261127120000): wat er later
+  // in komt, ziet de ontvanger pas na "Ook delen". De database zegt per map wat
+  // er nog ontbreekt. Alleen vragen als er ergens een lopende mapdeling is, en
+  // opnieuw als er iets in de map bij komt of uit gaat.
+  const hasActiveFolderShare = useMemo(() => data.driveShares.some(s => s.item_type === 'folder' && isShareActive(s)), [data.driveShares]);
+  const folderItemsSignature = useMemo(() => {
+    if (!folderId) return '';
+    const ids: string[] = [];
+    for (const a of data.attachments) if (a.entity_type === 'folder' && a.entity_id === folderId) ids.push(a.id);
+    for (const n of data.notes) if (n.folder_id === folderId) ids.push(n.id);
+    for (const d of data.documents) if (d.folder_id === folderId) ids.push(d.id);
+    return ids.sort().join(',');
+  }, [data.attachments, data.notes, data.documents, folderId]);
+  const [shareGaps, setShareGaps] = useState<FolderShareGap[]>([]);
+  const [gapsVersion, setGapsVersion] = useState(0);
+  const [gapBusy, setGapBusy] = useState(false);
+  useEffect(() => {
+    if (!folderId || !hasActiveFolderShare) { setShareGaps([]); return; }
+    let cancelled = false;
+    loadFolderShareGaps(folderId)
+      .then(gaps => { if (!cancelled) setShareGaps(gaps); })
+      // Een melding die niet laadt, mag de drive niet in de weg zitten.
+      .catch(() => { if (!cancelled) setShareGaps([]); });
+    return () => { cancelled = true; };
+  }, [folderId, hasActiveFolderShare, folderItemsSignature, data.driveShares, gapsVersion]);
+  const gapSummary = useMemo(() => summarizeFolderShareGaps(shareGaps, data.driveShares), [shareGaps, data.driveShares]);
+  const shareGapItems = async () => {
+    setGapBusy(true);
+    setError(null);
+    try {
+      for (const [shareId, items] of gapSummary.byShare) await addItemsToDriveShare(shareId, items);
+    } catch (err) {
+      setError((err as { message?: string } | null)?.message || 'Delen is niet gelukt.');
+    } finally {
+      setGapBusy(false);
+      setGapsVersion(v => v + 1);
+    }
+  };
 
   // Effectieve plaatsing: heeft een item een project, dan hoort het bij de klant van dat project.
   const place = useCallback((rawClient: string | null, rawProject: string | null) => {
@@ -599,6 +640,7 @@ export function ContentLibrary({
       // deellink, en verplaats je naar het dossier waar ze thuishoren.
       menu: canWrite ? () => contentMenu(key, it.kind, it.id, label, open) : null,
       shared: sharedKeys.has(shareKey(it.kind, it.id)),
+      unshared: gapSummary.itemKeys.has(shareKey(it.kind, it.id)),
       drag: { kind: it.kind, id: it.id, name: label },
       rename: canWrite
         ? typed => commitRename(label, typed, false, async name => {
@@ -643,6 +685,7 @@ export function ContentLibrary({
       att,
       menu: () => fileMenu(att, key),
       shared: sharedKeys.has(shareKey('attachment', att.id)),
+      unshared: gapSummary.itemKeys.has(shareKey('attachment', att.id)),
       drag: { kind: 'attachment', id: att.id, name: att.name },
       keepExtension: true,
       rename: canWrite
@@ -1010,7 +1053,7 @@ export function ContentLibrary({
         </span>
         {isRenaming
           ? <DriveRenameInput value={row.name} keepExtension={row.keepExtension} onCommit={row.rename!} onCancel={() => setRenaming(null)} />
-          : <span className="odrv-td-name" title={row.name}>{row.name}{row.shared && <span className="odrv-shared" role="img" aria-label="Gedeeld" title="Gedeeld met anderen"><Users size={13} /></span>}{row.archived && <em className="odrv-arch">gearchiveerd</em>}</span>}
+          : <span className="odrv-td-name" title={row.name}><span className="odrv-name-text">{row.name}</span>{row.shared && <span className="odrv-shared" role="img" aria-label="Gedeeld" title="Gedeeld met anderen"><Users size={13} /></span>}{row.unshared && <span className="odrv-unshared" title="Staat in een gedeelde map, maar de ontvanger ziet het nog niet">Niet gedeeld</span>}{row.archived && <em className="odrv-arch">gearchiveerd</em>}</span>}
         <span className="odrv-td-mod">{row.modified ? dateNL(row.modified) : '—'}</span>
         <span className="odrv-td-size">{row.size}</span>
         <span className="odrv-td-type">{row.typeLabel}</span>
@@ -1031,7 +1074,7 @@ export function ContentLibrary({
         <span className="odrv-tile-foot">
           {isRenaming
             ? <DriveRenameInput value={row.name} keepExtension={row.keepExtension} onCommit={row.rename!} onCancel={() => setRenaming(null)} />
-            : <span className="odrv-tile-name" title={row.name}>{row.name}{row.shared && <span className="odrv-shared" role="img" aria-label="Gedeeld" title="Gedeeld met anderen"><Users size={12} /></span>}</span>}
+            : <span className="odrv-tile-name" title={row.name}><span className="odrv-name-text">{row.name}</span>{row.shared && <span className="odrv-shared" role="img" aria-label="Gedeeld" title="Gedeeld met anderen"><Users size={12} /></span>}{row.unshared && <span className="odrv-unshared" title="Staat in een gedeelde map, maar de ontvanger ziet het nog niet">Niet gedeeld</span>}</span>}
           <span className="odrv-tile-meta">{isFolderRow(row) ? `${row.typeLabel} · ${row.size}` : `${row.typeLabel}${row.modified ? ` · ${dateNL(row.modified)}` : ''}`}</span>
         </span>
       </>;
@@ -1204,6 +1247,14 @@ export function ContentLibrary({
           </button>
         </div>
       </div>
+
+      {gapSummary.itemKeys.size > 0 && <div className="odrv-share-gap" role="status">
+        <Users size={15} aria-hidden="true" />
+        <span>{folderShareGapText(gapSummary)}</span>
+        {canWrite && <button type="button" className="btn btn-primary" onClick={() => void shareGapItems()} disabled={gapBusy}>
+          {gapBusy ? 'Bezig…' : 'Ook delen'}
+        </button>}
+      </div>}
 
       {(error || (linkOpen && folderId)) && <div className="odrv-embed-band">
         {error && <div className="error">{error}</div>}

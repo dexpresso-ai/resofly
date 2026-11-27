@@ -13,7 +13,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { AppData } from '../types.ts';
-import { activeSharesFor, isShareActive, resolveShareContext, sharedItemKeys } from './shares.ts';
+import { activeSharesFor, folderShareGapText, isShareActive, resolveShareContext, sharedItemKeys, summarizeFolderShareGaps } from './shares.ts';
+import type { DriveShare } from '../types.ts';
 
 const ORG = 'org-1';
 const KLANT_A = 'client-a';
@@ -129,4 +130,45 @@ test('alleen lopende delingen kleuren een rij en vullen het overzicht', () => {
   assert.deepEqual([...sharedItemKeys(data)], ['folder:f1']);
   assert.equal(activeSharesFor(data, 'folder', 'f1').length, 1);
   assert.equal(activeSharesFor(data, 'folder', 'f2').length, 0);
+});
+
+// ── Gedeelde mappen vullen zich niet meer vanzelf (20261127120000) ──────────
+// De drive krijgt van de database per map wat er nog niet gedeeld is. Daar komt
+// het label "Niet gedeeld" en de zin boven de map uit. Fout gaat het als een
+// item dubbel telt (het ontbreekt in twee delingen) of als de zin een ontvanger
+// noemt die het item al ziet.
+
+const deling = (id: string, naam: string): DriveShare => ({ id, recipient_name: naam, recipient_email: null } as unknown as DriveShare);
+
+test('één item, één ontvanger: enkelvoud', () => {
+  const s = summarizeFolderShareGaps([{ share_id: 's1', item_type: 'attachment', item_id: 'a1' }], [deling('s1', 'Jan')]);
+  assert.deepEqual([...s.itemKeys], ['attachment:a1']);
+  assert.equal(folderShareGapText(s), '1 bestand in deze map is nog niet gedeeld met Jan.');
+});
+
+test('een item dat in twee delingen ontbreekt, telt één keer en gaat naar allebei', () => {
+  const s = summarizeFolderShareGaps([
+    { share_id: 's1', item_type: 'attachment', item_id: 'a1' },
+    { share_id: 's2', item_type: 'attachment', item_id: 'a1' },
+    { share_id: 's1', item_type: 'note', item_id: 'n1' },
+  ], [deling('s1', 'Jan'), deling('s2', 'Piet')]);
+  assert.equal(s.itemKeys.size, 2);
+  assert.deepEqual(s.byShare.get('s1'), [{ item_type: 'attachment', item_id: 'a1' }, { item_type: 'note', item_id: 'n1' }]);
+  assert.deepEqual(s.byShare.get('s2'), [{ item_type: 'attachment', item_id: 'a1' }]);
+  assert.equal(folderShareGapText(s), '1 bestand en 1 notitie in deze map zijn nog niet gedeeld met Jan en Piet.');
+});
+
+test('meervoud en drie soorten in een vaste volgorde', () => {
+  const s = summarizeFolderShareGaps([
+    { share_id: 's1', item_type: 'document', item_id: 'd1' },
+    { share_id: 's1', item_type: 'attachment', item_id: 'a1' },
+    { share_id: 's1', item_type: 'attachment', item_id: 'a2' },
+    { share_id: 's1', item_type: 'note', item_id: 'n1' },
+    { share_id: 's1', item_type: 'note', item_id: 'n2' },
+  ], [deling('s1', 'Jan')]);
+  assert.equal(folderShareGapText(s), '2 bestanden, 2 notities en 1 document in deze map zijn nog niet gedeeld met Jan.');
+});
+
+test('niets te melden: geen zin', () => {
+  assert.equal(folderShareGapText(summarizeFolderShareGaps([], [])), '');
 });

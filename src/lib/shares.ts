@@ -162,3 +162,71 @@ export function expiryToIso(option: string): string | null {
   date.setDate(date.getDate() + found.days);
   return date.toISOString();
 }
+
+// ── Gedeelde mappen vullen zich niet meer vanzelf (20261127120000) ──────────
+// Een map delen legt vast wat er op dat moment in staat. Wat er later bij komt,
+// ziet de ontvanger pas na "Ook delen". De database meldt per map wat er nog
+// ontbreekt (drive_share_folder_gaps); dit maakt er een label en een zin van.
+
+export type FolderShareGapItemType = 'attachment' | 'note' | 'document';
+
+/** Eén item dat direct in de map staat en in een lopende mapdeling ontbreekt. */
+export type FolderShareGap = { share_id: UUID; item_type: FolderShareGapItemType; item_id: UUID };
+
+export type FolderShareGapSummary = {
+  /** `type:id` van elk item dat in minstens één lopende mapdeling ontbreekt. */
+  itemKeys: Set<string>;
+  /** Per deling de items die er met "Ook delen" bij komen. */
+  byShare: Map<UUID, Array<{ item_type: FolderShareGapItemType; item_id: UUID }>>;
+  /** Wie die items nog niet ziet, leesbaar en zonder dubbelen. */
+  recipients: string[];
+  /** Hoeveel items van elke soort het zijn (elk item één keer geteld). */
+  counts: Record<FolderShareGapItemType, number>;
+};
+
+export function summarizeFolderShareGaps(gaps: readonly FolderShareGap[], shares: readonly DriveShare[]): FolderShareGapSummary {
+  const itemKeys = new Set<string>();
+  const byShare = new Map<UUID, Array<{ item_type: FolderShareGapItemType; item_id: UUID }>>();
+  const recipients: string[] = [];
+  const counts: Record<FolderShareGapItemType, number> = { attachment: 0, note: 0, document: 0 };
+  for (const gap of gaps) {
+    const key = `${gap.item_type}:${gap.item_id}`;
+    if (!itemKeys.has(key)) {
+      itemKeys.add(key);
+      counts[gap.item_type] += 1;
+    }
+    const list = byShare.get(gap.share_id) ?? [];
+    if (!list.some(item => item.item_type === gap.item_type && item.item_id === gap.item_id)) {
+      list.push({ item_type: gap.item_type, item_id: gap.item_id });
+    }
+    byShare.set(gap.share_id, list);
+  }
+  for (const shareId of byShare.keys()) {
+    const share = shares.find(s => s.id === shareId);
+    const label = share ? shareRecipientLabel(share) : 'een ontvanger';
+    if (!recipients.includes(label)) recipients.push(label);
+  }
+  return { itemKeys, byShare, recipients, counts };
+}
+
+function joinDutch(parts: readonly string[]): string {
+  if (parts.length <= 1) return parts[0] ?? '';
+  return `${parts.slice(0, -1).join(', ')} en ${parts[parts.length - 1]}`;
+}
+
+const GAP_NOUNS: Record<FolderShareGapItemType, [string, string]> = {
+  attachment: ['bestand', 'bestanden'],
+  note: ['notitie', 'notities'],
+  document: ['document', 'documenten'],
+};
+
+/** De zin boven de map: "2 bestanden en 1 notitie in deze map zijn nog niet gedeeld met …". */
+export function folderShareGapText(summary: FolderShareGapSummary): string {
+  const order: FolderShareGapItemType[] = ['attachment', 'note', 'document'];
+  const parts = order
+    .filter(type => summary.counts[type] > 0)
+    .map(type => `${summary.counts[type]} ${GAP_NOUNS[type][summary.counts[type] === 1 ? 0 : 1]}`);
+  const total = order.reduce((sum, type) => sum + summary.counts[type], 0);
+  if (total === 0) return '';
+  return `${joinDutch(parts)} in deze map ${total === 1 ? 'is' : 'zijn'} nog niet gedeeld met ${joinDutch(summary.recipients)}.`;
+}

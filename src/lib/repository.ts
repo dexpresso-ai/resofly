@@ -1,5 +1,6 @@
 import type { DriveDragItem, DriveLocation } from './driveDnd';
 import type { ExportPageRequest } from './dataExport';
+import type { FolderShareGap } from './shares';
 import { supabase, supabaseAuth } from './supabase';
 import { recordInvitationBlockedBySeats } from '../services/licenseService';
 import { deleteR2Object } from './r2-api';
@@ -2706,6 +2707,32 @@ export async function updateDriveShare(
   values: { can_download?: boolean; expires_at?: string | null },
 ): Promise<DriveShare> {
   return updateRow<DriveShare>('drive_shares', shareId, values, organizationId);
+}
+
+/**
+ * Wat er direct in deze map staat en nog niet gedeeld is, per lopende
+ * mapdeling die de map omvat (de map zelf of een map erboven). Een map delen
+ * legt sinds 20261127120000 vast wat er op dat moment in staat; wat er later
+ * bij komt, ziet de ontvanger pas na "Ook delen".
+ */
+export async function loadFolderShareGaps(folderId: UUID): Promise<FolderShareGap[]> {
+  const { data, error } = await supabase.rpc('drive_share_folder_gaps', { p_folder_id: folderId });
+  if (error) {
+    // Nog niet gemigreerd: zonder melding is beter dan een drive die niet opent.
+    if (/drive_share_folder_gaps|schema cache|does not exist/i.test(error.message)) return [];
+    throw error;
+  }
+  return (data ?? []) as FolderShareGap[];
+}
+
+/** "Ook delen": zet deze items in een lopende mapdeling. Geeft terug hoeveel er nieuw bij kwamen. */
+export async function addItemsToDriveShare(
+  shareId: UUID,
+  items: ReadonlyArray<Pick<FolderShareGap, 'item_type' | 'item_id'>>,
+): Promise<number> {
+  const { data, error } = await supabase.rpc('drive_share_add_items', { p_share_id: shareId, p_items: items });
+  if (error) throw error;
+  return Number(data ?? 0);
 }
 export const selectLedgerAccounts = (organizationId: UUID) =>
   selectOptional<LedgerAccount>('ledger_accounts', organizationId, { orderBy: 'code', ascending: true, hint: BOOKKEEPING_MIGRATION_HINT });

@@ -21,6 +21,13 @@ function q(waarde) {
 }
 
 /** Een teamlid met eigen modulerechten (zoals Instellingen → Team dat zet). */
+// De namen van wat de klant in het portaal ziet bij één deling, gesorteerd.
+async function portaalTitels(token, shareId) {
+  const portaal = gelukt(await roep('client-portal', { token, body: { action: 'getSharedFiles' } }), 'portaal');
+  const deling = (portaal.shares ?? []).find((d) => d.id === shareId);
+  return (deling?.items ?? []).map((item) => item.name).sort((a, b) => a.localeCompare(b, 'nl')).join(',');
+}
+
 async function lidMet(orgId, naam, modules, rol = 'member') {
   const gebruiker = await maakGebruiker(naam);
   sql(`insert into public.organization_members (organization_id, user_id, email, role, status, module_access)
@@ -250,6 +257,58 @@ export default async function documentenScenario() {
   });
 
   groep('Documenten: delen via een geheime link');
+  // ── Een gedeelde map vult zich niet meer vanzelf (20261127120000) ─────────
+  // Tot dan zag de klant meteen wat een collega later in een gedeelde map zette.
+  // Nu alleen wat er bij het delen in stond, plus wat iemand er met "Ook delen"
+  // bij zet, of wat er in staat als iemand de map opnieuw deelt.
+  const mapDeling = await stap('een klantmap delen met klant A: het portaal toont wat er toen in stond', async () => {
+    const map = gelukt(await maak('content_folders', w.medewerker.token, { organization_id: w.orgId, client_id: w.klantA.id, name: 'Oplevering' }), 'map')[0];
+    gelukt(await maak('notes', w.medewerker.token, { organization_id: w.orgId, created_by: w.medewerker.id, client_id: w.klantA.id, folder_id: map.id, title: 'Eerste versie', content: '<p>Opgeleverd.</p>' }), 'notitie');
+    const res = await roep('file-share', {
+      token: w.medewerker.token,
+      body: { action: 'share', organizationId: w.orgId, itemType: 'folder', itemId: map.id, recipients: [{ kind: 'client' }] },
+    });
+    const uitkomst = gelukt(res, 'map delen').results?.[0];
+    verwacht(uitkomst && !uitkomst.error, `delen mislukt: ${JSON.stringify(uitkomst).slice(0, 300)}`);
+    gelijk(await portaalTitels(w.portaalA.token, uitkomst.share.id), 'Eerste versie', 'in het portaal');
+    return { map, shareId: uitkomst.share.id };
+  });
+
+  if (mapDeling) {
+    const later = await stap('later in de map gezet: de klant ziet en opent het niet, de drive meldt het', async () => {
+      const nieuw = gelukt(await maak('notes', w.medewerker.token, { organization_id: w.orgId, created_by: w.medewerker.id, client_id: w.klantA.id, folder_id: mapDeling.map.id, title: 'Tweede versie', content: '<p>Concept.</p>' }), 'notitie')[0];
+      gelijk(await portaalTitels(w.portaalA.token, mapDeling.shareId), 'Eerste versie', 'in het portaal');
+      geweigerd(await roep('client-portal', { token: w.portaalA.token, body: { action: 'downloadSharedFile', shareId: mapDeling.shareId, itemType: 'note', itemId: nieuw.id } }), 'het nieuwe item openen via de deling');
+      const gaten = gelukt(await rest('rpc/drive_share_folder_gaps', { method: 'POST', token: w.medewerker.token, body: { p_folder_id: mapDeling.map.id } }), 'wat nog niet gedeeld is');
+      gelijk(gaten.map((g) => g.item_id).join(','), nieuw.id, 'de melding in de drive');
+      return nieuw;
+    });
+
+    if (later) {
+      if (zonderInhoud?.lezen) await stap('wie Inhoud alleen mag lezen, vult de deling niet aan', async () => {
+        geweigerd(await rest('rpc/drive_share_add_items', { method: 'POST', token: zonderInhoud.lezen.token, body: { p_share_id: mapDeling.shareId, p_items: [{ item_type: 'note', item_id: later.id }] } }), 'aanvullen als lezer');
+        gelijk(await portaalTitels(w.portaalA.token, mapDeling.shareId), 'Eerste versie', 'in het portaal');
+      });
+
+      await stap('"Ook delen": daarna ziet de klant het wel', async () => {
+        gelukt(await rest('rpc/drive_share_add_items', { method: 'POST', token: w.medewerker.token, body: { p_share_id: mapDeling.shareId, p_items: [{ item_type: 'note', item_id: later.id }] } }), 'ook delen');
+        gelijk(await portaalTitels(w.portaalA.token, mapDeling.shareId), 'Eerste versie,Tweede versie', 'in het portaal');
+      });
+    }
+
+    await stap('de map opnieuw delen neemt mee wat er nu in staat, in dezelfde deling', async () => {
+      gelukt(await maak('notes', w.medewerker.token, { organization_id: w.orgId, created_by: w.medewerker.id, client_id: w.klantA.id, folder_id: mapDeling.map.id, title: 'Derde versie', content: '<p>Definitief.</p>' }), 'notitie');
+      const res = await roep('file-share', {
+        token: w.medewerker.token,
+        body: { action: 'share', organizationId: w.orgId, itemType: 'folder', itemId: mapDeling.map.id, recipients: [{ kind: 'client' }] },
+      });
+      const uitkomst = gelukt(res, 'opnieuw delen').results?.[0];
+      verwacht(uitkomst && !uitkomst.error, `opnieuw delen mislukt: ${JSON.stringify(uitkomst).slice(0, 300)}`);
+      gelijk(uitkomst.share.id, mapDeling.shareId, 'dezelfde deling, bijgewerkt');
+      gelijk(await portaalTitels(w.portaalA.token, mapDeling.shareId), 'Derde versie,Eerste versie,Tweede versie', 'in het portaal');
+    });
+  }
+
   const intern = await stap('(een intern document, zonder klant)', async () => {
     const res = await maak('documents', w.medewerker.token, { organization_id: w.orgId, created_by: w.medewerker.id, title: 'Huisregels', content: '<p>Koffie is gratis.</p>' });
     return gelukt(res, 'intern document')[0];
