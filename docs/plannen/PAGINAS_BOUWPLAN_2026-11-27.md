@@ -499,7 +499,7 @@ akkoord is.
 | Stap | Wat | Status |
 | --- | --- | --- |
 | 0 | Gedeelde mappen vullen zich niet meer vanzelf (§7). | gebouwd op 27 november, op de branch; zie `docs/changelog/CHANGELOG_GEDEELDE_MAPPEN_2026-11-27.md` |
-| 1A-1 | Datamodel en migraties: de kolommen op `documents`, `document_versions`, de triggers (boom, overerving, organisatie, controle op `body`), `claim_page_edit`, de zoekindex met zoek-RPC, de logboekvelden. Met databasetests, nog zonder scherm. | in aanbouw (27 november) |
+| 1A-1 | Datamodel en migraties: de kolommen op `documents`, `document_versions`, de triggers (boom, overerving, organisatie, controle op `body`), `claim_page_edit`, de zoekindex met zoek-RPC, de logboekvelden. Met databasetests, nog zonder scherm. | gebouwd op 27 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_DATAMODEL_2026-11-27.md` |
 | 1A-2 | Laden en zoeken: de kolomlijst in `loadCoreData`, `excerpt` in de kaarten, GlobalSearch en `content.search` via de zoek-RPC. In één stap, anders breekt zoeken (§6). | gepland |
 | 1A-3 | De editor: Tiptap als eigen stuk bundel, het pagina-scherm met eigen adres, de basisblokken, opslaan met `edit_version`, één tegelijk bewerken, versies. | gepland |
 | 1A-4 | De overige blokken: gewone tabel, afbeelding, bestand, callout, uitklapper, inhoudsopgave, subpagina. Het slash-menu en de +-knop op de telefoon. | gepland |
