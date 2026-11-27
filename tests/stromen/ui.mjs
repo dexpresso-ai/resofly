@@ -1788,6 +1788,29 @@ async function scenarioDocumenten() {
     const regel = sqlRij(`select added_by from public.drive_share_entries where share_id = ${q(deel.share.id)} and item_id = ${q(later.id)}`);
     gelijk(regel?.added_by, w.medewerker.id, 'gedeeld, op naam van wie klikte');
   });
+
+  // Stap 1A-2: de tekst van documenten zit niet meer in wat de app laadt.
+  // Zoeken op een woord dat alleen diep in de tekst staat, gaat via de
+  // database; openen haalt de hele tekst op (anders opende de editor leeg).
+  await uiStap('zoeken vindt een document op een woord uit de tekst, en openen toont de hele tekst', async () => {
+    const woord = `kwartel${Date.now().toString(36)}`;
+    const vulsel = 'Dit is een lange inleiding over de werkwijze. '.repeat(10);
+    gelukt(await rest('documents', { method: 'POST', token: w.medewerker.token, prefer: 'return=representation', body: {
+      organization_id: w.orgId, created_by: w.medewerker.id, title: 'Zoekproef', content: `<p>${vulsel}</p><p>Hier staat ${woord} in de tekst.</p>`,
+    } }), 'document');
+    const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+    const page = lid.page;
+    const zoekveld = page.locator('.gs-input').first();
+    await zoekveld.click();
+    await zoekveld.fill(woord);
+    const treffer = page.locator('.gs-result').filter({ hasText: 'Zoekproef' }).first();
+    await treffer.waitFor({ timeout: 15000 });
+    await treffer.click();
+    const venster = documentVenster(page);
+    await venster.waitFor({ timeout: 10000 });
+    const editor = venster.locator('[contenteditable="true"]').first();
+    await wachtTot(async () => (await editor.innerText().catch(() => '')).includes(woord), { melding: 'de hele tekst staat niet in de editor' });
+  });
 }
 
 // ── Bank: mutaties met de hand boeken ──────────────────────────────────────

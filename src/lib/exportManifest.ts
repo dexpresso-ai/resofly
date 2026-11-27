@@ -286,7 +286,7 @@ export const EXPORT_MANIFEST: Readonly<Record<string, TableRule>> = {
   attachments: { kind: 'export', files: ['storage_key'] },
   documents: { kind: 'export', files: ['storage_key'] },
   document_versions: { kind: 'export' },
-  document_edit_claims: { kind: 'intern', orderBy: ['document_id'], reason: 'Wie een pagina nu bewerkt: een hartslag van hooguit een paar minuten, alleen voor de weergave in ResoFly.' },
+  document_edit_claims: { kind: 'intern', reason: 'Wie een pagina nu bewerkt: een hartslag van hooguit een paar minuten, alleen voor de weergave in ResoFly.' },
   content_folders: { kind: 'export' },
   notes: { kind: 'export' },
   note_handwriting: { kind: 'export' },

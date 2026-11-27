@@ -1,6 +1,7 @@
 import type { DriveDragItem, DriveLocation } from './driveDnd';
 import type { ExportPageRequest } from './dataExport';
 import type { FolderShareGap } from './shares';
+import { DOCUMENT_CORE_COLUMNS } from './documentColumns';
 import { supabase, supabaseAuth } from './supabase';
 import { recordInvitationBlockedBySeats } from '../services/licenseService';
 import { deleteR2Object } from './r2-api';
@@ -1917,10 +1918,43 @@ export async function markTicketRead(ticketId: UUID): Promise<void> {
 }
 
 export async function selectDocuments(organizationId: UUID): Promise<InternalDocument[]> {
-  return selectOptional<InternalDocument>('documents', organizationId, {
+  const opts = {
     orderBy: 'created_at', ascending: false,
     hint: 'Voer de migratie 20260604000000_internal_documents.sql uit om interne documenten te activeren.',
-  });
+  };
+  try {
+    // Zonder tekst en zonder pagina-inhoud (stap 1A-2, src/lib/documentColumns.ts).
+    return await selectOptional<InternalDocument>('documents', organizationId, { ...opts, columns: DOCUMENT_CORE_COLUMNS });
+  } catch (error) {
+    // Even na een uitrol kan de app nieuwer zijn dan de database (de migratie
+    // 20261127130000 nog niet gedraaid): dan zoals vroeger, alles.
+    const fout = error as { code?: string; message?: string } | null;
+    if (['format', 'excerpt', 'parent_id'].some(column => isMissingColumn(fout, column))) {
+      return selectOptional<InternalDocument>('documents', organizationId, opts);
+    }
+    throw error;
+  }
+}
+
+/** Een gevonden document: wat search_documents teruggeeft. Nooit HTML, alleen de korte tekst. */
+export type DocumentSearchHit = {
+  id: UUID; title: string; excerpt: string; format: string; parent_id: UUID | null;
+  client_id: UUID | null; project_id: UUID | null; folder_id: UUID | null; updated_at: string; rank: number;
+};
+
+/**
+ * Zoeken in de titel én de tekst van documenten, in de database (stap 1A-2):
+ * de tekst zit niet meer in wat de app bij het opstarten laadt. Elk woord telt
+ * als begin van een woord; de rechten van wie zoekt gelden (RLS).
+ */
+export async function searchDocumentsText(organizationId: UUID, query: string, limit = 20): Promise<DocumentSearchHit[]> {
+  const { data, error } = await supabase.rpc('search_documents', { p_organization_id: organizationId, p_query: query, p_limit: limit });
+  if (error) {
+    // Nog niet gemigreerd: niets vinden is beter dan een zoekbalk met een fout.
+    if (/search_documents|schema cache|does not exist/i.test(error.message)) return [];
+    throw error;
+  }
+  return (data ?? []) as DocumentSearchHit[];
 }
 
 export async function selectFolders(organizationId: UUID): Promise<ContentFolder[]> {

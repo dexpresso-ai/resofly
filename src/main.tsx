@@ -113,6 +113,7 @@ import {
   removeProjectMember,
   createClientContact,
   updateClientContact,
+  loadContentHtml,
   type Table,
 } from './lib/repository';
 import { memberShortName, memberColor, memberInitials, memberEmail, projectTeamAdditions, taskAssigneeChoices } from './lib/members';
@@ -2720,6 +2721,9 @@ function App() {
         break;
       }
       case 'document':
+        // Vangnet: is de tekst van dit document nooit geladen, dan schrijven we
+        // hem ook niet. Anders wiste opslaan hem (stap 1A-2).
+        if (edit.item && edit.item.content === undefined) delete (values as Record<string, unknown>).content;
         edit.item
           ? await updateRow<InternalDocument>('documents', edit.item.id, values, activeOrg.id)
           : await insertRow<InternalDocument>('documents', activeOrg.id, values);
@@ -2849,7 +2853,18 @@ function App() {
 
   /** Open een intern Document: Word-modus → Collabora-editor; rich-text → de gewone editor-modal. */
   async function openDocument(doc: InternalDocument) {
-    if (!doc.storage_key) { setEdit({ kind: 'document', item: doc }); return; }
+    if (!doc.storage_key) {
+      // De tekst zit sinds stap 1A-2 niet meer in de kern: eerst ophalen. Anders
+      // opende de editor leeg, en wiste opslaan de tekst.
+      try {
+        // Altijd vers: een document uit een oude cache kan nog verouderde tekst bij zich hebben.
+        const content = await loadContentHtml('documents', doc.id, doc.organization_id);
+        setEdit({ kind: 'document', item: { ...doc, content } });
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Kon het document niet openen');
+      }
+      return;
+    }
     setOfficeOpening(true); setError(null);
     try {
       setOfficeSession(await createOfficeSessionForDocument(doc.id));
@@ -2875,7 +2890,8 @@ function App() {
         projectName: project?.name ?? null,
         dateLabel: new Date(doc.created_at).toLocaleDateString('nl-NL', { day: 'numeric', month: 'long', year: 'numeric' }),
         companyName: data.companySettings?.company_name ?? null,
-        content: doc.content || '',
+        // De tekst zit niet in de kern (stap 1A-2): voor het omzetten ophalen.
+        content: await loadContentHtml('documents', doc.id, doc.organization_id),
       };
       // Pas hier laden: alleen bij omzetten naar Word (stond in de opstartbundel).
       const { buildDocumentDocxBlob } = await import('./lib/documentExport');
@@ -4184,7 +4200,8 @@ function App() {
         break;
       case 'document':
         setPage('documents');
-        setEdit({ kind: 'document', item: result.item });
+        // Via openDocument: dat haalt de tekst op, en opent een Word-document in de Word-editor.
+        void openDocument(result.item);
         break;
       case 'quote':
         setPage('quotes');
@@ -4893,14 +4910,14 @@ function App() {
             tabs={tabs} activeTabId={activeTab.id} data={data} onSelect={switchTab} onClose={closeTab} onNew={openTab}
             trailing={look === 'zenit' && !narrowViewport ? <>
               {pageReadOnly && <span className="ztab-ro" title="Je kunt hier kijken, niet wijzigen"><Lock size={12} aria-hidden="true"/>Alleen lezen</span>}
-              <GlobalSearch variant="ask" data={data} onNavigate={handleSearchNavigate} canOpenPage={permissions.canOpenPage} onAsk={permissions.canRead('gerrie') ? askGerrie : undefined} />
+              <GlobalSearch variant="ask" data={data} organizationId={activeOrg?.id ?? null} onNavigate={handleSearchNavigate} canOpenPage={permissions.canOpenPage} onAsk={permissions.canRead('gerrie') ? askGerrie : undefined} />
             </>
             /* Baken: rechts in de tabrij wat Value Backlog in zijn bovenbalk
                heeft: zoeken (met Gerrie) en de gouden knop om iets te maken.
                Op de telefoon niet: daar is de tabrij al vol, en zoeken staat
                daar ook in Cockpit niet (globals.css, onder 761px). */
             : look === 'baken' && !narrowViewport ? <>
-              <GlobalSearch variant="ask" data={data} onNavigate={handleSearchNavigate} canOpenPage={permissions.canOpenPage} onAsk={permissions.canRead('gerrie') ? askGerrie : undefined} />
+              <GlobalSearch variant="ask" data={data} organizationId={activeOrg?.id ?? null} onNavigate={handleSearchNavigate} canOpenPage={permissions.canOpenPage} onAsk={permissions.canRead('gerrie') ? askGerrie : undefined} />
               <CreateMenu kinds={createKinds} onCreate={createFromBar} busy={Boolean(edit)} />
             </> : undefined}
           />}

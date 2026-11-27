@@ -4,6 +4,7 @@ import { CheckSquare, ChevronRight, FileText, FolderOpen, Receipt, Search, Searc
 import type { AppData, Client, InternalDocument, Invoice, Note, Project, Quote, Supplier, Task, Ticket as TicketType } from '../types';
 import { euro, total } from '../lib/format';
 import { customFieldsSearchText } from './CustomFields';
+import { searchDocumentsText } from '../lib/repository';
 
 export type SearchResultKind = 'client' | 'project' | 'task' | 'ticket' | 'note' | 'document' | 'quote' | 'invoice' | 'supplier';
 
@@ -116,7 +117,7 @@ export function searchWorkspace(data: AppData, term: string, canOpenPage?: (page
     }
   }
   for (const d of data.documents) {
-    if (matches(term, d.title, plain(d.content))) {
+    if (matches(term, d.title, d.excerpt)) {
       const ctx = d.client_id ? clientById.get(d.client_id)?.name : d.project_id ? projectById.get(d.project_id)?.name : null;
       out.push({ kind: 'document', id: d.id, title: d.title || 'Document', subtitle: ctx ?? 'Document', item: d });
     }
@@ -144,8 +145,10 @@ export function searchWorkspace(data: AppData, term: string, canOpenPage?: (page
   return canOpenPage ? out.filter(result => canOpenPage(KIND_PAGE[result.kind])) : out;
 }
 
-export function GlobalSearch({ data, onNavigate, canOpenPage, variant = 'field', onAsk }: {
+export function GlobalSearch({ data, onNavigate, canOpenPage, variant = 'field', onAsk, organizationId }: {
   data: AppData;
+  /** Voor het zoeken in de tekst van documenten, in de database (stap 1A-2). */
+  organizationId?: string | null;
   onNavigate: (result: SearchResult) => void;
   /** Modulerechten: alleen resultaten die het teamlid ook mag openen. Zonder: alles. */
   canOpenPage?: (page: string) => boolean;
@@ -166,7 +169,40 @@ export function GlobalSearch({ data, onNavigate, canOpenPage, variant = 'field',
 
   const term = query.trim().toLowerCase();
 
-  const results = useMemo<SearchResult[]>(() => searchWorkspace(data, term, canOpenPage), [term, data, canOpenPage]);
+  const baseResults = useMemo<SearchResult[]>(() => searchWorkspace(data, term, canOpenPage), [term, data, canOpenPage]);
+
+  // De tekst van documenten zit sinds stap 1A-2 niet meer in wat de app laadt:
+  // de database zoekt erin (search_documents). Titels en de korte tekst vindt
+  // searchWorkspace zelf; dit vult aan met wat alleen in de tekst staat.
+  const [textHits, setTextHits] = useState<SearchResult[]>([]);
+  useEffect(() => {
+    const mayOpen = !canOpenPage || canOpenPage('documents');
+    if (!organizationId || !mayOpen || term.length < 2) { setTextHits([]); return; }
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      searchDocumentsText(organizationId, term)
+        .then(hits => {
+          if (cancelled) return;
+          const byId = new Map(data.documents.map(d => [d.id, d] as const));
+          const naam = (id: string | null, lijst: Array<{ id: string; name: string }>) => (id ? lijst.find(x => x.id === id)?.name ?? null : null);
+          setTextHits(hits.flatMap(hit => {
+            const item = byId.get(hit.id);
+            if (!item) return [];
+            const subtitle = naam(hit.client_id, data.clients) ?? naam(hit.project_id, data.projects) ?? 'Document';
+            return [{ kind: 'document' as const, id: hit.id, title: hit.title || 'Document', subtitle, item }];
+          }));
+        })
+        // Een zoekvraag die mislukt, mag de zoekbalk niet in de weg zitten.
+        .catch(() => { if (!cancelled) setTextHits([]); });
+    }, 200);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [term, organizationId, data.documents, data.clients, data.projects, canOpenPage]);
+
+  const results = useMemo<SearchResult[]>(() => {
+    if (textHits.length === 0) return baseResults;
+    const seen = new Set(baseResults.filter(r => r.kind === 'document').map(r => r.id));
+    return [...baseResults, ...textHits.filter(hit => !seen.has(hit.id))];
+  }, [baseResults, textHits]);
 
   const countByKind = useMemo(() => {
     const counts = {} as Record<SearchResultKind, number>;

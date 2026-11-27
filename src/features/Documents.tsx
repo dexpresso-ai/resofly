@@ -1,6 +1,5 @@
 import type { AppData, InternalDocument, DocumentType } from '../types';
 import { Button } from '../components/Ui';
-import { RichTextExcerpt, RichTextViewer } from '../components/RichTextEditor';
 import { dateNL } from '../lib/format';
 
 export const documentTypeLabels: Record<DocumentType, string> = {
@@ -25,7 +24,8 @@ export function DocumentCard({ doc, data, onEdit }: { doc: InternalDocument; dat
       <span className="note-date">{dateNL(doc.created_at)}</span>
     </div>
     <h3>{doc.title}</h3>
-    <div className="note-content-preview"><RichTextViewer content={doc.content} /></div>
+    {/* De korte tekst die de database bijhoudt: de volledige tekst laadt pas bij openen (stap 1A-2). */}
+    <div className="note-content-preview">{doc.excerpt?.trim() ? <p>{doc.excerpt}</p> : <span className="rich-text-empty">Geen inhoud</span>}</div>
     <div className="note-relations">
       <span>{client ? `Klant: ${client.name}` : 'Geen klant'}</span>
       <span>{project ? `Project: ${project.name}` : 'Geen project'}</span>
@@ -66,7 +66,7 @@ export function RelatedDocuments({
       {sorted.map(doc => <button type="button" className="related-note-item" key={doc.id} onClick={() => onEdit(doc)}>
         <div className="related-note-top"><span className={`note-type note-type-${doc.document_type ?? 'general'}`}>{getDocumentTypeLabel(doc.document_type)}</span><span>{dateNL(doc.created_at)}</span></div>
         <strong>{doc.title}</strong>
-        <p><RichTextExcerpt content={doc.content} /></p>
+        <p>{doc.excerpt?.trim() || 'Geen inhoud'}</p>
       </button>)}
     </div>}
   </section>;

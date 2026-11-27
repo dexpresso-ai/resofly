@@ -301,7 +301,7 @@ export function ContentLibrary({
     }
     if (showDocuments) for (const d of data.documents) {
       const p = place(d.client_id, d.project_id);
-      out.push({ kind: 'document', id: d.id, title: d.title, content: d.content, modified: d.updated_at || d.created_at, clientId: p.clientId, projectId: p.projectId, folderId: d.folder_id ?? null, doc: d });
+      out.push({ kind: 'document', id: d.id, title: d.title, content: d.excerpt ?? '', modified: d.updated_at || d.created_at, clientId: p.clientId, projectId: p.projectId, folderId: d.folder_id ?? null, doc: d });
     }
     return out;
   }, [data.notes, data.documents, showNotes, showDocuments, place]);
@@ -728,7 +728,7 @@ export function ContentLibrary({
   } else if (folderId) {
     for (const f of subfolderList) folderRows.push(contentFolderRow(f, 'Submap'));
     for (const n of folderNotes) fileRows.push(itemRow({ kind: 'note', id: n.id, title: n.title, content: n.content, modified: n.updated_at || n.created_at, clientId, projectId, folderId, note: n }));
-    for (const d of folderDocs) fileRows.push(itemRow({ kind: 'document', id: d.id, title: d.title, content: d.content, modified: d.updated_at || d.created_at, clientId, projectId, folderId, doc: d }));
+    for (const d of folderDocs) fileRows.push(itemRow({ kind: 'document', id: d.id, title: d.title, content: d.excerpt ?? '', modified: d.updated_at || d.created_at, clientId, projectId, folderId, doc: d }));
     for (const a of folderAtts) fileRows.push(attRow(a));
   } else if (projectId === null) {
     for (const f of projectFolders) folderRows.push({
