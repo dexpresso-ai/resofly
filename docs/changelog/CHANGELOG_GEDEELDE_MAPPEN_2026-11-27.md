@@ -13,10 +13,22 @@ gebruikt"*.
   in de map komt, ziet hij niet en kan hij ook niet openen of downloaden.
 - **"Niet gedeeld"** staat in de drive achter elk item dat in een gedeelde map staat, maar
   dat de ontvanger nog niet ziet.
+  Op een telefoon staat er alleen een klein icoon (een doorgestreept oog), zodat er meer
+  van de naam overblijft.
 - **De balk boven de map** zegt wat er nog niet gedeeld is en met wie, bijvoorbeeld "1
   notitie in deze map is nog niet gedeeld met Jan de Vries". De knop **Ook delen** deelt
   het alsnog; daarna verdwijnen de balk en de labels. De knop staat er alleen voor wie op
   Inhoud mag schrijven.
+- **Een melding bij "Ook delen"**, die je per keer kunt uitzetten met het vinkje
+  **Melding sturen**. Het vinkje staat standaard aan, en deze browser onthoudt je keuze.
+  Vastgelegd op 27 november: *"Ja ik wil een melding die men ook uit kan zetten"*.
+  - De ontvanger krijgt de mail "Nieuw in “Oplevering”", met de namen van wat er nieuw
+    is (hoogstens tien, daarna "en nog 3").
+  - Een organisatie kan de tekst aanpassen bij Instellingen → E-mail, sjabloon "Nieuw in
+    een gedeelde map" (`file.added`), net als "Bestand gedeeld".
+  - Bij een deling met een geheime link gaat er een nieuwe link mee, net als bij "Opnieuw
+    versturen". De vorige link werkt daarna niet meer.
+  - Gaat de mail mis, dan is het delen wel gelukt, en zegt de app dat.
 - **Opnieuw delen** van de map (zelfde ontvanger) neemt mee wat er nu in staat, in
   dezelfde deling.
 - **Verplaats je een gedeeld item uit de map**, dan verdwijnt het bij de ontvanger. Zet je
@@ -50,6 +62,10 @@ gebruikt"*.
   - Het vraagt schrijfrechten op Inhoud.
   - Het weigert een ingetrokken of verlopen deling, en elk item dat niet (meer) in de map
     staat of bij een andere klant hoort.
+- `file-share`, actie `notifyAdded`: de melding bij "Ook delen". Het aanvullen zelf gaat
+  met `drive_share_add_items` onder de rechten van wie klikt. De melding gaat alleen over
+  wat nu echt in de deling staat; wordt er om iets anders gevraagd, dan gaat er geen mail
+  uit.
 - `drive_share_folder_gaps`: wat er in een map nog ontbreekt, per lopende mapdeling die de
   map omvat. De drive vraagt dit alleen op als er ergens een lopende mapdeling is, en
   opnieuw als er iets in de map bij komt. Daarmee blijft het opstarten van de app even
@@ -72,19 +88,24 @@ op één moment.
   - verplaatsen en terugzetten;
   - zelf een regel schrijven kan niet, vastleggen is alleen voor de deeldienst;
   - opnieuw delen.
-- `tests/stromen/documenten.mjs`, 5 nieuwe stappen door de echte deeldienst en het echte
+- `tests/stromen/documenten.mjs`, 7 nieuwe stappen door de echte deeldienst en het echte
   portaal:
   - een klantmap delen;
   - later toegevoegd is niet te zien en niet te openen;
   - een lezer kan niet aanvullen;
   - "Ook delen";
   - opnieuw delen in dezelfde deling.
+  - met melding krijgt de klant een mail met wat er nieuw is;
+  - over iets wat niet in de deling staat, gaat geen mail uit.
 - `tests/stromen/ui.mjs documenten`, een nieuwe stap in Chromium:
   - de balk, het label alleen bij het nieuwe item, en "Ook delen" laat beide verdwijnen;
+  - het vinkje Melding sturen staat standaard aan, en de klant krijgt de mail;
   - de database legt vast wie klikte;
   - op 390 pixels breed past de balk, en blijft het label in beeld.
 - De naam in een rij mag nu korter worden, zodat de labels erachter niet wegvallen. Op een
   telefoon viel "Niet gedeeld" eerst weg achter de afgekapte naam.
+- `src/lib/emailTemplateContent.test.ts`: de editor en de mail hebben dezelfde
+  standaardtekst; namen worden ge-escaped en een lange lijst wordt afgekort.
 - `npm test`, `npm run typecheck`, `npm run test:database` (de keten vanaf nul) en
   `npm run test:mobile -- --theme=both` voor de vier Inhoud-pagina's: groen.
 - **Niet gedraaid:** `deno check`. De proxy van de cloudsessie blokkeert deno.land; dat doet

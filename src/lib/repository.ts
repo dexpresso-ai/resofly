@@ -2725,6 +2725,24 @@ export async function loadFolderShareGaps(folderId: UUID): Promise<FolderShareGa
   return (data ?? []) as FolderShareGap[];
 }
 
+/**
+ * De melding bij "Ook delen": een mail aan de ontvanger over wat er nieuw in de
+ * gedeelde map staat. Alleen over items die echt in de deling staan; het
+ * delen zelf is dan al gebeurd (addItemsToDriveShare).
+ */
+export async function notifyDriveShareAdded(
+  organizationId: UUID,
+  shareId: UUID,
+  items: ReadonlyArray<Pick<FolderShareGap, 'item_type' | 'item_id'>>,
+): Promise<{ notified: boolean; notifyError: string | null }> {
+  const { data, error } = await supabase.functions.invoke('file-share', {
+    body: { action: 'notifyAdded', organizationId, shareId, items },
+  });
+  if (error) await throwFunctionError(error, 'De melding versturen is niet gelukt.');
+  if (!data?.ok) throw new Error(data?.error || 'De melding versturen is niet gelukt.');
+  return data.result as { notified: boolean; notifyError: string | null };
+}
+
 /** "Ook delen": zet deze items in een lopende mapdeling. Geeft terug hoeveel er nieuw bij kwamen. */
 export async function addItemsToDriveShare(
   shareId: UUID,

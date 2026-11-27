@@ -307,6 +307,28 @@ export default async function documentenScenario() {
       gelijk(uitkomst.share.id, mapDeling.shareId, 'dezelfde deling, bijgewerkt');
       gelijk(await portaalTitels(w.portaalA.token, mapDeling.shareId), 'Derde versie,Eerste versie,Tweede versie', 'in het portaal');
     });
+
+    const notitieIn = (titel) => ({ organization_id: w.orgId, created_by: w.medewerker.id, client_id: w.klantA.id, folder_id: mapDeling.map.id, title: titel, content: '<p>Tekst.</p>' });
+    await stap('"Ook delen" met melding: de klant krijgt een mail met wat er nieuw is', async () => {
+      const vierde = gelukt(await maak('notes', w.medewerker.token, notitieIn('Vierde versie')), 'notitie')[0];
+      const voor = mailsAan(w.klantA.email).length;
+      const items = [{ item_type: 'note', item_id: vierde.id }];
+      gelukt(await rest('rpc/drive_share_add_items', { method: 'POST', token: w.medewerker.token, body: { p_share_id: mapDeling.shareId, p_items: items } }), 'ook delen');
+      const res = gelukt(await roep('file-share', { token: w.medewerker.token, body: { action: 'notifyAdded', organizationId: w.orgId, shareId: mapDeling.shareId, items } }), 'melding');
+      verwacht(res.result?.notified === true, `geen melding: ${JSON.stringify(res).slice(0, 300)}`);
+      const mails = mailsAan(w.klantA.email);
+      gelijk(mails.length, voor + 1, 'één nieuwe mail');
+      const tekst = String(mails.at(-1)?.text ?? '');
+      verwacht(tekst.includes('Nieuw in “Oplevering”') && tekst.includes('Vierde versie'), `mail: ${tekst.slice(0, 300)}`);
+    });
+
+    await stap('een melding over iets wat niet in de deling staat, gaat niet uit', async () => {
+      const los = gelukt(await maak('notes', w.medewerker.token, notitieIn('Nog intern')), 'notitie')[0];
+      const voor = mailsAan(w.klantA.email).length;
+      const res = gelukt(await roep('file-share', { token: w.medewerker.token, body: { action: 'notifyAdded', organizationId: w.orgId, shareId: mapDeling.shareId, items: [{ item_type: 'note', item_id: los.id }] } }), 'melding');
+      gelijk(res.result?.notified, false, 'geen melding');
+      gelijk(mailsAan(w.klantA.email).length, voor, 'geen mail');
+    });
   }
 
   const intern = await stap('(een intern document, zonder klant)', async () => {

@@ -392,4 +392,47 @@ begin
 end;
 $$;
 
+-- ── 8. E-mailsjabloon "Nieuw in een gedeelde map" ─────────────────────────
+-- "Ook delen" stuurt de ontvanger een melding, die je per keer kunt uitzetten
+-- (vastgelegd op 27 november: "Ja ik wil een melding die men ook uit kan
+-- zetten"). Een organisatie kan de tekst aanpassen, net als bij "Bestand
+-- gedeeld". Dezelfde lijst als in 20261013100000, met file.added erbij.
+
+do $$
+declare
+  c record;
+begin
+  for c in
+    select conname
+    from pg_constraint
+    where conrelid = 'public.email_templates'::regclass
+      and contype = 'c'
+      and pg_get_constraintdef(oid) ilike '%template_key%'
+  loop
+    execute format('alter table public.email_templates drop constraint %I', c.conname);
+  end loop;
+end $$;
+
+alter table public.email_templates
+  add constraint email_templates_template_key_check
+  check (template_key in (
+    'quote.sent',
+    'invoice.sent',
+    'invoice.reminder.1',
+    'invoice.reminder.2',
+    'invoice.reminder.3',
+    'creditNote.sent',
+    'contract.sent',
+    'contract.signed.client',
+    'meetingBooking.linkSent',
+    'meetingBooking.confirmed',
+    'file.shared',
+    'file.added',
+    'file.transfer',
+    'portal.ticket.received',
+    'portal.ticket.created',
+    'portal.ticket.reply',
+    'portal.ticket.status'
+  ));
+
 commit;

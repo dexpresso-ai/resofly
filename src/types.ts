@@ -3936,6 +3936,7 @@ export type EmailTemplateKey =
   | 'meetingBooking.linkSent'
   | 'meetingBooking.confirmed'
   | 'file.shared'
+  | 'file.added'
   | 'file.transfer'
   | 'portal.ticket.received'
   | 'portal.ticket.created'

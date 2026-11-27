@@ -1762,6 +1762,7 @@ async function scenarioDocumenten() {
     const balk = inhoud(page).locator('.odrv-share-gap');
     await balk.waitFor({ timeout: 15000 });
     const zin = tekst(await balk.innerText());
+    gelijk(await balk.getByLabel('Melding sturen').isChecked(), true, 'melding staat standaard aan');
     verwacht(zin.includes('1 notitie in deze map is nog niet gedeeld met'), `balk: ${zin}`);
     gelijk(await inhoud(page).locator('.odrv-row').filter({ hasText: 'Tweede versie' }).first().locator('.odrv-unshared').count(), 1, 'label bij de nieuwe notitie');
     gelijk(await inhoud(page).locator('.odrv-row').filter({ hasText: 'Eerste versie' }).first().locator('.odrv-unshared').count(), 0, 'geen label bij wat al gedeeld is');
@@ -1783,6 +1784,7 @@ async function scenarioDocumenten() {
     await balk.getByRole('button', { name: 'Ook delen' }).click();
     await balk.waitFor({ state: 'detached', timeout: 15000 });
     gelijk(await inhoud(page).locator('.odrv-unshared').count(), 0, 'geen label meer');
+    verwacht(mailsAan(w.klantA.email).some((mail) => String(mail.text ?? '').includes('Tweede versie')), 'geen melding aan de klant over de nieuwe notitie');
     const regel = sqlRij(`select added_by from public.drive_share_entries where share_id = ${q(deel.share.id)} and item_id = ${q(later.id)}`);
     gelijk(regel?.added_by, w.medewerker.id, 'gedeeld, op naam van wie klikte');
   });

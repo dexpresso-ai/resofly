@@ -123,6 +123,8 @@ serve(async (req) => {
         return cors.json(req, { ok: true, results: await shareItem(user, organizationId, body) });
       case 'resendNotice':
         return cors.json(req, { ok: true, result: await resendNotice(user, organizationId, body) });
+      case 'notifyAdded':
+        return cors.json(req, { ok: true, result: await notifyAdded(user, organizationId, body) });
       default:
         throw new HttpError(`Onbekende actie: ${action}`, 400);
     }
@@ -523,12 +525,12 @@ async function loadCompany(organizationId: string): Promise<CompanyRow | null> {
   return (data as CompanyRow | null) ?? null;
 }
 
-async function loadShareEmailContent(organizationId: string): Promise<EmailTemplateContent | null> {
+async function loadShareEmailContent(organizationId: string, templateKey: 'file.shared' | 'file.added' = 'file.shared'): Promise<EmailTemplateContent | null> {
   const { data, error } = await admin
     .from('email_templates')
     .select('enabled,subject,intro,closing,cta_label')
     .eq('organization_id', organizationId)
-    .eq('template_key', 'file.shared')
+    .eq('template_key', templateKey)
     .maybeSingle();
   if (error || !data) {
     if (error) console.warn('file-share email_templates overgeslagen', error.message);
@@ -643,6 +645,141 @@ async function sendShareEmail(input: {
     console.error('file-share mail error', error instanceof Error ? error.message : error);
     return { ok: false, error: 'De melding kon niet worden verstuurd. De deling zelf staat wel klaar.' };
   }
+}
+
+const ADDED_NOUNS: Record<string, [string, string]> = {
+  attachment: ['bestand', 'bestanden'],
+  note: ['notitie', 'notities'],
+  document: ['document', 'documenten'],
+};
+
+/** "2 bestanden en 1 notitie": wat er nieuw is, als zinsdeel voor de mail. */
+function addedSentence(items: Array<{ item_type: string }>): string {
+  const parts = ['attachment', 'note', 'document']
+    .map((type) => ({ type, count: items.filter((item) => item.item_type === type).length }))
+    .filter((part) => part.count > 0)
+    .map((part) => `${part.count} ${ADDED_NOUNS[part.type][part.count === 1 ? 0 : 1]}`);
+  if (parts.length <= 1) return parts[0] ?? 'iets';
+  return `${parts.slice(0, -1).join(', ')} en ${parts[parts.length - 1]}`;
+}
+
+/**
+ * "Ook delen" met een melding (20261127120000). Het aanvullen zelf doet de app
+ * met drive_share_add_items, onder de rechten van wie klikt; hier gaat alleen
+ * de mail uit, en alleen over wat nu echt in de deling staat. Een deellink
+ * krijgt daarbij een nieuwe token, net als bij resendNotice: de oude is
+ * onherroepelijk kwijt zodra de eerste mail weg is.
+ */
+async function notifyAdded(
+  user: { id: string; email?: string },
+  organizationId: string,
+  body: Record<string, unknown>,
+) {
+  const shareId = String(body.shareId || '');
+  if (!isUuid(shareId)) throw new HttpError('Ongeldige deling.', 400);
+  const raw = Array.isArray(body.items) ? body.items : [];
+  if (raw.length === 0 || raw.length > 500) throw new HttpError('Geef de nieuwe items op, hoogstens 500.', 400);
+  const wanted = new Set(raw.map((item) => {
+    const row = (item ?? {}) as Record<string, unknown>;
+    return `${String(row.item_type || '')}:${String(row.item_id || '')}`;
+  }));
+
+  const { data, error } = await admin
+    .from('drive_shares')
+    .select('*')
+    .eq('id', shareId)
+    .eq('organization_id', organizationId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) throw new HttpError('Deze deling bestaat niet (meer).', 404);
+  let share = data as ShareRow;
+  if (share.item_type !== 'folder') throw new HttpError('Alleen bij een gedeelde map hoort deze melding.', 400);
+  if (share.revoked_at) throw new HttpError('Deze deling is ingetrokken.', 409);
+  if (share.expires_at && new Date(share.expires_at).getTime() <= Date.now()) {
+    throw new HttpError('Deze deling is verlopen.', 409);
+  }
+
+  // Alleen wat de ontvanger nu werkelijk ziet: op de lijst, nog in de map, bij dezelfde klant.
+  const { data: visible, error: itemsError } = await admin.rpc('drive_share_items', { p_share_id: share.id });
+  if (itemsError) throw itemsError;
+  const added = ((visible ?? []) as Array<{ item_type: string; item_id: string; name: string }>)
+    .filter((item) => wanted.has(`${item.item_type}:${item.item_id}`));
+  if (added.length === 0) return { notified: false, notifyError: 'Er staat niets nieuws in deze deling om te melden.' };
+
+  let token: string | null = null;
+  if (share.recipient_kind === 'link') {
+    token = randomToken();
+    const { data: updated, error: updateError } = await admin
+      .from('drive_shares')
+      .update({ token_hash: await sha256Hex(token), updated_at: new Date().toISOString() })
+      .eq('id', share.id)
+      .select('*')
+      .single();
+    if (updateError) throw shareError(updateError);
+    share = updated as ShareRow;
+  }
+
+  const to = String(share.recipient_email || '').trim();
+  if (!to) return { notified: false, notifyError: 'Deze ontvanger heeft geen e-mailadres.' };
+  if (!RESEND_API_KEY || !RESEND_FROM_EMAIL || !APP_PUBLIC_URL) {
+    return { notified: false, notifyError: 'E-mail is nog niet ingesteld. Het delen zelf is wel gelukt.' };
+  }
+  if (!(await emailQuotaAllows(admin, share.organization_id, 1))) {
+    return { notified: false, notifyError: 'Deze werkruimte heeft de grens voor e-mail bereikt. Het delen zelf is wel gelukt.' };
+  }
+
+  const context = await resolveItemContext(organizationId, 'folder', share.item_id).catch(() => null);
+  const url = await buildShareUrl(share, token, await portalLoginKeyFor(share));
+  const rendered = renderEmailTemplate('file.added', {
+    folderName: share.item_name || 'Map',
+    addedNames: added.map((item) => item.name),
+    addedSentence: addedSentence(added),
+    url,
+    accessHint: share.recipient_kind === 'contact' || share.recipient_kind === 'client'
+      ? 'Log in op het klantportaal met dit e-mailadres; je krijgt dan een inloglink toegestuurd.'
+      : share.recipient_kind === 'link' ? 'Deze link is persoonlijk en vervangt de link die je eerder kreeg.' : null,
+    recipientName: share.recipient_name,
+    senderName: await resolveSenderName(user, organizationId),
+    clientName: context?.client_name ?? null,
+    company: await loadCompany(organizationId),
+    content: await loadShareEmailContent(organizationId, 'file.added'),
+  });
+
+  try {
+    const sender = await resolveSenderIdentity(admin, organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO);
+    const brand = await loadEmailBrand(admin, share.organization_id);
+    const ids = added.map((item) => item.item_id).sort().join('');
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${RESEND_API_KEY}`,
+        'Content-Type': 'application/json',
+        'Idempotency-Key': sanitizeIdempotencyKey(`file-added-${share.id}-${(await sha256Hex(ids)).slice(0, 32)}`),
+      },
+      body: JSON.stringify(withEmailBrand({
+        from: sender.from,
+        to: [to],
+        reply_to: sender.replyTo,
+        subject: rendered.subject,
+        html: rendered.html,
+        text: rendered.text,
+        tags: [
+          { name: 'organization_id', value: sanitizeTagValue(share.organization_id) },
+          { name: 'template_key', value: 'file_added' },
+        ],
+      }, brand)),
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      console.error('file-share added resend error', response.status, text.slice(0, 300));
+      return { notified: false, notifyError: `De melding kon niet worden verstuurd (${response.status}). Het delen zelf is wel gelukt.` };
+    }
+  } catch (mailError) {
+    console.error('file-share added mail error', mailError instanceof Error ? mailError.message : mailError);
+    return { notified: false, notifyError: 'De melding kon niet worden verstuurd. Het delen zelf is wel gelukt.' };
+  }
+  await admin.from('drive_shares').update({ notified_at: new Date().toISOString() }).eq('id', share.id);
+  return { notified: true, notifyError: null };
 }
 
 function sanitizeTagValue(value: string): string {

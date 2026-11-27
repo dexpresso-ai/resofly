@@ -47,6 +47,7 @@ const PLACEHOLDERS: Record<string, Omit<EmailPlaceholder, 'token'>> = {
   item_name: { label: 'Naam van het gedeelde item', example: 'Oplevering fase 2' },
   item_kind: { label: 'Soort item', example: 'Map' },
   item_kind_lower: { label: 'Soort item (kleine letter)', example: 'map' },
+  added_sentence: { label: 'Wat er nieuw is, als zinsdeel', example: '2 bestanden en 1 notitie' },
   transfer_subject: { label: 'Onderwerp van de zending', example: 'Ontwerpen homepage' },
   file_count_sentence: { label: 'Aantal bestanden als zinsdeel', example: '3 bestanden' },
   total_size: { label: 'Totale grootte', example: '24,6 MB' },
@@ -222,6 +223,22 @@ export const EMAIL_TEMPLATES: EmailTemplateMeta[] = [
       cta_label: 'Bekijk {{item_kind_lower}}',
     },
     placeholders: placeholders('recipient_name', 'sender_name', 'company_name', 'item_name', 'item_kind', 'item_kind_lower', 'client_name', 'valid_until'),
+  },
+  // Spiegelt FILE_ADDED_DEFAULTS en FILE_ADDED_PLACEHOLDERS in
+  // _shared/emailTemplates/fileShared.ts; emailTemplateContent.test.ts houdt ze gelijk.
+  {
+    key: 'file.added',
+    label: 'Nieuw in een gedeelde map',
+    group: 'bestanden',
+    description: 'De e-mail die iemand krijgt als je iets toevoegt aan een map die al met hem gedeeld is (Ook delen). Een gedeelde map vult zich niet vanzelf: wat je er later in zet, deel je met Ook delen, en dan gaat deze melding mee, tenzij je hem uitzet. Onder je tekst staat altijd wat er nieuw is.',
+    fields: ['subject', 'intro', 'closing', 'cta_label'],
+    defaults: {
+      subject: 'Nieuw in “{{item_name}}”',
+      intro: 'Beste {{recipient_name}},\n{{sender_name}} heeft {{added_sentence}} toegevoegd aan “{{item_name}}”.',
+      closing: '',
+      cta_label: 'Bekijk de map',
+    },
+    placeholders: placeholders('recipient_name', 'sender_name', 'company_name', 'item_name', 'added_sentence', 'client_name'),
   },
   // Spiegelt FILE_TRANSFER_DEFAULTS en FILE_TRANSFER_PLACEHOLDERS in
   // _shared/emailTemplates/fileTransfer.ts; emailTemplateContent.test.ts houdt ze gelijk.
