@@ -273,6 +273,13 @@ async function shareWithOne(input: {
       .single();
     if (error) throw shareError(error);
     share = data as ShareRow;
+    // Een map opnieuw delen is opnieuw kiezen: wat er nú in staat, komt in de
+    // deling (20261127120000). Een nieuwe deling legt de database zelf vast,
+    // met een trigger; deze tak werkt een bestaande bij en mist die trigger.
+    if (input.itemType === 'folder') {
+      const { error: captureError } = await admin.rpc('drive_share_capture', { p_share_id: share.id });
+      if (captureError) throw shareError(captureError);
+    }
   } else {
     const { data, error } = await admin.from('drive_shares').insert(values).select('*').single();
     if (error) throw shareError(error);

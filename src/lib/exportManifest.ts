@@ -161,7 +161,10 @@ export const EXPORT_FORMAT_VERSION = 1;
 // 20261125120000 (onbeperkt AI-tegoed) zet een kolom op
 // organization_billing_profiles; die tabel is 'abonnement' en gaat niet mee.
 // 20261125130000 zet die vlag voor nog een organisatie; geen schemawijziging.
-export const EXPORT_SCHEMA_VERSION = '20261125130000';
+// 20261127120000 (gedeelde mappen niet meer live) zet drive_share_entries
+// erbij: welke items in een gedeelde map echt gedeeld zijn, wie ze deelde en
+// wanneer. Gaat mee, net als de delingen zelf.
+export const EXPORT_SCHEMA_VERSION = '20261127120000';
 
 export type TableKind =
   | 'export'
@@ -282,6 +285,7 @@ export const EXPORT_MANIFEST: Readonly<Record<string, TableRule>> = {
   note_handwriting: { kind: 'export' },
   note_calendar_links: { kind: 'export' },
   drive_shares: { kind: 'export', omit: TOKEN_HASH_OMIT },
+  drive_share_entries: { kind: 'export', orderBy: ['share_id', 'item_type', 'item_id'] },
   file_transfers: { kind: 'export' },
   file_transfer_items: {
     kind: 'export',

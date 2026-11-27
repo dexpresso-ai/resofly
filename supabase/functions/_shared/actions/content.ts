@@ -582,7 +582,11 @@ export const CONTENT_ACTIONS: ActionDef[] = [
         title: `${item.label} "${item.name}" delen`,
         sub: joinShort([`met ${labels.join(', ')}`, expires ? `tot ${expires}` : 'zonder einddatum', canDownload ? 'downloaden mag' : 'alleen bekijken'], 160),
         kind: 'mail',
-        warning: `${labels.length === 1 ? 'De ontvanger ziet' : 'De ontvangers zien'} ${item.label.toLowerCase() === 'map' ? 'deze map en alles wat erin komt' : 'dit'} vanaf nu en krijgt een melding per e-mail.`,
+        // Een map is sinds 20261127120000 niet meer live: de ontvanger ziet wat
+        // er bij het delen in staat. Wat er later bij komt, deel je apart.
+        warning: item.label.toLowerCase() === 'map'
+          ? `${labels.length === 1 ? 'De ontvanger ziet' : 'De ontvangers zien'} vanaf nu wat er nu in deze map staat en ${labels.length === 1 ? 'krijgt' : 'krijgen'} een melding per e-mail. Wat er later in de map komt, deel je apart.`
+          : `${labels.length === 1 ? 'De ontvanger ziet' : 'De ontvangers zien'} dit vanaf nu en ${labels.length === 1 ? 'krijgt' : 'krijgen'} een melding per e-mail.`,
         payload: {
           item_type: itemType, item_id: itemId, item_name: item.name, recipients, recipient_labels: labels,
           // Een dag; de browser maakt er het eind van die dag van, in de eigen tijdzone —
