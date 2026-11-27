@@ -1816,6 +1816,105 @@ async function scenarioDocumenten() {
     const editor = venster.locator('[contenteditable="true"]').first();
     await wachtTot(async () => (await editor.innerText().catch(() => '')).includes(woord), { melding: 'de hele tekst staat niet in de editor' });
   });
+
+  // ── Pagina's (stap 1A-3a) ──────────────────────────────────────────────────
+  const paginaTitel = `Werkwijze ${Date.now().toString(36)}`;
+  const paginaStatus = (page) => page.locator('.page-editor .page-editor-status');
+  const paginaRij = (page) => inhoud(page).locator('.odrv-row').filter({ hasText: paginaTitel }).first();
+
+  const pagina = await uiStap('Nieuw → Pagina: typen, het slaat vanzelf op, en het staat als pagina in de database', async () => {
+    const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+    const page = lid.page;
+    await naarKlantdossier(lid, w.klantA.name);
+    await inhoud(page).locator('.drive-new').click();
+    await page.locator('.drive-pop').getByRole('menuitem', { name: 'Pagina', exact: true }).click();
+    await page.locator('.page-editor').waitFor({ timeout: 20000 });
+    await wachtTot(async () => tekst(await paginaStatus(page).innerText().catch(() => '')) === 'Opgeslagen', { melding: 'de editor kwam niet in bewerken' });
+    await page.locator('.page-editor-title').fill(paginaTitel);
+    await page.locator('.page-editor .tiptap').click();
+    await page.keyboard.type('Koffie is gratis.');
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('- eerste punt');
+    await wachtTot(async () => tekst(await paginaStatus(page).innerText().catch(() => '')) === 'Opgeslagen', { melding: 'niet opgeslagen', timeout: 15000 });
+    const rij = sqlRij(`select id, format, content, edit_version, client_id from public.documents where organization_id = ${q(w.orgId)} and title = ${q(paginaTitel)}`);
+    verwacht(rij, 'pagina niet in de database');
+    gelijk(rij.format, 'page', 'soort');
+    gelijk(rij.client_id, w.klantA.id, 'bij klant A');
+    verwacht(rij.content.includes('Koffie is gratis.') && rij.content.includes('eerste punt'), `tekst niet opgeslagen: ${rij.content}`);
+    const lijst = sqlRij(`select count(*)::int as n from public.documents d, jsonb_path_query(d.body, 'strict $.** ? (@.type == "bulletList")') x where d.id = ${q(rij.id)}`);
+    gelijk(lijst.n, 1, 'de opsomming staat als blok in body');
+    await page.locator('.page-editor-close').click();
+    await page.locator('.page-editor').waitFor({ state: 'detached', timeout: 15000 });
+    await paginaRij(page).waitFor({ timeout: 10000 });
+    verwacht(tekst(await paginaRij(page).innerText()).includes('Pagina'), 'de rij heet geen Pagina');
+    const versies = sqlRij(`select count(*)::int as n from public.document_versions where document_id = ${q(rij.id)}`);
+    gelijk(versies.n, 1, 'bij sluiten een versie van deze sessie');
+    const claims = sqlRij(`select count(*)::int as n from public.document_edit_claims where document_id = ${q(rij.id)}`);
+    gelijk(claims.n, 0, 'bij sluiten is de claim los');
+    return rij;
+  });
+
+  await uiStap('opnieuw openen toont de tekst, en openen zonder te typen verandert niets', async () => {
+    if (!pagina) throw new Error('geen pagina');
+    const voor = sqlRij(`select edit_version, updated_at::text as gewijzigd from public.documents where id = ${q(pagina.id)}`);
+    const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+    const page = lid.page;
+    await naarKlantdossier(lid, w.klantA.name);
+    await paginaRij(page).click();
+    await page.locator('.page-editor').waitFor({ timeout: 20000 });
+    await wachtTot(async () => (await page.locator('.page-editor .tiptap').innerText().catch(() => '')).includes('Koffie is gratis.'), { melding: 'de tekst staat niet in de editor' });
+    await wachtTot(async () => tekst(await paginaStatus(page).innerText().catch(() => '')) === 'Opgeslagen', { melding: 'de editor kwam niet in bewerken' });
+    await page.waitForTimeout(2500);
+    await page.locator('.page-editor-close').click();
+    await page.locator('.page-editor').waitFor({ state: 'detached', timeout: 15000 });
+    const na = sqlRij(`select edit_version, updated_at::text as gewijzigd from public.documents where id = ${q(pagina.id)}`);
+    gelijk([na.edit_version, na.gewijzigd], [voor.edit_version, voor.gewijzigd], 'edit_version en "laatst gewijzigd" na alleen openen');
+  });
+
+  await uiStap('een tweede collega ziet wie de pagina bewerkt, en kan niet typen', async () => {
+    if (!pagina) throw new Error('geen pagina');
+    const lidA = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+    await naarKlantdossier(lidA, w.klantA.name);
+    await paginaRij(lidA.page).click();
+    await wachtTot(async () => tekst(await paginaStatus(lidA.page).innerText().catch(() => '')) === 'Opgeslagen', { melding: 'A kwam niet in bewerken' });
+    const lidB = await openWerkruimte(w.beheerder, 'beheerder', w.orgId, { tijdelijk: true });
+    await naarKlantdossier(lidB, w.klantA.name);
+    await paginaRij(lidB.page).click();
+    const banner = lidB.page.locator('.page-editor-banner');
+    await banner.waitFor({ timeout: 20000 });
+    verwacht(tekst(await banner.innerText()).includes('bewerkt deze pagina'), `banner: ${await banner.innerText()}`);
+    gelijk(await lidB.page.locator('.page-editor .tiptap').getAttribute('contenteditable'), 'false', 'B kan niet typen');
+    gelijk(await lidB.page.locator('.page-editor-toolbar').count(), 0, 'B heeft geen werkbalk');
+    await lidB.page.locator('.page-editor-close').click();
+    await lidA.page.locator('.page-editor-close').click();
+    await lidA.page.locator('.page-editor').waitFor({ state: 'detached', timeout: 15000 });
+  });
+
+  await uiStap('een pagina heeft geen Delen of Versturen, en op een telefoon past de werkbalk', async () => {
+    if (!pagina) throw new Error('geen pagina');
+    const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+    const page = lid.page;
+    await naarKlantdossier(lid, w.klantA.name);
+    await paginaRij(page).locator('.odrv-td-act button').first().click();
+    const menu = page.locator('.drive-pop');
+    await menu.getByRole('menuitem', { name: 'Openen', exact: true }).waitFor({ timeout: 10000 });
+    gelijk(await menu.getByRole('menuitem', { name: 'Delen…', exact: true }).count(), 0, 'Delen bij een pagina');
+    gelijk(await menu.getByRole('menuitem', { name: 'Versturen…', exact: true }).count(), 0, 'Versturen bij een pagina');
+    await page.keyboard.press('Escape');
+    await page.setViewportSize({ width: 390, height: 844 });
+    await rustig(lid);
+    await paginaRij(page).click();
+    const balk = page.locator('.page-editor-toolbar');
+    await balk.waitFor({ timeout: 20000 });
+    await page.waitForTimeout(600);
+    gelijk(tekst(await paginaStatus(page).innerText()), 'Opgeslagen', 'status direct na openen, zonder te typen');
+    const vak = await balk.boundingBox();
+    verwacht(vak && vak.x >= 0 && vak.x + vak.width <= 391, `werkbalk past niet: ${JSON.stringify(vak)}`);
+    const schuift = await balk.evaluate((el) => el.scrollWidth > el.clientWidth);
+    verwacht(schuift, 'de werkbalk schuift niet opzij op een telefoon');
+    await page.screenshot({ path: path.join(os.tmpdir(), 'stromen-ui-pagina-telefoon.png') });
+    await page.locator('.page-editor-close').click();
+  });
 }
 
 // ── Bank: mutaties met de hand boeken ──────────────────────────────────────

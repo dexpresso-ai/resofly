@@ -114,9 +114,10 @@ import {
   createClientContact,
   updateClientContact,
   loadContentHtml,
+  createPage,
   type Table,
 } from './lib/repository';
-import { memberShortName, memberColor, memberInitials, memberEmail, projectTeamAdditions, taskAssigneeChoices } from './lib/members';
+import { memberShortName, memberColor, memberInitials, memberEmail, memberName, projectTeamAdditions, taskAssigneeChoices } from './lib/members';
 import { uploadToR2 } from './lib/r2';
 import { listExternalCalendarEvents, createExternalCalendarEvent, updateCalendarEvent, deleteCalendarEvent, completeCalendarOAuth, takeCalendarOAuthReturn, invalidateCalendarEventsCache, type CalendarEventInput } from './lib/calendar-api';
 import { calendarOAuthErrorText } from './lib/calendarConnection';
@@ -258,6 +259,8 @@ const PublicContractPage = lazyPage(() => import('./features/PublicContractPage'
 const PublicBookingPage = lazyPage(() => import('./features/PublicBookingPage'), 'PublicBookingPage');
 const PublicGalleryPage = lazyPage(() => import('./features/PublicGalleryPage'), 'PublicGalleryPage');
 const PublicSharePage = lazyPage(() => import('./features/PublicSharePage'), 'PublicSharePage');
+// De pagina-editor (stap 1A-3a): Tiptap en ProseMirror laden pas als je een pagina opent.
+const PageEditor = lazyPage(() => import('./features/PageEditor'), 'PageEditor');
 const PublicUnsubscribePage = lazyPage(() => import('./features/PublicUnsubscribePage'), 'PublicUnsubscribePage');
 const PublicTransferPage = lazyPage(() => import('./features/PublicTransferPage'), 'PublicTransferPage');
 const ClientPortal = lazyPage(() => import('./features/portal/ClientPortal'), 'ClientPortal');
@@ -1285,6 +1288,8 @@ function App() {
   }, [page]);
   /** Het document dat in de editor openstaat — drijft de "Downloaden"-knop (native formaat). */
   const [officeDoc, setOfficeDoc] = useState<InternalDocument | null>(null);
+  /** De pagina die open staat in de pagina-editor (stap 1A-3a). */
+  const [pageEditDoc, setPageEditDoc] = useState<InternalDocument | null>(null);
   // Terug uit een telefoongesprek. `returnedCall` is de vraag ("gesprek
   // loggen?"), `callDraft` het venster dat daarop volgt. Twee aparte waarden,
   // zodat wegklikken van de vraag niet hetzelfde is als het venster sluiten.
@@ -2857,6 +2862,8 @@ function App() {
 
   /** Open een intern Document: Word-modus → Collabora-editor; rich-text → de gewone editor-modal. */
   async function openDocument(doc: InternalDocument) {
+    // Een pagina opent in de pagina-editor; die laadt zelf de inhoud (body).
+    if (doc.format === 'page') { setPageEditDoc(doc); return; }
     if (!doc.storage_key) {
       // De tekst zit sinds stap 1A-2 niet meer in de kern: eerst ophalen. Anders
       // opende de editor leeg, en wiste opslaan de tekst.
@@ -2883,6 +2890,18 @@ function App() {
       setError(e instanceof Error ? e.message : 'Kon de Word-editor niet openen');
     } finally {
       setOfficeOpening(false);
+    }
+  }
+
+  /** Een nieuwe, lege pagina op deze plek, en meteen open in de editor. */
+  async function createPageAndOpen(target: { client_id?: string | null; project_id?: string | null; folder_id?: string | null }) {
+    if (!activeOrg) return;
+    try {
+      const page = await createPage(activeOrg.id, target);
+      refresh();
+      setPageEditDoc(page);
+    } catch (e) {
+      setError((e as { message?: string } | null)?.message || 'Er kon geen pagina worden gemaakt.');
     }
   }
 
@@ -5004,6 +5023,7 @@ function App() {
       onClose={() => setCallDraft(null)}
       onSaved={refresh}
     /></DialogDeferred>}
+    {pageEditDoc && <DialogDeferred><PageEditor documentId={pageEditDoc.id} organizationId={pageEditDoc.organization_id} canWrite={orgCanWrite && permissions.canWrite('content')} nameOf={(userId: string) => memberName(userId, organizationContext.teamMembers ?? [], currentUserId)} onClose={() => { setPageEditDoc(null); refresh(); }}/></DialogDeferred>}
     {officeSession && <DialogDeferred><OfficeEditor session={officeSession} onClose={() => { setOfficeSession(null); setOfficeDoc(null); refresh(); }} onDownload={officeDoc ? downloadOfficeDoc : undefined} /></DialogDeferred>}
     {officeOpening && !officeSession && <div style={{ position: 'fixed', bottom: 16, right: 16, zIndex: 2100, background: 'var(--panel-strong)', border: '1px solid var(--border2)', borderRadius: 10, padding: '8px 14px', fontWeight: 600 }}>Editor openen…</div>}
     {/* Zwevend teamchat-paneel — overal beschikbaar, behalve op de volledige chatpagina. */}
@@ -5144,7 +5164,7 @@ function App() {
     }
     if (page === 'projects') return <ProjectsListPage data={data} canWrite={canWrite} onNewProject={() => ensureCanWrite() && setEdit({kind:'project'})} onOpenProject={(item) => { setProjectId(item.id); setClientId(null); setPage('project'); }} onEditProject={(item) => setEdit({kind:'project', item})}/>;
     if (page === 'project-planning') return <ProjectsPlanningPage data={data} onOpenProject={(item) => { setProjectId(item.id); setClientId(null); setPage('project'); }} />;
-    if (page === 'client' && client) return <ClientDetailPage data={data} client={client} teamMembers={workMembers} canWrite={canWrite} organizationId={activeOrg.id} onChanged={refresh} onInvoiceHours={onInvoiceHours} onBack={() => { setClientId(null); setPage('clients'); }} onEditClient={() => setEdit({kind:'client', item: client})} onNewQuote={() => ensureCanWrite() && setEdit({kind:'quote', defaults: { client_id: client.id }})} onEditQuote={(item)=>setEdit({kind:'quote', item})} onNewInvoice={() => ensureCanWrite() && setEdit({kind:'invoice', defaults: { client_id: client.id }})} onEditInvoice={(item)=>setEdit({kind:'invoice', item})} onOpenProject={(project) => { setProjectId(project.id); setClientId(null); setPage('project'); }} onNewProject={() => ensureCanWrite() && setEdit({kind:'project', defaults: { client_id: client.id }})} onNewNote={(t) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: t?.client_id ?? client.id, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }})} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewDocument={(t) => ensureCanWrite() && setEdit({kind:'document', item: undefined, defaults: { client_id: t?.client_id ?? client.id, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }})} onNewOfficeDocument={(docType, title, t) => { if (!ensureCanWrite()) return; void createDocumentFromBlankOffice(docType, { title, client_id: t?.client_id ?? client.id, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }); }} onEditDocument={openDocument} unreadCount={clientEmailUnread.byClient[client.id] ?? 0} onUnreadChanged={refreshClientEmailUnread} onNewTicket={() => { if (!canEditKind('ticket')) { setError('Je hebt geen wijzigrechten voor Tickets. Vraag een owner of admin om deze module voor je open te zetten.'); return; } setEdit({kind:'ticket', defaults: { client_id: client.id }}); }} onEditTicket={(item) => { setEdit({kind:'ticket', item}); markTicketRead(item.id).then(refreshTicketUnread).catch(() => {}); }} unreadTicketIds={ticketUnreadIds} canReadTickets={permissions.canRead('tickets')} canWriteTickets={orgCanWrite && permissions.canWrite('tickets')} canReadCalendar={permissions.canRead('calendar')} canWriteCalendar={orgCanWrite && permissions.canWrite('calendar')} onOpenBookingLink={(linkId) => openBookingLinks({ linkId })} onNewBookingLink={() => openBookingLinks({ create: true, clientId: client.id })}/>;
+    if (page === 'client' && client) return <ClientDetailPage data={data} client={client} teamMembers={workMembers} canWrite={canWrite} organizationId={activeOrg.id} onChanged={refresh} onInvoiceHours={onInvoiceHours} onBack={() => { setClientId(null); setPage('clients'); }} onEditClient={() => setEdit({kind:'client', item: client})} onNewQuote={() => ensureCanWrite() && setEdit({kind:'quote', defaults: { client_id: client.id }})} onEditQuote={(item)=>setEdit({kind:'quote', item})} onNewInvoice={() => ensureCanWrite() && setEdit({kind:'invoice', defaults: { client_id: client.id }})} onEditInvoice={(item)=>setEdit({kind:'invoice', item})} onOpenProject={(project) => { setProjectId(project.id); setClientId(null); setPage('project'); }} onNewProject={() => ensureCanWrite() && setEdit({kind:'project', defaults: { client_id: client.id }})} onNewNote={(t) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: t?.client_id ?? client.id, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }})} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewDocument={(t) => ensureCanWrite() && setEdit({kind:'document', item: undefined, defaults: { client_id: t?.client_id ?? client.id, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }})} onNewOfficeDocument={(docType, title, t) => { if (!ensureCanWrite()) return; void createDocumentFromBlankOffice(docType, { title, client_id: t?.client_id ?? client.id, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }); }} onNewPage={(t) => { if (!ensureCanWrite()) return; void createPageAndOpen({ client_id: t?.client_id ?? client.id, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }); }} onEditDocument={openDocument} unreadCount={clientEmailUnread.byClient[client.id] ?? 0} onUnreadChanged={refreshClientEmailUnread} onNewTicket={() => { if (!canEditKind('ticket')) { setError('Je hebt geen wijzigrechten voor Tickets. Vraag een owner of admin om deze module voor je open te zetten.'); return; } setEdit({kind:'ticket', defaults: { client_id: client.id }}); }} onEditTicket={(item) => { setEdit({kind:'ticket', item}); markTicketRead(item.id).then(refreshTicketUnread).catch(() => {}); }} unreadTicketIds={ticketUnreadIds} canReadTickets={permissions.canRead('tickets')} canWriteTickets={orgCanWrite && permissions.canWrite('tickets')} canReadCalendar={permissions.canRead('calendar')} canWriteCalendar={orgCanWrite && permissions.canWrite('calendar')} onOpenBookingLink={(linkId) => openBookingLinks({ linkId })} onNewBookingLink={() => openBookingLinks({ create: true, clientId: client.id })}/>;
     if (page === 'communication') return <CommunicationPage data={data} organizationId={activeOrg.id} canWrite={canWrite} inboxCount={inboxCount} activity={communicationActivity} focus={view.commFocus} ticketUnreadIds={ticketUnreadIds} currentUserId={currentUserId} canReadTickets={permissions.canRead('tickets')} canWriteTickets={orgCanWrite && permissions.canWrite('tickets')} canWriteContent={orgCanWrite && permissions.canWrite('content')} onUnreadChanged={refreshClientEmailUnread} onInboxChanged={refreshInbox} onTicketUnreadChanged={refreshTicketUnread} onOpenClient={(id) => { setClientId(id); setProjectId(null); setPage('client'); }} onOpenTicket={(item) => { setEdit({kind:'ticket', item}); markTicketRead(item.id).then(refreshTicketUnread).catch(() => {}); }} onChanged={refresh} onNewClientFromMail={openClientFromMail} inboxRefreshKey={inboxRevision} />;
     if (page === 'clients') return <Clients data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} onNew={() => ensureCanWrite() && setEdit({kind:'client'})} onOpen={(item)=>{ setClientId(item.id); setProjectId(null); setPage('client'); }} unreadByClient={clientEmailUnread.byClient} teamMembers={workMembers} currentUserId={currentUserId} onNewFromMail={openClientFromMail} inboxRefreshKey={inboxRevision}/>;
     if (page === 'tickets') return <Tickets data={data} onNew={() => ensureCanWrite() && setEdit({kind:'ticket'})} onEdit={(item)=>{ setEdit({kind:'ticket', item}); markTicketRead(item.id).then(refreshTicketUnread).catch(()=>{}); }} onConvert={convert} onPlan={planTicket} onResolve={(item) => void setTicketStatus(item, 'resolved')} onReopen={(item) => void setTicketStatus(item, TICKET_REOPEN_STATUS)} unreadTicketIds={ticketUnreadIds} teamMembers={workMembers} currentUserId={currentUserId}/>;
@@ -5155,7 +5175,7 @@ function App() {
     if (page === 'marketing') return <Marketing data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh}
       openCampaignId={view.pendingDraft?.kind === 'campaign' ? String(view.pendingDraft.payload.id ?? '') : null} onCampaignOpened={() => setPendingDraft(null)}/>;
     if (page === 'meetings') return <MeetingsOverview organizationId={activeOrg.id} data={data} currentUserId={currentUserId} canWriteModule={(module) => orgCanWrite && permissions.canWrite(module)} onOpenNote={(item) => setEdit({kind:'note', item})}/>;
-    if (page === 'content' || page === 'notes' || page === 'documents') return <ContentLibrary key={page} data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} initialView={page === 'notes' ? 'notes' : page === 'documents' ? 'documents' : 'all'} onNewNote={(t) => ensureCanWrite() && setEdit({kind:'note', defaults: { client_id: t?.client_id ?? null, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }})} onEditNote={(item)=>setEdit({kind:'note', item})} onNewDocument={(t) => ensureCanWrite() && setEdit({kind:'document', defaults: { client_id: t?.client_id ?? null, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }})} onNewOfficeDocument={(docType, title, t) => { if (!ensureCanWrite()) return; void createDocumentFromBlankOffice(docType, { title, client_id: t?.client_id ?? null, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }); }} onEditDocument={openDocument}/>;
+    if (page === 'content' || page === 'notes' || page === 'documents') return <ContentLibrary key={page} data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} initialView={page === 'notes' ? 'notes' : page === 'documents' ? 'documents' : 'all'} onNewNote={(t) => ensureCanWrite() && setEdit({kind:'note', defaults: { client_id: t?.client_id ?? null, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }})} onEditNote={(item)=>setEdit({kind:'note', item})} onNewDocument={(t) => ensureCanWrite() && setEdit({kind:'document', defaults: { client_id: t?.client_id ?? null, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }})} onNewOfficeDocument={(docType, title, t) => { if (!ensureCanWrite()) return; void createDocumentFromBlankOffice(docType, { title, client_id: t?.client_id ?? null, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }); }} onNewPage={(t) => { if (!ensureCanWrite()) return; void createPageAndOpen({ client_id: t?.client_id ?? null, project_id: t?.project_id ?? null, folder_id: t?.folder_id ?? null }); }} onEditDocument={openDocument}/>;
     if (page === 'quotes') return <Quotes data={data} canWrite={canWrite} canAdmin={canAdmin} onNew={() => ensureCanWrite() && setEdit({kind:'quote'})} onEdit={(item)=>setEdit({kind:'quote', item})} onSubmitApproval={submitQuoteApproval} onApprove={approveQuote} onReject={rejectQuote} onWithdraw={withdrawQuote} onSend={sendQuote} onConvertToInvoice={convertQuoteToInvoice} onDownloadPdf={downloadQuotePdf}/>;
     if (page === 'contracts') return <Contracts data={data} organizationId={activeOrg.id} canWrite={canWrite} onChanged={refresh} refreshKey={refreshRound}
       draft={view.pendingDraft?.kind === 'contract' ? contractDraftFrom(view.pendingDraft.payload) : null} onDraftConsumed={() => setPendingDraft(null)}/>;

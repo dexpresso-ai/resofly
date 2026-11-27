@@ -487,6 +487,7 @@ export function ClientDetailPage({
   onNewNote,
   onEditNote,
   onNewDocument,
+  onNewPage,
   onNewOfficeDocument,
   onEditDocument,
   unreadCount,
@@ -520,6 +521,8 @@ export function ClientDetailPage({
   onNewNote: (target?: ContentCreateTarget) => void;
   onEditNote: (note: Note) => void;
   onNewDocument: (target?: ContentCreateTarget) => void;
+  /** Een nieuwe pagina (stap 1A-3a). */
+  onNewPage?: (target?: ContentCreateTarget) => void;
   onNewOfficeDocument: (docType: NewOfficeType, title: string, target?: ContentCreateTarget) => void;
   onEditDocument: (doc: InternalDocument) => void;
   unreadCount: number;
@@ -937,6 +940,7 @@ export function ClientDetailPage({
       onNewNote={onNewNote}
       onEditNote={onEditNote}
       onNewDocument={onNewDocument}
+      onNewPage={onNewPage}
       onNewOfficeDocument={onNewOfficeDocument}
       onEditDocument={onEditDocument}
     />}

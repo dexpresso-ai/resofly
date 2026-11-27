@@ -13610,3 +13610,52 @@ button.alog-feed-row:hover{background:var(--bg3)}
 /* Maandweergave: een taak toont de kleur van zijn project, niet overal goud. */
 .cm-chip.is-task .cm-chip-dot,
 .cm-dayitem.is-task .cm-dayitem-dot{background:var(--event-color,var(--accent))}
+
+/* ── De pagina-editor (stap 1A-3a, src/features/PageEditor.tsx) ───────────────
+   Een rustige leeskolom over het hele scherm, met de werkbalk vast bovenaan. Op
+   een telefoon scrolt de werkbalk opzij in plaats van buiten beeld te lopen. */
+.page-editor{position:fixed;inset:0;z-index:2000;display:flex;flex-direction:column;background:var(--bg);color:var(--text)}
+.page-editor-bar{display:flex;align-items:center;gap:12px;min-height:52px;padding:0 14px;border-bottom:1px solid var(--border);flex:0 0 auto}
+.page-editor-close{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:10px;border:1px solid var(--border2);background:transparent;color:inherit;cursor:pointer;flex:0 0 auto}
+.page-editor-crumb{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;font-size:14px}
+.page-editor-status{flex:0 0 auto;font-size:12.5px;color:var(--muted2);white-space:nowrap}
+.page-editor-status.is-wijzigingen,.page-editor-status.is-bezig{color:var(--muted)}
+.page-editor-status.is-fout,.page-editor-status.is-conflict,.page-editor-status.is-geen_recht{color:var(--accent-r,#e5484d)}
+.page-editor-toolbar{display:flex;align-items:center;gap:2px;padding:6px 10px;border-bottom:1px solid var(--border);overflow-x:auto;flex:0 0 auto;scrollbar-width:thin}
+.page-editor-tool{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;flex:0 0 auto;border:none;border-radius:9px;background:transparent;color:var(--muted2);cursor:pointer}
+.page-editor-tool:hover:not(:disabled){background:rgba(var(--accent-rgb),.08);color:var(--text)}
+.page-editor-tool.is-active{background:rgba(var(--accent-rgb),.16);color:var(--accent-ink)}
+.page-editor-tool:disabled{opacity:.35;cursor:default}
+.page-editor-sep{width:1px;height:20px;margin:0 6px;background:var(--border2);flex:0 0 auto}
+.page-editor-banner{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding:10px 16px;border-bottom:1px solid var(--border);background:var(--bg2);font-size:13px}
+.page-editor-banner>span{flex:1 1 240px;min-width:0}
+.page-editor-banner.is-warning{border-left:3px solid var(--accent-r,#e5484d)}
+.page-editor-scroll{flex:1 1 auto;min-height:0;overflow-y:auto}
+.page-editor-sheet{max-width:760px;margin:0 auto;padding:40px 24px 160px}
+.page-editor-title{display:block;width:100%;border:none;background:transparent;color:var(--text);font:inherit;font-size:34px;font-weight:700;line-height:1.2;letter-spacing:-.01em;padding:0;margin:0 0 18px;outline:none}
+.page-editor-title::placeholder{color:var(--muted)}
+.page-prose .tiptap{outline:none;font-size:16px;line-height:1.7;color:var(--text);min-height:40vh}
+.page-prose .tiptap>*+*{margin-top:.75em}
+.page-prose .tiptap h1{font-size:26px;line-height:1.25;margin-top:1.4em;font-weight:700}
+.page-prose .tiptap h2{font-size:21px;line-height:1.3;margin-top:1.3em;font-weight:700}
+.page-prose .tiptap h3{font-size:17px;line-height:1.35;margin-top:1.2em;font-weight:700}
+.page-prose .tiptap p{margin:0}
+.page-prose .tiptap ul,.page-prose .tiptap ol{padding-left:1.4em;margin:0}
+.page-prose .tiptap li>p{margin:0}
+.page-prose .tiptap ul[data-type="taskList"]{list-style:none;padding-left:2px}
+.page-prose .tiptap ul[data-type="taskList"] li{display:flex;align-items:flex-start;gap:9px}
+.page-prose .tiptap ul[data-type="taskList"] li>label{flex:0 0 auto;margin-top:.3em}
+.page-prose .tiptap ul[data-type="taskList"] li>div{flex:1 1 auto;min-width:0}
+.page-prose .tiptap ul[data-type="taskList"] li[data-checked="true"]>div{color:var(--muted);text-decoration:line-through}
+.page-prose .tiptap input[type="checkbox"]{width:16px;height:16px;accent-color:var(--accent)}
+.page-prose .tiptap blockquote{margin:0;padding:2px 0 2px 16px;border-left:3px solid rgba(var(--accent-rgb),.5);color:var(--muted2)}
+.page-prose .tiptap code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.9em;padding:1px 5px;border-radius:6px;background:var(--bg2)}
+.page-prose .tiptap pre{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto}
+.page-prose .tiptap pre code{padding:0;background:none}
+.page-prose .tiptap hr{border:none;border-top:1px solid var(--border2);margin:1.4em 0}
+.page-prose .tiptap a{color:var(--accent-ink);text-decoration:underline;text-underline-offset:2px}
+.page-prose .tiptap .is-editor-empty:first-child::before{content:attr(data-placeholder);float:left;height:0;color:var(--muted);pointer-events:none}
+@media (max-width:640px){
+  .page-editor-sheet{padding:24px 16px 120px}
+  .page-editor-title{font-size:26px}
+}

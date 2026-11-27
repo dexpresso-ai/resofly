@@ -3,7 +3,7 @@ import type { DragEvent as ReactDragEvent, KeyboardEvent as ReactKeyboardEvent, 
 import {
   ArrowDown, ArrowUp, ArrowUpDown, Check, ChevronDown, ChevronLeft, ChevronRight, Download, Eye, EyeOff,
   File, FilePen, FileText, Folder, FolderOpen, FolderPlus, Info, LayoutGrid, Link2, List, MoreVertical,
-  Pencil, Plus, Presentation, Search, Send, Share2, Sheet, SlidersHorizontal, StickyNote, Trash2, Upload, UploadCloud, Users, X,
+  NotebookText, Pencil, Plus, Presentation, Search, Send, Share2, Sheet, SlidersHorizontal, StickyNote, Trash2, Upload, UploadCloud, Users, X,
 } from 'lucide-react';
 import type { AppData, Attachment, ContentFolder, InternalDocument, Note, Project } from '../types';
 import { dateNL } from '../lib/format';
@@ -134,6 +134,7 @@ export function ContentLibrary({
   onNewNote,
   onEditNote,
   onNewDocument,
+  onNewPage,
   onNewOfficeDocument,
   onEditDocument,
 }: {
@@ -147,6 +148,8 @@ export function ContentLibrary({
   onNewNote: (target?: ContentCreateTarget) => void;
   onEditNote: (n: Note) => void;
   onNewDocument: (target?: ContentCreateTarget) => void;
+  /** Een nieuwe pagina op deze plek (stap 1A-3a). Zonder: geen keuze "Pagina" in het menu. */
+  onNewPage?: (target?: ContentCreateTarget) => void;
   /** Nieuw leeg Word/Excel/PowerPoint-document buiten een dossiermap (klantwortel of project). */
   onNewOfficeDocument: (docType: NewOfficeType, title: string, target?: ContentCreateTarget) => void;
   onEditDocument: (d: InternalDocument) => void;
@@ -653,12 +656,12 @@ export function ContentLibrary({
       color: it.kind === 'note' ? 'var(--accent-v)' : documentAccentColor(it.doc),
       modified: it.modified,
       size: '',
-      typeLabel: it.kind === 'note' ? (noteHandwritingSummary(data, it.id) ? 'Notitie · handschrift' : 'Notitie') : 'Document',
+      typeLabel: it.kind === 'note' ? (noteHandwritingSummary(data, it.id) ? 'Notitie · handschrift' : 'Notitie') : it.doc?.format === 'page' ? 'Pagina' : 'Document',
       doc: it.doc,
       onOpen: open,
       // Ook zónder klant een menu: juist die items ("Geen klant") deel je met een
       // deellink, en verplaats je naar het dossier waar ze thuishoren.
-      menu: canWrite ? () => contentMenu(key, it.kind, it.id, label, open) : null,
+      menu: canWrite ? () => contentMenu(key, it.kind, it.id, label, open, it.doc?.format === 'page') : null,
       shared: sharedKeys.has(shareKey(it.kind, it.id)),
       unshared: gapSummary.itemKeys.has(shareKey(it.kind, it.id)),
       drag: { kind: it.kind, id: it.id, name: label },
@@ -1008,13 +1011,15 @@ export function ContentLibrary({
     </>;
   }
 
-  function contentMenu(rowKey: string, kind: 'note' | 'document', id: string, name: string, open: () => void) {
+  function contentMenu(rowKey: string, kind: 'note' | 'document', id: string, name: string, open: () => void, isPage = false) {
     return <>
       <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setMenu(null); open(); }}><FilePen size={16} /> Openen</button>
       <button type="button" className="drive-pop-item" role="menuitem" onClick={() => beginRename(rowKey)}><Pencil size={16} /> Naam wijzigen</button>
       <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openMove([{ kind, id, name }])}><Folder size={16} /> Verplaatsen naar…</button>
-      <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openSend([{ type: kind, id }])}><Send size={16} /> Versturen…</button>
-      <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openShare({ type: kind, id, name })}><Share2 size={16} /> Delen…</button>
+      {/* Een pagina delen of versturen kan pas met de vrijgave (1C) en de export (1B);
+          de database weigert het tot dan. Daarom staan de knoppen er niet. */}
+      {!isPage && <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openSend([{ type: kind, id }])}><Send size={16} /> Versturen…</button>}
+      {!isPage && <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openShare({ type: kind, id, name })}><Share2 size={16} /> Delen…</button>}
       <div className="drive-pop-sep" />
       <button type="button" className="drive-pop-item danger" role="menuitem" onClick={() => { setMenu(null); deleteContent(kind, id, name); }}><Trash2 size={16} /> Verwijderen</button>
     </>;
@@ -1192,6 +1197,7 @@ export function ContentLibrary({
               <div className="drive-pop-sep" />
             </>}
             <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setNewOpen(false); onNewNote(createTarget); }}><StickyNote size={16} style={{ color: 'var(--accent-v)' }} /> Notitie</button>
+            {onNewPage && <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setNewOpen(false); onNewPage(createTarget); }}><NotebookText size={16} style={{ color: 'var(--accent)' }} /> Pagina</button>}
             <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setNewOpen(false); onNewDocument(createTarget); }}><FileText size={16} style={{ color: 'var(--accent-b)' }} /> Document</button>
             <div className="drive-pop-sep" />
             <button type="button" className="drive-pop-item" role="menuitem" disabled={opening} onClick={() => createNewOffice('docx')}><FileText size={16} style={{ color: 'var(--accent-b)' }} /> Word-document</button>

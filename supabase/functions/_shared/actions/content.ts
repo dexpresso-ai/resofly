@@ -706,8 +706,13 @@ async function planContentUpdate(ctx: ActionCtx, input: Record<string, unknown>,
   const itemId = id(input, isNote ? 'note_id' : 'document_id');
   const table = isNote ? 'notes' : 'documents';
   const label = isNote ? 'Notitie' : 'Document';
-  const current = await row<{ title: string | null; content: string | null; client_id: string | null; project_id: string | null; storage_key?: string | null }>(
-    ctx, table, itemId, isNote ? 'title, content, client_id, project_id' : 'title, content, client_id, project_id, storage_key', label);
+  const current = await row<{ title: string | null; content: string | null; client_id: string | null; project_id: string | null; storage_key?: string | null; format?: string | null }>(
+    ctx, table, itemId, isNote ? 'title, content, client_id, project_id' : 'title, content, client_id, project_id, storage_key, format', label);
+  // Bij een pagina komt de tekst uit de blokken; de database weigert een wijziging
+  // van alleen de tekst (20261127130000). Voorstellen per blok komen later.
+  if (!isNote && current.format === 'page' && typeof input.content === 'string' && input.content.trim()) {
+    throw new ActionError('Tekst toevoegen aan een pagina kan nog niet via Gerrie. Open de pagina en typ het erbij; de titel aanpassen kan wel.');
+  }
 
   const patch: Record<string, unknown> = {};
   const changes: string[] = [];

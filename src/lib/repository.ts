@@ -1936,6 +1936,82 @@ export async function selectDocuments(organizationId: UUID): Promise<InternalDoc
   }
 }
 
+/** Een pagina zoals de editor hem nodig heeft: met de inhoud (body). */
+export type PageRow = {
+  id: UUID; organization_id: UUID; title: string; body: unknown; edit_version: number; updated_at: string;
+  format: string; client_id: UUID | null; project_id: UUID | null; folder_id: UUID | null; parent_id: UUID | null;
+};
+
+/** Eén pagina met inhoud, vers uit de database (stap 1A-3a). */
+export async function loadPage(documentId: UUID, organizationId: UUID): Promise<PageRow> {
+  const { data, error } = await supabase
+    .from('documents')
+    .select('id,organization_id,title,body,edit_version,updated_at,format,client_id,project_id,folder_id,parent_id')
+    .eq('id', documentId)
+    .eq('organization_id', organizationId)
+    .single();
+  if (error) throw error;
+  return data as PageRow;
+}
+
+/**
+ * Een pagina opslaan, maar alleen als niemand er intussen iets in schreef:
+ * edit_version moet nog zijn wat de editor kent. De database verhoogt hem bij
+ * elke nieuwe inhoud of titel (20261127130000). Geeft `ok: false` als iemand
+ * anders (Gerrie, de API, een overname) ertussen kwam; dan niet overschrijven.
+ */
+export async function savePage(
+  documentId: UUID, organizationId: UUID, values: { title: string; body: unknown }, knownVersion: number,
+): Promise<{ ok: true; editVersion: number; updatedAt: string } | { ok: false }> {
+  const { data, error } = await supabase
+    .from('documents')
+    .update({ title: values.title, body: values.body })
+    .eq('id', documentId)
+    .eq('organization_id', organizationId)
+    .eq('edit_version', knownVersion)
+    .select('edit_version,updated_at')
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return { ok: false };
+  const row = data as { edit_version: number; updated_at: string };
+  return { ok: true, editVersion: row.edit_version, updatedAt: row.updated_at };
+}
+
+/** Claimen of de hartslag geven (claim_page_edit). `claimed` is false als een ander bewerkt. */
+export async function claimPageEdit(documentId: UUID): Promise<{ claimed: boolean; userId: UUID | null; seenAt: string | null }> {
+  const { data, error } = await supabase.rpc('claim_page_edit', { p_document_id: documentId });
+  if (error) throw error;
+  const row = (Array.isArray(data) ? data[0] : data) as { claimed?: boolean; user_id?: UUID; seen_at?: string } | null;
+  return { claimed: Boolean(row?.claimed), userId: row?.user_id ?? null, seenAt: row?.seen_at ?? null };
+}
+
+/** Loslaten als je de pagina sluit. Beste moeite: lukt het niet, dan vervalt de claim na twee minuten. */
+export async function releasePageEdit(documentId: UUID): Promise<void> {
+  const { error } = await supabase.rpc('release_page_edit', { p_document_id: documentId });
+  if (error) throw error;
+}
+
+/** Een versie vastleggen van wat er nu staat (save_page_version). */
+export async function savePageVersion(documentId: UUID, reason: 'sessie' | 'vastgelegd' = 'sessie'): Promise<void> {
+  const { error } = await supabase.rpc('save_page_version', { p_document_id: documentId, p_reason: reason });
+  if (error) throw error;
+}
+
+/** Een nieuwe, lege pagina op deze plek. */
+export async function createPage(
+  organizationId: UUID, target: { client_id?: UUID | null; project_id?: UUID | null; folder_id?: UUID | null; title?: string },
+): Promise<InternalDocument> {
+  return insertRow<InternalDocument>('documents', organizationId, {
+    title: target.title?.trim() || 'Nieuwe pagina',
+    format: 'page',
+    body: { type: 'doc', content: [{ type: 'paragraph' }] },
+    document_type: 'general',
+    client_id: target.client_id ?? null,
+    project_id: target.project_id ?? null,
+    folder_id: target.folder_id ?? null,
+  });
+}
+
 /** Een gevonden document: wat search_documents teruggeeft. Nooit HTML, alleen de korte tekst. */
 export type DocumentSearchHit = {
   id: UUID; title: string; excerpt: string; format: string; parent_id: UUID | null;

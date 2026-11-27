@@ -35,7 +35,8 @@
 --      en zou anders stil verdwijnen (zoals bij "tekst aanvullen" van Gerrie).
 --  10. Een pagina delen kan pas vanaf stap 1C, met de vrijgegeven versie. Tot
 --      dan neemt een gedeelde map geen pagina's mee, en weigert de database
---      een deling van een pagina. Anders zag een klant de live tekst.
+--      een deling van een pagina. Anders zag een klant de live tekst. Ook
+--      versturen (een zending) slaat pagina's over, tot de export van 1B.
 --
 -- Veilig om meermaals te draaien.
 -- ============================================================
@@ -728,6 +729,73 @@ end;
 $$;
 
 revoke all on function public.drive_folder_tree_items(uuid, uuid) from public, anon, authenticated;
+
+-- Versturen (een zending) pakt een map uit met drive_folder_leaves: ook daar
+-- geen pagina's. Zelfde functie als in 20261013100000, met één regel erbij.
+create or replace function public.drive_folder_leaves(p_organization_id uuid, p_folder_id uuid)
+returns table (
+  item_type text,
+  item_id uuid,
+  name text,
+  mime_type text,
+  size_bytes bigint,
+  storage_key text,
+  path text
+)
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  v_client uuid;
+begin
+  if auth.role() is distinct from 'service_role' then
+    raise exception 'Alleen de verzenddienst mag dit aanroepen.' using errcode = '42501';
+  end if;
+
+  select ctx.client_id into v_client
+    from public.drive_item_client(p_organization_id, 'folder', p_folder_id) ctx;
+
+  return query
+  with recursive tree as (
+    select f.id, f.name, ''::text as path, 0 as depth
+      from public.content_folders f
+     where f.id = p_folder_id and f.organization_id = p_organization_id
+    union all
+    select c.id, c.name, case when t.path = '' then t.name else t.path || ' / ' || t.name end, t.depth + 1
+      from public.content_folders c
+      join tree t on c.parent_id = t.id
+     where t.depth < 20
+       and c.organization_id = p_organization_id
+       and coalesce((select p.client_id from public.projects p where p.id = c.project_id), c.client_id)
+           is not distinct from v_client
+  )
+  select 'attachment'::text, a.id, a.name, a.mime_type, a.size_bytes::bigint, a.storage_key,
+         case when t.path = '' then t.name else t.path || ' / ' || t.name end
+    from tree t
+    join public.attachments a
+      on a.entity_type = 'folder' and a.entity_id = t.id and a.organization_id = p_organization_id
+  union all
+  select 'note'::text, n.id, n.title, 'text/html'::text, 0::bigint, null::text,
+         case when t.path = '' then t.name else t.path || ' / ' || t.name end
+    from tree t
+    join public.notes n on n.folder_id = t.id and n.organization_id = p_organization_id
+     and coalesce((select p.client_id from public.projects p where p.id = n.project_id), n.client_id)
+         is not distinct from v_client
+  union all
+  select 'document'::text, d.id, d.title, coalesce(d.mime_type, 'text/html'), coalesce(d.size_bytes, 0)::bigint, d.storage_key,
+         case when t.path = '' then t.name else t.path || ' / ' || t.name end
+    from tree t
+    join public.documents d on d.folder_id = t.id and d.organization_id = p_organization_id
+     and d.format <> 'page'
+     and coalesce((select p.client_id from public.projects p where p.id = d.project_id), d.client_id)
+         is not distinct from v_client;
+end;
+$$;
+
+revoke all on function public.drive_folder_leaves(uuid, uuid) from public, anon, authenticated;
+grant execute on function public.drive_folder_leaves(uuid, uuid) to service_role;
 
 create or replace function public.drive_shares_no_pages_yet()
 returns trigger
