@@ -13739,3 +13739,19 @@ button.alog-feed-row:hover{background:var(--bg3)}
 .page-block-backdrop{position:fixed;inset:0;z-index:2003;display:flex;align-items:flex-end;background:rgba(var(--shade-rgb),calc(.45 * var(--shade-k)))}
 .page-block-menu.is-sheet{position:static;width:100%;max-width:none;max-height:min(70vh,520px);padding:8px 8px calc(12px + env(safe-area-inset-bottom));border-radius:18px 18px 0 0}
 .page-block-menu-head{padding:6px 10px 10px;font-size:13px;font-weight:700;color:var(--muted2)}
+/* Stap 1A-4b: de subpagina als regel met een icoon, en de knop naar de
+   bovenliggende pagina in de balk. */
+.page-prose .tiptap .page-subpage{margin:0}
+.page-prose .tiptap .page-subpage.ProseMirror-selectednode .page-subpage-link{outline:2px solid rgba(var(--accent-rgb),.5);outline-offset:1px}
+.page-subpage-link{display:flex;align-items:center;gap:10px;width:100%;padding:8px 10px;border:1px solid transparent;border-radius:10px;background:transparent;color:var(--text);font:inherit;font-size:15px;font-weight:600;text-align:left;cursor:pointer}
+.page-subpage-link:hover{border-color:var(--border);background:var(--bg2)}
+.page-subpage-icon{flex:0 0 auto;width:18px;height:18px;background:var(--muted2);-webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z'/%3E%3Cpath d='M14 2v4a2 2 0 0 0 2 2h4'/%3E%3Cpath d='M10 9H8'/%3E%3Cpath d='M16 13H8'/%3E%3Cpath d='M16 17H8'/%3E%3C/svg%3E") center/contain no-repeat;mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z'/%3E%3Cpath d='M14 2v4a2 2 0 0 0 2 2h4'/%3E%3Cpath d='M10 9H8'/%3E%3Cpath d='M16 13H8'/%3E%3Cpath d='M16 17H8'/%3E%3C/svg%3E") center/contain no-repeat}
+.page-subpage-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-decoration:underline;text-decoration-color:rgba(var(--accent-rgb),.45);text-underline-offset:3px}
+.page-subpage.is-missing .page-subpage-link{color:var(--muted2);font-weight:500;cursor:default}
+.page-subpage.is-missing .page-subpage-title{text-decoration:none;font-style:italic}
+.page-editor-parent{display:inline-flex;align-items:center;gap:3px;min-width:0;max-width:30%;height:30px;padding:0 8px 0 4px;border:none;border-radius:8px;background:transparent;color:var(--muted2);font:inherit;font-size:13px;cursor:pointer;flex:0 1 auto}
+.page-editor-parent span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.page-editor-parent:hover{background:var(--bg2);color:var(--text)}
+@media (max-width:640px){
+  .page-editor-parent span{display:none}
+}

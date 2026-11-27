@@ -504,7 +504,8 @@ akkoord is.
 | 1A-3a | De editor: Tiptap als eigen stuk bundel, het pagina-scherm, de basisblokken, opslaan met `edit_version`, één tegelijk bewerken. | gebouwd en op staging gezet op 27 november; zie `docs/changelog/CHANGELOG_PAGINAS_EDITOR_2026-11-27.md` |
 | 1A-3b | Het versiepaneel (bekijken en terugzetten) en een eigen adres per pagina. | gebouwd en op staging gezet op 27 november; zie `docs/changelog/CHANGELOG_PAGINAS_VERSIES_ADRES_2026-11-27.md` |
 | 1A-4a | Eerst een grendel: een pagina met een blok dat de editor niet kent, gaat niet open om te bewerken. Dan de blokken zonder opslag: gewone tabel, callout, uitklapper, inhoudsopgave. Het blokmenu: `/` in de tekst en de +-knop, ook op de telefoon. Een migratie die de maten van tabelcellen en de soort callout nakijkt. | gebouwd op 27 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_BLOKKEN_2026-11-27.md` |
-| 1A-4b | De blokken met opslag en verwijzingen: afbeelding, bestand uit het dossier, subpagina (§8). Met een migratie die afdwingt dat een bijlage van dezelfde organisatie en hetzelfde dossier is. | gepland |
+| 1A-4b-1 | De subpagina (maken met `/pagina`, openen, omhoog, de terugknop langs de weg), en een migratie die afdwingt dat afbeeldingen, bestanden en subpagina's bij dezelfde organisatie en hetzelfde dossier horen (§8). | gebouwd op 27 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_SUBPAGINAS_2026-11-27.md` |
+| 1A-4b-2 | Afbeelding (uploaden, plakken, slepen) en bestand uit het dossier, met voorvertoning (§8). | gepland |
 | 1A-5 | De drive: de boom, het eigen dossier met logo, "Pagina" in het Nieuw-menu, slepen, de prullenbak. De tekstdocumenten omzetten. | gepland |
 | 1B-1 | Proef: huisstijlletters en emoji in een PDF via Collabora (§9). | gepland |
 | 1B-2 | Export: `page-export`, de DOCX-module, het interne PDF-pad, het exportvenster, vastleggen in het dossier, de Word-kopie. | gepland |
@@ -556,8 +557,20 @@ akkoord is.
   - De inhoudsopgave heeft geen eigen gegevens: hij tekent zich uit de koppen.
   - Een callout bevat alleen tekst en lijsten.
   - Kolommen schuiven naar fase 2, zoals §3 toeliet.
-- **Volgende stap: 1A-4b**, afbeelding, bestand uit het dossier en subpagina (§8), met een
-  migratie die afdwingt dat een bijlage van dezelfde organisatie en hetzelfde dossier is.
+- **Daarna gebouwd, op de branch:** 1A-4b-1, de subpagina en de controle op verwijzingen
+  (migratie 20261127150000).
+- **Volgende stap: 1A-4b-2**, afbeelding en bestand. Wat al vaststaat (uitgezocht op 27
+  november):
+  - **Uploaden:** via `uploadToR2` (`src/lib/r2.ts`) met entity_type `document` en de pagina
+    als entity_id, daarna `createAttachment`. Hooguit 25 MB.
+  - **Tonen:** `fetchStoredFileBlob` en een blob-URL, alleen in de weergave van het blok,
+    nooit in attrs. De database weigert `src`, en een adres in attrs zou elke opening
+    laten opslaan.
+  - **Geplakte plaatjes van buiten** (`<img src="https://…">`) worden geen afbeeldingsblok:
+    opslaan zou dan voorgoed mislukken.
+  - **Een bestand uit het dossier kiezen** kan met `TransferSourcePicker`
+    (`src/components/SendFilesDialog.tsx`).
+  - **Verdwenen bestanden** tonen "niet gevonden", ook in oude versies.
 - **Nog open:** hoeveel bestaande mapdelingen de datastap van `20261127120000` omzette.
   `supabase db push` toont geen aantallen, en een cloudsessie kan staging niet lezen. In
   de werkruimte van de ResoFly-koppeling liepen geen delingen. Voor de andere organisaties:

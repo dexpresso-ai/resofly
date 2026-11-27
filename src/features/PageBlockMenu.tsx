@@ -19,10 +19,11 @@ import type { SuggestionProps } from '@tiptap/suggestion';
 import { NodeSelection, PluginKey, TextSelection } from '@tiptap/pm/state';
 import type { Transaction } from '@tiptap/pm/state';
 import {
-  Braces, Heading1, Heading2, Heading3, List, ListChecks, ListCollapse, ListOrdered, ListTree, MessageSquareText, Minus,
+  Braces, FileText, Heading1, Heading2, Heading3, List, ListChecks, ListCollapse, ListOrdered, ListTree, MessageSquareText, Minus,
   Pilcrow, Quote, Table2,
 } from 'lucide-react';
 import { filterPageBlocks, type PageBlock, type PageBlockKey } from '../lib/pageBlocks';
+import { pageLinksOf } from '../lib/pageEditorExtensions';
 import { useBackStep } from '../lib/useBackStep';
 
 const ICONS: Record<PageBlockKey, JSX.Element> = {
@@ -37,6 +38,7 @@ const ICONS: Record<PageBlockKey, JSX.Element> = {
   callout: <MessageSquareText size={17} />,
   uitklapper: <ListCollapse size={17} />,
   inhoudsopgave: <ListTree size={17} />,
+  subpagina: <FileText size={17} />,
   citaat: <Quote size={17} />,
   code: <Braces size={17} />,
   scheidingslijn: <Minus size={17} />,
@@ -49,13 +51,17 @@ const ICONS: Record<PageBlockKey, JSX.Element> = {
  * toets overschreef dan dat blok. prosemirror-tables maakte van zo'n tabel
  * zelfs een selectie van alle cellen.
  */
-function cursorOnText({ tr, dispatch }: { tr: Transaction; dispatch?: unknown }): boolean {
-  if (!dispatch || !(tr.selection instanceof NodeSelection)) return true;
+function cursorOnText(where: 'na-dit-blok' | 'voor-het-volgende') {
+  return ({ tr, dispatch }: { tr: Transaction; dispatch?: unknown }): boolean => {
+    if (!dispatch || !(tr.selection instanceof NodeSelection)) return true;
+    // Na een inhoudsopgave of subpagina is het geselecteerde blok het nieuwe
+    // zelf: erachter verder. Na een lijn is het het blok dáárna: ervoor verder.
+    return placeTextCursor(tr, where === 'na-dit-blok' ? tr.selection.to : tr.selection.from);
+  };
+}
+
+function placeTextCursor(tr: Transaction, pos: number): boolean {
   const paragraph = tr.doc.type.schema.nodes.paragraph;
-  const selected = tr.selection.node.type.name;
-  // Na de inhoudsopgave: erachter verder. Na een lijn: de lijn staat ervoor,
-  // het geselecteerde blok is dat van daarna; dus vóór dat blok verder.
-  const pos = selected === 'tableOfContents' ? tr.selection.to : tr.selection.from;
   const next = tr.doc.resolve(pos).nodeAfter;
   if (next?.isTextblock) {
     tr.setSelection(TextSelection.create(tr.doc, pos + 1));
@@ -79,21 +85,27 @@ function blockChain(chain: ChainedCommands, key: PageBlockKey): ChainedCommands 
     case 'tabel': return chain.insertTable({ rows: 3, cols: 3, withHeaderRow: true });
     case 'callout': return chain.wrapIn('callout', { variant: 'info' });
     case 'uitklapper': return chain.setDetails();
-    case 'inhoudsopgave': return chain.insertContent({ type: 'tableOfContents' }).command(cursorOnText);
+    case 'inhoudsopgave': return chain.insertContent({ type: 'tableOfContents' }).command(cursorOnText('na-dit-blok'));
+    // Alleen om te kijken of het kan: de echte subpagina maakt runPageBlock,
+    // eerst in de database en dan pas het blok.
+    case 'subpagina': return chain.insertContent({ type: 'subpage', attrs: { pageId: PROBE_PAGE_ID } });
     case 'citaat': return chain.toggleBlockquote();
     case 'code': return chain.setCodeBlock();
-    case 'scheidingslijn': return chain.setHorizontalRule().command(cursorOnText);
+    case 'scheidingslijn': return chain.setHorizontalRule().command(cursorOnText('voor-het-volgende'));
   }
 }
 
+const PROBE_PAGE_ID = '00000000-0000-4000-8000-000000000000';
+
 /** Blokken die in een tabel of callout niet thuishoren, ook als het schema ze toelaat. */
-const NOT_IN_TABLE: ReadonlySet<PageBlockKey> = new Set(['tabel', 'callout', 'uitklapper', 'inhoudsopgave']);
-const NOT_IN_CALLOUT: ReadonlySet<PageBlockKey> = new Set(['tabel', 'callout', 'uitklapper', 'inhoudsopgave', 'code', 'citaat', 'scheidingslijn']);
+const NOT_IN_TABLE: ReadonlySet<PageBlockKey> = new Set(['tabel', 'callout', 'uitklapper', 'inhoudsopgave', 'subpagina']);
+const NOT_IN_CALLOUT: ReadonlySet<PageBlockKey> = new Set(['tabel', 'callout', 'uitklapper', 'inhoudsopgave', 'subpagina', 'code', 'citaat', 'scheidingslijn']);
 
 export function canRunPageBlock(editor: Editor, key: PageBlockKey): boolean {
   if (!editor.isEditable || editor.isActive('codeBlock')) return false;
   if (editor.isActive('table') && NOT_IN_TABLE.has(key)) return false;
   if (editor.isActive('callout') && NOT_IN_CALLOUT.has(key)) return false;
+  if (key === 'subpagina' && !pageLinksOf(editor)) return false;
   try {
     return blockChain(editor.can().chain(), key).run();
   } catch {
@@ -118,8 +130,25 @@ function openDetailsAtSelection(editor: Editor): void {
   }
 }
 
+/**
+ * Een subpagina: eerst de pagina in de database, onder deze; dan pas het blok,
+ * met haar id. Typt iemand intussen verder, dan komt het blok waar de cursor
+ * dan staat.
+ */
+function insertSubpage(editor: Editor, range?: Range): boolean {
+  const links = pageLinksOf(editor);
+  if (!links) return false;
+  if (range) editor.chain().focus().deleteRange(range).run();
+  void links.create().then(pageId => {
+    if (!pageId || editor.isDestroyed || !editor.isEditable) return;
+    editor.chain().focus().insertContent({ type: 'subpage', attrs: { pageId } }).command(cursorOnText('na-dit-blok')).run();
+  });
+  return true;
+}
+
 /** Voert het blok uit. Met `range` (na `/`) eerst de schuine streep en het zoekwoord weg. */
 export function runPageBlock(editor: Editor, key: PageBlockKey, range?: Range): boolean {
+  if (key === 'subpagina') return insertSubpage(editor, range);
   let chain = editor.chain().focus();
   if (range) chain = chain.deleteRange(range);
   const done = blockChain(chain, key).run();

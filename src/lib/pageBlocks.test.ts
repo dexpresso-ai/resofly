@@ -26,6 +26,12 @@ test('andere woorden, ook uit andere programma\'s', () => {
   assert.ok(keys('lijst').includes('opsomming') && keys('lijst').includes('nummering'));
 });
 
+// §4 van het bouwplan: /pagina maakt een subpagina.
+test('/pagina geeft eerst de subpagina', () => {
+  assert.equal(keys('pagina')[0], 'subpagina');
+  assert.equal(keys('sub')[0], 'subpagina');
+});
+
 test('hoofdletters en accenten maken niet uit', () => {
   assert.equal(keys('TABEL')[0], 'tabel');
   assert.equal(keys('tâbel')[0], 'tabel');

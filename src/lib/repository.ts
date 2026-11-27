@@ -2032,17 +2032,39 @@ export async function restorePageVersion(versionId: UUID): Promise<void> {
 
 /** Een nieuwe, lege pagina op deze plek. */
 export async function createPage(
-  organizationId: UUID, target: { client_id?: UUID | null; project_id?: UUID | null; folder_id?: UUID | null; title?: string },
+  organizationId: UUID,
+  target: { client_id?: UUID | null; project_id?: UUID | null; folder_id?: UUID | null; parent_id?: UUID | null; title?: string },
 ): Promise<InternalDocument> {
   return insertRow<InternalDocument>('documents', organizationId, {
     title: target.title?.trim() || 'Nieuwe pagina',
     format: 'page',
     body: { type: 'doc', content: [{ type: 'paragraph' }] },
     document_type: 'general',
-    client_id: target.client_id ?? null,
-    project_id: target.project_id ?? null,
-    folder_id: target.folder_id ?? null,
+    // Een subpagina (stap 1A-4b): de database zet klant en project gelijk aan
+    // die van de ouder, en haalt de map weg (alleen de bovenste pagina heeft er
+    // een). Wat hier staat, telt dan niet.
+    parent_id: target.parent_id ?? null,
+    client_id: target.parent_id ? null : target.client_id ?? null,
+    project_id: target.parent_id ? null : target.project_id ?? null,
+    folder_id: target.parent_id ? null : target.folder_id ?? null,
   });
+}
+
+/**
+ * De titel van een pagina, voor een subpagina-blok en de knop naar de
+ * bovenliggende pagina. null als hij niet (meer) bestaat of je hem niet mag
+ * zien (RLS en de module Inhoud).
+ */
+export async function pageTitle(pageId: UUID, organizationId: UUID): Promise<string | null> {
+  const { data, error } = await supabase
+    .from('documents')
+    .select('title')
+    .eq('id', pageId)
+    .eq('organization_id', organizationId)
+    .eq('format', 'page')
+    .maybeSingle();
+  if (error) throw error;
+  return (data as { title: string } | null)?.title ?? null;
 }
 
 /** Een gevonden document: wat search_documents teruggeeft. Nooit HTML, alleen de korte tekst. */

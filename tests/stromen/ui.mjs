@@ -2290,6 +2290,56 @@ async function scenarioDocumenten() {
     await wachtOpgeslagen(page);
     await sluitPagina(page);
   });
+  // ── Subpagina's (stap 1A-4b) ──────────────────────────────────────────────
+  await uiStap('subpagina via /pagina: een pagina onder deze; openen, omhoog, en de terugknop volgt de weg', async () => {
+    if (!blokPagina) throw new Error('geen pagina');
+    const titelVan = async (page) => page.locator('.page-editor-title').inputValue().catch(() => '');
+    const { page } = await openBlokPagina(w.medewerker, 'medewerker');
+    await wachtOpgeslagen(page, 'de editor kwam niet in bewerken');
+    await editorVak(page).locator('h2').filter({ hasText: 'Planning' }).click();
+    await page.keyboard.press('Control+End');
+    await kiesBlok(page, 'pagina', 'Subpagina');
+    const blok = editorVak(page).locator('.page-subpage');
+    await wachtTot(async () => tekst(await blok.innerText().catch(() => '')) === 'Naamloze pagina', { melding: `het subpagina-blok: ${tekst(await blok.innerText().catch(() => ''))}` });
+    await wachtOpgeslagen(page);
+    const kind = sqlRij(`select id, client_id, folder_id from public.documents where parent_id = ${q(blokPagina.id)}`);
+    verwacht(kind, 'geen subpagina in de database');
+    gelijk([kind.client_id, kind.folder_id], [w.klantA.id, null], 'de subpagina hoort bij klant A, zonder map');
+    gelijk(telBlok(blokPagina.id, `@.type == "subpage" && @.attrs.pageId == "${kind.id}"`), 1, 'het blok wijst naar de subpagina');
+    // Openen: eerst opslaan en de claim los, dan de subpagina.
+    await blok.locator('button').click();
+    await wachtTot(async () => (await titelVan(page)) === 'Naamloze pagina', { melding: 'de subpagina ging niet open' });
+    await wachtTot(async () => page.url().includes(`pagina=${kind.id}`), { melding: `het adres volgt niet: ${page.url()}` });
+    gelijk(sqlRij(`select count(*)::int as n from public.document_edit_claims where document_id = ${q(blokPagina.id)}`).n, 0, 'de claim op de bovenliggende pagina is los');
+    await wachtOpgeslagen(page, 'de subpagina kwam niet in bewerken');
+    await page.locator('.page-editor-title').fill('Onderpagina');
+    await editorVak(page).click();
+    await page.keyboard.type('Tekst op de subpagina.');
+    await wachtOpgeslagen(page);
+    // Omhoog met de knop in de balk; het blok toont dan de nieuwe titel.
+    const omhoog = page.locator('.page-editor-parent');
+    await wachtTot(async () => tekst(await omhoog.innerText().catch(() => '')).includes(blokTitel), { melding: `de knop omhoog: ${tekst(await omhoog.innerText().catch(() => ''))}` });
+    await omhoog.click();
+    await wachtTot(async () => (await titelVan(page)) === blokTitel, { melding: 'omhoog ging niet naar de bovenliggende pagina' });
+    await wachtTot(async () => tekst(await editorVak(page).locator('.page-subpage').innerText().catch(() => '')) === 'Onderpagina', { melding: 'het blok toont de nieuwe titel niet' });
+    // De terugknop volgt de weg: de subpagina, weer de bovenliggende, dan dicht.
+    await page.goBack();
+    await wachtTot(async () => (await titelVan(page)) === 'Onderpagina', { melding: 'terug ging niet naar de subpagina' });
+    await page.goBack();
+    await wachtTot(async () => (await titelVan(page)) === blokTitel, { melding: 'terug ging niet naar de bovenliggende pagina' });
+    await page.goBack();
+    await page.locator('.page-editor').waitFor({ state: 'detached', timeout: 15000 });
+    gelijk(sqlRij(`select content from public.documents where id = ${q(kind.id)}`).content, 'Tekst op de subpagina.', 'de tekst van de subpagina is bewaard');
+    // Een subpagina die niet meer bestaat: het blok zegt het, en klikken doet niets.
+    sql(`delete from public.documents where id = ${q(kind.id)}`);
+    const { page: opnieuw } = await openBlokPagina(w.medewerker, 'medewerker');
+    const weg = editorVak(opnieuw).locator('.page-subpage');
+    await wachtTot(async () => tekst(await weg.innerText().catch(() => '')) === 'Pagina niet gevonden', { melding: 'een verdwenen subpagina toont geen melding' });
+    await weg.locator('button').click();
+    await opnieuw.waitForTimeout(800);
+    gelijk(await titelVan(opnieuw), blokTitel, 'klikken op een verdwenen subpagina opende iets');
+    await sluitPagina(opnieuw);
+  });
 }
 
 // ── Bank: mutaties met de hand boeken ──────────────────────────────────────

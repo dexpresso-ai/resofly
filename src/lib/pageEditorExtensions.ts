@@ -29,7 +29,7 @@ import { calloutVariant, isAllowedPageLink } from './pageSchema.ts';
 export const PAGE_BLOCKS_WITH_ID = [
   'paragraph', 'heading', 'bulletList', 'orderedList', 'listItem', 'taskList', 'taskItem',
   'blockquote', 'codeBlock', 'horizontalRule',
-  'table', 'callout', 'details', 'tableOfContents',
+  'table', 'callout', 'details', 'tableOfContents', 'subpage',
 ] as const;
 
 /** De smalste kolom van een tabel, ook bij slepen. */
@@ -165,6 +165,118 @@ export const TableOfContents = Node.create({
   },
 });
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Wat de subpagina nodig heeft van de editor eromheen (PageEditor zet dit in
+ * editor.storage.subpage.links). Hier geen database: dit bestand draait ook in
+ * Node, voor de test van het schema.
+ */
+export type PageLinks = {
+  /** De titel, of null als de pagina niet (meer) bestaat of je hem niet mag zien. */
+  titleOf: (pageId: string) => Promise<string | null>;
+  /** Naar een andere pagina; de editor sluit deze eerst netjes (opslaan, versie, claim los). */
+  open: (pageId: string) => void;
+  /** Een nieuwe pagina onder deze; geeft het id, of null als het niet lukte. */
+  create: () => Promise<string | null>;
+};
+
+export function pageLinksOf(editor: Editor): PageLinks | null {
+  const storage = (editor.storage as unknown as Record<string, { links?: PageLinks | null } | undefined>).subpage;
+  return storage?.links ?? null;
+}
+
+/**
+ * Een subpagina: een verwijzing naar een andere pagina, met haar titel. De
+ * titel staat niet in body (hij verandert in de andere pagina); het blok haalt
+ * hem op. Bestaat de pagina niet meer, of mag je hem niet zien, dan staat er
+ * "Pagina niet gevonden" en doet klikken niets.
+ */
+const subpageView: NodeViewRenderer = ({ editor, node }) => {
+  const dom = document.createElement('div');
+  dom.className = 'page-subpage';
+  dom.setAttribute('data-type', 'subpage');
+  dom.contentEditable = 'false';
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'page-subpage-link';
+  const icon = document.createElement('span');
+  icon.className = 'page-subpage-icon';
+  icon.setAttribute('aria-hidden', 'true');
+  const label = document.createElement('span');
+  label.className = 'page-subpage-title';
+  button.append(icon, label);
+  dom.append(button);
+  let current: string | null = typeof node.attrs.pageId === 'string' ? node.attrs.pageId : null;
+  let alive = true;
+  let missing = false;
+  const load = (pageId: string | null) => {
+    const links = pageLinksOf(editor);
+    label.textContent = 'Laden…';
+    if (!pageId || !links) { label.textContent = 'Pagina'; return; }
+    links.titleOf(pageId).then(title => {
+      if (!alive || current !== pageId) return;
+      missing = title === null;
+      dom.classList.toggle('is-missing', missing);
+      label.textContent = missing ? 'Pagina niet gevonden' : (title || 'Naamloze pagina');
+    }, () => {
+      if (alive && current === pageId) label.textContent = 'Pagina';
+    });
+  };
+  load(current);
+  button.addEventListener('click', event => {
+    event.preventDefault();
+    const links = pageLinksOf(editor);
+    if (links && current && !missing) links.open(current);
+  });
+  return {
+    dom,
+    update: updated => {
+      if (updated.type.name !== 'subpage') return false;
+      const next = typeof updated.attrs.pageId === 'string' ? updated.attrs.pageId : null;
+      if (next !== current) { current = next; load(current); }
+      return true;
+    },
+    ignoreMutation: () => true,
+    stopEvent: (event: Event) => event.target instanceof Element && event.target.closest('button') !== null,
+    destroy: () => { alive = false; },
+  };
+};
+
+export const Subpage = Node.create({
+  name: 'subpage',
+  group: 'block',
+  atom: true,
+  selectable: true,
+  draggable: false,
+  addStorage() {
+    return { links: null as PageLinks | null };
+  },
+  addAttributes() {
+    return {
+      pageId: {
+        default: null,
+        parseHTML: (element: HTMLElement) => element.getAttribute('data-page-id'),
+        renderHTML: (attributes: Record<string, unknown>) => ({ 'data-page-id': attributes.pageId }),
+      },
+    };
+  },
+  parseHTML() {
+    // Alleen met een geldig id: anders weigerde de database elke volgende
+    // opslag van de pagina, en bleef je werk hangen.
+    return [{
+      tag: 'div[data-type="subpage"]',
+      getAttrs: (element: HTMLElement) => (UUID_PATTERN.test(element.getAttribute('data-page-id') ?? '') ? null : false),
+    }];
+  },
+  renderHTML({ HTMLAttributes }) {
+    return ['div', mergeAttributes(HTMLAttributes, { 'data-type': 'subpage', class: 'page-subpage' })];
+  },
+  addNodeView() {
+    return subpageView;
+  },
+});
+
 /**
  * Kolombreedtes slepen. Tiptap zet dit alleen aan als de editor bij het maken
  * al bewerkbaar is (Table.addProseMirrorPlugins in 3.35.1); de onze begint op
@@ -215,6 +327,7 @@ export function pageEditorExtensions(options: { placeholder?: string } = {}) {
     DetailsContent,
     Callout,
     TableOfContents,
+    Subpage,
     UniqueID.configure({ types: [...PAGE_BLOCKS_WITH_ID] }),
     Placeholder.configure({ placeholder: options.placeholder ?? 'Typ hier, of typ / voor een tabel, callout of ander blok.' }),
   ];

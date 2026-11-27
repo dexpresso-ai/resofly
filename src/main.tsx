@@ -1314,6 +1314,8 @@ function App() {
   const [officeDoc, setOfficeDoc] = useState<InternalDocument | null>(null);
   /** De pagina die open staat in de pagina-editor (stap 1A-3a). */
   const [pageEditDoc, setPageEditDoc] = useState<InternalDocument | null>(null);
+  // De weg langs subpagina's (stap 1A-4b): de terugknop gaat een pagina terug.
+  const [pageTrail, setPageTrail] = useState<string[]>([]);
   // Terug uit een telefoongesprek. `returnedCall` is de vraag ("gesprek
   // loggen?"), `callDraft` het venster dat daarop volgt. Twee aparte waarden,
   // zodat wegklikken van de vraag niet hetzelfde is als het venster sluiten.
@@ -5068,7 +5070,21 @@ function App() {
       onClose={() => setCallDraft(null)}
       onSaved={refresh}
     /></DialogDeferred>}
-    {pageEditDoc && <DialogDeferred><PageEditor documentId={pageEditDoc.id} organizationId={pageEditDoc.organization_id} canWrite={orgCanWrite && permissions.canWrite('content')} nameOf={(userId: string) => memberName(userId, organizationContext.teamMembers ?? [], currentUserId)} onClose={() => { setPageEditDoc(null); refresh(); }}/></DialogDeferred>}
+    {pageEditDoc && <DialogDeferred><PageEditor
+      // Een andere pagina is een verse editor: geen claim, inhoud of geschiedenis van de vorige.
+      key={pageEditDoc.id}
+      documentId={pageEditDoc.id}
+      organizationId={pageEditDoc.organization_id}
+      canWrite={orgCanWrite && permissions.canWrite('content')}
+      nameOf={(userId: string) => memberName(userId, organizationContext.teamMembers ?? [], currentUserId)}
+      backTo={pageTrail[pageTrail.length - 1] ?? null}
+      onOpenPage={(step) => {
+        const from = pageEditDoc.id;
+        setPageTrail(trail => (step.how === 'terug' ? trail.slice(0, -1) : [...trail, from]));
+        setPageEditDoc(previous => (previous ? { ...previous, id: step.id } : previous));
+      }}
+      onClose={() => { setPageTrail([]); setPageEditDoc(null); refresh(); }}
+    /></DialogDeferred>}
     {officeSession && <DialogDeferred><OfficeEditor session={officeSession} onClose={() => { setOfficeSession(null); setOfficeDoc(null); refresh(); }} onDownload={officeDoc ? downloadOfficeDoc : undefined} /></DialogDeferred>}
     {officeOpening && !officeSession && <div style={{ position: 'fixed', bottom: 16, right: 16, zIndex: 2100, background: 'var(--panel-strong)', border: '1px solid var(--border2)', borderRadius: 10, padding: '8px 14px', fontWeight: 600 }}>Editor openen…</div>}
     {/* Zwevend teamchat-paneel — overal beschikbaar, behalve op de volledige chatpagina. */}

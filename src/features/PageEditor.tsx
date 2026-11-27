@@ -35,17 +35,17 @@ import { EditorContent, useEditor, useEditorState } from '@tiptap/react';
 import type { Editor, JSONContent } from '@tiptap/react';
 import {
   AlignCenter, AlignLeft, AlignRight, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, BetweenHorizontalEnd, BetweenHorizontalStart,
-  BetweenVerticalEnd, BetweenVerticalStart, Bold, Braces, Copy, Heading1, Heading2, Heading3, History, Info, Italic, Lightbulb, Link2,
+  BetweenVerticalEnd, BetweenVerticalStart, Bold, Braces, ChevronLeft, Copy, Heading1, Heading2, Heading3, History, Info, Italic, Lightbulb, Link2,
   List, ListChecks, ListOrdered, Minus, OctagonAlert, PanelTop, Pilcrow, Plus, Quote, Redo2, Strikethrough, TableCellsMerge,
   TableCellsSplit, Trash2, TriangleAlert, Underline as UnderlineIcon, Undo2, X,
 } from 'lucide-react';
 import { isInTable, moveTableColumn, moveTableRow, selectedRect } from '@tiptap/pm/tables';
-import { pageEditorExtensions } from '../lib/pageEditorExtensions';
+import { pageEditorExtensions, type PageLinks } from '../lib/pageEditorExtensions';
 import { calloutVariant, isAllowedPageLink, type CalloutVariant } from '../lib/pageSchema';
 import { pageBodyFit } from '../lib/pageBodyCheck';
 import {
-  claimPageEdit, listPageVersions, loadPage, loadPageVersion, releasePageEdit, restorePageVersion, savePage, savePageVersion,
-  type PageVersionSummary,
+  claimPageEdit, createPage, listPageVersions, loadPage, loadPageVersion, pageTitle, releasePageEdit, restorePageVersion, savePage,
+  savePageVersion, type PageVersionSummary,
 } from '../lib/repository';
 import { useBackStep } from '../lib/useBackStep';
 import {
@@ -88,7 +88,10 @@ function whenLabel(value: string): string {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString('nl-NL', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
-export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClose }: {
+/** Naar een andere pagina: verder (een subpagina, of omhoog) of terug langs de weg die je kwam. */
+export type PageStep = { id: string; how: 'vooruit' | 'terug' };
+
+export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClose, onOpenPage, backTo = null }: {
   documentId: string;
   organizationId: string;
   /** Schrijfrechten op Inhoud. Zonder: alleen lezen, en geen claim. */
@@ -96,6 +99,10 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
   /** De naam van een collega, voor "Sanne bewerkt deze pagina". */
   nameOf: (userId: string) => string;
   onClose: () => void;
+  /** Een andere pagina openen nadat deze netjes dicht is (stap 1A-4b). */
+  onOpenPage?: (step: PageStep) => void;
+  /** De pagina waar je vandaan kwam: de terugknop gaat daarheen in plaats van dicht. */
+  backTo?: string | null;
 }) {
   const [mode, setModeState] = useState<Mode>('laden');
   const [saveState, setSaveState] = useState<SaveState>('opgeslagen');
@@ -106,6 +113,7 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
   const [versionsOpen, setVersionsOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [refreshHelps, setRefreshHelps] = useState(true);
+  const [parent, setParent] = useState<{ id: string; title: string | null } | null>(null);
 
   const modeRef = useRef<Mode>('laden');
   const titleRef = useRef('');
@@ -209,6 +217,7 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
     // alleen preventUpdate, niet addToHistory (nagekeken in @tiptap/core 3.35.1).
     ed.chain().setMeta('addToHistory', false).setContent(row.body as JSONContent, { emitUpdate: false }).run();
     setTitle(row.title);
+    setParent(previous => (row.parent_id ? { id: row.parent_id, title: previous?.id === row.parent_id ? previous.title : null } : null));
     versionRef.current = row.edit_version;
     baselineRef.current = snapshotOf(row.title.trim() || 'Naamloze pagina', ed.getJSON());
     setSaveState('opgeslagen');
@@ -393,7 +402,7 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
     };
   }, [currentSnapshot, documentId]);
 
-  const close = useCallback(async (discard = false) => {
+  const close = useCallback(async (discard = false, next?: PageStep) => {
     if (closingRef.current) return;
     closingRef.current = true;
     if (timerRef.current) { window.clearTimeout(timerRef.current); timerRef.current = null; }
@@ -410,11 +419,56 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
       releasedRef.current = true;
       await releasePageEdit(documentId).catch(() => {});
     }
-    onClose();
-  }, [documentId, onClose, queueSave]);
+    if (next && onOpenPage) onOpenPage(next);
+    else onClose();
+  }, [documentId, onClose, onOpenPage, queueSave]);
 
-  // De terugknop van de telefoon sluit de editor, zoals Sluiten.
-  useBackStep(true, () => { void close(); });
+  // De terugknop van de telefoon: terug naar de pagina waar je vandaan kwam,
+  // anders dicht, zoals Sluiten.
+  useBackStep(true, () => { void close(false, backTo ? { id: backTo, how: 'terug' } : undefined); });
+
+  // Subpagina's (stap 1A-4b): wat het blok nodig heeft. Een andere pagina
+  // openen gaat via close(), zodat deze eerst is opgeslagen, een versie heeft
+  // en de claim los is.
+  const closeRef = useRef(close);
+  closeRef.current = close;
+  useEffect(() => {
+    if (!editor) return;
+    const titles = new Map<string, Promise<string | null>>();
+    const links: PageLinks = {
+      titleOf: pageId => {
+        let title = titles.get(pageId);
+        if (!title) {
+          title = pageTitle(pageId, organizationId);
+          titles.set(pageId, title);
+          title.catch(() => titles.delete(pageId));
+        }
+        return title;
+      },
+      open: pageId => { void closeRef.current(false, { id: pageId, how: 'vooruit' }); },
+      create: async () => {
+        try {
+          const page = await createPage(organizationId, { parent_id: documentId, title: 'Naamloze pagina' });
+          titles.set(page.id, Promise.resolve(page.title));
+          return page.id;
+        } catch (error) {
+          setMessage((error as { message?: string } | null)?.message || 'De subpagina kon niet worden gemaakt.');
+          return null;
+        }
+      },
+    };
+    (editor.storage as unknown as Record<string, { links: PageLinks | null }>).subpage.links = links;
+  }, [editor, documentId, organizationId]);
+
+  // De titel van de bovenliggende pagina, voor de knop omhoog.
+  useEffect(() => {
+    if (!parent || parent.title !== null) return;
+    let cancelled = false;
+    pageTitle(parent.id, organizationId)
+      .then(title => { if (!cancelled) setParent(current => (current?.id === parent.id ? { id: parent.id, title: title ?? 'Pagina' } : current)); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [parent, organizationId]);
 
   const reloadAfterConflict = async () => {
     setMessage(null);
@@ -475,6 +529,13 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
     <div className="page-editor" role="dialog" aria-modal="true" aria-label={title || 'Pagina'}>
       <div className="page-editor-bar">
         <button type="button" className="page-editor-close" onClick={() => void close()} aria-label="Pagina sluiten"><X size={18} /></button>
+        {parent && <button
+          type="button"
+          className="page-editor-parent"
+          onClick={() => void close(false, { id: parent.id, how: 'vooruit' })}
+          title={`Naar ${parent.title ?? 'de bovenliggende pagina'}`}
+          aria-label={`Naar de bovenliggende pagina${parent.title ? `: ${parent.title}` : ''}`}
+        ><ChevronLeft size={15} /><span>{parent.title ?? '…'}</span></button>}
         <span className="page-editor-crumb" title={title}>{title || 'Pagina'}</span>
         <span className={`page-editor-status is-${mode === 'bewerken' ? saveState : mode}`} role="status">{statusText}</span>
         <button type="button" className="page-editor-action" onClick={() => void copyLink()} title="Een link naar deze pagina, voor collega's">
