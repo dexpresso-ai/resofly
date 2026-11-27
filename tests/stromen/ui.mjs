@@ -1979,6 +1979,284 @@ async function scenarioDocumenten() {
     await page.locator('.page-editor-close').click();
     await page.locator('.page-editor').waitFor({ state: 'detached', timeout: 15000 });
   });
+
+  // ── Blokken en het blokmenu (stap 1A-4a) ───────────────────────────────────
+  const blokTitel = `Blokken ${Date.now().toString(36)}`;
+  const blokRij = (page) => inhoud(page).locator('.odrv-row').filter({ hasText: blokTitel }).first();
+  const editorVak = (page) => page.locator('.page-editor .tiptap');
+  const wachtOpgeslagen = (page, melding = 'niet opgeslagen') =>
+    wachtTot(async () => tekst(await paginaStatus(page).innerText().catch(() => '')) === 'Opgeslagen', { melding, timeout: 20000 });
+  const blokRijInDb = () => sqlRij(`select id, body, content, edit_version, updated_at::text as gewijzigd from public.documents where organization_id = ${q(w.orgId)} and title = ${q(blokTitel)}`);
+  const telBlok = (id, filter) => sqlRij(`select count(*)::int as n from public.documents d, jsonb_path_query(d.body, ${q(`strict $.** ? (${filter})`)}) x where d.id = ${q(id)}`).n;
+  /** Typ `/zoekwoord`; het genoemde blok staat bovenaan, en Enter kiest het. */
+  const kiesBlok = async (page, zoekwoord, naam) => {
+    await page.keyboard.type(`/${zoekwoord}`);
+    const menu = page.locator('.page-block-menu');
+    await menu.waitFor({ timeout: 10000 });
+    await wachtTot(async () => tekst(await menu.locator('.page-block-item.is-active .page-block-label').innerText().catch(() => '')) === naam,
+      { melding: `bovenaan staat niet ${naam}: ${tekst(await menu.innerText().catch(() => ''))}` });
+    await page.keyboard.press('Enter');
+    await menu.waitFor({ state: 'detached', timeout: 10000 });
+  };
+  const openBlokPagina = async (gebruiker, naam) => {
+    const lid = await openWerkruimte(gebruiker, naam, w.orgId, { tijdelijk: true });
+    await naarKlantdossier(lid, w.klantA.name);
+    await blokRij(lid.page).click();
+    await lid.page.locator('.page-editor').waitFor({ timeout: 20000 });
+    return lid;
+  };
+  const sluitPagina = async (page) => {
+    await page.locator('.page-editor-close').click();
+    await page.locator('.page-editor').waitFor({ state: 'detached', timeout: 15000 });
+  };
+
+  const blokPagina = await uiStap('het blokmenu: /tab maakt een tabel met kopregel; typen, een rij erbij, uitlijnen en een kolom breder slepen', async () => {
+    const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+    const page = lid.page;
+    await naarKlantdossier(lid, w.klantA.name);
+    await inhoud(page).locator('.drive-new').click();
+    await page.locator('.drive-pop').getByRole('menuitem', { name: 'Pagina', exact: true }).click();
+    await page.locator('.page-editor').waitFor({ timeout: 20000 });
+    await wachtOpgeslagen(page, 'de editor kwam niet in bewerken');
+    await page.locator('.page-editor-title').fill(blokTitel);
+    await editorVak(page).click();
+    await page.keyboard.type('Intro');
+    await page.keyboard.press('Enter');
+    await kiesBlok(page, 'tab', 'Tabel');
+    const tabel = editorVak(page).locator('table').first();
+    await tabel.waitFor({ timeout: 10000 });
+    gelijk(await tabel.locator('th').count(), 3, 'een kopregel met drie kolommen');
+    await page.keyboard.type('Naam');
+    await page.keyboard.press('Tab');
+    await page.keyboard.type('Bedrag');
+    await page.keyboard.press('Tab');
+    await page.keyboard.press('Tab');
+    await page.keyboard.type('Koffie');
+    await page.keyboard.press('Tab');
+    await page.keyboard.type('2,50');
+    const tabelBalk = page.locator('.page-editor-subbar[aria-label="Tabel"]');
+    await tabelBalk.waitFor({ timeout: 5000 });
+    await tabelBalk.getByRole('button', { name: 'Rechts uitlijnen', exact: true }).click();
+    await tabelBalk.getByRole('button', { name: 'Rij eronder', exact: true }).click();
+    gelijk(await tabel.locator('tr').count(), 4, 'rijen na Rij eronder');
+    // Een kolom breder slepen, aan de rechterrand van de eerste kop. Tiptap zette
+    // dat alleen aan als de editor bij het maken al bewerkbaar was.
+    const kop = await tabel.locator('th').first().boundingBox();
+    await page.mouse.move(kop.x + kop.width - 2, kop.y + kop.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(kop.x + kop.width + 80, kop.y + kop.height / 2, { steps: 8 });
+    await page.mouse.up();
+    await wachtTot(async () => ((await tabel.locator('th').first().boundingBox())?.width ?? 0) > kop.width + 40, { melding: 'de kolom werd niet breder' });
+    await wachtOpgeslagen(page);
+    const rij = blokRijInDb();
+    verwacht(rij, 'pagina niet in de database');
+    verwacht(rij.content.includes('Naam Bedrag') && rij.content.includes('Koffie 2,50'), `tekst uit de tabel: ${rij.content}`);
+    gelijk(telBlok(rij.id, '@.type == "tableHeader"'), 3, 'kopcellen in body');
+    gelijk(telBlok(rij.id, '@.type == "tableRow"'), 4, 'rijen in body');
+    gelijk(telBlok(rij.id, '@.type == "tableCell" && @.attrs.align == "right"'), 1, 'de cel met 2,50 rechts uitgelijnd');
+    gelijk(telBlok(rij.id, '@.type == "tableHeader" && @.attrs.colwidth.type() == "array"'), 1, 'de gesleepte breedte staat in body');
+    await sluitPagina(page);
+    return rij;
+  });
+
+  await uiStap('callout, uitklapper en inhoudsopgave via het menu; uitklappen slaat niets op', async () => {
+    if (!blokPagina) throw new Error('geen pagina');
+    const { page } = await openBlokPagina(w.medewerker, 'medewerker');
+    await wachtOpgeslagen(page, 'de editor kwam niet in bewerken');
+    await editorVak(page).locator('p').filter({ hasText: 'Intro' }).first().click();
+    await page.keyboard.press('Control+End');
+    await kiesBlok(page, 'callout', 'Callout');
+    await page.keyboard.type('Let op de deadline.');
+    const calloutBalk = page.locator('.page-editor-subbar[aria-label="Callout"]');
+    await calloutBalk.waitFor({ timeout: 5000 });
+    await calloutBalk.getByRole('button', { name: 'Waarschuwing', exact: true }).click();
+    await editorVak(page).locator('.page-callout[data-variant="waarschuwing"]').waitFor({ timeout: 5000 });
+    // In een callout geen kop: het menu toont alleen wat daar kan. Escape
+    // sluit het menu, niet de pagina.
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('/kop');
+    const menu = page.locator('.page-block-menu');
+    await menu.waitFor({ timeout: 10000 });
+    verwacht(tekst(await menu.innerText()).includes('Geen blok gevonden'), `koppen in een callout: ${tekst(await menu.innerText())}`);
+    await page.keyboard.press('Escape');
+    await menu.waitFor({ state: 'detached', timeout: 5000 });
+    verwacht(await page.locator('.page-editor').isVisible(), 'Escape sloot de pagina');
+    for (let i = 0; i < 5; i += 1) await page.keyboard.press('Backspace');
+    await page.keyboard.press('Control+End');
+    await kiesBlok(page, 'uitklapper', 'Uitklapper');
+    await page.keyboard.type('Meer weten?');
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('Uitleg hier.');
+    await page.keyboard.press('Control+End');
+    await kiesBlok(page, 'kop2', 'Kop 2');
+    await page.keyboard.type('Planning');
+    // De inhoudsopgave bovenaan, op een nieuwe lege regel.
+    await page.keyboard.press('Control+Home');
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('ArrowUp');
+    await kiesBlok(page, 'inh', 'Inhoudsopgave');
+    const toc = editorVak(page).locator('.page-toc');
+    await toc.waitFor({ timeout: 5000 });
+    // Na het invoegen staat de cursor op tekst, niet op de inhoudsopgave: typen
+    // overschreef die anders.
+    await page.keyboard.type('Welkom. ');
+    await wachtTot(async () => tekst(await editorVak(page).locator('p').filter({ hasText: 'Intro' }).first().innerText().catch(() => '')) === 'Welkom. Intro',
+      { melding: 'de tekst kwam niet voor Intro' });
+    gelijk(await toc.count(), 1, 'de inhoudsopgave staat er nog na typen');
+    await wachtTot(async () => tekst(await toc.innerText().catch(() => '')).includes('Planning'), { melding: `de kop staat niet in de inhoudsopgave: ${tekst(await toc.innerText().catch(() => ''))}` });
+    await wachtOpgeslagen(page);
+    // Open of dicht is weergave: in- en uitklappen slaat niets op.
+    const voor = blokRijInDb();
+    await editorVak(page).locator('.page-details > button').first().click();
+    await page.waitForTimeout(2500);
+    gelijk(tekst(await paginaStatus(page).innerText()), 'Opgeslagen', 'status na inklappen');
+    gelijk(blokRijInDb().edit_version, voor.edit_version, 'edit_version na inklappen');
+    const rij = blokRijInDb();
+    gelijk(telBlok(rij.id, '@.type == "callout" && @.attrs.variant == "waarschuwing"'), 1, 'de callout als waarschuwing');
+    gelijk(telBlok(rij.id, '@.type == "details"'), 1, 'de uitklapper');
+    gelijk(telBlok(rij.id, '@.type == "detailsContent" && @.content[0].content[0].text == "Uitleg hier."'), 1, 'de uitleg staat ín de uitklapper');
+    gelijk(telBlok(rij.id, '@.type == "tableOfContents"'), 1, 'de inhoudsopgave');
+    gelijk(telBlok(rij.id, '@.type == "heading" && @.attrs.level == 2'), 1, 'de kop');
+    verwacht(rij.content.includes('Let op de deadline.') && rij.content.includes('Meer weten? Uitleg hier.') && rij.content.includes('Planning'),
+      `de platte tekst: ${rij.content}`);
+    await sluitPagina(page);
+  });
+
+  await uiStap('plakken uit Excel of Word wordt een tabel, zonder de stijl van buiten', async () => {
+    if (!blokPagina) throw new Error('geen pagina');
+    const { page } = await openBlokPagina(w.medewerker, 'medewerker');
+    await wachtOpgeslagen(page, 'de editor kwam niet in bewerken');
+    // Eerst buiten de tabel: in een tabel plakt prosemirror-tables de cellen
+    // over de bestaande heen (zo hoort het daar), en Ctrl+End verlaat een cel niet.
+    await editorVak(page).locator('h2').filter({ hasText: 'Planning' }).click();
+    await page.keyboard.press('Control+End');
+    await page.evaluate(() => {
+      const html = '<meta charset="utf-8"><table border=0 cellpadding=0 cellspacing=0 width=200 style="border-collapse:collapse;width:150pt">'
+        + '<col width=100 style="width:75pt"><col width=100>'
+        + '<tr height=20><td class=xl65 style="background:url(https://volg.test/pixel.gif);text-align:center">Product</td><td>Prijs</td></tr>'
+        + '<tr><td>Thee</td><td align=right>1,80</td></tr></table>';
+      const data = new DataTransfer();
+      data.setData('text/html', html);
+      data.setData('text/plain', 'Product\tPrijs\nThee\t1,80');
+      document.querySelector('.page-editor .tiptap').dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+    });
+    await wachtTot(async () => (await editorVak(page).locator('table').count()) === 2, { melding: 'geen tweede tabel na plakken' });
+    await wachtOpgeslagen(page);
+    const rij = blokRijInDb();
+    verwacht(rij.content.includes('Product Prijs Thee 1,80'), `tekst uit de geplakte tabel: ${rij.content}`);
+    verwacht(!JSON.stringify(rij.body).includes('volg.test'), 'een adres van buiten staat in body');
+    gelijk(telBlok(rij.id, '@.type == "tableCell" && @.attrs.align == "center"'), 1, 'uitlijnen uit de stijl van de geplakte cel');
+    await sluitPagina(page);
+  });
+
+  await uiStap('opnieuw openen met elk nieuw blok verandert niets, en ongedaan maken staat uit', async () => {
+    if (!blokPagina) throw new Error('geen pagina');
+    const voor = blokRijInDb();
+    const { page } = await openBlokPagina(w.medewerker, 'medewerker');
+    await wachtOpgeslagen(page, 'de editor kwam niet in bewerken');
+    await editorVak(page).locator('.page-toc').waitFor({ timeout: 10000 });
+    gelijk(await editorVak(page).locator('table').count(), 2, 'twee tabellen');
+    gelijk(await editorVak(page).locator('.page-callout').count(), 1, 'de callout');
+    gelijk(await editorVak(page).locator('.page-details').count(), 1, 'de uitklapper');
+    gelijk(await page.getByRole('button', { name: 'Ongedaan maken', exact: true }).isDisabled(), true, 'ongedaan maken direct na openen');
+    await page.waitForTimeout(2500);
+    gelijk(tekst(await paginaStatus(page).innerText()), 'Opgeslagen', 'status na alleen openen');
+    await sluitPagina(page);
+    const na = blokRijInDb();
+    gelijk([na.edit_version, na.gewijzigd], [voor.edit_version, voor.gewijzigd], 'edit_version en "laatst gewijzigd" na alleen openen');
+  });
+
+  await uiStap('een pagina met een blok dat deze app niet kent, gaat alleen open om te lezen en blijft zoals hij was', async () => {
+    // Tiptap maakte van zo'n pagina stilletjes een lege; de eerste toets
+    // schreef die dan over de echte heen.
+    const body = { type: 'doc', content: [
+      { type: 'paragraph', content: [{ type: 'text', text: 'Boven de kolommen.' }] },
+      { type: 'columns', content: [{ type: 'column', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Links' }] }] }] },
+    ] };
+    const titel = `Uit de toekomst ${Date.now().toString(36)}`;
+    sql(`insert into public.documents (organization_id, created_by, title, format, body, client_id)
+      values (${q(w.orgId)}, ${q(w.medewerker.id)}, ${q(titel)}, 'page', ${q(JSON.stringify(body))}::jsonb, ${q(w.klantA.id)})`);
+    const nieuw = sqlRij(`select id, edit_version, updated_at::text as gewijzigd, body::text as body from public.documents
+      where organization_id = ${q(w.orgId)} and title = ${q(titel)}`);
+    const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+    const page = lid.page;
+    const adres = new URL(page.url());
+    adres.searchParams.set('pagina', nieuw.id);
+    await page.goto(adres.toString());
+    await page.locator('.page-editor').waitFor({ timeout: 30000 });
+    const banner = page.locator('.page-editor-banner');
+    await wachtTot(async () => tekst(await banner.innerText().catch(() => '')).includes('Ververs de app'), { melding: 'geen melding over een onbekend blok' });
+    gelijk(tekst(await paginaStatus(page).innerText()), 'Alleen lezen', 'status');
+    gelijk(await editorVak(page).getAttribute('contenteditable'), 'false', 'niet bewerkbaar');
+    gelijk(await page.locator('.page-editor-toolbar').count(), 0, 'geen werkbalk');
+    gelijk(await page.getByRole('button', { name: 'App verversen', exact: true }).count(), 1, 'een knop om te verversen');
+    gelijk(sqlRij(`select count(*)::int as n from public.document_edit_claims where document_id = ${q(nieuw.id)}`).n, 0, 'geen claim');
+    await editorVak(page).click();
+    await page.keyboard.type('xyz');
+    await page.waitForTimeout(2500);
+    await sluitPagina(page);
+    const na = sqlRij(`select edit_version, updated_at::text as gewijzigd, body::text as body from public.documents where id = ${q(nieuw.id)}`);
+    gelijk([na.edit_version, na.gewijzigd, na.body], [nieuw.edit_version, nieuw.gewijzigd, nieuw.body], 'de pagina is onveranderd');
+    gelijk(sqlRij(`select count(*)::int as n from public.document_versions where document_id = ${q(nieuw.id)}`).n, 0, 'geen versie');
+  });
+
+  await uiStap('op een telefoon: de +-knop opent het blokmenu als paneel, terug sluit het menu, en een brede tabel schuift binnen de pagina', async () => {
+    if (!blokPagina) throw new Error('geen pagina');
+    const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+    const page = lid.page;
+    // Eerst naar het dossier: op een telefoon zit het menu achter een knop.
+    await naarKlantdossier(lid, w.klantA.name);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await rustig(lid);
+    await blokRij(page).click();
+    await page.locator('.page-editor').waitFor({ timeout: 20000 });
+    await wachtOpgeslagen(page, 'de editor kwam niet in bewerken');
+    await editorVak(page).locator('td').filter({ hasText: 'Koffie' }).first().click();
+    const tabelBalk = page.locator('.page-editor-subbar[aria-label="Tabel"]');
+    await tabelBalk.waitFor({ timeout: 5000 });
+    for (let i = 0; i < 4; i += 1) await tabelBalk.getByRole('button', { name: 'Kolom rechts', exact: true }).click();
+    await wachtOpgeslagen(page);
+    const maat = async (el) => el.evaluate((node) => ({ sw: node.scrollWidth, cw: node.clientWidth }));
+    const pagina = await maat(page.locator('.page-editor-scroll'));
+    verwacht(pagina.sw <= pagina.cw + 1, `de pagina schuift opzij: ${JSON.stringify(pagina)}`);
+    const omhulsel = await maat(editorVak(page).locator('.tableWrapper').first());
+    verwacht(omhulsel.sw > omhulsel.cw, `de tabel schuift niet binnen de pagina: ${JSON.stringify(omhulsel)}`);
+    await editorVak(page).locator('p').filter({ hasText: 'Intro' }).first().click();
+    const plus = page.getByRole('button', { name: 'Blok invoegen', exact: true });
+    await plus.click();
+    const paneel = page.locator('.page-block-menu.is-sheet');
+    await paneel.waitFor({ timeout: 5000 });
+    const vak = await paneel.boundingBox();
+    verwacht(vak && vak.x >= 0 && vak.x + vak.width <= 391 && vak.y + vak.height <= 845, `het paneel past niet: ${JSON.stringify(vak)}`);
+    await page.goBack();
+    await paneel.waitFor({ state: 'detached', timeout: 5000 });
+    verwacht(await page.locator('.page-editor').isVisible(), 'terug sloot de pagina in plaats van het menu');
+    await plus.click();
+    await paneel.getByRole('option', { name: /Scheidingslijn/ }).click();
+    await paneel.waitFor({ state: 'detached', timeout: 5000 });
+    await wachtTot(async () => (await editorVak(page).locator('hr').count()) === 1, { melding: 'geen scheidingslijn' });
+    // Na de lijn komt de tabel. Typen hoort op een nieuwe regel te komen; de
+    // tabel bleef eerst geselecteerd en werd overschreven.
+    await page.keyboard.type('Na de lijn');
+    await wachtTot(async () => (await editorVak(page).locator('p').filter({ hasText: 'Na de lijn' }).count()) === 1, { melding: 'de tekst na de lijn staat niet op een eigen regel' });
+    verwacht(tekst(await editorVak(page).locator('table').first().innerText()).includes('Bedrag'), 'de tabel na de lijn is overschreven');
+    await wachtOpgeslagen(page);
+    await page.screenshot({ path: path.join(os.tmpdir(), 'stromen-ui-blokken-telefoon.png') });
+    await sluitPagina(page);
+    // Alleen lezen (de kijker): de tabel schuift ook dan binnen de pagina.
+    const kijker = await openWerkruimte(w.kijker, 'kijker', w.orgId, { tijdelijk: true });
+    await kijker.page.setViewportSize({ width: 390, height: 844 });
+    await rustig(kijker);
+    const adres = new URL(kijker.page.url());
+    adres.searchParams.set('pagina', blokPagina.id);
+    await kijker.page.goto(adres.toString());
+    await kijker.page.locator('.page-editor .tableWrapper').first().waitFor({ timeout: 30000 });
+    gelijk(await editorVak(kijker.page).getAttribute('contenteditable'), 'false', 'de kijker leest alleen');
+    const kijkPagina = await maat(kijker.page.locator('.page-editor-scroll'));
+    verwacht(kijkPagina.sw <= kijkPagina.cw + 1, `de pagina schuift opzij bij alleen lezen: ${JSON.stringify(kijkPagina)}`);
+    await kijker.page.screenshot({ path: path.join(os.tmpdir(), 'stromen-ui-blokken-lezen.png') });
+    await sluitPagina(kijker.page);
+  });
 }
 
 // ── Bank: mutaties met de hand boeken ──────────────────────────────────────

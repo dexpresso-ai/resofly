@@ -516,7 +516,8 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
   );
 }
 
-type Tool = { label: string; icon: JSX.Element; active?: boolean; disabled?: boolean; run: () => void } | 'sep';
+/** `text`: een woord naast het icoon, waar iconen alleen te veel op elkaar lijken (weghalen). */
+type Tool = { label: string; icon: JSX.Element; text?: string; active?: boolean; disabled?: boolean; run: () => void } | 'sep';
 
 function ToolButtons({ tools }: { tools: Tool[] }) {
   return <>{tools.map((tool, index) => tool === 'sep'
@@ -524,7 +525,7 @@ function ToolButtons({ tools }: { tools: Tool[] }) {
     : <button
         key={tool.label}
         type="button"
-        className={`page-editor-tool${tool.active ? ' is-active' : ''}`}
+        className={`page-editor-tool${tool.active ? ' is-active' : ''}${tool.text ? ' has-text' : ''}`}
         title={tool.label}
         aria-label={tool.label}
         aria-pressed={tool.active ?? undefined}
@@ -532,7 +533,7 @@ function ToolButtons({ tools }: { tools: Tool[] }) {
         // Muisklik houdt de cursor in de tekst.
         onMouseDown={event => event.preventDefault()}
         onClick={tool.run}
-      >{tool.icon}</button>)}</>;
+      >{tool.icon}{tool.text && <span>{tool.text}</span>}</button>)}</>;
 }
 
 const CALLOUT_CHOICES: Array<{ variant: CalloutVariant; label: string; icon: JSX.Element }> = [
@@ -668,9 +669,9 @@ function Toolbar({ editor, onInsert }: { editor: Editor; onInsert: (anchor: DOMR
     { label: 'Midden uitlijnen', icon: <AlignCenter size={16} />, active: state.cellAlign === 'center', run: () => chain().setCellAttribute('align', 'center').run() },
     { label: 'Rechts uitlijnen', icon: <AlignRight size={16} />, active: state.cellAlign === 'right', run: () => chain().setCellAttribute('align', 'right').run() },
     'sep',
-    { label: 'Rij verwijderen', icon: <Trash2 size={16} />, disabled: place.rows <= 1, run: () => chain().deleteRow().run() },
-    { label: 'Kolom verwijderen', icon: <Trash2 size={16} />, disabled: place.cols <= 1, run: () => chain().deleteColumn().run() },
-    { label: 'Tabel verwijderen', icon: <Trash2 size={16} />, run: () => chain().deleteTable().run() },
+    { label: 'Rij verwijderen', icon: <Trash2 size={15} />, text: 'Rij', disabled: place.rows <= 1, run: () => chain().deleteRow().run() },
+    { label: 'Kolom verwijderen', icon: <Trash2 size={15} />, text: 'Kolom', disabled: place.cols <= 1, run: () => chain().deleteColumn().run() },
+    { label: 'Tabel verwijderen', icon: <Trash2 size={15} />, text: 'Tabel', run: () => chain().deleteTable().run() },
   ] : [];
 
   const calloutTools: Tool[] = state.callout ? [
@@ -681,7 +682,7 @@ function Toolbar({ editor, onInsert }: { editor: Editor; onInsert: (anchor: DOMR
       run: () => { chain().updateAttributes('callout', { variant: choice.variant }).run(); },
     })),
     'sep' as const,
-    { label: 'Kader weghalen', icon: <Trash2 size={16} />, run: () => chain().lift('callout').run() },
+    { label: 'Kader weghalen', icon: <Trash2 size={15} />, text: 'Kader weg', run: () => chain().lift('callout').run() },
   ] : [];
 
   return (
@@ -708,7 +709,7 @@ function Toolbar({ editor, onInsert }: { editor: Editor; onInsert: (anchor: DOMR
       </div>}
       {state.details && !place && !state.callout && <div className="page-editor-subbar" role="toolbar" aria-label="Uitklapper">
         <span className="page-editor-subbar-label">Uitklapper</span>
-        <ToolButtons tools={[{ label: 'Uitklapper weghalen', icon: <Trash2 size={16} />, run: () => chain().unsetDetails().run() }]} />
+        <ToolButtons tools={[{ label: 'Uitklapper weghalen', icon: <Trash2 size={15} />, text: 'Uitklapper weg', run: () => chain().unsetDetails().run() }]} />
       </div>}
     </>
   );

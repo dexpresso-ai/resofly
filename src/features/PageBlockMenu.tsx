@@ -16,7 +16,8 @@ import { Extension } from '@tiptap/core';
 import type { ChainedCommands, Editor, Range } from '@tiptap/core';
 import { Suggestion, exitSuggestion } from '@tiptap/suggestion';
 import type { SuggestionProps } from '@tiptap/suggestion';
-import { PluginKey } from '@tiptap/pm/state';
+import { NodeSelection, PluginKey, TextSelection } from '@tiptap/pm/state';
+import type { Transaction } from '@tiptap/pm/state';
 import {
   Braces, Heading1, Heading2, Heading3, List, ListChecks, ListCollapse, ListOrdered, ListTree, MessageSquareText, Minus,
   Pilcrow, Quote, Table2,
@@ -41,6 +42,30 @@ const ICONS: Record<PageBlockKey, JSX.Element> = {
   scheidingslijn: <Minus size={17} />,
 };
 
+/**
+ * Na een blok zonder tekst hoort de cursor op een tekstregel. Tiptap zette na
+ * een scheidingslijn de selectie óp het blok dat erna kwam (een tabel, een
+ * callout), en na een inhoudsopgave op de inhoudsopgave zelf: de volgende
+ * toets overschreef dan dat blok. prosemirror-tables maakte van zo'n tabel
+ * zelfs een selectie van alle cellen.
+ */
+function cursorOnText({ tr, dispatch }: { tr: Transaction; dispatch?: unknown }): boolean {
+  if (!dispatch || !(tr.selection instanceof NodeSelection)) return true;
+  const paragraph = tr.doc.type.schema.nodes.paragraph;
+  const selected = tr.selection.node.type.name;
+  // Na de inhoudsopgave: erachter verder. Na een lijn: de lijn staat ervoor,
+  // het geselecteerde blok is dat van daarna; dus vóór dat blok verder.
+  const pos = selected === 'tableOfContents' ? tr.selection.to : tr.selection.from;
+  const next = tr.doc.resolve(pos).nodeAfter;
+  if (next?.isTextblock) {
+    tr.setSelection(TextSelection.create(tr.doc, pos + 1));
+  } else {
+    tr.insert(pos, paragraph.create());
+    tr.setSelection(TextSelection.create(tr.doc, pos + 1));
+  }
+  return true;
+}
+
 /** Wat elk blok doet, op een keten die echt draait of alleen kijkt (can). */
 function blockChain(chain: ChainedCommands, key: PageBlockKey): ChainedCommands {
   switch (key) {
@@ -54,10 +79,10 @@ function blockChain(chain: ChainedCommands, key: PageBlockKey): ChainedCommands 
     case 'tabel': return chain.insertTable({ rows: 3, cols: 3, withHeaderRow: true });
     case 'callout': return chain.wrapIn('callout', { variant: 'info' });
     case 'uitklapper': return chain.setDetails();
-    case 'inhoudsopgave': return chain.insertContent({ type: 'tableOfContents' });
+    case 'inhoudsopgave': return chain.insertContent({ type: 'tableOfContents' }).command(cursorOnText);
     case 'citaat': return chain.toggleBlockquote();
     case 'code': return chain.setCodeBlock();
-    case 'scheidingslijn': return chain.setHorizontalRule();
+    case 'scheidingslijn': return chain.setHorizontalRule().command(cursorOnText);
   }
 }
 
@@ -76,11 +101,30 @@ export function canRunPageBlock(editor: Editor, key: PageBlockKey): boolean {
   }
 }
 
+/**
+ * Een nieuwe uitklapper open zetten. Open of dicht wordt niet opgeslagen
+ * (persist uit), dus hij begon dicht; Enter in de kopregel sprong dan uit de
+ * uitklapper in plaats van erin, en je tekst kwam eronder te staan.
+ */
+function openDetailsAtSelection(editor: Editor): void {
+  const { $from } = editor.state.selection;
+  for (let depth = $from.depth; depth > 0; depth -= 1) {
+    if ($from.node(depth).type.name !== 'details') continue;
+    const dom = editor.view.nodeDOM($from.before(depth));
+    if (dom instanceof HTMLElement && !dom.classList.contains('is-open')) {
+      dom.querySelector<HTMLButtonElement>(':scope > button')?.click();
+    }
+    return;
+  }
+}
+
 /** Voert het blok uit. Met `range` (na `/`) eerst de schuine streep en het zoekwoord weg. */
 export function runPageBlock(editor: Editor, key: PageBlockKey, range?: Range): boolean {
   let chain = editor.chain().focus();
   if (range) chain = chain.deleteRange(range);
-  return blockChain(chain, key).run();
+  const done = blockChain(chain, key).run();
+  if (done && key === 'uitklapper') openDetailsAtSelection(editor);
+  return done;
 }
 
 export function pageBlocksFor(editor: Editor, query: string): PageBlock[] {
