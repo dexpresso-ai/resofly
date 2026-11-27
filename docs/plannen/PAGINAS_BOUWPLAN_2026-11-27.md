@@ -11,10 +11,14 @@ documentenstructuur kunnen gaan aanmaken. […] Ik wil functionaliteit ook hebbe
 als een docx of pdf gemaakt kan worden. Ik wil ook tabellen kunnen maken in die pagina's.
 Eigenlijk alles wat je in Notion kunt doen, maar dan net wat mooier en slimmer.*
 
-**Kort.** Er komt een nieuw soort document: de pagina.
+**Kort.** Er komt een nieuw soort inhoud: de pagina. **Een pagina is een webpagina in ResoFly,
+geen bestand.** Je maakt, leest en deelt hem in de browser, met een eigen adres, subpagina's en
+links, zoals op een website. Word en PDF zijn alleen uitvoer: een kopie die je maakt als je op
+Exporteren drukt.
 
-1. **Pagina's vervangen de tekstdocumenten.** Een pagina bestaat uit blokken, kan subpagina's
-   hebben en kent gewone tabellen. Word, Excel en PowerPoint blijven ernaast bestaan.
+1. **Pagina's vervangen de huidige tekstdocumenten.** Dat is de eenvoudige editor in de app, die
+   nu ook al geen Word-bestand maakt. Een pagina bestaat uit blokken, kan subpagina's hebben en
+   kent gewone tabellen. Echte Word-, Excel- en PowerPoint-bestanden blijven ernaast bestaan.
 2. **Pagina's staan in de drive**: in klant- en projectdossiers, en in een eigen dossier van het
    bedrijf, met logo, voor het bedrijfshandboek.
 3. **Export naar Word en PDF in de huisstijl**, langs één route: pagina → DOCX → PDF via de
@@ -33,7 +37,7 @@ Eigenlijk alles wat je in Notion kunt doen, maar dan net wat mooier en slimmer.*
 | Gewone tabellen of databases? | "Ik bedoel nu eerst standaard tabellen met alleen content op die pagina." |
 | Samen tegelijk typen vanaf dag één? | "Mag in fase 3." |
 | Lezen klanten mee? | "Nee klanten mogen pas meelezen zodra document wordt gedeeld door eigenaar." Later: "Inderdaad ook klantbestanden worden pas gedeeld, wanneer de gebruiker van de app de deel functie gebruikt." |
-| PDF zoals het scherm, of opgemaakt in de huisstijl? | In de huisstijl: "Inderdaad het tweede." |
+| De PDF-export: zoals het scherm, of opgemaakt in de huisstijl? | In de huisstijl: "Inderdaad het tweede." Dit gaat alleen over de export; de pagina zelf blijft een webpagina. |
 | Bedrijfshandboek in fase 1? | "Ja bedrijfshandboek nemen we mee. Eigen logo en structuur in de drive." |
 
 Zo lees ik twee van die antwoorden. Klopt dat niet, dan past dit plan zich aan:
@@ -83,7 +87,18 @@ Zo lees ik twee van die antwoorden. Klopt dat niet, dan past dit plan zich aan:
 
 ## 3. Wat een pagina is
 
-**Een pagina is een rij in `documents` met `format = 'page'`.** Waarom geen nieuwe tabel: delen,
+**Een webpagina, geen bestand.**
+
+- Een pagina leeft in de app: je opent hem in de browser of op de telefoon, en er zit geen .docx
+  achter.
+- Elke pagina heeft een eigen adres, dat in de adresbalk blijft staan zolang hij open is. Dat is
+  anders dan bij `?chat=`, dat na het openen verdwijnt.
+- Kopieer je dat adres, dan opent een collega met rechten dezelfde pagina.
+- Links naar subpagina's en andere pagina's werken zoals op een website.
+- In de app heet het overal "Pagina".
+
+**Opslag: een rij in de tabel `documents` met `format = 'page'`.** `documents` is alleen de naam
+van de databasetabel. Waarom geen nieuwe tabel: delen,
 het portaal, het logboek, het opslagquotum, de opruimwachtrij, de organisatiegrenzen
 (`20261106150000_inhoud_binnen_organisatie`) en de handelingen van Gerrie werken al op
 `documents`. Een nieuwe tabel zou op al die plekken een tweede variant vragen.
@@ -229,8 +244,8 @@ eigen changelog.
   logboek. Zo weet je altijd welke versie de klant op welke dag zag.
 - **Subpagina's:** het deelvenster toont de boom, en je vinkt aan welke meegaan (elk een eigen
   deling). Een subpagina die er later bij komt, is niet gedeeld.
-- **Weergave in het portaal en bij een geheime link:** de vrijgegeven versie, op de server
-  omgezet naar HTML en gesaneerd. Dat doet één module (`renderPageHtml`), die ook de app en het
+- **Weergave in het portaal en bij een geheime link:** de klant leest een webpagina, geen PDF.
+  Het is de vrijgegeven versie, op de server omgezet naar HTML en gesaneerd. Dat doet één module (`renderPageHtml`), die ook de app en het
   exportvoorbeeld gebruiken. Een afbeelding wordt alleen geserveerd als hij in die versie staat.
 
 ## 8. Afbeeldingen en bestanden in een pagina
@@ -242,6 +257,9 @@ eigen changelog.
   bestand van een andere organisatie of klant kan er niet in; dat dwingt de database af.
 
 ## 9. Export naar Word en PDF
+
+Export is uitvoer. De pagina blijft de webpagina; de export is een kopie van dat moment, voor wie
+een bestand nodig heeft: een bijlage, de printer, het archief.
 
 **Eén route: pagina → DOCX → PDF via Collabora.** Daardoor zien Word en PDF er hetzelfde uit. Een
 tweede tekenroute (bijvoorbeeld headless Chrome) zou uit elkaar gaan lopen, zoals bij offertes
@@ -323,7 +341,7 @@ en facturen gebeurde vóór Documentopmaak.
 - het datamodel en de migraties;
 - laden, en zoeken op de server;
 - de editor met de blokken en de gewone tabel;
-- de boom in de drive, en het eigen dossier met logo;
+- de boom in de drive, het eigen dossier met logo, en een eigen adres per pagina;
 - de prullenbak, één tegelijk bewerken, en de versies;
 - de tekstdocumenten omzetten.
 
@@ -379,7 +397,8 @@ portaal en bij een geheime link.
 - **Verder:**
   - `test:loading`;
   - `test:mobile -- --theme=both` (editor, +-knop, tabel);
-  - `test:terugknop` (pagina en exportvenster sluiten met terug);
+  - `test:terugknop` (van een subpagina terug naar de vorige pagina, en het exportvenster sluiten
+    met terug);
   - `dataGroups.test.ts` en `actionTenancy.test.ts`;
   - `deno check` voor `page-export`.
 
