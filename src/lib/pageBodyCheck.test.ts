@@ -36,3 +36,22 @@ test('geen object of geen document, past niet', () => {
   assert.equal(pageBodyFit(schema, 'tekst').ok, false);
   assert.equal(pageBodyFit(schema, { type: 'paragraph' }).ok, false);
 });
+
+const table = (cellAttrs: Record<string, unknown>) => doc({
+  type: 'table',
+  content: [{ type: 'tableRow', content: [{ type: 'tableCell', attrs: cellAttrs, content: [p('a')] }] }],
+});
+
+test('een tabel met hele getallen als maat past', () => {
+  assert.deepEqual(pageBodyFit(schema, table({ colspan: 1, rowspan: 1, colwidth: [120] })), { ok: true });
+  assert.deepEqual(pageBodyFit(schema, table({ colwidth: null })), { ok: true });
+});
+
+// Tiptap zet colwidth zonder controle in een style-attribuut; zo kwam er een
+// plaatje van buiten (een volgpixel) in de pagina.
+test('een tabelcel met tekst of een stijl als maat past niet', () => {
+  assert.equal(pageBodyFit(schema, table({ colwidth: ['1px; background-image: url(https://example.com/x.png)'] })).ok, false);
+  assert.equal(pageBodyFit(schema, table({ colspan: '2' })).ok, false);
+  assert.equal(pageBodyFit(schema, table({ rowspan: 1.5 })).ok, false);
+  assert.equal(pageBodyFit(schema, table({ colwidth: 120 })).ok, false);
+});
