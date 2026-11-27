@@ -501,7 +501,8 @@ akkoord is.
 | 0 | Gedeelde mappen vullen zich niet meer vanzelf (§7). | gebouwd op 27 november, op de branch; zie `docs/changelog/CHANGELOG_GEDEELDE_MAPPEN_2026-11-27.md` |
 | 1A-1 | Datamodel en migraties: de kolommen op `documents`, `document_versions`, de triggers (boom, overerving, organisatie, controle op `body`), `claim_page_edit`, de zoekindex met zoek-RPC, de logboekvelden. Met databasetests, nog zonder scherm. | gebouwd op 27 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_DATAMODEL_2026-11-27.md` |
 | 1A-2 | Laden en zoeken: de kolomlijst in `loadCoreData`, `excerpt` in de kaarten, GlobalSearch en `content.search` via de zoek-RPC. In één stap, anders breekt zoeken (§6). | gebouwd op 27 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_LADEN_ZOEKEN_2026-11-27.md`. Gerrie zoekt bewust nog zoals voorheen (zie daar) |
-| 1A-3 | De editor: Tiptap als eigen stuk bundel, het pagina-scherm met eigen adres, de basisblokken, opslaan met `edit_version`, één tegelijk bewerken, versies. | gepland |
+| 1A-3a | De editor: Tiptap als eigen stuk bundel, het pagina-scherm, de basisblokken, opslaan met `edit_version`, één tegelijk bewerken. | gepland |
+| 1A-3b | Het versiepaneel (bekijken en terugzetten) en een eigen adres per pagina. | gepland |
 | 1A-4 | De overige blokken: gewone tabel, afbeelding, bestand, callout, uitklapper, inhoudsopgave, subpagina. Het slash-menu en de +-knop op de telefoon. | gepland |
 | 1A-5 | De drive: de boom, het eigen dossier met logo, "Pagina" in het Nieuw-menu, slepen, de prullenbak. De tekstdocumenten omzetten. | gepland |
 | 1B-1 | Proef: huisstijlletters en emoji in een PDF via Collabora (§9). | gepland |
@@ -519,3 +520,17 @@ akkoord is.
 - **`content` en `excerpt` houdt de database bij.** Bij een pagina maakt een trigger de
   platte tekst uit `body`, en bij elk document de korte tekst voor de tegels. Zo kloppen ze
   ook als Gerrie, de API of de Word-editor schrijft.
+
+**Voorwaarden voor 1A-3, vastgelegd bij de oplevering van 1A-2 (27 november):**
+
+- **Tekst aanvullen door Gerrie bij een pagina.** De database weigert bij een pagina een
+  wijziging van alleen `content`. Zodra er pagina's zijn, mislukken daar
+  `appendToContent`, het toepassen van `document.update` in de app en `planContentUpdate`
+  op de server. Kies één van twee: aanvullen als alinea's in `body`, of pagina's
+  weglaten uit `contentTargetsFrom` en uit wat Gerrie als doel kan kiezen.
+- **Delen bij een pagina** verbergen of uitzetten in het menu van de drive en in het
+  deelvenster, met een uitleg. De database weigert het tot 1C, anders krijgt de
+  gebruiker een kale foutmelding.
+- **De editor:** de licentie per Tiptap-extensie nakijken. De namen van de blokken moeten
+  precies die van `src/lib/pageSchema.ts` zijn. De editor blijft een eigen stuk bundel,
+  dat pas laadt als je een pagina opent.

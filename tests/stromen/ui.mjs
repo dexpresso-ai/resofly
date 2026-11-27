@@ -1800,11 +1800,16 @@ async function scenarioDocumenten() {
     } }), 'document');
     const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
     const page = lid.page;
+    let zoekvragen = 0;
+    page.on('request', (verzoek) => { if (verzoek.url().includes('/rest/v1/rpc/search_documents')) zoekvragen += 1; });
     const zoekveld = page.locator('.gs-input').first();
     await zoekveld.click();
     await zoekveld.fill(woord);
     const treffer = page.locator('.gs-result').filter({ hasText: 'Zoekproef' }).first();
     await treffer.waitFor({ timeout: 15000 });
+    // Eén zoekvraag per woord, ook als de app intussen opnieuw tekent.
+    await page.waitForTimeout(1500);
+    gelijk(zoekvragen, 1, 'zoekvragen aan de database voor één woord');
     await treffer.click();
     const venster = documentVenster(page);
     await venster.waitFor({ timeout: 10000 });

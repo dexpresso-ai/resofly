@@ -659,6 +659,10 @@ const BOOT_ROUND: Promise<(RoundStart & { userId: string; cache: Promise<Workspa
   })()
   : null;
 let bootRoundTaken = false;
+/** Twee keer tikken op een telefoon opent een document niet twee keer. Een
+ *  vlag op moduleniveau, geen hook: openDocument staat na een vroege return in
+ *  de app, en een hook daar liet de app wit (zwart) blijven. */
+let documentOpening = false;
 /** Eén keer: de ronde die al bij het laden begon. Daarna altijd null. */
 function takeBootRound() {
   if (bootRoundTaken) return null;
@@ -2856,12 +2860,18 @@ function App() {
     if (!doc.storage_key) {
       // De tekst zit sinds stap 1A-2 niet meer in de kern: eerst ophalen. Anders
       // opende de editor leeg, en wiste opslaan de tekst.
+      if (documentOpening) return;
+      documentOpening = true;
+      setOfficeOpening(true); setError(null);
       try {
         // Altijd vers: een document uit een oude cache kan nog verouderde tekst bij zich hebben.
         const content = await loadContentHtml('documents', doc.id, doc.organization_id);
         setEdit({ kind: 'document', item: { ...doc, content } });
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Kon het document niet openen');
+      } finally {
+        documentOpening = false;
+        setOfficeOpening(false);
       }
       return;
     }
