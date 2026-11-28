@@ -516,7 +516,7 @@ akkoord is.
 | 1B-2 | Export: `page-export`, de DOCX-module, het interne PDF-pad, het exportvenster, vastleggen in het dossier, de Word-kopie. | gebouwd op 28 november, op staging gezet op 28 november: de DOCX-module (`_shared/pageDocx.ts`, met de huisstijlletters ingesloten via `_shared/woff.ts`), en de knop "Word" in de editor, die de DOCX in de app bouwt (zie de afwijking hieronder). Zie `docs/changelog/CHANGELOG_PAGINAS_WORD_2026-11-28.md`. Het exportvenster en de Word-kopie kwamen in 1B-3; `page-export`, de PDF en vastleggen in het dossier wachten op Collabora (1B-5). |
 | 1B-3 | Het exportvenster ("Exporteren" in de balk) met Word downloaden, "Maak er een Word-document van" (een Word-document naast de pagina, dat meteen opent in Collabora) en afdrukken. | gebouwd op 28 november, op staging gezet op 28 november om 11:46 UTC (3be4452); zie `docs/changelog/CHANGELOG_PAGINAS_EXPORTEREN_2026-11-28.md`. Op staging na te lopen: een Word-document bewerken en bewaren in Collabora. |
 | 1B-4 | De opties in het exportvenster: een voorblad (titel, klant, project, datum, logo), een inhoudsopgave vooraan, subpagina's als hoofdstukken, briefpapier aan of uit. | 1B-4a (voorblad, inhoudsopgave vooraan, subpagina's als hoofdstukken) gebouwd op 28 november; zie `docs/changelog/CHANGELOG_PAGINAS_EXPORTEREN_2026-11-28.md`. 1B-4b (briefpapier als afbeelding achter elke bladzijde, met de marges uit Documentopmaak) en 1B-4c (de kop en voet in de huisstijl: logo, merkkleur, voettekst) gebouwd op 28 november. Alle drie op staging gezet op 28 november om 11:46 UTC (3be4452). In een .docx kan alleen een briefpapier dat een afbeelding is. Een briefpapier als PDF hoort bij de PDF (1B-5), met pdf-lib zoals bij facturen. |
-| 1B-5 | De PDF: `page-export` (de DOCX op de server, in R2 onder `page-export`), een intern pad in de media-worker naar Collabora, en "Vastleggen in dossier". | gebouwd op 28 november, op de branch, na "ga door met het plan": de server bouwt de DOCX (`page-export`), de worker zet hem om (`/internal/office/convert-page`, zonder bestand in R2), en de app downloadt of legt vast in de map. Zie `docs/changelog/CHANGELOG_PAGINAS_PDF_2026-11-28.md`. De media-worker rolt de gebruiker uit: `docs/setup/PAGINA_PDF_SETUP.md`. Ook gebouwd (deel 4): een briefpapier dat een PDF is, onder elke bladzijde van de PDF, met pdf-lib zoals bij facturen (`_shared/pdfLetterhead.ts`); Word blijft dan zonder. |
+| 1B-5 | De PDF: `page-export` (de DOCX op de server, in R2 onder `page-export`), een intern pad in de media-worker naar Collabora, en "Vastleggen in dossier". | gebouwd op 28 november, na "ga door met het plan", en op staging gezet op 28 november om 14:39 UTC (abe8b06): de server bouwt de DOCX (`page-export`), de worker zet hem om (`/internal/office/convert-page`, zonder bestand in R2), en de app downloadt of legt vast in de map. Zie `docs/changelog/CHANGELOG_PAGINAS_PDF_2026-11-28.md`. De media-worker rolt de gebruiker uit: `docs/setup/PAGINA_PDF_SETUP.md`. Ook gebouwd (deel 4): een briefpapier dat een PDF is, onder elke bladzijde van de PDF, met pdf-lib zoals bij facturen (`_shared/pdfLetterhead.ts`); Word blijft dan zonder. |
 | 1C-1 | De omzetting van een pagina naar HTML voor de klant (`_shared/pageHtml.ts`, `renderPageHtml`), zonder browser, en `pageReferences` in `_shared`. Verandert nog niets aan wat een klant ziet. | gebouwd op 28 november, op staging gezet op 28 november; zie `docs/changelog/CHANGELOG_PAGINAS_HTML_2026-11-28.md` |
 | 1C-2 | De vrijgave in de database: `drive_shares.document_version_id`, alleen een vrijgegeven versie van die pagina en organisatie. In dezelfde stap lezen het portaal en de geheime link die versie, via `renderPageHtml`. | gebouwd op 28 november, op staging gezet op 28 november; zie `docs/changelog/CHANGELOG_PAGINAS_DELEN_VRIJGAVE_2026-11-28.md`. Migratie `20261128120000_paginas_delen`. |
 | 1C-3 | Het deelvenster voor een pagina: vrijgeven, subpagina's aanvinken, "De klant ziet een oudere versie" met "Bijwerken bij klant", het logboek. | gebouwd op 28 november, op staging gezet op 28 november: 1C-3a (database en server: `file-share` met de vrijgave, `page_share_status`, `release_page_to_shares`, migratie `20261128130000`) en 1C-3b (het venster, de knop en de melding in de editor, Gerrie); zie `docs/changelog/CHANGELOG_PAGINAS_BIJWERKEN_BIJ_KLANT_2026-11-28.md` |
@@ -583,6 +583,16 @@ akkoord is.
 - **De editor:** de licentie per Tiptap-extensie nakijken. De namen van de blokken moeten
   precies die van `src/lib/pageSchema.ts` zijn. De editor blijft een eigen stuk bundel,
   dat pas laadt als je een pagina opent.
+
+**Op staging sinds 28 november 2026, 14:39 UTC (abe8b06), op verzoek van de gebruiker:** de PDF
+(1B-5), zonder migraties.
+- De uitrol (Deploy Supabase, run 268) is geslaagd. `page-export` staat er; de rooktest zegt
+  "page-export staat er en weigert een verzoek zonder herkomst (403)".
+- CI op de branch: runs 315 en 316 helemaal groen. Daarna alleen tekst en de reparatie van de
+  origin in `page-export` (die las `GERRIE_ALLOWED_ORIGINS` niet).
+- De gebruiker rolt de media-worker uit (`docs/setup/PAGINA_PDF_SETUP.md`). Tot dan zegt het
+  venster dat de PDF er nog niet is.
+- Op staging na te lopen: één PDF, één vastgelegd, en één met een briefpapier dat een PDF is.
 
 **Op staging sinds 28 november 2026, 11:46 UTC (3be4452), op verzoek van de gebruiker:** de export,
 1B-3 tot en met 1B-4c, zonder migraties.
@@ -700,7 +710,7 @@ nieuwe blokken niet, en opent zo'n pagina alleen om te lezen.
   - Bij een lege bovenste pagina begint het eerste hoofdstuk niet meer na een lege bladzijde.
   - De controle met LibreOffice is nu een script: `scripts/proef-word-rondgang.sh`, met de
     proefbestanden uit `scripts/proef-word-export.mjs`.
-- **Daarna gebouwd, op de branch:** 1B-5, de PDF.
+- **Daarna gebouwd, en op staging gezet om 14:39 UTC (abe8b06):** 1B-5, de PDF.
   - `page-export` leest met de sessie van wie exporteert (RLS), en bouwt de DOCX met dezelfde
     samensteller als de app (`_shared/pageExport.ts`).
   - De media-worker zet hem om via `/internal/office/convert-page`, zonder bestand in R2. Dat is

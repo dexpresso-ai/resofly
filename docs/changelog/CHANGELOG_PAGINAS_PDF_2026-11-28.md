@@ -2,8 +2,9 @@
 
 28 november 2026. Zie `docs/plannen/PAGINAS_BOUWPLAN_2026-11-27.md`, §9 en §18.
 
-Gebouwd na de merge naar staging van 11:46 UTC (`3be4452`), op de branch. Op die merge zei de
-gebruiker "ga door met het plan". Dat is de weg van §9: de server bouwt de Word-file
+Gebouwd na de merge naar staging van 11:46 UTC (`3be4452`), en op staging gezet op 28 november
+om 14:39 UTC (`abe8b06`), op verzoek van de gebruiker. De uitrol en de rooktest (met
+`page-export`) zijn geslaagd. Op de merge van 11:46 zei de gebruiker "ga door met het plan". Dat is de weg van §9: de server bouwt de Word-file
 (`page-export`), en Collabora maakt er via de media-worker een PDF van. Die worker rolt de
 gebruiker met de hand uit; zie `docs/setup/PAGINA_PDF_SETUP.md`.
 

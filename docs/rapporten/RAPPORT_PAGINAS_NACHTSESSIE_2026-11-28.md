@@ -13,6 +13,11 @@ van 27 november 17:07 (`416b997`), en wat ik je wil vragen.
 Het bouwplan is `docs/plannen/PAGINAS_BOUWPLAN_2026-11-27.md`. In §18 staan de stappen en de
 stand voor de overdracht.
 
+**Om 14:39 UTC ook de PDF (1B-5) naar staging gezet, op jouw verzoek** (`abe8b06`).
+- De uitrol is geslaagd. `page-export` staat er; de rooktest heeft dat nagekeken.
+- Rol nu de media-worker uit: `docs/setup/PAGINA_PDF_SETUP.md`. Tot dan zegt het exportvenster
+  dat de PDF er nog niet is; Word downloaden kan wel.
+
 **Om 11:46 UTC ook de export naar staging gezet, op jouw verzoek** (`3be4452`): 1B-3 tot en
 met 1B-4c.
 - Wat erin zit: het exportvenster, de Word-kopie, het voorblad, de inhoudsopgave, de
@@ -24,12 +29,11 @@ met 1B-4c.
 
 ## Wat ik van je nodig heb, op volgorde
 
-1. **De PDF (1B-5) is gebouwd, op de branch** (vraag 10). Na je "ga door met het plan" heb
-   ik hem gebouwd zoals §9 zegt: de server maakt de Word-file.
+1. **De PDF (1B-5) staat op staging** (vraag 10). Na je "ga door met het plan" heb ik hem
+   gebouwd zoals §9 zegt: de server maakt de Word-file.
    - Een briefpapier dat een PDF is, komt onder elke bladzijde van de PDF. In Word komt het
      niet; dat zegt het venster.
-   - Zeg of hij naar staging mag. Rol daarna de media-worker uit; hoe dat gaat, staat in
-     `docs/setup/PAGINA_PDF_SETUP.md`.
+   - Rol de media-worker uit; hoe dat gaat, staat in `docs/setup/PAGINA_PDF_SETUP.md`.
    - Tot de worker is uitgerold, zegt het exportvenster dat de PDF er nog niet is.
 2. **Open de vier proefbestanden in echte Word** (vragen 4 en 11):
    - zonder huisstijl;
@@ -194,8 +198,8 @@ met 1B-4c.
 
 ## Na de merge van 09:34 gebouwd
 
-1B-3 tot en met 1B-4c staan sinds 11:46 UTC op staging (`3be4452`). 1B-5 staat op de branch,
-en gaat pas naar staging als je het zegt.
+1B-3 tot en met 1B-4c staan sinds 11:46 UTC op staging (`3be4452`), en 1B-5 sinds 14:39 UTC
+(`abe8b06`).
 
 | Stap | Wat | Changelog |
 | --- | --- | --- |
@@ -203,7 +207,7 @@ en gaat pas naar staging als je het zegt.
 | 1B-4a | De opties voor Word: een voorblad (logo, titel, klant, project, datum), een inhoudsopgave vooraan, en de subpagina's als hoofdstukken. | `CHANGELOG_PAGINAS_EXPORTEREN_2026-11-28.md` |
 | 1B-4b | Het briefpapier achter elke bladzijde, als het een afbeelding is (een PDF kan niet in Word), met de marges uit Documentopmaak. Gerepareerd: het voorblad overleefde opnieuw opslaan in Collabora niet goed. | `CHANGELOG_PAGINAS_EXPORTEREN_2026-11-28.md` |
 | 1B-4c | De kop en voet in de huisstijl: het logo en een lijn in de merkkleur, de voettekst en het paginanummer. De controle met LibreOffice is nu een script (`scripts/proef-word-rondgang.sh`). | `CHANGELOG_PAGINAS_EXPORTEREN_2026-11-28.md` |
-| 1B-5 | Na de merge van 11:46, op de branch: "PDF downloaden" en "Vastleggen in het dossier". De server maakt de Word-file (`page-export`) en de media-worker de PDF (`/internal/office/convert-page`). Een briefpapier dat een PDF is, komt onder elke bladzijde van de PDF (niet in Word). De worker rol jij uit. | `CHANGELOG_PAGINAS_PDF_2026-11-28.md` |
+| 1B-5 | Na de merge van 11:46 gebouwd, op staging sinds 14:39 (`abe8b06`): "PDF downloaden" en "Vastleggen in het dossier". De server maakt de Word-file (`page-export`) en de media-worker de PDF (`/internal/office/convert-page`). Een briefpapier dat een PDF is, komt onder elke bladzijde van de PDF (niet in Word). De worker rol jij uit. | `CHANGELOG_PAGINAS_PDF_2026-11-28.md` |
 
 Geen migraties. 1B-5 brengt een nieuwe edge function mee (`page-export`), en een nieuw pad in
 de media-worker, die je zelf uitrolt.
