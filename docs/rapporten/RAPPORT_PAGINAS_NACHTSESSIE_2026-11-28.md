@@ -221,6 +221,11 @@ op 1A-5d na. Fase 2 staat nu in stappen in §18 van het bouwplan.
     transactie, met iemand die Tickets mag schrijven en Projecten niet. Voor pagina's heb ik dat in 2-2a vermeden: daar
     is de link zonder foreign key. Wil je dat ik het voor tickets ook zo oplos, zeg het dan.
     Dat raakt de tickets, niet de pagina's.
+14. **De titel van een taak uit een pagina noemt de klant bij naam** (2-2a). Staat er in de
+    regel een vermelding, dan komt de naam die jij ziet in de titel, zoals wanneer je de taak
+    zelf typt. Wie Projecten mag lezen maar Klanten niet, ziet die naam dan in de taak, en in
+    het logboek. Dat is het omgekeerde van de kopieën in het dossier (vraag 12), waar ik de
+    namen juist weglaat. Liever de soort ("klant") in de titel? Zeg het dan.
 
 ## Gevonden en gerepareerd
 

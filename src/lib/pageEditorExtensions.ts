@@ -339,8 +339,35 @@ function taskBadge(editor: Editor, link: PageTaskLink, getPos: () => number | un
  */
 export const PageTaskLinks = Extension.create({
   name: 'pageTaskLinks',
+  // Vóór TaskItem, voor Enter hieronder.
+  priority: 1000,
   addStorage(): PageTaskLinksStorage {
     return { links: new Map(), open: null, make: null };
+  },
+  addKeyboardShortcuts() {
+    return {
+      // Enter aan het begin van een gevulde takenregel: een lege regel erboven,
+      // en deze regel blijft dezelfde knoop, met hetzelfde id. Splitsen gaf
+      // beide helften hetzelfde id, en dan gaf UniqueID ze allebei een nieuw:
+      // de taak van die regel raakte haar label kwijt, en de knop "Maak er een
+      // taak van" kwam terug (gezien in ui.mjs, stap 2-2a). UniqueID verhuist
+      // een id alleen naar de volgende regel als de eerste helemaal leeg is, en
+      // een takenregel heeft altijd een alinea.
+      Enter: ({ editor }) => {
+        const { state } = editor;
+        const { selection } = state;
+        if (!selection.empty) return false;
+        const { $from } = selection;
+        if ($from.parentOffset !== 0 || $from.parent.type.name !== 'paragraph' || $from.parent.content.size === 0) return false;
+        const depth = $from.depth - 1;
+        if (depth < 1) return false;
+        const item = $from.node(depth);
+        if (item.type.name !== 'taskItem' || item.firstChild !== $from.parent) return false;
+        const empty = item.type.create({ checked: false }, state.schema.nodes.paragraph.create());
+        editor.view.dispatch(state.tr.insert($from.before(depth), empty).scrollIntoView());
+        return true;
+      },
+    };
   },
   addProseMirrorPlugins() {
     const editor = this.editor;

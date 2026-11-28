@@ -5138,7 +5138,10 @@ function App() {
             title,
             project_id: projectId,
             // Bij een project volgt de klant uit het project (tasks_org_integrity).
-            client_id: projectId ? null : clientId,
+            // Anders alleen een klant die jij mag zien: tasks_org_integrity kijkt
+            // met jouw rechten, en zonder Klanten kreeg je een kale databasefout.
+            // Dan wordt het een losse taak.
+            client_id: projectId ? null : (clientId && data.clients.some(client => client.id === clientId) ? clientId : null),
             page_id: pageEditDoc.id,
             page_block_id: blockId,
           });

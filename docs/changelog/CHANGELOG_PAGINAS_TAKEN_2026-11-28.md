@@ -32,7 +32,21 @@ met een link terug naar de pagina. Het vinkje en de taak samen volgen in 2-2b.
 - **Rechten**: wie klikt, met de eigen rechten.
   - Inhoud schrijven en Projecten schrijven: de knop.
   - Projecten alleen lezen: het label, maar geen knop.
+  - Mag je de klant van de pagina niet zien (geen Klanten), dan wordt het een losse taak. De
+    database controleert de klant van een taak met jouw rechten, en gaf anders een kale fout.
   - Gerrie, de MCP en de API maken in deze stap geen taken uit een pagina.
+- **Een regel bewerken** houdt de link, of de link raakt kwijt; hij komt nooit bij een andere
+  regel. Nagelopen in de editor:
+  - Enter aan het begin zet een lege regel erboven; het label blijft bij de tekst. Dat moest
+    anders: gewoon splitsen gaf beide helften hetzelfde id, en dan gaf UniqueID ze allebei een
+    nieuw. Het label raakte kwijt en de knop kwam terug.
+  - Enter midden in de regel: het label blijft bij het eerste deel.
+  - Backspace aan het begin van de regel eronder: het label blijft.
+  - Kwijt bij Backspace aan het begin van de regel zelf (de tekst gaat naar de regel erboven) en
+    bij het wissen van een selectie over twee regels. De knop komt dan terug, dus een tweede taak
+    is mogelijk; de eerste blijft gewoon bestaan.
+  - De tekst knippen laat de regel leeg achter, met het label. Plakken maakt een nieuwe regel,
+    zonder label: UniqueID geeft geplakte blokken een nieuw id.
 
 ## Waarom de link bij de taak staat, en zonder foreign key
 
@@ -74,7 +88,8 @@ met een link terug naar de pagina. Het vinkje en de taak samen volgen in 2-2b.
   `EditModal` toont "Uit pagina" als de pagina in de geladen gegevens staat.
 - **De data-export** neemt de twee kolommen mee met de taken (`EXPORT_SCHEMA_VERSION`
   `20261128170000`).
-- **De API** toont ze (nog) niet: die heeft een vaste lijst velden per taak.
+- **De API** toont ze (nog) niet: die heeft een vaste lijst velden per taak. Webhooks ook niet:
+  die sturen alleen `webhook_payload_columns`.
 
 ## Getest
 
@@ -96,13 +111,21 @@ met een link terug naar de pagina. Het vinkje en de taak samen volgen in 2-2b.
   - een lege regel geeft geen knop, wel de uitleg;
   - "Taak openen" sluit de pagina (de claim vrij) en opent het taakvenster. "Uit pagina" opent de
     pagina weer, met het label;
-  - met Projecten lezen: het label, geen knop. Zonder Projecten: geen label.
+  - met Projecten lezen: het label, geen knop. Zonder Projecten: geen label;
+  - met Projecten en Inhoud maar zonder Klanten, op een klantpagina zonder project: een losse
+    taak, met het label.
+- **`ui.mjs paginas`, een tweede stap**: na elke bewerking hierboven staat het label bij tekst
+  uit de gekoppelde regel, op die regel zelf als je zijn tekst knipte, of nergens. De eerste
+  versie van die stap vond de fout bij Enter aan het begin.
+- `ui.mjs` kent nu `--stap=<tekst>`: alleen de stappen met die tekst in hun naam, om één stap te
+  herhalen zonder het hele scenario.
 
   De eerste run faalde bij "Nieuw → Pagina". De editor haalt nu ook `@tiptap/pm/view` binnen, en
   Vite bundelde dat pas tijdens de run (zoals eerder `@tiptap/pm/model`). `ui.mjs` bundelt het nu
   vooraf.
 
-  Daarna: 23 stappen, 0 fout.
+  Daarna: 23 stappen, 0 fout. Met de stap voor het bewerken van een regel, en Enter aan het
+  begin: 24 stappen, 0 fout.
 - `npm run test:terugknop` (18 gelukt, 0 mislukt): het taakvenster kan nu naar een pagina.
 - `npm run test:mobile -- --pages=project,weekplanner --theme=both`: 12 metingen, 0 problemen.
   De nagebootste backend heeft geen taken uit een pagina; het label en "Uit pagina" toetst de

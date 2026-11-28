@@ -8,6 +8,9 @@
  *   --schermafdrukken=<map>   waar schermafdrukken van mislukte stappen heen gaan
  *                             (standaard <tmp>/stromen-ui; ook STROMEN_UI_SCHERMAFDRUKKEN)
  *   --zichtbaar               Chromium met venster, om mee te kijken
+ *   --stap=<tekst>            alleen de stappen met deze tekst in hun naam, om één
+ *                             stap te herhalen zonder het hele scenario; een stap
+ *                             die op een eerdere bouwt, mist dan wat die maakte
  *
  * Waarom: run.mjs toetst de functies en de database rechtstreeks. Of een knop
  * in het scherm ook díe functie aanroept, met die gegevens, en of de gebruiker
@@ -419,6 +422,7 @@ const noten = [];
  * open schermen, en de tijdelijke schermen (een klant) gaan dicht.
  */
 function uiStap(naam, fn, { toegestaan = [], foutmelding = null } = {}) {
+  if (opties.stap && !naam.toLowerCase().includes(String(opties.stap).toLowerCase())) return Promise.resolve(null);
   return stap(naam, async () => {
     const begin = new Map([...schermen].map((s) => [s, { fouten: s.fouten.length, console: s.console.length }]));
     const verkeerBegin = server.verkeer.length;
@@ -2567,6 +2571,146 @@ async function scenarioPaginas() {
     await zonderProjecten.page.waitForTimeout(500);
     gelijk(await label(zonderProjecten.page).count(), 0, 'zonder Projecten: een label');
     await sluit(zonderProjecten);
+
+    // Een pagina bij de klant zonder project, en iemand die Klanten niet mag zien:
+    // een losse taak, geen kale databasefout (tasks_org_integrity kijkt met
+    // zijn rechten naar de klant).
+    const klantRegel = randomUUID();
+    const klantTitel = `Klantpagina ${tag}`;
+    const klantBody = { type: 'doc', content: [{ type: 'taskList', content: [item(klantRegel, [{ type: 'text', text: 'Terugbellen' }])] }] };
+    sql(`insert into public.documents (organization_id, created_by, title, format, body, client_id)
+      values (${q(w.orgId)}, ${q(w.medewerker.id)}, ${q(klantTitel)}, 'page', ${q(JSON.stringify(klantBody))}::jsonb, ${q(w.klantA.id)})`);
+    const klantPagina = sqlRij(`select id from public.documents where organization_id = ${q(w.orgId)} and title = ${q(klantTitel)}`);
+    const planner = await maakGebruiker('ui-zonder-klanten-2');
+    sql(`insert into public.organization_members (organization_id, user_id, email, role, status, module_access)
+      values (${q(w.orgId)}, ${q(planner.id)}, ${q(planner.email)}, 'member', 'active', '{"content":"write","projects":"write","clients":"none"}'::jsonb)`);
+    const pl = await openWerkruimte(planner, 'zonder-klanten-2', w.orgId, { tijdelijk: true });
+    const plAdres = new URL(pl.page.url());
+    plAdres.searchParams.set('pagina', klantPagina.id);
+    await pl.page.goto(plAdres.toString());
+    await pl.page.locator('.page-editor').waitFor({ timeout: 30000 });
+    await wachtOpgeslagen(pl.page, 'zonder Klanten: de pagina kwam niet in bewerken');
+    await regelIn(pl.page, klantRegel).click();
+    await balk(pl.page).getByRole('button', { name: 'Maak er een taak van' }).click();
+    const losse = await wachtTot(async () => sqlRij(`select title, project_id, client_id from public.tasks where page_id = ${q(klantPagina.id)}`), { melding: 'zonder Klanten: geen taak' });
+    gelijk([losse.title, losse.project_id, losse.client_id], ['Terugbellen', null, null], 'zonder Klanten: een losse taak');
+    await wachtTot(async () => (await label(pl.page).count()) === 1, { melding: 'zonder Klanten: geen label' });
+    await sluitPagina(pl.page);
+    await sluit(pl);
+  });
+
+  await uiStap('actiepunten (stap 2-2a): het label blijft bij zijn tekst bij Enter, Backspace en knippen en plakken, of verdwijnt; nooit bij een andere regel', async () => {
+    // De link hangt aan het id van de regel. In 2-2b zet het vinkje de taak op
+    // Klaar: een label dat naar een andere regel verhuist, zou dan de verkeerde
+    // taak afvinken. Kwijtraken mag (de knop komt terug); verhuizen niet.
+    const tag = Date.now().toString(36);
+    const projectNaam = `Regels ${tag}`;
+    sql(`insert into public.projects (organization_id, created_by, client_id, name) values (${q(w.orgId)}, ${q(w.medewerker.id)}, ${q(w.klantA.id)}, ${q(projectNaam)})`);
+    const project = sqlRij(`select id from public.projects where organization_id = ${q(w.orgId)} and name = ${q(projectNaam)}`);
+    const [boven, gekoppeld, onder] = [randomUUID(), randomUUID(), randomUUID()];
+    const item = (id, tekstRegel) => ({ type: 'taskItem', attrs: { checked: false, id }, content: [{ type: 'paragraph', content: [{ type: 'text', text: tekstRegel }] }] });
+    const body = JSON.stringify({ type: 'doc', content: [
+      { type: 'taskList', content: [item(boven, 'Planning maken'), item(gekoppeld, 'Offerte sturen'), item(onder, 'Factuur nakijken')] },
+      { type: 'paragraph', content: [{ type: 'text', text: 'Einde' }] },
+    ] });
+    const titel = `Regels ${tag}`;
+    sql(`insert into public.documents (organization_id, created_by, title, format, body, client_id, project_id)
+      values (${q(w.orgId)}, ${q(w.medewerker.id)}, ${q(titel)}, 'page', ${q(body)}::jsonb, ${q(w.klantA.id)}, ${q(project.id)})`);
+    const pagina = sqlRij(`select id from public.documents where organization_id = ${q(w.orgId)} and title = ${q(titel)}`);
+    sql(`insert into public.tasks (organization_id, created_by, title, project_id, page_id, page_block_id)
+      values (${q(w.orgId)}, ${q(w.medewerker.id)}, 'Offerte sturen', ${q(project.id)}, ${q(pagina.id)}, ${q(gekoppeld)})`);
+    const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+    const page = lid.page;
+    const regelIn = (id) => editorVak(page).locator(`li[data-checked][data-id="${id}"] p`).first();
+    /** Waar de labels staan: de tekst van hun regel, zonder het label zelf. */
+    const labels = () => page.evaluate(() => [...document.querySelectorAll('.page-editor .tiptap .page-task-badge')].map((badge) => {
+      const regel = badge.closest('p');
+      return (regel?.textContent ?? '').replace(badge.textContent ?? '', '').replace(/\s+/g, ' ').trim();
+    }));
+    /** Elke keer vers: de pagina zoals hierboven, opnieuw geopend. */
+    const vers = async () => {
+      if (await page.locator('.page-editor').count()) await sluitPagina(page);
+      sql(`update public.documents set body = ${q(body)}::jsonb where id = ${q(pagina.id)}`);
+      const adres = new URL(page.url());
+      adres.searchParams.set('pagina', pagina.id);
+      await page.goto(adres.toString());
+      await page.locator('.page-editor').waitFor({ timeout: 30000 });
+      await wachtOpgeslagen(page, 'de pagina kwam niet in bewerken');
+      await wachtTot(async () => JSON.stringify(await labels()) === JSON.stringify(['Offerte sturen']), { melding: 'het label staat niet bij "Offerte sturen"' });
+    };
+    /**
+     * Kwijt mag; anders alleen bij tekst uit de gekoppelde regel, of op die
+     * regel zelf als je zijn tekst wegknipte (leeg). Nooit bij de tekst van
+     * een andere regel.
+     */
+    const blijftBijZijnTekst = async (wat, { leegMag = false } = {}) => {
+      await page.waitForTimeout(400);
+      const nu = await labels();
+      verwacht(nu.length <= 1, `${wat}: meer dan één label: ${JSON.stringify(nu)}`);
+      if (nu.length === 1) verwacht(/Offerte|sturen/.test(nu[0]) || (leegMag && nu[0] === ''), `${wat}: het label staat bij een andere regel: "${nu[0]}"`);
+      return nu[0] ?? '(kwijt)';
+    };
+    const uitkomst = {};
+
+    await vers();
+    await regelIn(gekoppeld).click();
+    await page.keyboard.press('Home');
+    await page.keyboard.press('Enter');
+    uitkomst['Enter aan het begin'] = await blijftBijZijnTekst('Enter aan het begin');
+    // Een regel erboven invoegen is gewoon werk: daar mag het label niet kwijt
+    // (pageEditorExtensions.ts, PageTaskLinks). Erboven staat nu een lege regel.
+    gelijk(uitkomst['Enter aan het begin'], 'Offerte sturen', 'Enter aan het begin: het label blijft bij de regel');
+    gelijk(await editorVak(page).locator('li[data-checked]').count(), 4, 'Enter aan het begin: een lege regel erbij');
+    // De alinea, niet de li: daarin staat ook het verborgen label van het vinkje.
+    gelijk(tekst(await editorVak(page).locator('li[data-checked]').nth(1).locator('p').innerText()), '', 'Enter aan het begin: de lege regel staat boven de gekoppelde');
+
+    await vers();
+    await regelIn(gekoppeld).click();
+    await page.keyboard.press('Home');
+    for (let i = 0; i < 'Offerte'.length; i += 1) await page.keyboard.press('ArrowRight');
+    await page.keyboard.press('Enter');
+    uitkomst['Enter midden in de regel'] = await blijftBijZijnTekst('Enter midden in de regel');
+
+    await vers();
+    await regelIn(gekoppeld).click();
+    await page.keyboard.press('Home');
+    await page.keyboard.press('Backspace');
+    uitkomst['Backspace naar de regel erboven'] = await blijftBijZijnTekst('Backspace naar de regel erboven');
+
+    await vers();
+    await regelIn(onder).click();
+    await page.keyboard.press('Home');
+    await page.keyboard.press('Backspace');
+    uitkomst['Backspace van de regel eronder'] = await blijftBijZijnTekst('Backspace van de regel eronder');
+
+    await vers();
+    await regelIn(gekoppeld).click();
+    await page.keyboard.press('Home');
+    await page.keyboard.press('Shift+End');
+    await page.keyboard.press('Control+x');
+    await editorVak(page).locator('p').filter({ hasText: 'Einde' }).click();
+    await page.keyboard.press('End');
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('Control+v');
+    // De geknipte tekst laat zijn regel leeg achter; de geplakte regel is nieuw
+    // (UniqueID geeft geplakte blokken een nieuw id), zonder label.
+    uitkomst['de tekst knippen en plakken'] = await blijftBijZijnTekst('de tekst knippen en plakken', { leegMag: true });
+
+    // Een selectie over twee regels wissen: ProseMirror houdt de eerste regel,
+    // met de rest van de tweede erin. Wat er dan met het label gebeurt, staat
+    // hieronder in het verslag; 2-2b moet daar rekening mee houden.
+    await vers();
+    await regelIn(gekoppeld).click();
+    await page.keyboard.press('Home');
+    await page.keyboard.press('Shift+ArrowDown');
+    await page.keyboard.press('Backspace');
+    await page.waitForTimeout(400);
+    uitkomst['een selectie over twee regels wissen'] = (await labels())[0] ?? '(kwijt)';
+
+    // Wat er gebeurde, voor de changelog: bij welke tekst het label staat, of "kwijt".
+    console.log(`        het label na elke bewerking: ${JSON.stringify(uitkomst)}`);
+    await sluitPagina(page);
+    await sluit(lid);
   });
 
   await uiStap('plakken uit Excel of Word wordt een tabel, zonder de stijl van buiten', async () => {

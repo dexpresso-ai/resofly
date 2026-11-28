@@ -603,6 +603,18 @@ branch tot de gebruiker zegt dat het naar staging mag.
 - **Het vinkje volgt in 2-2b.** In 2-2a staan het vinkje in de pagina en de stand van de taak
   nog los van elkaar; het label laat zien hoe de taak ervoor staat.
 
+**Vast te leggen vóór 2-2b (28 november, na het nalezen van 2-2a):**
+
+- **Alleen een klik op het vinkje verandert de taak.** Niet elke wijziging van `checked` in de
+  pagina. Anders zetten ongedaan maken, een oude versie terugzetten of opnieuw laden na een
+  conflict ook taken om.
+- **Het vinkje noemt de taak.** Een regel kan zijn tekst kwijtraken (knippen) en toch zijn taak
+  houden. Daarom toont de balk welke taak er klaar gaat ("Offerte sturen"), voordat het gebeurt.
+- **Rechten.** Wie Inhoud mag schrijven maar Projecten niet, vinkt alleen de pagina af, en ziet
+  dat de taak niet meegaat.
+- **De link per regel is nagelopen** (zie de changelog van 2-2a): hij blijft bij zijn regel of
+  raakt kwijt, en komt nooit bij de tekst van een andere regel.
+
 **1C wordt gebouwd volgens de lezing van §1 (28 november):**
 
 - Delen mag iedereen met schrijfrechten op Inhoud, zoals nu, en altijd als bewuste handeling.
