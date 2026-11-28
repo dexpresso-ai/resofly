@@ -87,6 +87,14 @@ select pg_temp.gelijk(pg_temp.als_rpc(:'eigenaar', format('with u as (update pub
 select pg_temp.gelijk((select title from public.documents where id = :'p'), 'Handboek', 'de titel is gebleven');
 select pg_temp.gelijk(pg_temp.als_rpc(:'eigenaar', format('select public.trash_page(%L)', :'p')), '0', 'nog eens weggooien doet niets');
 
+-- Ook de versies en bijlagen van de pagina zijn weg uit beeld.
+insert into public.document_versions (organization_id, document_id, version, title, body, reason, created_by)
+values (:'org', :'c', 1, 'Hoofdstuk', '{"type":"doc","content":[{"type":"paragraph"}]}'::jsonb, 'sessie', :'eigenaar');
+insert into public.attachments (organization_id, entity_type, entity_id, name, mime_type, size_bytes, storage_key)
+values (:'org', 'document', :'c', 'schema.png', 'image/png', 10, :'org' || '/document/' || :'c' || '/x-schema.png');
+select pg_temp.gelijk(pg_temp.als_rpc(:'eigenaar', format('select count(*) from public.document_versions where document_id = %L', :'c')), '0', 'de versies van een pagina in de prullenbak');
+select pg_temp.gelijk(pg_temp.als_rpc(:'eigenaar', format('select count(*) from public.attachments where entity_id = %L', :'c')), '0', 'en haar bijlagen');
+
 -- ── 2. archived_at zet je niet zelf ────────────────────────────────────────
 select pg_temp.weigert(format('select pg_temp.als_rpc(%L, %L)', :'eigenaar', format('update public.documents set archived_at = now() where id = %L', :'los')),
   'row-level security', 'archived_at met de hand zetten');
@@ -102,6 +110,7 @@ select pg_temp.weigert(format('select pg_temp.als_rpc(%L, %L)', :'lezer', format
 -- ── 4. Terugzetten ─────────────────────────────────────────────────────────
 select pg_temp.gelijk(pg_temp.als_rpc(:'eigenaar', format('select public.restore_page(%L)', :'p')), '3', 'de pagina komt terug met haar subpagina''s');
 select pg_temp.gelijk(pg_temp.als_rpc(:'eigenaar', format('select count(*) from public.documents where id in (%L, %L, %L)', :'p', :'c', :'g')), '3', 'weer zichtbaar');
+select pg_temp.gelijk(pg_temp.als_rpc(:'eigenaar', format('select count(*) from public.attachments where entity_id = %L', :'c')), '1', 'met haar bijlage weer zichtbaar');
 -- Eerst het hoofdstuk weggooien, dan het handboek: twee keer, twee regels.
 select pg_temp.als_rpc(:'eigenaar', format('select public.trash_page(%L)', :'c'));
 select pg_temp.als_rpc(:'eigenaar', format('select public.trash_page(%L)', :'p'));

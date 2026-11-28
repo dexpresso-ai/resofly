@@ -11,7 +11,7 @@
 -- Nu:
 --   - trash_page() zet archived_at op de pagina en al haar subpagina's;
 --   - een pagina in de prullenbak is voor iedereen onzichtbaar en niet te
---     wijzigen (een restrictive policy). Gerrie, de MCP en de API filteren
+--     wijzigen (een restrictive policy), met haar versies en bijlagen. Gerrie, de MCP en de API filteren
 --     zelf (actions/types.ts en gerrieCore.ts), want die draaien als service role;
 --   - restore_page() zet haar terug, met de subpagina's die er tegelijk in
 --     gingen. Ligt de ouder nog in de prullenbak, dan komt ze los in het dossier;
@@ -37,6 +37,37 @@ create policy "documents niet uit de prullenbak" on public.documents
   to authenticated
   using (archived_at is null)
   with check (archived_at is null);
+
+-- Ook de versies en de bijlagen van zo'n pagina: die hebben hun eigen
+-- policies (op organisatie), en waren anders per id nog te lezen. De hulp is
+-- security definer: onder de policy hierboven ziet de lezer de pagina zelf niet
+-- meer, en zou hij dus denken dat ze niet in de prullenbak ligt.
+create or replace function public.document_in_trash(p_document_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (select 1 from public.documents d where d.id = p_document_id and d.archived_at is not null);
+$$;
+
+revoke all on function public.document_in_trash(uuid) from public, anon;
+grant execute on function public.document_in_trash(uuid) to authenticated;
+
+drop policy if exists "document_versions niet uit de prullenbak" on public.document_versions;
+create policy "document_versions niet uit de prullenbak" on public.document_versions
+  as restrictive
+  for all
+  to authenticated
+  using (not public.document_in_trash(document_id));
+
+drop policy if exists "attachments niet uit de prullenbak" on public.attachments;
+create policy "attachments niet uit de prullenbak" on public.attachments
+  as restrictive
+  for all
+  to authenticated
+  using (entity_type <> 'document' or not public.document_in_trash(entity_id));
 
 -- ── 2. Weggooien ────────────────────────────────────────────────────────────
 

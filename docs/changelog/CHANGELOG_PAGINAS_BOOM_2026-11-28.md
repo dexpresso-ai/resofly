@@ -15,7 +15,11 @@ en §18).
     subpagina, niet als ze er al onder staat. De database bewaakt dat ook.
   - De pagina komt bij de klant en het project van haar nieuwe ouder, zonder eigen map.
 - **Een subpagina naar een map of dossier slepen** maakt haar weer een losse pagina op die
-  plek.
+  plek. Dat kan ook naar de wortel van haar eigen dossier, via "Terug" of "Verplaatsen
+  naar…".
+  - Wat misging: de verkenner zag de wortel als haar plek, en vond dat ze er al stond.
+  - Nu heeft een subpagina geen eigen plek in de drive (`driveItemLocation`); ze hangt onder
+    een pagina.
   - Wat misging: de database zette haar stil terug onder haar ouder, want een subpagina
     volgt de plek van haar ouder.
 - **Het kruimelpad.** Op een subpagina staan bovenin alle bovenliggende pagina's, elk
@@ -45,6 +49,8 @@ en §18).
 ## Getest
 
 - **Unit tests:** `npm test` (2339 gelukt) en `npm run typecheck`.
+  - Later toegevoegd in `driveDnd.test.ts`: een subpagina naar de wortel van haar dossier is
+    een verplaatsing, en niet "staat er al".
 - **`tests/stromen/ui.mjs documenten`:** 27 stappen, 0 fout. De nieuwe stap, met echte
   sleepacties in Chromium:
   - een pagina met een subpagina toont "1 subpagina", en de subpagina staat niet los in het

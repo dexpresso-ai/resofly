@@ -10,9 +10,17 @@ en §18).
     bleven in de opslag en telden mee in het quotum.
   - Ook als je meerdere dingen tegelijk verwijdert, gaan de pagina's ertussen naar de
     prullenbak.
+  - Ook als je een verwijdering goedkeurt die Gerrie voorstelde.
+    - Wat misging: daar ging een pagina nog definitief weg (`src/lib/actions/removal.ts`).
 - **Een pagina in de prullenbak is nergens te zien**, ook niet voor de eigenaar: niet in de
   drive, bij zoeken, via een link, of voor Gerrie, de MCP of de API. Ze is ook niet te
   wijzigen.
+  - Haar versies en de rijen van haar bijlagen zijn ook afgeschermd. Ze hebben eigen
+    policies, op organisatie, en waren anders per id nog te lezen.
+  - Het bestand zelf: de worker haalt een bestand op met zijn opslagsleutel en kijkt
+    daarbij niet naar de rij. Wie de sleutel van vóór het weggooien al heeft, kan het tot
+    het definitief verwijderen nog ophalen. De app doet dat niet meer: zonder rij kent ze de
+    sleutel niet.
 - **De knop Prullenbak in de drive** toont per keer weggooien één regel: de pagina, met
   hoeveel subpagina's er meegingen, wanneer, en hoeveel dagen ze nog blijft.
   - Wie Inhoud mag lezen, ziet de prullenbak.
@@ -33,6 +41,8 @@ en §18).
     lees of wijzig je niet, en `archived_at` zet je niet zelf;
   - `trash_page`, `restore_page`, `list_page_trash` en `delete_page_forever`, met de rechten
     op Inhoud;
+  - `document_in_trash()` (security definer) met restrictive policies op `document_versions`
+    en `attachments`;
   - `page_trash_purge_tree` zet de bijlagen in `storage_purge_queue` (reden `document`);
   - `purge_page_trash` draait dagelijks om 03:43 UTC via pg_cron.
   - `trash_page` gebruikt `clock_timestamp()`. Wat misging met `now()`: binnen één transactie
@@ -72,6 +82,14 @@ en §18).
   - definitief verwijderen, met de bijlage in de opruimwachtrij;
   - na 31 dagen opgeruimd, wat net is weggegooid blijft;
   - een buitenstaander en een tekstdocument worden geweigerd.
+- **De databasetest kijkt ook** of de versies en bijlagen van een pagina in de prullenbak
+  verborgen zijn, en of de bijlage na terugzetten weer te zien is.
+- **De CI-run op de branch** (run 303, commit 631f565) is groen in de snelle jobs:
+  - de migraties vanaf nul met de databasetests;
+  - `deno check` van de gewijzigde edge functions;
+  - typecheck en unit tests.
+
+  De mobiele test liep nog bij het schrijven.
 - **Het nieuwe UI-scenario `paginadrive`:** 4 stappen, 0 fout.
   - De boom-stap van gisteren staat nu ook in dit scenario, los van "documenten": de stappen
     maken hun eigen pagina's, en zo draait het in een paar minuten.
@@ -80,5 +98,8 @@ en §18).
     verwijderen.
 - **Docker in deze sessie:** de achtergrondtaak stopte na twee uur. Daarna draaiden de
   database- en UI-tests in één begrensde opdracht die Docker zelf start en stopt.
-  - Het scenario "documenten" is na het verplaatsen van de boom-stap niet opnieuw gedraaid.
-  - Die stap gebruikt alleen zijn eigen pagina's.
+  - Later die nacht zijn alle drie de UI-scenario's opnieuw gedraaid, na het splitsen van
+    "documenten":
+    - `documenten`: 10 stappen, 0 fout;
+    - `paginas`: 18 stappen, 0 fout;
+    - `paginadrive`: 5 stappen, 0 fout.

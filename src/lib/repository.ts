@@ -7335,6 +7335,13 @@ export type PageTrashItem = {
   client_id: UUID | null; project_id: UUID | null; subpages: number; purge_on: string;
 };
 
+/** De soort van een document (page, html, office), of null als het er niet (meer) is. */
+export async function documentFormat(id: UUID, organizationId: UUID): Promise<string | null> {
+  const { data, error } = await supabase.from('documents').select('format').eq('id', id).eq('organization_id', organizationId).maybeSingle();
+  if (error) throw error;
+  return (data as { format: string | null } | null)?.format ?? null;
+}
+
 /** Een pagina met haar subpagina's naar de prullenbak. Geeft het aantal pagina's. */
 export async function trashPage(pageId: UUID): Promise<number> {
   const { data, error } = await supabase.rpc('trash_page', { p_page_id: pageId });

@@ -101,7 +101,7 @@ export type DriveLocationSource = {
   folders: ReadonlyArray<{ id: string; client_id: string | null; project_id?: string | null; parent_id: string | null }>;
   projects: ReadonlyArray<{ id: string; client_id: string | null }>;
   notes: ReadonlyArray<{ id: string; client_id: string | null; project_id: string | null; folder_id?: string | null }>;
-  documents: ReadonlyArray<{ id: string; client_id: string | null; project_id: string | null; folder_id?: string | null }>;
+  documents: ReadonlyArray<{ id: string; client_id: string | null; project_id: string | null; folder_id?: string | null; parent_id?: string | null }>;
   attachments: ReadonlyArray<{ id: string; entity_type: string; entity_id: string }>;
 };
 
@@ -131,6 +131,10 @@ export function driveItemLocation(source: DriveLocationSource, item: DriveDragIt
     ? source.notes.find(n => n.id === item.id)
     : source.documents.find(d => d.id === item.id);
   if (!row) return null;
+  // Een subpagina (stap 1A-5) staat niet zelf in een map of dossierwortel: ze
+  // hangt onder een pagina. Gaf dit de wortel van haar dossier terug, dan
+  // vond "naar de wortel" dat ze er al stond, en kon ze nooit los.
+  if ('parent_id' in row && row.parent_id) return null;
   if (row.folder_id) {
     const loc = inFolder(row.folder_id);
     if (loc) return loc;

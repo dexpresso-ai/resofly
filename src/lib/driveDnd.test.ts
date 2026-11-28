@@ -157,3 +157,17 @@ test('de teller schrijft enkelvoud en meervoud uit', () => {
   assert.equal(itemCountLabel(1), '1 item');
   assert.equal(itemCountLabel(3), '3 items');
 });
+
+
+// Stap 1A-5: een subpagina naar de wortel van haar eigen dossier slepen maakt
+// haar los. Met de wortel als "plek" vond de verkenner dat ze er al stond.
+test('een subpagina staat niet zelf in een map: naar de wortel van haar dossier is een verplaatsing', () => {
+  const bron = {
+    folders: [], projects: [], notes: [], attachments: [],
+    documents: [{ id: 'kind', client_id: 'X', project_id: null, folder_id: null, parent_id: 'ouder' }],
+  };
+  assert.equal(driveItemLocation(bron, document('kind')), null);
+  const plan = planDriveMove([document('kind')], plek('X'), { locationOf: item => driveItemLocation(bron, item), descendantIds: () => [] });
+  assert.deepEqual(plan.moves.map(i => i.id), ['kind']);
+  assert.equal(plan.unchanged.length, 0);
+});
