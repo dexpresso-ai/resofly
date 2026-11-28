@@ -747,9 +747,11 @@ nieuwe blokken niet, en opent zo'n pagina alleen om te lezen.
     - de mobiele lay-outtest (36 minuten), laden, de inrichting en de terugknop;
     - `deno check` van `pageDocx.ts` met het briefpapier en de kop en voet;
   - run 314 (staging, 3be4452, dezelfde code na de merge): helemaal groen;
-  - run 315 (504a3f9, 1B-5 deel 1 tot en met 3): `deno check` (ook van `page-export`), de
-    migraties, de typecheck en de unit tests groen. De mobiele lay-outtest liep nog. Deel 4
-    (5f1569b) krijgt een eigen run zodra 315 klaar is.
+  - run 315 (504a3f9, 1B-5 deel 1 tot en met 3): helemaal groen. Daarbij waren:
+    - `deno check` van `page-export`, `pageExport.ts` en `pageTreeOrder.ts`;
+    - de mobiele lay-outtest (39 minuten) met het exportvenster en zijn PDF-knoppen, laden, de
+      inrichting en de terugknop;
+  - de run voor deel 4 (het briefpapier als PDF) is gestart na run 315.
 - **`deno check` op de modules van pagina's:** sinds 1C-1 een eigen stap in
   `.github/workflows/frontend-checks.yml` ("Deno-typecheck pagina's"): `pageDocx.ts`,
   `woff.ts`, `zipWriter.ts`, `pageExportFonts.ts`, `pageHtml.ts` en `pageReferences.ts`. Geen
