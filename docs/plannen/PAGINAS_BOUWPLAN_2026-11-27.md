@@ -587,6 +587,8 @@ akkoord is.
     context), met de .woff van de server omgezet door `_shared/woff.ts`.
   - Nog te doen op de Collabora-container: welke letter hij neemt als de huisstijlletter
     ontbreekt, of hij de ingesloten letter gebruikt, en of er een emoji-letter is.
+- **Daarna gebouwd, op de branch:** afdrukken met Ctrl+P (§9), alleen de pagina, zie
+  `docs/changelog/CHANGELOG_PAGINAS_AFDRUKKEN_2026-11-28.md`.
 - **Nog niet door `deno check`:** `_shared/pageDocx.ts`, `_shared/woff.ts` en `_shared/zipWriter.ts`. Dat gebeurt
   vanzelf zodra `page-export` ze importeert en in de lijst van
   `.github/workflows/frontend-checks.yml` staat.
@@ -604,8 +606,8 @@ akkoord is.
 - **UI-tests in drie scenario's**, elk binnen de tien minuten van een begrensde Docker-run:
   - `ui.mjs documenten` (10 stappen);
   - `paginas`, de editor en zijn blokken (18);
-  - `paginadrive`, de boom in de drive, de prullenbak, het eigen dossier en de boom naast de
-    pagina (6).
+  - `paginadrive`, de boom in de drive, de prullenbak, het eigen dossier, de boom naast de
+    pagina en afdrukken (7).
 - **De "Geen klant"-teksten in de documentenomgeving zijn weg** (de vensters van notities en
   documenten, de kaart van een document). Waar het blijft, staat in
   `docs/changelog/CHANGELOG_EIGEN_DOSSIER_2026-11-28.md`.

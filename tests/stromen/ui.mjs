@@ -2803,6 +2803,46 @@ async function scenarioPaginadrive() {
     await regel(`Handboek ${tag}`).waitFor({ timeout: 10000 });
     await sluitPagina(page);
   });
+  // ── Afdrukken (§9: "Ctrl+P blijft werken, met een nette printstijl") ───────
+  await uiStap('afdrukken: alleen de pagina, over de hele lengte, met de uitklapper open', async () => {
+    const tag = Date.now().toString(36);
+    const tekstblok = (text) => ({ type: 'paragraph', content: [{ type: 'text', text }] });
+    const body = { type: 'doc', content: [
+      { type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: 'Printkop' }] },
+      { type: 'details', content: [
+        { type: 'detailsSummary', content: [{ type: 'text', text: 'Meer lezen' }] },
+        { type: 'detailsContent', content: [tekstblok(`Ingeklapte tekst ${tag}`)] },
+      ] },
+      ...Array.from({ length: 80 }, (_, i) => tekstblok(`Alinea ${i + 1} van de printproef, lang genoeg om een regel te vullen.`)),
+      tekstblok(`Laatste regel ${tag}`),
+    ] };
+    sql(`insert into public.documents (organization_id, created_by, title, format, body, client_id)
+      values (${q(w.orgId)}, ${q(w.medewerker.id)}, ${q(`Printproef ${tag}`)}, 'page', ${q(JSON.stringify(body))}::jsonb, ${q(w.klantA.id)})`);
+    const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+    const page = lid.page;
+    await naarKlantdossier(lid, w.klantA.name);
+    await inhoud(page).locator('.odrv-row').filter({ hasText: `Printproef ${tag}` }).first().click();
+    await page.locator('.page-editor').waitFor({ timeout: 20000 });
+    const vak = page.locator('.page-editor .tiptap');
+    await vak.getByText(`Laatste regel ${tag}`).waitFor({ timeout: 15000 });
+    gelijk(await vak.getByText(`Ingeklapte tekst ${tag}`).isVisible(), false, 'de uitklapper is op het scherm dicht');
+    await page.emulateMedia({ media: 'print' });
+    try {
+      for (const [kiezer, wat] of [['.page-editor-bar', 'de balk van de editor'], ['.page-editor-toolbar', 'de knoppen'], ['.page-tree', 'de boom'], ['.sidebar-nav', 'de zijbalk van de app']]) {
+        gelijk(await page.locator(kiezer).first().isVisible().catch(() => false), false, `${wat} op papier`);
+      }
+      verwacht(await vak.getByText(`Ingeklapte tekst ${tag}`).isVisible(), 'een dichte uitklapper staat op papier niet open');
+      verwacht(await page.locator('.page-editor-title').isVisible(), 'de titel staat niet op papier');
+      // Over de hele lengte: 80 alinea's lopen door over meer bladen, zonder lege bladen erachter.
+      const pdf = await page.pdf({ format: 'A4' });
+      const { PDFDocument } = await import('pdf-lib');
+      const bladen = (await PDFDocument.load(pdf)).getPageCount();
+      verwacht(bladen >= 2 && bladen <= 6, `de pagina op papier: ${bladen} bladen`);
+    } finally {
+      await page.emulateMedia({ media: 'screen' });
+    }
+    await sluitPagina(page);
+  });
 }
 
 // ── Bank: mutaties met de hand boeken ──────────────────────────────────────

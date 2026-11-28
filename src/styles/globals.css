@@ -13857,3 +13857,27 @@ button.alog-feed-row:hover{background:var(--bg3)}
   .page-tree.is-drawer .page-tree-page{min-height:40px}
   .page-tree.is-drawer .page-tree-toggle{width:32px;height:32px;flex-basis:32px}
 }
+/* Ctrl+P op een open pagina (§9 van het bouwplan voor pagina's): alleen de
+   pagina, over de hele lengte, zwart op wit, met de uitklappers open. Zonder
+   deze regels is de editor een vast venster met een eigen schuifbalk: dan
+   kwam alleen het stuk dat in beeld stond op papier, met de app eromheen.
+   De app eromheen gaat weg (behalve de weg naar de editor), en die weg
+   verliest zijn vaste hoogtes, zodat de pagina kan doorlopen. */
+@media print{
+  body:has(.page-editor){background:#fff!important}
+  body:has(.page-editor)>*:not(#root){display:none!important}
+  body:has(.page-editor) #root *:not(:has(.page-editor)):not(.page-editor):not(.page-editor *){display:none!important}
+  body:has(.page-editor) #root,body:has(.page-editor) #root *:has(.page-editor){position:static!important;display:block!important;overflow:visible!important;width:auto!important;height:auto!important;min-height:0!important;max-height:none!important;margin:0!important;padding:0!important;border:0!important;background:none!important;box-shadow:none!important;transform:none!important;filter:none!important;contain:none!important}
+  /* Het donkere thema vult zijn kleuren al op :root in; daarom hier de lichte, op de editor zelf. */
+  .page-editor{--text:#1C1B18;--ink:#1C1B18;--muted:#6F6B63;--muted2:#55524B;--border:#D4D1CA;--border2:#C7C3BA;--bg:#fff;--bg2:#fff;--bg3:#F4F3F0;--panel:#fff;--accent-ink:#855800;--accent-rgb:244,188,46;--ok-rgb:11,107,78;--warn-rgb:163,71,10;--danger-rgb:189,31,49;--accent-g:#0B6B4E;--accent-o:#A3470A;--accent-r:#BD1F31;--shade-rgb:28,27,24;--shade-k:.3;color-scheme:light;position:static!important;display:block!important;background:#fff!important;color:#1C1B18!important}
+  .page-editor-bar,.page-editor-toolbar,.page-editor-subbar,.page-editor-banner,.page-tree,.page-tree-backdrop,.page-versions,.page-block-menu,.page-file-picker-backdrop{display:none!important}
+  .page-editor-main,.page-editor-scroll{display:block!important;overflow:visible!important;height:auto!important;min-height:0!important}
+  .page-editor-sheet{max-width:none;margin:0;padding:0}
+  .page-editor-title{display:block;width:100%;margin:0 0 12pt;padding:0;border:0;background:none;color:#1C1B18;font-size:24pt;font-weight:700}
+  .page-prose .tiptap{min-height:0;color:#1C1B18}
+  .page-prose .tiptap .is-editor-empty:first-child::before{content:none}
+  .page-prose .tiptap .page-details>button,.page-prose .tiptap .column-resize-handle{display:none}
+  .page-prose .tiptap .page-details [data-type="detailsContent"][hidden]{display:block}
+  .page-prose .tiptap h1,.page-prose .tiptap h2,.page-prose .tiptap h3{break-after:avoid}
+  .page-prose .tiptap tr,.page-prose .tiptap img,.page-prose .tiptap .page-callout,.page-prose .tiptap pre{break-inside:avoid}
+}
