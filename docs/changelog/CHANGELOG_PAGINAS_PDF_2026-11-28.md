@@ -13,7 +13,18 @@ gebruiker met de hand uit; zie `docs/setup/PAGINA_PDF_SETUP.md`.
   - voorblad, inhoudsopgave, subpagina's als hoofdstukken en briefpapier;
   - de kop en voet in de huisstijl.
 
-  De PDF komt uit dezelfde Word-file, dus Word en PDF zien er hetzelfde uit.
+  De PDF komt uit dezelfde Word-file, dus Word en PDF zien er hetzelfde uit. Op één ding na:
+  zie het briefpapier als PDF hieronder.
+- **Een briefpapier dat een PDF is, komt onder de PDF** (deel 4). Eerst stond de optie dan uit.
+  - De eerste pagina van het briefpapier komt onder elke bladzijde, ook het voorblad, net als
+    een briefpapier dat een afbeelding is in Word. Een ander formaat dan A4 vult de bladzijde,
+    zonder te vervormen.
+  - De tekst houdt de ruimte vrij die Documentopmaak voor het briefpapier opgeeft, en de kop en
+    voet in de huisstijl vallen weg: het briefpapier heeft zijn eigen.
+  - In Word past zo'n briefpapier niet. Daar blijft het weg, en het venster zegt dat bij de
+    optie. Met zo'n briefpapier verschillen Word en PDF dus.
+  - Is het briefpapier geen bruikbare PDF, dan zegt het venster dat meteen, vóór het omzetten.
+    Een lege eerste pagina is geen fout: dan valt er niets te tekenen.
 - **"Vastleggen in het dossier"**: de PDF als vast bestand in de map van de bovenste pagina, met
   de datum in de naam ("Handboek (28-11-2026).pdf").
   - Wat je later aan de pagina wijzigt, verandert die PDF niet.
@@ -53,6 +64,15 @@ gebruiker met de hand uit; zie `docs/setup/PAGINA_PDF_SETUP.md`.
   Het contractpad blijft alleen contracten omzetten. De aanroep van Collabora delen ze.
 - **Vastleggen** loopt langs de gewone upload van de drive (`uploadToR2`, map), met de rechten
   van wie het doet.
+- **Het briefpapier als PDF** (`_shared/pdfLetterhead.ts`, deel 4), met pdf-lib zoals bij
+  facturen:
+  - `page-export` laadt het briefpapier en sluit het op proef in, vóór het omzetten;
+  - de Word-file houdt alleen de ruimte vrij (`pageDocx.ts`: een briefpapier zonder afbeelding);
+  - na het omzetten komt de eerste pagina van het briefpapier onder elke bladzijde.
+
+  pdf-lib tekent altijd bovenop. De module zet zijn tekening daarom vooraan de pagina, zodat de
+  tekst erop staat. De pagina's zelf blijven staan; de links, de bladwijzers en de titel blijven
+  dus die van Collabora. De pagina's opnieuw insluiten in een nieuw document zou ze kwijtraken.
 - **De rooktest na de uitrol** (`scripts/supabase-smoke-test.sh`) kijkt nu ook of `page-export`
   er staat. Hij stuurt origin "null", en dat weigert de functie altijd (403, "zonder herkomst"),
   wat de omgeving ook toestaat. Zonder de functie antwoordt Supabase zelf met 404.
@@ -73,9 +93,6 @@ gebruiker met de hand uit; zie `docs/setup/PAGINA_PDF_SETUP.md`.
 
 ## Nog niet
 
-- **Een briefpapier als PDF onder de PDF.** Een briefpapier dat een afbeelding is, kan wel (via
-  de Word-file). Voor een PDF als briefpapier zegt het venster dat het nog niet kan. Dat kan
-  later met pdf-lib, zoals bij facturen.
 - **Gerrie, de API en de MCP** exporteren nog niet. De server kan het nu zonder browser, maar een
   handeling is een eigen stap.
 
@@ -97,7 +114,11 @@ gebruiker met de hand uit; zie `docs/setup/PAGINA_PDF_SETUP.md`.
   - de kijker wel; Inhoud "geen", de buren en zonder sessie niet;
   - een pagina in de prullenbak niet;
   - de ontbrekende route geeft een eigen code;
-  - het briefpapier: geen, of een PDF.
+  - het briefpapier:
+    - zonder, of een kapotte PDF: een melding, en niets naar de worker;
+    - een echte PDF: de worker krijgt de ruimte ervoor, zonder afbeelding of kop, en het
+      briefpapier staat onder elke bladzijde (de volgorde in de PDF, en `pdftotext` per
+      bladzijde).
 
   De nagebootste worker zet de Word-file met LibreOffice (de motor van Collabora) echt om, en de
   tekst staat in de PDF (`pdftotext`).
@@ -105,15 +126,39 @@ gebruiker met de hand uit; zie `docs/setup/PAGINA_PDF_SETUP.md`.
   - PDF downloaden met een voorblad;
   - vastleggen in de map, met de upload en de rij;
   - een worker zonder het pad: het venster zegt het.
+
+  De stap van het briefpapier is aangepast (deel 4). Een PDF als briefpapier kan aan, met de
+  uitleg; de PDF vraagt het, en Word blijft zonder.
+- **Unit voor het briefpapier als PDF** (deel 4):
+  - `_shared/pdfLetterhead.test.ts` (5):
+    - eerst het briefpapier, dan de pagina, ook bij één inhoudsstroom;
+    - links, titel en maker blijven;
+    - een ander formaat vult de bladzijde, gecentreerd;
+    - een lege pagina;
+    - een kapotte PDF;
+  - `pageDocx.test.ts`: de ruimte zonder afbeelding, zonder kop in de huisstijl.
+- **`scripts/proef-pdf-briefpapier.mjs`**: de echte weg, met een PDF van LibreOffice (de motor
+  van Collabora). Een PDF van pdf-lib zelf zit anders in elkaar en zegt daarom weinig.
+  - Zelfde bladzijden, links per bladzijde, bladwijzers en titel als ervoor.
+  - De tekst van het briefpapier op elke bladzijde, en die van de pagina; de tekst is
+    regel voor regel dezelfde als zonder briefpapier.
+  - Een afbeelding van bladzijde 2 en 3: de kopband en de tint van het briefpapier zichtbaar,
+    en de tekst erop. Ook met het oog bekeken.
+  - De tijd: zo'n 40 ms voor 5 bladzijden, en 75 tot 90 ms voor 20 bladzijden met afbeeldingen
+    (Node, deze machine, twee keer gemeten). Het bestand wordt kleiner (235 → 73 kB): pdf-lib bundelt de ruim 1000 losse
+    objecten van LibreOffice. De afbeeldingen, de letters en de tekst blijven gelijk.
 - **De app-kant van Word na de ombouw:** dezelfde UI-stappen voor Word slagen.
 - **`tsc` op `page-export`** en de functies ernaast, tegen de typen van supabase-js. Deno draait
   hier niet; de CI doet `deno check` (de stap "Deno-typecheck pagina's" neemt `page-export` nu
   mee).
-- **`npm test`** (2432) en **`npm run typecheck`**.
+- **`npm test`** (2438 met deel 4) en **`npm run typecheck`**.
 
 ## Wat hier niet te testen is
 
 - **Collabora zelf, en de uitgerolde worker.** In de proef met LibreOffice 24.2 werd de Word-file
   van de server een goede PDF.
-- **Op staging na te lopen**, nadat de worker is uitgerold: één PDF downloaden, en één
-  vastleggen. Zie `docs/setup/PAGINA_PDF_SETUP.md`.
+- **Op staging na te lopen**, nadat de worker is uitgerold: één PDF downloaden, één
+  vastleggen, en één met een briefpapier dat een PDF is. Zie `docs/setup/PAGINA_PDF_SETUP.md`.
+- **De rekentijd in de edge runtime.** Het briefpapier eronder kost hier minder dan 0,1 seconde
+  voor 20 bladzijden. Een edge function heeft een grens aan de rekentijd per verzoek; met een veel
+  groter briefpapier of veel meer bladzijden is dat op staging na te kijken.

@@ -15,8 +15,10 @@
 // zoals ze op het scherm staat, en kent ze niet.
 //
 // Stap 1B-5: de PDF, met dezelfde opties. De server maakt hem (page-export),
-// uit dezelfde Word-file, zodat Word en PDF er hetzelfde uitzien (§9).
-// "Vastleggen in het dossier" zet de PDF als vast bestand in de map.
+// uit dezelfde Word-file, zodat Word en PDF er hetzelfde uitzien (§9). Op één
+// ding na: een briefpapier dat een PDF is, past niet in Word, en komt alleen
+// onder de PDF. "Vastleggen in het dossier" zet de PDF als vast bestand in de
+// map.
 // ============================================================
 
 import { useEffect } from 'react';
@@ -41,7 +43,7 @@ export function PageExportDialog({ busy, error, canCopy, options, subpages, lett
   canCopy: boolean;
   options: PageExportOptions;
   subpages: PageExportSubpages;
-  /** Het briefpapier van Documentopmaak: een afbeelding kan in Word, een PDF niet. null: er is er geen. */
+  /** Het briefpapier van Documentopmaak: een afbeelding kan in Word en PDF, een PDF alleen in de PDF. null: er is er geen. */
   letterhead: 'image' | 'pdf' | null;
   letterheadPdfNote: string;
   /**
@@ -102,7 +104,7 @@ export function PageExportDialog({ busy, error, canCopy, options, subpages, lett
             {check('toc', 'Inhoudsopgave vooraan')}
             {letterhead === 'image' && check('letterhead', 'Briefpapier, achter elke bladzijde')}
             {letterhead === 'pdf' && <>
-              {check('letterhead', 'Briefpapier', true)}
+              {check('letterhead', 'Briefpapier, onder elke bladzijde van de PDF')}
               <p className="page-export-note">{letterheadPdfNote}</p>
             </>}
             {subpages && subpages.count > 0 && check('chapters', `Subpagina's als hoofdstukken (${subpages.count})`)}

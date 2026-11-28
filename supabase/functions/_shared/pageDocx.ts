@@ -108,11 +108,15 @@ export type PageDocxCover = {
 
 /**
  * Het briefpapier (stap 1B-4b): een afbeelding over de hele bladzijde, achter
- * de tekst, op elke bladzijde. Een briefpapier als PDF kan niet in een .docx;
- * de aanroeper zegt dat, en geeft dan niets mee.
+ * de tekst, op elke bladzijde. Een briefpapier als PDF kan niet in een .docx.
  */
 export type PageDocxLetterhead = {
-  image: PageDocxImage;
+  /**
+   * null: alleen de ruimte, en de kop en voet van een briefpapier. Voor een
+   * briefpapier dat een PDF is: dat komt na het omzetten onder de PDF (stap
+   * 1B-5, pdfLetterhead.ts). In een Word-download geeft de app dan niets mee.
+   */
+  image: PageDocxImage | null;
   /** De ruimte die het briefpapier boven en onder voor zichzelf houdt, in twips. Nooit minder dan de gewone marge. */
   top?: number;
   bottom?: number;
@@ -945,16 +949,19 @@ export function pageDocxFiles(title: string, body: unknown, context: PageDocxCon
   const paperImage = options.letterhead?.image;
   const paperExt = paperImage ? IMAGE_EXT[paperImage.contentType] : undefined;
   const paper = paperImage && paperExt ? { image: paperImage, ext: paperExt } : null;
+  // Een briefpapier als PDF (stap 1B-5) komt pas na het omzetten onder de
+  // PDF. Hier alleen de ruimte ervoor, met de kop en voet van een briefpapier.
+  const withPaper = Boolean(paper) || Boolean(options.letterhead && !options.letterhead.image);
   const clampMargin = (value: number | undefined) => Math.min(Math.round(PAGE_HEIGHT / 3), Math.max(MARGIN, whole(value, MARGIN, PAGE_HEIGHT)));
   // Kop en voet in de huisstijl (stap 1B-4c). Met briefpapier niet: dat heeft
   // zijn eigen kop en voet, en een logo of lijn kwam er dan overheen (zoals
   // builtInLayout de gekleurde balk weglaat bij briefpapier).
-  const brand = paper ? null : context.brand ?? null;
+  const brand = withPaper ? null : context.brand ?? null;
   const brandLogo = brand?.logo ? logoSize(brand.logo, HEADER_LOGO_MAX_CX, HEADER_LOGO_MAX_CY) : null;
   const brandLine = brandColor(brand?.color);
   const brandHeader = Boolean(brandLogo || brandLine);
   const footerText = brand?.footerText?.trim() || null;
-  const margins: Margins = paper
+  const margins: Margins = withPaper
     ? (() => {
       const top = clampMargin(options.letterhead?.top);
       const bottom = clampMargin(options.letterhead?.bottom);

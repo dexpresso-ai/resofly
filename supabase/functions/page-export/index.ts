@@ -1,4 +1,5 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
+import * as PdfLib from 'https://esm.sh/pdf-lib@1.17.1';
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import {
   HttpError, assertModuleAccess, createAdminClient, createUserClient, isUuid,
@@ -11,6 +12,7 @@ import {
 } from '../_shared/pageExport.ts';
 import { pageExportFonts, type PageExportFont } from '../_shared/pageExportFonts.ts';
 import { PDF_FONT_FILES } from '../_shared/pdfFonts.ts';
+import { LetterheadUnusable, loadLetterhead, underlayLetterhead, type UnderlayDocument } from '../_shared/pdfLetterhead.ts';
 import { sfntFamilyName, woffToSfnt } from '../_shared/woff.ts';
 
 // ============================================================
@@ -33,6 +35,11 @@ import { sfntFamilyName, woffToSfnt } from '../_shared/woff.ts';
 // handleInternalPageConvertPdf in workers/media-api). De worker rol je met de
 // hand uit (wrangler). Ontbreekt het pad daar nog, dan zegt deze functie dat
 // met een eigen code (pdf_niet_beschikbaar), zodat de app het kan uitleggen.
+//
+// Een briefpapier dat een PDF is, kan niet in de DOCX. Dat komt na het
+// omzetten onder de PDF, met pdf-lib zoals bij facturen
+// (_shared/pdfLetterhead.ts); de DOCX houdt er alleen de ruimte voor vrij.
+// Met zo'n briefpapier verschillen Word en PDF dus: Word heeft het niet.
 // ============================================================
 
 const admin = createAdminClient();
@@ -53,8 +60,6 @@ const cors = makeCors(
 
 /** De PDF kan hier (nog) niet: de worker kent het pad niet, of het is niet ingericht. */
 class PdfUnavailable extends Error {}
-
-const LETTERHEAD_PDF_IN_PDF = 'Je briefpapier is een PDF, en dat kan nog niet onder deze PDF. Met een afbeelding (PNG of JPG) als briefpapier kan het wel: Instellingen → Documentopmaak.';
 
 type PageRow = { id: string; organization_id: string; title: string; body: unknown; client_id: string | null; project_id: string | null };
 type TreeRow = { id: string; title: string; parent_id: string | null; position: number | null };
@@ -197,18 +202,30 @@ async function imageBytes(organizationId: string, storageKey: string, contentTyp
 /**
  * Het briefpapier (stap 1B-4b), zoals de app het doet: gevraagd maar niet te
  * gebruiken, dan geen PDF. Nooit stil zonder briefpapier.
+ *
+ * Een afbeelding gaat in de DOCX. Een PDF niet (stap 1B-5): de DOCX houdt
+ * alleen de ruimte vrij, en `pdf` komt na het omzetten onder de PDF. Het is
+ * hier al geladen en op proef ingesloten: een kapot briefpapier geeft zo
+ * meteen een melding, en niet pas na een minuut omzetten.
  */
-function letterheadOf(settings: Settings | null): PageDocxLetterhead {
+async function letterheadOf(settings: Settings | null): Promise<{ docx: PageDocxLetterhead; pdf: UnderlayDocument | null }> {
   const kind = settings?.invoice_template_kind;
   if (!settings || !kind || kind === 'none') throw new HttpError('Er is geen briefpapier ingesteld. Dat doe je bij Instellingen → Documentopmaak.', 422);
-  if (kind === 'pdf') throw new HttpError(LETTERHEAD_PDF_IN_PDF, 422);
   const paper = documentAssetsFromSettings(settings).letterhead;
   if (!paper) throw new HttpError('Het briefpapier is leeg of niet te lezen. Kies het opnieuw bij Instellingen → Documentopmaak.', 422);
-  if (paper.kind === 'pdf') throw new HttpError(LETTERHEAD_PDF_IN_PDF, 422);
   const layout = resolveDocumentLayout(parseDocumentLayouts(settings.document_layouts), 'invoice', { letterhead: true });
+  const margins = letterheadMargins(layout, PAGE_HEIGHT);
+  if (paper.kind === 'pdf') {
+    try {
+      return { docx: { image: null, ...margins }, pdf: await loadLetterhead(PdfLib, paper.bytes) };
+    } catch (error) {
+      if (error instanceof LetterheadUnusable) throw new HttpError(error.message, 422);
+      throw error;
+    }
+  }
   return {
-    image: { bytes: paper.bytes, contentType: paper.type === 'png' ? 'image/png' : 'image/jpeg' },
-    ...letterheadMargins(layout, PAGE_HEIGHT),
+    docx: { image: { bytes: paper.bytes, contentType: paper.type === 'png' ? 'image/png' : 'image/jpeg' }, ...margins },
+    pdf: null,
   };
 }
 
@@ -226,7 +243,7 @@ async function pagePdf(
   if (settingsError) throw new HttpError(`De bedrijfsinstellingen konden niet worden gelezen: ${settingsError.message}`, 500);
   const settings = settingsRow as Settings | null;
   // Eerst het briefpapier: een fout daar hoort vóór al het andere werk.
-  const letterhead = choice.letterhead ? letterheadOf(settings) : null;
+  const letterhead = choice.letterhead ? await letterheadOf(settings) : null;
 
   const [titleRows, fileRows, imageRows] = await Promise.all([
     rowsById<{ id: string; title: string }>(db, 'documents', 'id,title', org, refs.pages),
@@ -265,8 +282,12 @@ async function pagePdf(
     })
     : null;
   // Als ArrayBuffer: dat is in elke versie van de typen een geldige body.
-  const docx = await (await buildPageDocx(page.title, page.body, context, exportOptions({ cover, toc: choice.toc, chapters, letterhead }))).arrayBuffer();
-  return convertToPdf(org, docx);
+  const docx = await (await buildPageDocx(page.title, page.body, context, exportOptions({ cover, toc: choice.toc, chapters, letterhead: letterhead?.docx ?? null }))).arrayBuffer();
+  const pdf = await convertToPdf(org, docx);
+  if (!letterhead?.pdf) return pdf;
+  const withPaper = await underlayLetterhead(PdfLib, new Uint8Array(pdf), letterhead.pdf);
+  // Een eigen ArrayBuffer van precies deze bytes (zie hierboven).
+  return withPaper.buffer.slice(withPaper.byteOffset, withPaper.byteOffset + withPaper.byteLength) as ArrayBuffer;
 }
 
 /** De klant en het project, als je die mag zien; anders blijft die regel leeg. */

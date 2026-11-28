@@ -12,6 +12,7 @@
 import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { inflateRawSync } from 'node:zlib';
+import { decodePDFRawStream, PDFArray, PDFDocument, StandardFonts } from 'pdf-lib';
 import { roep } from './functies.mjs';
 import { mailsAan, post } from './nepdiensten.mjs';
 import { maakGebruiker, rest, sql, sqlRij } from './supabase.mjs';
@@ -645,23 +646,55 @@ export default async function documentenScenario() {
       }
     });
 
-    await stap('briefpapier: zonder briefpapier, of met een PDF als briefpapier, een duidelijke melding en geen PDF', async () => {
-      const zet = (soort) => sql(`update public.company_settings set invoice_template_kind = ${q(soort)},
-        invoice_template_data_url = ${soort === 'pdf' ? q('data:application/pdf;base64,JVBERi0xLjQK') : 'null'},
+    await stap('briefpapier: zonder of kapot een duidelijke melding en geen PDF; een PDF als briefpapier komt onder elke bladzijde', async () => {
+      const zet = (soort, dataUrl) => sql(`update public.company_settings set invoice_template_kind = ${q(soort)},
+        invoice_template_data_url = ${dataUrl ? q(dataUrl) : 'null'},
         invoice_template_mime_type = ${soort === 'pdf' ? q('application/pdf') : 'null'} where organization_id = ${q(w.orgId)}`);
       const voor = post.paginaPdf.verzoeken.length;
       try {
-        zet('none');
+        zet('none', null);
         const zonder = await exporteer(w.medewerker.token, { letterhead: true });
         gelijk(zonder.status, 422, 'zonder briefpapier');
         verwacht(/geen briefpapier ingesteld/.test(zonder.json?.error ?? ''), `de melding: ${zonder.json?.error}`);
-        zet('pdf');
-        const pdf = await exporteer(w.medewerker.token, { letterhead: true });
-        gelijk(pdf.status, 422, 'een PDF als briefpapier');
-        verwacht(/briefpapier is een PDF/.test(pdf.json?.error ?? ''), `de melding: ${pdf.json?.error}`);
+        // Alleen de kop van een PDF: de melding komt vóór het omzetten, niet na een minuut Collabora.
+        zet('pdf', 'data:application/pdf;base64,JVBERi0xLjQK');
+        const kapot = await exporteer(w.medewerker.token, { letterhead: true });
+        gelijk(kapot.status, 422, 'een kapotte PDF als briefpapier');
+        verwacht(/geen bruikbare PDF/.test(kapot.json?.error ?? ''), `de melding: ${kapot.json?.error}`);
         gelijk(post.paginaPdf.verzoeken.length, voor, 'niets naar de worker');
+
+        // Een echte PDF als briefpapier (stap 1B-5).
+        const papier = await PDFDocument.create();
+        papier.addPage([595.28, 841.89]).drawText('BRIEFPAPIER PROEF', { x: 40, y: 800, size: 16, font: await papier.embedFont(StandardFonts.Helvetica) });
+        zet('pdf', `data:application/pdf;base64,${Buffer.from(await papier.save()).toString('base64')}`);
+        const met = await exporteer(w.medewerker.token, { letterhead: true, chapters: true });
+        gelijk(met.status, 200, `een PDF als briefpapier: ${met.tekst.slice(0, 200)}`);
+        // De worker kreeg de ruimte voor het briefpapier, zonder afbeelding en zonder kop in de huisstijl.
+        const delen = leesZip(post.paginaPdf.verzoeken.at(-1).bytes);
+        verwacht(![...delen.keys()].some((naam) => naam === 'word/header1.xml' || naam.startsWith('word/media/briefpapier')), `de .docx: ${[...delen.keys()].join(', ')}`);
+        const xml = delen.get('word/document.xml')?.toString('utf8') ?? '';
+        // De marges van een briefpapier, net als bij een afbeelding (ui.mjs, paginaexport): zonder eigen
+        // opmaak de standaard van een factuur (voet vanaf 768 pt), en boven nooit minder dan de gewone marge.
+        verwacht(xml.includes('<w:pgMar w:top="1418" w:right="1418" w:bottom="1478" w:left="1418" w:header="709" w:footer="1158" w:gutter="0"/>'), `de marges: ${xml.match(/<w:pgMar [^>]*>/)?.[0]}`);
+        // In de PDF: op elke bladzijde eerst het briefpapier (een ingesloten pagina), dan de pagina.
+        const pdf = await PDFDocument.load(met.bytes);
+        verwacht(pdf.getPageCount() >= 1, 'geen bladzijden');
+        for (const [i, blad] of pdf.getPages().entries()) {
+          const inhoud = blad.node.Contents();
+          const eerste = pdf.context.lookup(inhoud instanceof PDFArray ? inhoud.get(0) : inhoud);
+          const tekst = Buffer.from(decodePDFRawStream(eerste).decode()).toString('latin1');
+          verwacht(/EmbeddedPdfPage-\d+ Do/.test(tekst), `bladzijde ${i + 1}: het briefpapier staat niet onderop: ${tekst.slice(0, 120)}`);
+        }
+        try {
+          const tekst = execFileSync('pdftotext', ['-', '-'], { input: Buffer.from(met.bytes) }).toString('utf8');
+          if (tekst.trim()) {
+            const bladen = tekst.split('\f').filter((blad) => blad.trim());
+            verwacht(bladen.length === pdf.getPageCount() && bladen.every((blad) => blad.includes('BRIEFPAPIER PROEF')), `het briefpapier op elke bladzijde: ${bladen.length} bladen`);
+            verwacht(tekst.includes('Tekst voor de PDF.') && tekst.includes('Hoofdstuk PDF'), `de pagina zelf: ${tekst.slice(0, 200)}`);
+          }
+        } catch { /* geen pdftotext: de volgorde hierboven is genoeg */ }
       } finally {
-        zet('none');
+        zet('none', null);
       }
     });
   }

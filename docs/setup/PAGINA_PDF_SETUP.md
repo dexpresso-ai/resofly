@@ -47,6 +47,11 @@ dat doe je zo:
    Met de opties: het voorblad, de inhoudsopgave en de hoofdstukken.
 3. Kies **Vastleggen in het dossier** bij een pagina in een map. De PDF staat dan in die map, met
    de datum in de naam.
+4. Is je briefpapier (Instellingen → Documentopmaak) een PDF? Zet dan **Briefpapier** aan en
+   download de PDF. Het briefpapier hoort onder elke bladzijde te staan, met de tekst erop en
+   de ruimte die Documentopmaak ervoor opgeeft. In Word komt het niet; dat zegt het venster.
+   Duurt het lang of mislukt het bij een groot briefpapier, kijk dan in de logs van
+   `page-export`.
 
 ## Geheimen en instellingen
 

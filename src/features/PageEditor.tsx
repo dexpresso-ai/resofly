@@ -44,7 +44,7 @@ import { pageEditorExtensions, type PageLinks, type PageMedia } from '../lib/pag
 import { fetchStoredFileBlob, uploadToR2 } from '../lib/r2';
 import { calloutVariant, isAllowedPageLink, type CalloutVariant } from '../lib/pageSchema';
 import { pageBodyFit } from '../lib/pageBodyCheck';
-import { LETTERHEAD_PDF_MESSAGE, wordFileName } from '../lib/pageExportParts';
+import { LETTERHEAD_PDF_NOTE, wordFileName } from '../lib/pageExportParts';
 import { warmupOfficeEditor } from '../lib/office';
 import type { InternalDocument } from '../types';
 // Alleen het type: de export zelf laadt pas bij een klik (import()).
@@ -824,7 +824,8 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
       const wordOptions = {
         cover: exportOptions.cover,
         toc: exportOptions.toc,
-        // Alleen een briefpapier dat een afbeelding is; bij een PDF staat de optie uit (het venster zegt waarom).
+        // In Word alleen een briefpapier dat een afbeelding is. Een PDF past
+        // daar niet; die komt alleen onder de PDF (het venster zegt het).
         letterhead: exportOptions.letterhead && letterheadKind === 'image',
         chapters: exportOptions.chapters ? (subpages?.subpages ?? []).map(({ page, depth }) => ({ id: page.id, title: page.title, depth })) : [],
       };
@@ -833,8 +834,10 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
         if (!(await flushForShare())) {
           throw new Error('De pagina kon niet worden opgeslagen, dus er is ook geen PDF van gemaakt. Probeer het zo nog eens.');
         }
+        // Het briefpapier ook als het een PDF is: de server legt het eronder.
         const pdf = await exportPagePdf(documentId, {
-          cover: wordOptions.cover, toc: wordOptions.toc, chapters: wordOptions.chapters.length > 0, letterhead: wordOptions.letterhead,
+          cover: wordOptions.cover, toc: wordOptions.toc, chapters: wordOptions.chapters.length > 0,
+          letterhead: exportOptions.letterhead && letterheadKind !== null,
         });
         const base = wordFileName(title).replace(/\.docx$/, '');
         if (action === 'pdf') {
@@ -984,7 +987,7 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
         options={exportOptions}
         subpages={exportSubpages ? { count: exportSubpages.subpages.length, tooMany: exportSubpages.tooMany, limit: EXPORT_SUBPAGE_LIMIT } : null}
         letterhead={letterheadKind}
-        letterheadPdfNote={LETTERHEAD_PDF_MESSAGE}
+        letterheadPdfNote={LETTERHEAD_PDF_NOTE}
         folder={exportFolder ? { name: exportFolder.name } : exportFolder}
         onOptions={setExportOptions}
         onChoose={action => void runExport(action)}

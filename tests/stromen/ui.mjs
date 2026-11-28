@@ -29,6 +29,7 @@ import { crc32, deflateSync, inflateRawSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
 import { chromium } from '@playwright/test';
+import { PDFDocument, StandardFonts } from 'pdf-lib';
 import { API_URL, ANON_KEY, CLIENT_DOMAINS_WERKER_GEHEIM, CRON_SECRET, ORIGIN, SERVICE_KEY } from './omgeving.mjs';
 import { installeer, mailsAan, post } from './nepdiensten.mjs';
 import { roep, roepRequest } from './functies.mjs';
@@ -3752,7 +3753,7 @@ async function scenarioPaginaexport() {
     await sluitPagina(page);
   }, { toegestaan: [{ functie: 'page-export', status: 501 }] });
 
-  await uiStap('briefpapier: een afbeelding achter elke bladzijde, met de marges van Documentopmaak; een briefpapier als PDF kan niet, en het venster zegt waarom', async () => {
+  await uiStap('briefpapier: een afbeelding achter elke bladzijde, met de marges van Documentopmaak; een briefpapier als PDF alleen onder de PDF, en het venster zegt dat', async () => {
     const papier = pngVlak(210, 297, [250, 246, 235]);
     const zet = (soort, dataUrl, mime) => sql(`update public.company_settings set invoice_template_kind = ${q(soort)},
       invoice_template_mime_type = ${mime ? q(mime) : 'null'}, invoice_template_file_name = ${soort === 'none' ? 'null' : q('briefpapier')},
@@ -3778,8 +3779,10 @@ async function scenarioPaginaexport() {
       // Zonder eigen opmaak: de standaard van een factuur (voet vanaf 768 pt), en boven nooit minder dan de gewone marge.
       verwacht(xml.includes('<w:pgMar w:top="1418" w:right="1418" w:bottom="1478" w:left="1418" w:header="709" w:footer="1158" w:gutter="0"/>'), `de marges: ${xml.match(/<w:pgMar [^>]*>/)?.[0]}`);
       await sluitPagina(page);
-      // Een briefpapier als PDF: de optie staat uit, met de uitleg.
-      zet('pdf', 'data:application/pdf;base64,JVBERi0xLjQK', 'application/pdf');
+      // Een briefpapier als PDF (stap 1B-5): de optie kan aan, en het venster zegt dat het alleen onder de PDF komt.
+      const pdfPapier = await PDFDocument.create();
+      pdfPapier.addPage([595.28, 841.89]).drawText('BRIEFPAPIER PROEF', { x: 40, y: 800, size: 16, font: await pdfPapier.embedFont(StandardFonts.Helvetica) });
+      zet('pdf', `data:application/pdf;base64,${Buffer.from(await pdfPapier.save()).toString('base64')}`, 'application/pdf');
       const ander = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
       // Bewaard van eerder: het briefpapier aan.
       await ander.page.evaluate(() => window.localStorage.setItem('resofly.paginaExport.opties', JSON.stringify({ letterhead: true })));
@@ -3787,12 +3790,23 @@ async function scenarioPaginaexport() {
       await ander.page.locator('.page-editor-export').click();
       const venster2 = ander.page.locator('.page-export');
       await venster2.waitFor({ timeout: 10000 });
-      const optie = venster2.locator('.page-export-check').filter({ hasText: 'Briefpapier' });
-      verwacht(await optie.locator('input').isDisabled(), 'een briefpapier als PDF kan toch aan');
-      verwacht(tekst(await venster2.locator('.page-export-note').innerText()).includes('Je briefpapier is een PDF'), 'het venster zegt niet waarom');
-      // De bewaarde keuze telt dan niet: Word downloaden geeft een bestand zonder briefpapier.
-      await venster2.locator('.page-editor-close').click();
-      await venster2.waitFor({ state: 'detached', timeout: 5000 });
+      const optie = venster2.locator('.page-export-check').filter({ hasText: 'Briefpapier, onder elke bladzijde van de PDF' }).locator('input');
+      verwacht(!(await optie.isDisabled()) && await optie.isChecked(), 'een briefpapier als PDF kan niet aan, of de bewaarde keuze telt niet');
+      verwacht(tekst(await venster2.locator('.page-export-note').innerText()).includes('Je briefpapier is een PDF: het komt onder de PDF.'), 'het venster zegt niet waar het briefpapier komt');
+      // PDF downloaden: de app vraagt het briefpapier; de worker krijgt de ruimte ervoor, zonder afbeelding of kop.
+      const voor = post.paginaPdf.verzoeken.length;
+      const verzoek = ander.page.waitForRequest((req) => req.url().includes('/page-export') && req.method() === 'POST', { timeout: 30000 });
+      const onderweg = ander.page.waitForEvent('download', { timeout: 120000 });
+      onderweg.catch(() => {});
+      await venster2.locator('.page-export-pdf').click();
+      verwacht((await verzoek).postDataJSON()?.letterhead === true, 'de app vraagt geen briefpapier onder de PDF');
+      gelijk(readFileSync(await (await onderweg).path()).subarray(0, 5).toString(), '%PDF-', 'een PDF');
+      gelijk(post.paginaPdf.verzoeken.length, voor + 1, 'één keer omgezet');
+      const vanPdf = docxDelen(Buffer.from(post.paginaPdf.verzoeken.at(-1).bytes));
+      verwacht(!vanPdf.has('word/header1.xml') && ![...vanPdf.keys()].some(naam => naam.startsWith('word/media/briefpapier')), 'de Word-file van de PDF heeft toch een kop of een briefpapier');
+      verwacht((vanPdf.get('word/document.xml')?.toString('utf8') ?? '').includes('w:bottom="1478"'), 'de Word-file van de PDF houdt geen ruimte vrij voor het briefpapier');
+      await venster2.waitFor({ state: 'detached', timeout: 10000 });
+      // Word downloaden, met dezelfde keuze: zonder briefpapier, want dat past er niet in.
       const zonder = docxDelen(readFileSync(await (await exporteerWord(ander.page)).path()));
       // Geen briefpapier in het bestand; de kop in de huisstijl (stap 1B-4c) staat er wel.
       verwacht(![...zonder.keys()].some(naam => naam.startsWith('word/media/briefpapier')), 'met een PDF-briefpapier toch een briefpapier');

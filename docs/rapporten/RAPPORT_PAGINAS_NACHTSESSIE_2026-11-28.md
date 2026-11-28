@@ -26,6 +26,8 @@ met 1B-4c.
 
 1. **De PDF (1B-5) is gebouwd, op de branch** (vraag 10). Na je "ga door met het plan" heb
    ik hem gebouwd zoals §9 zegt: de server maakt de Word-file.
+   - Een briefpapier dat een PDF is, komt onder elke bladzijde van de PDF. In Word komt het
+     niet; dat zegt het venster.
    - Zeg of hij naar staging mag. Rol daarna de media-worker uit; hoe dat gaat, staat in
      `docs/setup/PAGINA_PDF_SETUP.md`.
    - Tot de worker is uitgerold, zegt het exportvenster dat de PDF er nog niet is.
@@ -201,7 +203,7 @@ en gaat pas naar staging als je het zegt.
 | 1B-4a | De opties voor Word: een voorblad (logo, titel, klant, project, datum), een inhoudsopgave vooraan, en de subpagina's als hoofdstukken. | `CHANGELOG_PAGINAS_EXPORTEREN_2026-11-28.md` |
 | 1B-4b | Het briefpapier achter elke bladzijde, als het een afbeelding is (een PDF kan niet in Word), met de marges uit Documentopmaak. Gerepareerd: het voorblad overleefde opnieuw opslaan in Collabora niet goed. | `CHANGELOG_PAGINAS_EXPORTEREN_2026-11-28.md` |
 | 1B-4c | De kop en voet in de huisstijl: het logo en een lijn in de merkkleur, de voettekst en het paginanummer. De controle met LibreOffice is nu een script (`scripts/proef-word-rondgang.sh`). | `CHANGELOG_PAGINAS_EXPORTEREN_2026-11-28.md` |
-| 1B-5 | Na de merge van 11:46, op de branch: "PDF downloaden" en "Vastleggen in het dossier". De server maakt de Word-file (`page-export`) en de media-worker de PDF (`/internal/office/convert-page`). De worker rol jij uit. | `CHANGELOG_PAGINAS_PDF_2026-11-28.md` |
+| 1B-5 | Na de merge van 11:46, op de branch: "PDF downloaden" en "Vastleggen in het dossier". De server maakt de Word-file (`page-export`) en de media-worker de PDF (`/internal/office/convert-page`). Een briefpapier dat een PDF is, komt onder elke bladzijde van de PDF (niet in Word). De worker rol jij uit. | `CHANGELOG_PAGINAS_PDF_2026-11-28.md` |
 
 Geen migraties. 1B-5 brengt een nieuwe edge function mee (`page-export`), en een nieuw pad in
 de media-worker, die je zelf uitrolt.
