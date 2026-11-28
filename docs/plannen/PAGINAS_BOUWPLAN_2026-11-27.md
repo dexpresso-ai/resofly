@@ -636,6 +636,8 @@ branch tot de gebruiker zegt dat het naar staging mag.
   "page-export staat er en weigert een verzoek zonder herkomst (403)".
 - CI op de branch: runs 315 en 316 helemaal groen. Daarna alleen tekst en de reparatie van de
   origin in `page-export` (die las `GERRIE_ALLOWED_ORIGINS` niet).
+- CI op staging (run 317, abe8b06): helemaal groen, ook `deno check` van die reparatie en de
+  mobiele lay-outtest.
 - De gebruiker rolt de media-worker uit (`docs/setup/PAGINA_PDF_SETUP.md`). Tot dan zegt het
   venster dat de PDF er nog niet is.
 - Op staging na te lopen: één PDF, één vastgelegd, en één met een briefpapier dat een PDF is.

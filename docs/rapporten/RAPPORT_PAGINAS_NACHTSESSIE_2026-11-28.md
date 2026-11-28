@@ -15,6 +15,7 @@ stand voor de overdracht.
 
 **Om 14:39 UTC ook de PDF (1B-5) naar staging gezet, op jouw verzoek** (`abe8b06`).
 - De uitrol is geslaagd. `page-export` staat er; de rooktest heeft dat nagekeken.
+- De CI op staging (run 317) is helemaal groen.
 - Rol nu de media-worker uit: `docs/setup/PAGINA_PDF_SETUP.md`. Tot dan zegt het exportvenster
   dat de PDF er nog niet is; Word downloaden kan wel.
 
