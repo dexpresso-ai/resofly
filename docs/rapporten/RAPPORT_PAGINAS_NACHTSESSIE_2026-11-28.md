@@ -1,8 +1,14 @@
 # Pagina's: de nachtsessie van 27 op 28 november 2026
 
-Wat er op de branch `claude/affectionate-meitner-arfqck` is gebouwd sinds de laatste merge naar
-staging (`416b997`, 27 november 17:07), en wat ik je wil vragen. Er is niets naar staging
-gegaan: mergen gebeurt pas als jij het zegt.
+Wat er op de branch `claude/affectionate-meitner-arfqck` is gebouwd sinds de merge naar staging
+van 27 november 17:07 (`416b997`), en wat ik je wil vragen.
+
+**Op 28 november om 09:34 UTC naar staging gezet, op jouw verzoek** (`59fab7e`).
+- De uitrol is geslaagd: de zeven migraties, de edge functions en de rooktest.
+- Overgeslagen: de Word-proef in echte Word (vraag 4) en de bevestiging van de keuzes van 1C
+  (vraag 8). Die vragen blijven staan.
+- Ververs open tabbladen: een oude versie van de app opent een pagina met nieuwe blokken alleen
+  om te lezen.
 
 Het bouwplan is `docs/plannen/PAGINAS_BOUWPLAN_2026-11-27.md`. In §18 staan de stappen en de
 stand voor de overdracht.
@@ -77,8 +83,8 @@ stand voor de overdracht.
    deling aan, maar alleen met een vrijgegeven versie, en het portaal en de geheime link tonen
    alleen die versie. Sinds 1C-3 kun je in de app een pagina delen en bijwerken.
 
-   **Merge 1C-2, 1C-3 en 1C-4 samen.** In 1C-4 kwam wat de klant ziet: opmaak, afbeeldingen
-   en bijlagen die nog in het dossier horen. Bekeken in de browser via een geheime link, die
+   **1C-2, 1C-3 en 1C-4 zijn samen naar staging gegaan** (28 november). In 1C-4 kwam wat de
+   klant ziet: opmaak, afbeeldingen en bijlagen die nog in het dossier horen. Bekeken in de browser via een geheime link, die
    hetzelfde leesvenster gebruikt als het portaal. Het portaal zelf is niet in een browser
    bekeken: inloggen vraagt een mail. Wat de server het portaal geeft, is wel getest.
 
