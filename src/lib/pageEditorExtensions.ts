@@ -297,6 +297,11 @@ export type PageTaskLinksStorage = {
   open: ((taskId: string) => void) | null;
   /** Van een regel een taak maken. Zonder (geen rechten op Projecten): geen knop. */
   make: ((blockId: string, title: string) => Promise<void>) | null;
+  /**
+   * Iemand klikte het vinkje van een regel met een taak aan of uit (stap
+   * 2-2b). Alleen een klik: zie PageTaskLinks.
+   */
+  checked: ((link: PageTaskLink, checked: boolean, blockId: string) => void) | null;
 };
 
 export const PAGE_TASK_LINKS_KEY = new PluginKey('pageTaskLinks');
@@ -342,7 +347,7 @@ export const PageTaskLinks = Extension.create({
   // Vóór TaskItem, voor Enter hieronder.
   priority: 1000,
   addStorage(): PageTaskLinksStorage {
-    return { links: new Map(), open: null, make: null };
+    return { links: new Map(), open: null, make: null, checked: null };
   },
   addKeyboardShortcuts() {
     return {
@@ -373,6 +378,24 @@ export const PageTaskLinks = Extension.create({
     const editor = this.editor;
     return [new Plugin({
       key: PAGE_TASK_LINKS_KEY,
+      // Het vinkje en de taak (stap 2-2b). Alleen een klik van iemand telt: het
+      // change-event van het vinkje. Ongedaan maken, een oude versie
+      // terugzetten of opnieuw laden na een conflict zetten `checked` in de
+      // pagina ook om, maar mogen geen taak afvinken. TaskItem zelf zet de
+      // pagina al om (zijn eigen luisteraar op het vinkje gaat eerst).
+      view: view => {
+        const onChange = (event: Event) => {
+          const box = event.target;
+          if (!(box instanceof HTMLInputElement) || box.type !== 'checkbox' || !editor.isEditable) return;
+          const blockId = box.closest('li[data-id]')?.getAttribute('data-id');
+          const store = pageTaskLinksOf(editor);
+          const link = blockId ? store?.links.get(blockId) : undefined;
+          if (!blockId || !link || !store?.checked) return;
+          store.checked(link, box.checked, blockId);
+        };
+        view.dom.addEventListener('change', onChange);
+        return { destroy: () => view.dom.removeEventListener('change', onChange) };
+      },
       props: {
         decorations: state => {
           const links = pageTaskLinksOf(editor)?.links;

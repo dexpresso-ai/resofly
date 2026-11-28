@@ -1,4 +1,4 @@
-# Pagina's: actiepunten worden taken (stap 2-2a)
+# Pagina's: actiepunten worden taken (stap 2-2a en 2-2b)
 
 28 november 2026. Zie `docs/plannen/PAGINAS_BOUWPLAN_2026-11-27.md`, §13 en §18 (fase 2, met de
 keuzes voor 2-2).
@@ -134,12 +134,57 @@ met een link terug naar de pagina. Het vinkje en de taak samen volgen in 2-2b.
 ## Uitrollen
 
 Migratie `20261128170000` moet samen met of vóór de app naar staging. Zonder de kolommen
-mislukt "Maak er een taak van" met een fout.
+mislukt "Maak er een taak van" met een fout. Op 28 november om 16:48 samen met 2-0 tot en met
+2-1c naar staging gezet (`7250aff`); het deploylog noemt de migratie.
+
+## Stap 2-2b: het vinkje en de taak samen
+
+### Wat er nu kan
+
+- **Aanvinken zet de taak op Klaar.** Vink je een regel met een taak aan, dan gaat de taak op
+  Klaar. Uitvinken zet haar terug op Te doen.
+  - Een melding boven de pagina noemt de taak: "De taak "Offerte sturen" staat op Klaar." Een
+    regel kan zijn tekst kwijt zijn (knippen) en toch zijn taak houden; zo zie je welke er klaar
+    ging.
+  - "Ongedaan maken" in die melding zet de taak terug, en het vinkje in de pagina ook. De
+    melding verdwijnt na twaalf seconden vanzelf.
+  - Het label achter de regel volgt meteen: "Taak · Klaar".
+- **Alleen een klik telt.** Ongedaan maken in de editor (Ctrl+Z), een oude versie terugzetten of
+  opnieuw laden zet het vinkje in de pagina om, maar niet de taak.
+- **Een regel zonder taak** blijft een gewoon vinkje.
+- **Projecten alleen lezen**: het vinkje zet alleen de regel om. De melding zegt dat de taak
+  niet meegaat, zonder "Ongedaan maken".
+- **Al klaar**: stond de taak al op Klaar (elders afgevinkt) en vink je de regel aan, dan
+  verandert er aan de taak niets en komt er geen melding.
+
+### Hoe het werkt
+
+- `PageTaskLinks` luistert naar het `change`-event van een vinkje, op de editor zelf. Dat event
+  komt alleen van een klik; TaskItem zet de pagina zelf al om, en daarna zet `PageEditor` de
+  taak (`onSetTaskStatus`).
+- `main.tsx` zet de stand langs dezelfde weg als het kanbanbord (`updateRow`, onder de RLS),
+  met de rechten van wie klikt. Zonder Projecten schrijven krijgt de editor die functie niet.
+- "Ongedaan maken" zet het vinkje terug met een transactie, niet met een klik. Zo zet dat de
+  taak niet opnieuw om.
+
+### Getest
+
+- **`ui.mjs paginas`: 25 stappen, 0 fout.** De nieuwe stap:
+  - aanvinken: de taak op Klaar, de melding noemt haar, het label "Taak · Klaar";
+  - "Ongedaan maken": de taak op Te doen, het vinkje uit, ook in de opgeslagen pagina;
+  - aan en weer uit: de taak op Te doen, met een melding;
+  - Ctrl+Z na aanvinken: het vinkje uit, de taak blijft Klaar;
+  - daarna weer aanvinken, met de taak al op Klaar: geen melding, de taak blijft Klaar;
+  - een regel zonder taak: geen melding, de taak verandert niet;
+  - met Projecten alleen lezen: "Alleen de regel is afgevinkt", geen "Ongedaan maken", de taak
+    verandert niet.
+- `npm test` (2460) en `npm run typecheck`.
 
 ## Nog niet
 
-- **Het vinkje en de taak samen (2-2b).** Nu staan ze los: aanvinken in de pagina verandert de
-  taak niet. Het label laat zien hoe de taak ervoor staat.
+- **Bij delen en export volgt het vinkje de taak nog niet.** Een taak die elders klaar ging,
+  staat in de pagina nog open tot iemand het vinkje aanklikt. Het label toont wel "Klaar". Dat
+  is de volgende stap.
 - **Een taak die elders verandert**, krijgt pas een nieuw label als de app ververst (bijvoorbeeld
   na het sluiten van een taak of de pagina).
 - **Meer regels tegelijk** ("Maak taken van alle open punten").

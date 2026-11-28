@@ -5155,6 +5155,12 @@ function App() {
           throw e;
         }
       } : undefined}
+      // Het vinkje van een regel met een taak (stap 2-2b): de stand van de taak,
+      // langs dezelfde weg als op het kanbanbord, met de rechten van wie klikt.
+      onSetTaskStatus={orgCanWrite && permissions.canWrite('projects') ? async (taskId, status) => {
+        const updated = await updateRow<Task>('tasks', taskId, { status }, activeOrg.id);
+        setData(prev => ({ ...prev, tasks: mergeTaskRows(prev.tasks, [updated]) }));
+      } : undefined}
       backTo={pageTrail[pageTrail.length - 1] ?? null}
       ownDossierName={data.companySettings?.company_name?.trim() || 'Eigen dossier'}
       houseStyle={data.companySettings}

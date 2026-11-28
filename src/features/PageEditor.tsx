@@ -53,7 +53,7 @@ import { calloutVariant, isAllowedPageLink, type CalloutVariant } from '../lib/p
 import { pageBodyFit } from '../lib/pageBodyCheck';
 import { LETTERHEAD_PDF_NOTE, wordFileName } from '../lib/pageExportParts';
 import { warmupOfficeEditor } from '../lib/office';
-import type { InternalDocument } from '../types';
+import type { InternalDocument, TaskStatus } from '../types';
 // Alleen het type: de export zelf laadt pas bij een klik (import()).
 import type { PageWordHouseStyle } from '../lib/pageWordExport';
 import {
@@ -137,7 +137,7 @@ export type PageShareRequest = {
   done: () => void;
 };
 
-export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClose, onOpenPage, backTo = null, ownDossierName = 'Eigen dossier', houseStyle = null, onShare, onOpenDocument, mentionName, mentionSearch, onOpenMention, taskLinks, onMakeTask }: {
+export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClose, onOpenPage, backTo = null, ownDossierName = 'Eigen dossier', houseStyle = null, onShare, onOpenDocument, mentionName, mentionSearch, onOpenMention, taskLinks, onMakeTask, onSetTaskStatus }: {
   documentId: string;
   organizationId: string;
   /** Schrijfrechten op Inhoud. Zonder: alleen lezen, en geen claim. */
@@ -176,6 +176,11 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
   taskLinks?: ReadonlyMap<string, PageTaskLink>;
   /** Van een regel een taak maken, met de rechten van wie klikt. Zonder: geen knop. */
   onMakeTask?: (input: { blockId: string; title: string; projectId: string | null; clientId: string | null }) => Promise<void>;
+  /**
+   * De stand van een taak zetten, als iemand het vinkje van haar regel
+   * aanklikt (stap 2-2b). Zonder (geen Projecten schrijven): alleen de pagina.
+   */
+  onSetTaskStatus?: (taskId: string, status: TaskStatus) => Promise<void>;
 }) {
   const [mode, setModeState] = useState<Mode>('laden');
   const [saveState, setSaveState] = useState<SaveState>('opgeslagen');
@@ -183,6 +188,8 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
   const [holder, setHolder] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [closeAnyway, setCloseAnyway] = useState(false);
+  /** Wat het vinkje met een taak deed (stap 2-2b), met "Ongedaan maken". */
+  const [taskNotice, setTaskNotice] = useState<{ text: string; undo: (() => void) | null } | null>(null);
   const [versionsOpen, setVersionsOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   /** Het exportvenster (stap 1B-3), wat er loopt, en wat er misging. */
@@ -677,6 +684,14 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
   const onMakeTaskRef = useRef(onMakeTask);
   onMakeTaskRef.current = onMakeTask;
   const canMakeTasks = Boolean(onMakeTask);
+  const onSetTaskStatusRef = useRef(onSetTaskStatus);
+  onSetTaskStatusRef.current = onSetTaskStatus;
+  // Een melding over een taak verdwijnt vanzelf; "Ongedaan maken" kan zolang ze er staat.
+  useEffect(() => {
+    if (!taskNotice) return;
+    const timer = window.setTimeout(() => setTaskNotice(null), 12000);
+    return () => window.clearTimeout(timer);
+  }, [taskNotice]);
   useEffect(() => {
     if (!editor || editor.isDestroyed) return;
     const store = pageTaskLinksOf(editor);
@@ -693,12 +708,37 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
         setMessage((error as { message?: string } | null)?.message || 'De taak kon niet worden gemaakt.');
       }
     } : null;
+    // Het vinkje van een regel met een taak (stap 2-2b). De melding noemt de
+    // taak: een regel kan zijn tekst kwijt zijn (knippen) en toch zijn taak
+    // houden, en zo zie je welke er klaar ging.
+    store.checked = (link: PageTaskLink, checked: boolean, blockId: string) => {
+      if ((link.status === 'done') === checked) return;
+      const setStatus = onSetTaskStatusRef.current;
+      if (!setStatus) {
+        setTaskNotice({ text: `Alleen de regel is ${checked ? 'afgevinkt' : 'weer open'}. De taak "${link.title}" kun jij niet wijzigen.`, undo: null });
+        return;
+      }
+      const before = link.status;
+      setStatus(link.id, checked ? 'done' : 'todo')
+        .then(() => setTaskNotice({
+          text: checked ? `De taak "${link.title}" staat op Klaar.` : `De taak "${link.title}" staat weer op Te doen.`,
+          // Terug: de taak naar wat ze was, en het vinkje in de pagina ook.
+          undo: () => {
+            setTaskNotice(null);
+            setTaskItemChecked(editor, blockId, !checked);
+            void onSetTaskStatusRef.current?.(link.id, before).catch(error => {
+              setMessage((error as { message?: string } | null)?.message || 'De taak kon niet worden teruggezet.');
+            });
+          },
+        }))
+        .catch(error => setMessage((error as { message?: string } | null)?.message || 'De taak kon niet worden bijgewerkt.'));
+    };
     try {
       editor.view.dispatch(editor.state.tr.setMeta(PAGE_TASK_LINKS_KEY, true).setMeta('addToHistory', false));
     } catch {
       // Nog niet in beeld: de labels komen dan bij het tekenen.
     }
-  }, [editor, taskLinks, canMakeTasks]);
+  }, [editor, taskLinks, canMakeTasks]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!editor || editor.isDestroyed) return;
     const titles = new Map<string, Promise<string | null>>();
@@ -1118,6 +1158,12 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
         {closeAnyway && <button type="button" className="btn" onClick={() => void close(true)}>Toch sluiten</button>}
       </div>}
 
+      {taskNotice && <div className="page-editor-banner page-task-banner" role="status">
+        <span>{taskNotice.text}</span>
+        {taskNotice.undo && <button type="button" className="btn" onClick={taskNotice.undo}>Ongedaan maken</button>}
+        <button type="button" className="btn" onClick={() => setTaskNotice(null)}>Oké</button>
+      </div>}
+
       {(shareOutdated || shareNote) && <div className="page-editor-banner page-share-banner" role="status">
         <span>{shareNote ?? 'De klant ziet een oudere versie van deze pagina.'}</span>
         {!shareNote && <button type="button" className="btn" onClick={() => void releaseToShares()} disabled={releasing}>
@@ -1418,6 +1464,25 @@ function selectedMention(ed: Editor): { kind: MentionKind; id: string; word: str
   const name = mentionNamesOf(ed)?.(ref.kind, ref.id) ?? null;
   const word = MENTION_KIND_WORDS[ref.kind].charAt(0).toUpperCase() + MENTION_KIND_WORDS[ref.kind].slice(1);
   return { kind: ref.kind, id: ref.id, word, name, opens: Boolean(name && MENTION_OPENS[ref.kind] && mentionOpenOf(ed)) };
+}
+
+/**
+ * Het vinkje van een regel zetten, als transactie en niet als klik: zo zet
+ * "Ongedaan maken" de pagina terug zonder dat het vinkje opnieuw de taak
+ * omzet (alleen een klik doet dat, zie PageTaskLinks).
+ */
+function setTaskItemChecked(editor: Editor, blockId: string, checked: boolean): void {
+  if (editor.isDestroyed) return;
+  let at: number | null = null;
+  editor.state.doc.descendants((node, pos) => {
+    if (at !== null) return false;
+    if (node.type.name === 'taskItem' && node.attrs.id === blockId) { at = pos; return false; }
+    return true;
+  });
+  if (at === null) return;
+  const node = editor.state.doc.nodeAt(at);
+  if (!node || node.attrs.checked === checked) return;
+  editor.view.dispatch(editor.state.tr.setNodeMarkup(at, undefined, { ...node.attrs, checked }));
 }
 
 /**

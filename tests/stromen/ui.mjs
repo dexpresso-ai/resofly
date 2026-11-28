@@ -2713,6 +2713,95 @@ async function scenarioPaginas() {
     await sluit(lid);
   });
 
+  await uiStap('het vinkje en de taak (stap 2-2b): aanvinken zet de taak op Klaar en noemt haar, ongedaan maken zet beide terug, uitvinken zet haar op Te doen; Ctrl+Z en een regel zonder taak veranderen niets aan een taak; zonder Projecten schrijven alleen de regel', async () => {
+    const tag = Date.now().toString(36);
+    const projectNaam = `Vinkjes ${tag}`;
+    sql(`insert into public.projects (organization_id, created_by, client_id, name) values (${q(w.orgId)}, ${q(w.medewerker.id)}, ${q(w.klantA.id)}, ${q(projectNaam)})`);
+    const project = sqlRij(`select id from public.projects where organization_id = ${q(w.orgId)} and name = ${q(projectNaam)}`);
+    const [gekoppeld, gewoon] = [randomUUID(), randomUUID()];
+    const item = (id, tekstRegel) => ({ type: 'taskItem', attrs: { checked: false, id }, content: [{ type: 'paragraph', content: [{ type: 'text', text: tekstRegel }] }] });
+    const body = { type: 'doc', content: [{ type: 'taskList', content: [item(gekoppeld, 'Offerte sturen'), item(gewoon, 'Koffie halen')] }] };
+    const titel = `Vinkjes ${tag}`;
+    sql(`insert into public.documents (organization_id, created_by, title, format, body, client_id, project_id)
+      values (${q(w.orgId)}, ${q(w.medewerker.id)}, ${q(titel)}, 'page', ${q(JSON.stringify(body))}::jsonb, ${q(w.klantA.id)}, ${q(project.id)})`);
+    const pagina = sqlRij(`select id from public.documents where organization_id = ${q(w.orgId)} and title = ${q(titel)}`);
+    sql(`insert into public.tasks (organization_id, created_by, title, project_id, page_id, page_block_id)
+      values (${q(w.orgId)}, ${q(w.medewerker.id)}, 'Offerte sturen', ${q(project.id)}, ${q(pagina.id)}, ${q(gekoppeld)})`);
+    const taakStand = () => sqlRij(`select status from public.tasks where page_id = ${q(pagina.id)}`).status;
+    const openAls = async (gebruiker, naam) => {
+      const lid = await openWerkruimte(gebruiker, naam, w.orgId, { tijdelijk: true });
+      const adres = new URL(lid.page.url());
+      adres.searchParams.set('pagina', pagina.id);
+      await lid.page.goto(adres.toString());
+      await lid.page.locator('.page-editor').waitFor({ timeout: 30000 });
+      await wachtOpgeslagen(lid.page, 'de pagina met vinkjes kwam niet in bewerken');
+      return lid;
+    };
+    const vinkje = (page, id) => editorVak(page).locator(`li[data-checked][data-id="${id}"] input[type="checkbox"]`).first();
+    const melding = (page) => page.locator('.page-task-banner');
+    const label = (page) => editorVak(page).locator('.page-task-badge');
+
+    const lid = await openAls(w.medewerker, 'medewerker');
+    const page = lid.page;
+    await wachtTot(async () => tekst(await label(page).innerText().catch(() => '')) === 'Taak · Te doen', { melding: 'geen label "Te doen"' });
+    // Aanvinken: de taak op Klaar, en de melding noemt haar.
+    await vinkje(page, gekoppeld).click();
+    await wachtTot(async () => taakStand() === 'done', { melding: 'aanvinken zette de taak niet op Klaar' });
+    await wachtTot(async () => tekst(await melding(page).innerText().catch(() => '')).includes('De taak "Offerte sturen" staat op Klaar.'), { melding: 'geen melding die de taak noemt' });
+    await wachtTot(async () => tekst(await label(page).innerText().catch(() => '')) === 'Taak · Klaar', { melding: 'het label werd niet "Klaar"' });
+    // Ongedaan maken: de taak en het vinkje terug.
+    await melding(page).getByRole('button', { name: 'Ongedaan maken' }).click();
+    await wachtTot(async () => taakStand() === 'todo', { melding: 'ongedaan maken zette de taak niet terug' });
+    await wachtTot(async () => !(await vinkje(page, gekoppeld).isChecked()), { melding: 'ongedaan maken zette het vinkje niet terug' });
+    await wachtOpgeslagen(page);
+    gelijk(sqlRij(`select count(*)::int as n from public.documents d, jsonb_path_query(d.body, ${q(`strict $.** ? (@.type == "taskItem" && @.attrs.id == "${gekoppeld}" && @.attrs.checked == true)`)}) x where d.id = ${q(pagina.id)}`).n, 0, 'na ongedaan maken staat het vinkje in de pagina uit');
+    // Aan en weer uit: de taak terug op Te doen.
+    await vinkje(page, gekoppeld).click();
+    await wachtTot(async () => taakStand() === 'done', { melding: 'opnieuw aanvinken' });
+    await vinkje(page, gekoppeld).click();
+    await wachtTot(async () => taakStand() === 'todo', { melding: 'uitvinken zette de taak niet op Te doen' });
+    await wachtTot(async () => tekst(await melding(page).innerText().catch(() => '')).includes('staat weer op Te doen'), { melding: 'geen melding bij uitvinken' });
+    // Ctrl+Z zet het vinkje in de pagina terug, maar niet de taak: alleen een klik telt.
+    await vinkje(page, gekoppeld).click();
+    await wachtTot(async () => taakStand() === 'done', { melding: 'aanvinken voor Ctrl+Z' });
+    await editorVak(page).locator(`li[data-checked][data-id="${gewoon}"] p`).click();
+    await page.keyboard.press('Control+z');
+    await wachtTot(async () => !(await vinkje(page, gekoppeld).isChecked()), { melding: 'Ctrl+Z zette het vinkje niet terug' });
+    await page.waitForTimeout(800);
+    gelijk(taakStand(), 'done', 'Ctrl+Z veranderde de taak');
+    // De taak is al Klaar, het vinkje staat uit (na Ctrl+Z): aanvinken laat de taak zoals ze is, zonder melding.
+    await page.locator('.page-task-banner').getByRole('button', { name: 'Oké' }).click().catch(() => undefined);
+    await vinkje(page, gekoppeld).click();
+    await page.waitForTimeout(600);
+    gelijk(await melding(page).count(), 0, 'aanvinken bij een taak die al Klaar is, gaf een melding');
+    gelijk(taakStand(), 'done', 'aanvinken bij een taak die al Klaar is');
+    // Een regel zonder taak: geen melding, geen taak.
+    await vinkje(page, gewoon).click();
+    await page.waitForTimeout(600);
+    gelijk(await melding(page).count(), 0, 'een regel zonder taak gaf een melding');
+    gelijk(taakStand(), 'done', 'een regel zonder taak veranderde de taak');
+    await wachtOpgeslagen(page);
+    await sluitPagina(page);
+    await sluit(lid);
+
+    // Projecten alleen lezen: het vinkje zet alleen de regel om, en dat staat er.
+    sql(`update public.tasks set status = 'todo' where page_id = ${q(pagina.id)}`);
+    sql(`update public.documents set body = ${q(JSON.stringify(body))}::jsonb where id = ${q(pagina.id)}`);
+    const lezer = await maakGebruiker('ui-vinkjes-lezen');
+    sql(`insert into public.organization_members (organization_id, user_id, email, role, status, module_access)
+      values (${q(w.orgId)}, ${q(lezer.id)}, ${q(lezer.email)}, 'member', 'active', '{"content":"write","projects":"read","clients":"read"}'::jsonb)`);
+    const metLezen = await openAls(lezer, 'vinkjes-lezen');
+    await wachtTot(async () => (await label(metLezen.page).count()) === 1, { melding: 'projecten lezen: geen label' });
+    await vinkje(metLezen.page, gekoppeld).click();
+    await wachtTot(async () => tekst(await melding(metLezen.page).innerText().catch(() => '')).includes('Alleen de regel is afgevinkt'), { melding: 'projecten lezen: geen uitleg' });
+    gelijk(await melding(metLezen.page).getByRole('button', { name: 'Ongedaan maken' }).count(), 0, 'projecten lezen: ongedaan maken');
+    await metLezen.page.waitForTimeout(600);
+    gelijk(taakStand(), 'todo', 'projecten lezen: de taak veranderde');
+    await wachtOpgeslagen(metLezen.page);
+    await sluitPagina(metLezen.page);
+    await sluit(metLezen);
+  });
+
   await uiStap('plakken uit Excel of Word wordt een tabel, zonder de stijl van buiten', async () => {
     if (!blokPagina) throw new Error('geen pagina');
     const { page } = await openBlokPagina(w.medewerker, 'medewerker');
