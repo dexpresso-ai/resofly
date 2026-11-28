@@ -246,8 +246,9 @@ Ze mogen opnieuw draaien, en de databasetests lopen ze na.
   - 312 is 9b92cc4: na de merge, 1B-3 en 1B-4a;
   - 313 is 0d3ccbe: 1B-4b en 1B-4c.
 
-  Run 311 op staging (59fab7e, dezelfde code na de merge) is ook helemaal groen. Run 314 op
-  staging (3be4452, de export) loopt nog. Groen betekent:
+  Runs 311 en 314 op staging (59fab7e en 3be4452, dezelfde code na elke merge) zijn ook
+  helemaal groen. Van run 315 (1B-5 deel 1 tot en met 3) waren `deno check`, de migraties, de
+  typecheck en de unit tests al groen; de rest liep nog. Groen betekent:
   - de migraties vanaf nul met de databasetests;
   - `deno check`;
   - typecheck en de unit tests;

@@ -588,7 +588,8 @@ akkoord is.
 1B-3 tot en met 1B-4c, zonder migraties.
 - De uitrol (Deploy Supabase, run 267) is geslaagd, met de rooktest.
 - CI op de branch: runs 312 (1B-3 en 1B-4a) en 313 (met 1B-4b en 1B-4c) helemaal groen. Run 313
-  liep nog bij de merge en was om 11:55 klaar. Run 314 (staging) loopt nog.
+  liep nog bij de merge en was om 11:55 klaar. Run 314 op staging (dezelfde code) is ook
+  helemaal groen.
 - Op staging na te lopen: een Word-kopie bewerken en bewaren in Collabora.
 
 **Op staging sinds 28 november 2026, 09:34 UTC (59fab7e), op verzoek van de gebruiker:** alles van
@@ -745,7 +746,10 @@ nieuwe blokken niet, en opent zo'n pagina alleen om te lezen.
   - run 313 (0d3ccbe, met 1B-4b en 1B-4c): helemaal groen. Daarbij waren:
     - de mobiele lay-outtest (36 minuten), laden, de inrichting en de terugknop;
     - `deno check` van `pageDocx.ts` met het briefpapier en de kop en voet;
-  - run 314 (staging, 3be4452, dezelfde code na de merge): loopt nog.
+  - run 314 (staging, 3be4452, dezelfde code na de merge): helemaal groen;
+  - run 315 (504a3f9, 1B-5 deel 1 tot en met 3): `deno check` (ook van `page-export`), de
+    migraties, de typecheck en de unit tests groen. De mobiele lay-outtest liep nog. Deel 4
+    (5f1569b) krijgt een eigen run zodra 315 klaar is.
 - **`deno check` op de modules van pagina's:** sinds 1C-1 een eigen stap in
   `.github/workflows/frontend-checks.yml` ("Deno-typecheck pagina's"): `pageDocx.ts`,
   `woff.ts`, `zipWriter.ts`, `pageExportFonts.ts`, `pageHtml.ts` en `pageReferences.ts`. Geen
