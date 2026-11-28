@@ -169,7 +169,9 @@ export const EXPORT_FORMAT_VERSION = 1;
 // archived_by): ze gaan met de tabel mee. document_versions gaat mee (de
 // geschiedenis van een pagina); document_edit_claims is intern (wie nu
 // bewerkt, een hartslag van een minuut of twee).
-export const EXPORT_SCHEMA_VERSION = '20261128100000';
+// 20261128120000 (pagina's delen) zet document_version_id op drive_shares: de
+// versie van een pagina die de klant ziet. Gaat met de delingen mee.
+export const EXPORT_SCHEMA_VERSION = '20261128120000';
 
 export type TableKind =
   | 'export'

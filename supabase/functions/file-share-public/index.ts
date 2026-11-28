@@ -4,6 +4,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { BRANDING_COLUMNS, sanitizeBranding, withoutNewestBrandingColumns } from '../_shared/branding.ts';
 import { signedDownloadUrls, storageKeyBelongsOnlyTo } from '../_shared/fileTransferServer.ts';
 import { officeDownloadName } from '../_shared/fileTransfer.ts';
+import { sharedDocumentText } from '../_shared/sharedPage.ts';
 
 // ============================================================
 // ResoFly — Publieke deellink (file-share-public)
@@ -135,6 +136,11 @@ serve(async (req) => {
 async function getShare(tokenHash: string) {
   const share = await resolveShare(tokenHash, true);
   const items = await loadItems(share.id);
+  // Een losse deling zonder item: het item is weg, of het is een pagina in de
+  // prullenbak. Dan hetzelfde antwoord als een link die niet meer loopt.
+  if (share.item_type !== 'folder' && items.length === 0) {
+    throw new ShareError('Deze deellink bestaat niet meer, is ingetrokken of is verlopen.', 404);
+  }
   const company = await loadCompany(share.organization_id);
 
   return {
@@ -179,7 +185,7 @@ async function downloadItem(tokenHash: string, body: Record<string, unknown>) {
   // Lezen is kijken, geen downloaden: een notitie of tekstdocument blijft dus ook
   // leesbaar als de afzender downloaden heeft uitgezet.
   if (item.item_type === 'note' || (!item.storage_key && item.item_type === 'document')) {
-    return { text: await loadTextItem(share.organization_id, item) };
+    return { text: await loadTextItem(share, item) };
   }
   if (share.can_download !== true) throw new ShareError('Downloaden is voor deze deling uitgezet.', 403);
   if (!item.storage_key) throw new ShareError('Voor dit item is geen bestand om te downloaden.', 404);
@@ -251,13 +257,20 @@ async function loadItems(shareId: string): Promise<ShareItem[]> {
     (a.path || '').localeCompare(b.path || '', 'nl') || a.name.localeCompare(b.name, 'nl', { numeric: true }));
 }
 
-async function loadTextItem(organizationId: string, item: ShareItem): Promise<{ title: string; html: string }> {
-  const table = item.item_type === 'note' ? 'notes' : 'documents';
+async function loadTextItem(share: ShareRow, item: ShareItem): Promise<{ title: string; html: string }> {
+  if (item.item_type === 'document') {
+    // Bij een pagina de gedeelde versie, nooit de pagina zoals ze nu is
+    // (_shared/sharedPage.ts). Een geheime link is één deling: subpagina's
+    // staan er niet in.
+    const text = await sharedDocumentText(supabaseAdmin, share, item.item_id);
+    if (!text) throw new ShareError('Dit item bestaat niet meer.', 404);
+    return text;
+  }
   const { data, error } = await supabaseAdmin
-    .from(table)
+    .from('notes')
     .select('title,content')
     .eq('id', item.item_id)
-    .eq('organization_id', organizationId)
+    .eq('organization_id', share.organization_id)
     .maybeSingle();
   if (error) throw error;
   if (!data) throw new ShareError('Dit item bestaat niet meer.', 404);

@@ -27,6 +27,7 @@ import {
   type PortalThreadSummary,
 } from '../_shared/portalMessages.ts';
 import { officeDownloadName, transferZipName } from '../_shared/fileTransfer.ts';
+import { sharedDocumentText } from '../_shared/sharedPage.ts';
 import { PORTAL_TICKETS_CLOSED_MESSAGE, portalDocumentDecision, portalDocumentScopeFilter, portalTicketsOpen } from '../_shared/portalAccess.ts';
 import { INVALID_CHARACTER_MESSAGE, containsNulCharacter, dbErrorAnswer } from '../_shared/dbError.ts';
 import { bookingVideoService, isBookingVideoKind, videoKindOfUrl, type BookingVideoKind } from '../_shared/meetingBookingRules.ts';
@@ -861,6 +862,10 @@ async function getSharedFiles(user: PortalUser, body: Record<string, unknown>) {
   const out = [];
   for (const share of scoped) {
     const items = await loadShareItems(share.id);
+    // Een losse deling zonder item: het item is weg, of het is een pagina in
+    // de prullenbak. Dan ook de deling niet tonen, anders stond de naam van
+    // toen er nog (drive_shares.item_name).
+    if (share.item_type !== 'folder' && items.length === 0) continue;
     out.push({
       id: share.id,
       clientId: share.client_id,
@@ -911,12 +916,21 @@ async function downloadSharedFile(user: PortalUser, body: Record<string, unknown
     console.warn('client-portal touch_drive_share overgeslagen', error instanceof Error ? error.message : error);
   }
 
-  // Lezen is kijken, geen downloaden: een notitie of tekstdocument blijft dus ook
-  // leesbaar als de afzender downloaden heeft uitgezet.
-  if (item.item_type === 'note' || (!item.storage_key && item.item_type === 'document')) {
-    const table = item.item_type === 'note' ? 'notes' : 'documents';
+  // Lezen is kijken, geen downloaden: een notitie, tekstdocument of pagina blijft
+  // dus ook leesbaar als de afzender downloaden heeft uitgezet.
+  if (!item.storage_key && item.item_type === 'document') {
+    // Bij een pagina de gedeelde versie, nooit de pagina zoals ze nu is
+    // (_shared/sharedPage.ts). Een subpagina alleen als die ook met deze
+    // lezer gedeeld is.
+    const text = await sharedDocumentText(supabaseAdmin, share, item.item_id, {
+      subpages: (pageIds) => visibleSubpages(shares, share, pageIds),
+    });
+    if (!text) throw new PortalError('Dit item bestaat niet meer.', 404);
+    return { text };
+  }
+  if (item.item_type === 'note') {
     const { data, error } = await supabaseAdmin
-      .from(table)
+      .from('notes')
       .select('title,content')
       .eq('id', item.item_id)
       .eq('organization_id', share.organization_id)
@@ -981,6 +995,34 @@ async function downloadSharedFile(user: PortalUser, body: Record<string, unknown
       base64: arrayBufferToBase64(await response.arrayBuffer()),
     },
   };
+}
+
+/**
+ * De subpagina's die deze lezer ook gedeeld kreeg, met de titel van hun
+ * gedeelde versie (via drive_share_items). Een subpagina die niet met hem
+ * gedeeld is, bestaat voor hem niet: ook haar titel niet (§7 van het
+ * bouwplan voor pagina's).
+ */
+async function visibleSubpages(shares: SharedShareRow[], current: SharedShareRow, pageIds: string[]): Promise<Record<string, { title: string }>> {
+  const candidates = shares
+    .filter((s) => s.id !== current.id && s.item_type === 'document' && s.organization_id === current.organization_id)
+    .map((s) => s.id);
+  if (candidates.length === 0 || pageIds.length === 0) return {};
+  const { data, error } = await supabaseAdmin
+    .from('drive_shares')
+    .select('id,item_id')
+    .eq('organization_id', current.organization_id)
+    .eq('item_type', 'document')
+    .in('id', candidates)
+    .in('item_id', pageIds);
+  if (error) throw error;
+  const out: Record<string, { title: string }> = {};
+  for (const row of (data ?? []) as Array<{ id: string; item_id: string }>) {
+    if (out[row.item_id]) continue;
+    const item = (await loadShareItems(row.id)).find((candidate) => candidate.item_id === row.item_id);
+    if (item) out[row.item_id] = { title: item.name };
+  }
+  return out;
 }
 
 // ── Zendingen (bestanden versturen) ───────────────────────────────────

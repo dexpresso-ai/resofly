@@ -61,9 +61,10 @@ stand voor de overdracht.
    - **Een bestand in de pagina:** de klant ziet de naam ("Bijlage: offerte.pdf"), maar het
      bestand zelf alleen als je het ook deelt.
 
-   Een pagina kan nu nergens bij een klant terechtkomen. Gedeelde mappen en zendingen slaan
-   pagina's over, en de database weigert een deling. Dat blijft zo tot het portaal de
-   vrijgegeven versie leest (stap 1C-2).
+   Vóór 1C kon een pagina nergens bij een klant terechtkomen: gedeelde mappen en zendingen
+   slaan pagina's over, en de database weigerde een deling. Sinds 1C-2 neemt de database een
+   deling aan, maar alleen met een vrijgegeven versie, en het portaal en de geheime link tonen
+   alleen die versie. In de app staat "Delen…" bij een pagina nog niet; dat komt in 1C-3.
 
 ## Gevonden en gerepareerd
 
@@ -93,11 +94,13 @@ stand voor de overdracht.
 | §12 | Gerrie (of een gekoppelde AI, een agent, de API) vult een pagina aan: elke regel een alinea onderaan, na een akkoord. Vervangen kan niet. | `CHANGELOG_PAGINAS_GERRIE_AANVULLEN_2026-11-28.md` |
 | 1B-2 (deel) | De knop "Word" in de editor: de pagina als .docx, in de letters van de huisstijl. PDF en het exportvenster wachten op Collabora. | `CHANGELOG_PAGINAS_WORD_2026-11-28.md` |
 | 1C-1 | De omzetting van een pagina naar HTML voor de klant, op de server. Een klant ziet nog niets: delen blijft voor een pagina geweigerd tot de vrijgave er is (1C-2). | `CHANGELOG_PAGINAS_HTML_2026-11-28.md` |
+| 1C-2 | Delen is vrijgeven, in de database: een deling van een pagina draagt de vrijgegeven versie, en het portaal en de geheime link tonen alleen die. In de app kun je een pagina nog niet delen (dat is 1C-3). | `CHANGELOG_PAGINAS_DELEN_VRIJGAVE_2026-11-28.md` |
 
-Er komen drie migraties mee die nog niet op staging staan:
+Er komen vier migraties mee die nog niet op staging staan:
 - `20261127140000_paginas_blokken`;
 - `20261127150000_paginas_verwijzingen`;
-- `20261128100000_paginas_prullenbak`.
+- `20261128100000_paginas_prullenbak`;
+- `20261128120000_paginas_delen`.
 
 Ze mogen opnieuw draaien, en de databasetests lopen ze na.
 
