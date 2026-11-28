@@ -602,6 +602,13 @@ akkoord is.
     ontbreekt, of hij de ingesloten letter gebruikt, en of er een emoji-letter is.
 - **Daarna gebouwd, op de branch:** afdrukken met Ctrl+P (§9), alleen de pagina, zie
   `docs/changelog/CHANGELOG_PAGINAS_AFDRUKKEN_2026-11-28.md`.
+- **De CI op de branch (Frontend checks, met de hand gestart):**
+  - run 304 (ba3ee84): helemaal groen;
+  - run 305 (bf471ad, met de boom naast de pagina): helemaal groen, ook de mobiele
+    lay-outtest (36 minuten), laden per module, de inrichting en de terugknop;
+  - de run voor 0bff935 (de knop "Word" en alles ervoor) is op 28 november rond 02:46
+    gestart. De uitkomst staat in de changelog van de Word-export, of nog niet: kijk dan in
+    GitHub Actions.
 - **Nog niet door `deno check`:** `_shared/pageDocx.ts`, `_shared/woff.ts` en `_shared/zipWriter.ts`. Dat gebeurt
   vanzelf zodra `page-export` ze importeert en in de lijst van
   `.github/workflows/frontend-checks.yml` staat.
