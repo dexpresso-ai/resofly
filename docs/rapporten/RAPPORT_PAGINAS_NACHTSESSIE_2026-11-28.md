@@ -54,6 +54,18 @@ stand voor de overdracht.
    lezen pas mee als de eigenaar deelt, en alleen een owner of admin publiceert. Dat wil ik met
    je doorlopen voor ik het bouw.
 
+## Gevonden en gerepareerd
+
+- **Een zwart scherm bij het openen van een pagina.**
+  - Waar: alleen in de UI-test, met de boom naast de pagina erbij en een werkende
+    calendar-integrations.
+  - Wat er gebeurde: een effect van de editor kreeg een editor die Tiptap al had opgeruimd, en
+    de hele app viel om.
+  - De reparatie: zulke effecten stoppen nu, en wachten op de nieuwe editor.
+  - Het is nooit op staging geweest. Waarom React de effecten precies opnieuw liet lopen, is
+    niet vastgesteld.
+  - Zie `docs/changelog/CHANGELOG_PAGINAS_EDITOR_ZWART_SCHERM_2026-11-28.md`.
+
 ## Wat er klaarstaat (nog niet op staging)
 
 | Stap | Wat | Changelog |
