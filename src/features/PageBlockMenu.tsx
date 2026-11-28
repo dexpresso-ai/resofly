@@ -18,12 +18,12 @@ import { Suggestion, exitSuggestion } from '@tiptap/suggestion';
 import type { SuggestionProps } from '@tiptap/suggestion';
 import { PluginKey } from '@tiptap/pm/state';
 import {
-  Braces, FileText, Heading1, Heading2, Heading3, Image as ImageIcon, List, Paperclip, ListChecks, ListCollapse, ListOrdered, ListTree,
+  Braces, Columns2, Columns3, FileText, Heading1, Heading2, Heading3, Image as ImageIcon, List, Paperclip, ListChecks, ListCollapse, ListOrdered, ListTree,
   MessageSquareText, Minus, Pilcrow, Quote, Table2,
 } from 'lucide-react';
 import { filterPageBlocks, type PageBlock, type PageBlockKey } from '../lib/pageBlocks';
 import {
-  canInsertFileBlock, cursorOnText, imageFilesOf, insertFileBlock, insertFiles, insertImages, pageLinksOf, pageMediaOf,
+  canInsertFileBlock, cursorOnText, imageFilesOf, insertColumns, insertFileBlock, insertFiles, insertImages, pageLinksOf, pageMediaOf,
 } from '../lib/pageEditorExtensions';
 import { useBackStep } from '../lib/useBackStep';
 
@@ -36,6 +36,8 @@ const ICONS: Record<PageBlockKey, JSX.Element> = {
   nummering: <ListOrdered size={17} />,
   takenlijst: <ListChecks size={17} />,
   tabel: <Table2 size={17} />,
+  kolommen2: <Columns2 size={17} />,
+  kolommen3: <Columns3 size={17} />,
   callout: <MessageSquareText size={17} />,
   uitklapper: <ListCollapse size={17} />,
   inhoudsopgave: <ListTree size={17} />,
@@ -58,6 +60,8 @@ function blockChain(chain: ChainedCommands, key: PageBlockKey): ChainedCommands 
     case 'nummering': return chain.toggleOrderedList();
     case 'takenlijst': return chain.toggleTaskList();
     case 'tabel': return chain.insertTable({ rows: 3, cols: 3, withHeaderRow: true });
+    case 'kolommen2': return chain.command(insertColumns(2));
+    case 'kolommen3': return chain.command(insertColumns(3));
     case 'callout': return chain.wrapIn('callout', { variant: 'info' });
     case 'uitklapper': return chain.setDetails();
     case 'inhoudsopgave': return chain.insertContent({ type: 'tableOfContents' }).command(cursorOnText('na-dit-blok'));
@@ -75,14 +79,18 @@ function blockChain(chain: ChainedCommands, key: PageBlockKey): ChainedCommands 
 
 const PROBE_PAGE_ID = '00000000-0000-4000-8000-000000000000';
 
-/** Blokken die in een tabel of callout niet thuishoren, ook als het schema ze toelaat. */
-const NOT_IN_TABLE: ReadonlySet<PageBlockKey> = new Set(['tabel', 'callout', 'uitklapper', 'inhoudsopgave', 'subpagina']);
-const NOT_IN_CALLOUT: ReadonlySet<PageBlockKey> = new Set(['tabel', 'callout', 'uitklapper', 'inhoudsopgave', 'subpagina', 'code', 'citaat', 'scheidingslijn']);
+/** Blokken die in een tabel, callout of kolom niet thuishoren, ook als het schema ze toelaat. */
+const NOT_IN_TABLE: ReadonlySet<PageBlockKey> = new Set(['tabel', 'kolommen2', 'kolommen3', 'callout', 'uitklapper', 'inhoudsopgave', 'subpagina']);
+const NOT_IN_CALLOUT: ReadonlySet<PageBlockKey> = new Set(['tabel', 'kolommen2', 'kolommen3', 'callout', 'uitklapper', 'inhoudsopgave', 'subpagina', 'code', 'citaat', 'scheidingslijn']);
+// Wat het schema in een kolom weigert (COLUMN_CONTENT). Hier ook, zodat het menu
+// het niet toont: ProseMirror zocht anders een plek buiten de kolom.
+const NOT_IN_COLUMN: ReadonlySet<PageBlockKey> = new Set(['tabel', 'kolommen2', 'kolommen3', 'uitklapper', 'inhoudsopgave', 'subpagina']);
 
 export function canRunPageBlock(editor: Editor, key: PageBlockKey): boolean {
   if (!editor.isEditable || editor.isActive('codeBlock')) return false;
   if (editor.isActive('table') && NOT_IN_TABLE.has(key)) return false;
   if (editor.isActive('callout') && NOT_IN_CALLOUT.has(key)) return false;
+  if (editor.isActive('column') && NOT_IN_COLUMN.has(key)) return false;
   if (key === 'subpagina' && !pageLinksOf(editor)) return false;
   if ((key === 'afbeelding' || key === 'bestand') && !pageMediaOf(editor)) return false;
   try {

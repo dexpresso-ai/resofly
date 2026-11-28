@@ -52,3 +52,10 @@ test('elk blok heeft een eigen sleutel, een naam en uitleg', () => {
   assert.equal(new Set(PAGE_BLOCKS.map(block => block.key)).size, PAGE_BLOCKS.length);
   for (const block of PAGE_BLOCKS) assert.ok(block.label && block.hint, block.key);
 });
+
+test('/kol en /2 vinden de kolommen (stap 2-0)', () => {
+  assert.deepEqual(keys('kol').slice(0, 2), ['kolommen2', 'kolommen3']);
+  assert.equal(keys('2')[0], 'kolommen2');
+  assert.equal(keys('3')[0], 'kolommen3');
+  assert.ok(keys('naast').includes('kolommen2'));
+});

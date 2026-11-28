@@ -2200,6 +2200,55 @@ async function scenarioPaginas() {
     await sluitPagina(page);
   });
 
+  await uiStap('kolommen via het menu (stap 2-0): typen in elke kolom, Backspace naar de vorige, lege kolommen weer weg, en op een telefoon onder elkaar', async () => {
+    if (!blokPagina) throw new Error('geen pagina');
+    const { page } = await openBlokPagina(w.medewerker, 'medewerker');
+    await wachtOpgeslagen(page, 'de editor kwam niet in bewerken');
+    await editorVak(page).locator('h2').filter({ hasText: 'Planning' }).click();
+    await page.keyboard.press('Control+End');
+    await page.keyboard.press('Enter');
+    // /2: "2 kolommen" staat bovenaan, voor Kop 2.
+    await kiesBlok(page, '2', '2 kolommen');
+    const kolommen = editorVak(page).locator('.page-columns');
+    await kolommen.waitFor({ timeout: 5000 });
+    gelijk(await kolommen.locator('.page-column').count(), 2, 'twee kolommen');
+    // De cursor staat in de eerste kolom.
+    await page.keyboard.type('Links');
+    await kolommen.locator('.page-column').nth(1).click();
+    await page.keyboard.type('Rechts');
+    // Backspace aan het begin van de tweede kolom: naar het eind van de eerste.
+    await page.keyboard.press('Home');
+    await page.keyboard.press('Backspace');
+    await page.keyboard.type('!');
+    await wachtTot(async () => tekst(await kolommen.locator('.page-column').first().innerText().catch(() => '')) === 'Links!',
+      { melding: `Backspace ging niet naar de eerste kolom: ${tekst(await kolommen.innerText().catch(() => ''))}` });
+    // Drie lege kolommen, en meteen Backspace: die gaan weer weg.
+    await page.keyboard.press('Control+End');
+    await kiesBlok(page, '3', '3 kolommen');
+    await wachtTot(async () => (await editorVak(page).locator('.page-columns').count()) === 2, { melding: 'de drie kolommen kwamen er niet bij' });
+    await page.keyboard.press('Backspace');
+    await wachtTot(async () => (await editorVak(page).locator('.page-columns').count()) === 1, { melding: 'lege kolommen gingen niet weg met Backspace' });
+    await wachtOpgeslagen(page);
+    const rij = blokRijInDb();
+    gelijk(telBlok(rij.id, '@.type == "columns"'), 1, 'één blok kolommen');
+    gelijk(telBlok(rij.id, '@.type == "column"'), 2, 'twee kolommen in de database');
+    gelijk(telBlok(rij.id, '@.type == "column" && @.content[0].content[0].text == "Links!"'), 1, 'de eerste kolom');
+    gelijk(telBlok(rij.id, '@.type == "column" && @.content[0].content[0].text == "Rechts"'), 1, 'de tweede kolom');
+    verwacht(rij.content.includes('Links!') && rij.content.includes('Rechts'), `de platte tekst: ${rij.content}`);
+    // Op een telefoon onder elkaar.
+    const breed = page.viewportSize();
+    await page.setViewportSize({ width: 390, height: 844 });
+    try {
+      await wachtTot(async () => {
+        const [a, b] = await Promise.all([0, 1].map(i => kolommen.locator('.page-column').nth(i).boundingBox()));
+        return Boolean(a && b && b.y >= a.y + a.height - 1);
+      }, { melding: 'op een telefoon staan de kolommen niet onder elkaar' });
+    } finally {
+      if (breed) await page.setViewportSize(breed);
+    }
+    await sluitPagina(page);
+  });
+
   await uiStap('plakken uit Excel of Word wordt een tabel, zonder de stijl van buiten', async () => {
     if (!blokPagina) throw new Error('geen pagina');
     const { page } = await openBlokPagina(w.medewerker, 'medewerker');
@@ -2250,16 +2299,22 @@ async function scenarioPaginas() {
     gelijk([na.edit_version, na.gewijzigd], [voor.edit_version, voor.gewijzigd], 'edit_version en "laatst gewijzigd" na alleen openen');
   });
 
-  await uiStap('een pagina met een blok dat deze app niet kent, gaat alleen open om te lezen en blijft zoals hij was', async () => {
+  await uiStap('een pagina met een blok dat deze app niet kent, gaat alleen open om te lezen en blijft zoals hij was; een pagina die niet in de editor past ook', async () => {
     // Tiptap maakte van zo'n pagina stilletjes een lege; de eerste toets
-    // schreef die dan over de echte heen.
+    // schreef die dan over de echte heen. Sinds de kolommen (stap 2-0) kent de
+    // editor elk blok dat de database aanneemt, en eerst gebruikte deze test
+    // kolommen. Een blok uit de toekomst (een nieuwere database, een oud
+    // tabblad) bootst hij nu na: de insert slaat de triggers over, en daarmee
+    // de controle van de body (documents_page_text).
     const body = { type: 'doc', content: [
-      { type: 'paragraph', content: [{ type: 'text', text: 'Boven de kolommen.' }] },
-      { type: 'columns', content: [{ type: 'column', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Links' }] }] }] },
+      { type: 'paragraph', content: [{ type: 'text', text: 'Boven het nieuwe blok.' }] },
+      { type: 'tijdlijn', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Later' }] }] },
     ] };
     const titel = `Uit de toekomst ${Date.now().toString(36)}`;
-    sql(`insert into public.documents (organization_id, created_by, title, format, body, client_id)
-      values (${q(w.orgId)}, ${q(w.medewerker.id)}, ${q(titel)}, 'page', ${q(JSON.stringify(body))}::jsonb, ${q(w.klantA.id)})`);
+    sql(`begin; set local session_replication_role = replica;
+      insert into public.documents (organization_id, created_by, title, format, body, client_id)
+      values (${q(w.orgId)}, ${q(w.medewerker.id)}, ${q(titel)}, 'page', ${q(JSON.stringify(body))}::jsonb, ${q(w.klantA.id)});
+      commit;`);
     const nieuw = sqlRij(`select id, edit_version, updated_at::text as gewijzigd, body::text as body from public.documents
       where organization_id = ${q(w.orgId)} and title = ${q(titel)}`);
     const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
@@ -2282,6 +2337,26 @@ async function scenarioPaginas() {
     const na = sqlRij(`select edit_version, updated_at::text as gewijzigd, body::text as body from public.documents where id = ${q(nieuw.id)}`);
     gelijk([na.edit_version, na.gewijzigd, na.body], [nieuw.edit_version, nieuw.gewijzigd, nieuw.body], 'de pagina is onveranderd');
     gelijk(sqlRij(`select count(*)::int as n from public.document_versions where document_id = ${q(nieuw.id)}`).n, 0, 'geen versie');
+    // Eén kolom: dat neemt de database aan, maar de editor maakt er twee of drie
+    // (stap 2-0). Ook die pagina gaat alleen open om te lezen, met een eigen melding.
+    const scheef = { type: 'doc', content: [
+      { type: 'columns', content: [{ type: 'column', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Alleen' }] }] }] },
+    ] };
+    const titel2 = `Eén kolom ${Date.now().toString(36)}`;
+    sql(`insert into public.documents (organization_id, created_by, title, format, body, client_id)
+      values (${q(w.orgId)}, ${q(w.medewerker.id)}, ${q(titel2)}, 'page', ${q(JSON.stringify(scheef))}::jsonb, ${q(w.klantA.id)})`);
+    const tweede = sqlRij(`select id, edit_version, body::text as body from public.documents where organization_id = ${q(w.orgId)} and title = ${q(titel2)}`);
+    const adres2 = new URL(page.url());
+    adres2.searchParams.set('pagina', tweede.id);
+    await page.goto(adres2.toString());
+    await page.locator('.page-editor').waitFor({ timeout: 30000 });
+    await wachtTot(async () => tekst(await page.locator('.page-editor-banner').innerText().catch(() => '')).includes('De inhoud van deze pagina klopt niet'),
+      { melding: 'geen melding over een pagina die niet past' });
+    gelijk(tekst(await paginaStatus(page).innerText()), 'Alleen lezen', 'status bij één kolom');
+    gelijk(await editorVak(page).getAttribute('contenteditable'), 'false', 'één kolom: niet bewerkbaar');
+    await sluitPagina(page);
+    const tweedeNa = sqlRij(`select edit_version, body::text as body from public.documents where id = ${q(tweede.id)}`);
+    gelijk([tweedeNa.edit_version, tweedeNa.body], [tweede.edit_version, tweede.body], 'de pagina met één kolom is onveranderd');
   });
 
   await uiStap('op een telefoon: de +-knop opent het blokmenu als paneel, terug sluit het menu, en een brede tabel schuift binnen de pagina', async () => {

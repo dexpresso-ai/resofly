@@ -429,7 +429,7 @@ portaal en bij een geheime link.
 ## 16. Open punten
 
 - **Privé-pagina's** (alleen voor jou): wel of niet? En zien Owner en Admin ze?
-- **Kolommen:** in fase 1 of in fase 2?
+- **Kolommen:** in fase 1 of in fase 2? Gebouwd als eerste stap van fase 2 (2-0, 28 november).
 - **Tussenversies:** hoe lang bewaren we die? Vrijgegeven versies blijven altijd.
 - **Collabora:** hoeveel instances bij meer gebruik?
 
@@ -521,6 +521,48 @@ akkoord is.
 | 1C-2 | De vrijgave in de database: `drive_shares.document_version_id`, alleen een vrijgegeven versie van die pagina en organisatie. In dezelfde stap lezen het portaal en de geheime link die versie, via `renderPageHtml`. | gebouwd op 28 november, op staging gezet op 28 november; zie `docs/changelog/CHANGELOG_PAGINAS_DELEN_VRIJGAVE_2026-11-28.md`. Migratie `20261128120000_paginas_delen`. |
 | 1C-3 | Het deelvenster voor een pagina: vrijgeven, subpagina's aanvinken, "De klant ziet een oudere versie" met "Bijwerken bij klant", het logboek. | gebouwd op 28 november, op staging gezet op 28 november: 1C-3a (database en server: `file-share` met de vrijgave, `page_share_status`, `release_page_to_shares`, migratie `20261128130000`) en 1C-3b (het venster, de knop en de melding in de editor, Gerrie); zie `docs/changelog/CHANGELOG_PAGINAS_BIJWERKEN_BIJ_KLANT_2026-11-28.md` |
 | 1C-4 | De weergave in het portaal en bij een geheime link: de opmaak, en afbeeldingen die de server alleen tekent als ze in de gedeelde versie staan. Een klantpagina gaat alleen naar het portaal. | gebouwd op 28 november, op staging gezet op 28 november; zie `docs/changelog/CHANGELOG_PAGINAS_PORTAAL_WEERGAVE_2026-11-28.md`. Migratie `20261128140000`. Een klantpagina via een losse link weigerde de database al. |
+
+**Fase 2, in tussenstappen (ingedeeld op 28 november, na "Merge naar staging en houw verder"):**
+
+Fase 1 is af, op 1A-5d na (dat wacht op twee besluiten). Fase 2 volgt §13. Alles blijft op de
+branch tot de gebruiker zegt dat het naar staging mag.
+
+| Stap | Wat | Status |
+| --- | --- | --- |
+| 2-0 | Kolommen: twee of drie naast elkaar, op de telefoon onder elkaar (§3, en open punt in §16). De database, de klantweergave en de export kennen ze al; de editor kan ze nog niet maken. | gebouwd op 28 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_KOLOMMEN_2026-11-28.md`. Geen migratie. |
+| 2-1a | @-vermeldingen, de basis: een knoop `mention` met alleen de soort (klant, project, taak, factuur, collega) en het id. De database neemt hem aan, en weigert een vermelding van iets uit een andere organisatie. De editor toont hem; Word, PDF, de zoekindex, Gerrie en de klant krijgen de naam alleen met de rechten van wie kijkt. Een tabel voor "Genoemd in", bijgehouden door de database. | nog te bouwen |
+| 2-1b | De @-kiezer in de editor: na @ zoeken in de klanten, projecten, taken, facturen en collega's die je mag zien. De chip toont de naam van nu, en opent wat hij noemt. | nog te bouwen |
+| 2-1c | "Genoemd in" bij een klant en een project: de pagina's die hen noemen, voor zover je die mag lezen. | nog te bouwen |
+| 2-2 | Actiepunten worden taken: een taak in een pagina wordt met één klik een taak in het project, met een link terug. | nog te ontwerpen |
+| 2-3 | Levende blokken: open taken, uren tegen budget, openstaande facturen, met de rechten van wie kijkt; bij delen en export een momentopname. | nog te ontwerpen |
+| 2-4 | Sjablonen met `mergeTokens`, en projectsjablonen die een paginaboom aanmaken. | nog te ontwerpen |
+| 2-5 | Opmerkingen bij een blok. | nog te ontwerpen |
+| 2-6 | Gerrie stelt per blok voor, en gebruikt pagina's als kennis. | nog te ontwerpen |
+| 2-7 | Notities worden pagina's (handschrift als blok, labels, de agenda). | wacht op 1A-5d (het omzetten) |
+| — | Privé-pagina's. | wacht op een besluit (§16) |
+
+**Keuzes voor de @-vermeldingen (2-1), vastgelegd bij het indelen:**
+
+- **Alleen de soort en het id, geen naam.** Wie Inhoud mag lezen maar Klanten of Financiën
+  niet, leest de body van een pagina wel. Een opgeslagen naam kwam dan via de body, de versies,
+  de tekstspiegel, het uittreksel, de zoekindex en Gerrie bij die persoon terecht (regel 3).
+  - De naam komt pas bij het tonen, met de rechten van wie kijkt: in de app uit de geladen
+    gegevens, in `page-export` met de sessie van wie exporteert, zoals bij het voorblad.
+  - Zo hoeft ook niemand een opgeslagen naam bij te werken.
+  - Een naam opslaan kan later nog. Hem uit versies en de zoekindex halen kan niet.
+- **Wie de naam niet mag zien, ziet de soort:** "klant", "project", "factuur". De chip opent dan
+  niets.
+- **Bij de klant (portaal, geheime link): de strenge standaard.** De klant ziet alleen de soort,
+  geen naam. Dat volgt de regel van een subpagina die niet gedeeld is. Of de klant de naam wel
+  mag zien, is een vraag aan de gebruiker; het rapport noemt hem.
+- **De database en de editor tegelijk.** De database neemt `mention` pas aan in dezelfde stap
+  waarin de editor hem kan tonen. Anders konden de API, de MCP en Gerrie pagina's maken die de
+  editor alleen om te lezen opent.
+- **Plakken uit een andere organisatie:** de database weigert zo'n vermelding, en dan zou elke
+  automatische opslag van die pagina mislukken. De editor laat daarom bij plakken een
+  vermelding vallen die hij niet kent, zoals bij een afbeelding uit een ander dossier.
+- **"Genoemd in"** komt uit een tabel die de database bij elke opslag bijhoudt. De lijst loopt
+  langs de regels van `documents`: Inhoud mogen lezen, en niet in de prullenbak.
 
 **1C wordt gebouwd volgens de lezing van §1 (28 november):**
 

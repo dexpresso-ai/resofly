@@ -13774,6 +13774,14 @@ button.alog-feed-row:hover{background:var(--bg3)}
 .page-prose .tiptap .page-callout[data-variant="let-op"]::before{background:var(--accent-o)}
 .page-prose .tiptap .page-callout[data-variant="waarschuwing"]{--callout-icon:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 16h.01'/%3E%3Cpath d='M12 8v4'/%3E%3Cpath d='M15.312 2a2 2 0 0 1 1.414.586l4.688 4.688A2 2 0 0 1 22 8.688v6.624a2 2 0 0 1-.586 1.414l-4.688 4.688a2 2 0 0 1-1.414.586H8.688a2 2 0 0 1-1.414-.586l-4.688-4.688A2 2 0 0 1 2 15.312V8.688a2 2 0 0 1 .586-1.414l4.688-4.688A2 2 0 0 1 8.688 2z'/%3E%3C/svg%3E");border-color:rgba(var(--danger-rgb),.34);background:rgba(var(--danger-rgb),.08)}
 .page-prose .tiptap .page-callout[data-variant="waarschuwing"]::before{background:var(--accent-r)}
+/* Stap 2-0: kolommen. Even breed naast elkaar; op een smal scherm onder elkaar.
+   Tijdens het bewerken een stippellijn om elke kolom: anders zag je niet waar
+   de ene ophoudt en de andere begint. */
+.page-prose .tiptap .page-columns{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:14px;margin:.6em 0}
+.page-prose .tiptap .page-column{min-width:0;padding:4px 8px;border-radius:8px;outline:1px dashed transparent;outline-offset:2px}
+.page-prose .tiptap .page-column>*+*{margin-top:.5em}
+.page-prose .tiptap[contenteditable="true"] .page-column{outline-color:var(--border2)}
+@media (max-width:640px){.page-prose .tiptap .page-columns{grid-auto-flow:row}}
 .page-prose .tiptap .page-details{display:flex;align-items:flex-start;gap:6px;padding:8px 10px;border:1px solid var(--border);border-radius:12px}
 .page-prose .tiptap .page-details>button{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;width:24px;height:24px;margin-top:2px;padding:0;border:none;border-radius:7px;background:transparent;color:var(--muted2);cursor:pointer}
 .page-prose .tiptap .page-details>button:hover{background:var(--bg2);color:var(--text)}

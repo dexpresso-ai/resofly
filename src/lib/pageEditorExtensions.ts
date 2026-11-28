@@ -16,7 +16,7 @@
 import { Extension, Node, mergeAttributes } from '@tiptap/core';
 import type { Editor, NodeViewRenderer } from '@tiptap/core';
 import type { Node as PmNode } from '@tiptap/pm/model';
-import { NodeSelection, Plugin, TextSelection } from '@tiptap/pm/state';
+import { NodeSelection, Plugin, Selection, TextSelection } from '@tiptap/pm/state';
 import type { Transaction } from '@tiptap/pm/state';
 import { columnResizing } from '@tiptap/pm/tables';
 import { StarterKit } from '@tiptap/starter-kit';
@@ -31,7 +31,7 @@ import { calloutVariant, isAllowedPageLink } from './pageSchema.ts';
 export const PAGE_BLOCKS_WITH_ID = [
   'paragraph', 'heading', 'bulletList', 'orderedList', 'listItem', 'taskList', 'taskItem',
   'blockquote', 'codeBlock', 'horizontalRule',
-  'table', 'callout', 'details', 'tableOfContents', 'subpage', 'image', 'fileBlock',
+  'table', 'callout', 'details', 'tableOfContents', 'subpage', 'image', 'fileBlock', 'columns',
 ] as const;
 
 /** De smalste kolom van een tabel, ook bij slepen. */
@@ -64,6 +64,117 @@ export const Callout = Node.create({
     return ['div', mergeAttributes(HTMLAttributes, { 'data-type': 'callout', class: 'page-callout' }), 0];
   },
 });
+
+/**
+ * Wat in een kolom mag: gewone blokken. Geen tabel, kolommen, uitklapper,
+ * inhoudsopgave of subpagina: die passen niet in een smalle kolom, en Word
+ * en PDF zetten kolommen al in een tabel (pageDocx.ts).
+ */
+export const COLUMN_CONTENT = '(paragraph | heading | bulletList | orderedList | taskList | blockquote | codeBlock | horizontalRule | callout | image | fileBlock)+';
+
+/**
+ * Kolommen (stap 2-0): twee of drie naast elkaar, even breed, en op een smal
+ * scherm onder elkaar (globals.css). De database, de klantweergave
+ * (pageHtml.ts) en de export (pageDocx.ts) kenden ze al sinds 1A-1; alleen de
+ * editor kon ze nog niet maken. Isolating: Backspace of Enter aan de rand van
+ * een kolom haalt geen tekst over de grens heen.
+ */
+export const Columns = Node.create({
+  name: 'columns',
+  group: 'block',
+  content: 'column{2,3}',
+  defining: true,
+  isolating: true,
+  parseHTML() {
+    return [{ tag: 'div[data-type="columns"]' }];
+  },
+  renderHTML({ HTMLAttributes }) {
+    return ['div', mergeAttributes(HTMLAttributes, { 'data-type': 'columns', class: 'page-columns' }), 0];
+  },
+  addKeyboardShortcuts() {
+    return { Backspace: ({ editor }) => backspaceInColumns(editor) };
+  },
+});
+
+export const Column = Node.create({
+  name: 'column',
+  content: COLUMN_CONTENT,
+  isolating: true,
+  parseHTML() {
+    return [{ tag: 'div[data-type="column"]' }];
+  },
+  renderHTML({ HTMLAttributes }) {
+    return ['div', mergeAttributes(HTMLAttributes, { 'data-type': 'column', class: 'page-column' }), 0];
+  },
+});
+
+/**
+ * Kolommen invoegen, met de cursor in de eerste. Staan de kolommen onderaan,
+ * dan komt er een lege regel onder: anders kon je niet meer onder de kolommen
+ * verder typen (een kolom houdt Enter binnen zichzelf).
+ */
+export function insertColumns(count: 2 | 3) {
+  return ({ tr, dispatch }: { tr: Transaction; dispatch?: unknown }): boolean => {
+    const { schema } = tr.doc.type;
+    const columns = schema.nodes.columns.create(null,
+      Array.from({ length: count }, () => schema.nodes.column.create(null, schema.nodes.paragraph.create())));
+    const { $from } = tr.selection;
+    // Alleen op het hoogste niveau: niet in een lijst, citaat of uitklapper.
+    if ($from.depth !== 1 || !$from.parent.isTextblock) return false;
+    if (!dispatch) return true;
+    // Een lege regel wordt de kolommen; anders komen ze eronder.
+    const empty = $from.parent.content.size === 0;
+    const at = empty ? $from.before(1) : $from.after(1);
+    if (empty) tr.replaceWith(at, $from.after(1), columns);
+    else tr.insert(at, columns);
+    const after = at + columns.nodeSize;
+    if (!tr.doc.resolve(after).nodeAfter) tr.insert(after, schema.nodes.paragraph.create());
+    tr.setSelection(Selection.near(tr.doc.resolve(at + 2), 1));
+    return true;
+  };
+}
+
+/**
+ * Backspace aan het begin van een kolom. In een volgende kolom: naar het eind
+ * van de kolom ervoor. In de eerste, terwijl alle kolommen leeg zijn: de
+ * kolommen weg, met een lege regel ervoor in de plaats. Anders kwam je er
+ * niet meer uit: een kolom laat Backspace niet over zijn rand.
+ */
+function backspaceInColumns(editor: Editor): boolean {
+  const { state } = editor;
+  const { selection } = state;
+  if (!selection.empty) return false;
+  const { $from } = selection;
+  if ($from.parentOffset !== 0) return false;
+  let columnDepth = -1;
+  for (let depth = $from.depth; depth > 0; depth -= 1) {
+    if ($from.node(depth).type.name === 'column') {
+      columnDepth = depth;
+      break;
+    }
+  }
+  if (columnDepth < 1) return false;
+  // Alleen aan het begin van het eerste blok van de kolom.
+  if ($from.index(columnDepth) !== 0 || $from.depth !== columnDepth + 1) return false;
+  const columns = $from.node(columnDepth - 1);
+  const columnIndex = $from.index(columnDepth - 1);
+  const columnsPos = $from.before(columnDepth - 1);
+  if (columnIndex > 0) {
+    // Naar het eind van de kolom ervoor.
+    const previousEnd = $from.before(columnDepth) - 1;
+    editor.view.dispatch(state.tr.setSelection(Selection.near(state.doc.resolve(previousEnd), -1)));
+    return true;
+  }
+  let allEmpty = true;
+  columns.forEach(column => {
+    if (column.childCount !== 1 || column.firstChild?.type.name !== 'paragraph' || column.firstChild.content.size > 0) allEmpty = false;
+  });
+  if (!allEmpty) return false;
+  const tr = state.tr.replaceWith(columnsPos, columnsPos + columns.nodeSize, state.schema.nodes.paragraph.create());
+  tr.setSelection(TextSelection.create(tr.doc, columnsPos + 1));
+  editor.view.dispatch(tr.scrollIntoView());
+  return true;
+}
 
 /**
  * Een knop in een blok (inhoudsopgave, subpagina, bestand) pakt bij een klik
@@ -716,6 +827,8 @@ export function pageEditorExtensions(options: { placeholder?: string } = {}) {
     DetailsSummary,
     DetailsContent,
     Callout,
+    Columns,
+    Column,
     TableOfContents,
     Subpage,
     PageImage,

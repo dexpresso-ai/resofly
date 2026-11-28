@@ -10,7 +10,7 @@
 export type PageBlockKey =
   | 'tekst' | 'kop1' | 'kop2' | 'kop3'
   | 'opsomming' | 'nummering' | 'takenlijst'
-  | 'tabel' | 'callout' | 'uitklapper' | 'inhoudsopgave' | 'subpagina' | 'afbeelding' | 'bestand'
+  | 'tabel' | 'kolommen2' | 'kolommen3' | 'callout' | 'uitklapper' | 'inhoudsopgave' | 'subpagina' | 'afbeelding' | 'bestand'
   | 'citaat' | 'code' | 'scheidingslijn';
 
 export type PageBlock = {
@@ -31,6 +31,9 @@ export const PAGE_BLOCKS: readonly PageBlock[] = [
   { key: 'nummering', label: 'Nummering', hint: 'Een genummerde lijst', words: ['lijst', 'nummers', 'genummerd', 'numbered'] },
   { key: 'takenlijst', label: 'Takenlijst', hint: 'Taken om af te vinken', words: ['taken', 'afvinken', 'todo', 'checklist'] },
   { key: 'tabel', label: 'Tabel', hint: 'Rijen en kolommen, met een kopregel', words: ['raster', 'excel', 'table'] },
+  // Stap 2-0. "2 kolommen" en niet "Kolommen (2)": /2 en /3 vinden ze dan ook.
+  { key: 'kolommen2', label: '2 kolommen', hint: 'Twee stukken naast elkaar; op de telefoon onder elkaar', words: ['kolommen', 'naast elkaar', 'columns', 'layout'] },
+  { key: 'kolommen3', label: '3 kolommen', hint: 'Drie stukken naast elkaar; op de telefoon onder elkaar', words: ['kolommen', 'naast elkaar', 'columns', 'layout'] },
   { key: 'callout', label: 'Callout', hint: 'Een kader dat opvalt: info, tip, let op', words: ['kader', 'opmerking', 'let op', 'tip', 'info', 'waarschuwing'] },
   { key: 'uitklapper', label: 'Uitklapper', hint: 'Tekst die je in- en uitklapt', words: ['inklappen', 'uitklappen', 'toggle', 'details'] },
   { key: 'inhoudsopgave', label: 'Inhoudsopgave', hint: 'Een lijst van de koppen op deze pagina', words: ['inhoud', 'overzicht', 'toc'] },
