@@ -27,6 +27,7 @@ import { TableKit } from '@tiptap/extension-table';
 import { Details, DetailsContent, DetailsSummary } from '@tiptap/extension-details';
 import { calloutVariant, isAllowedPageLink } from './pageSchema.ts';
 import { MENTION_KIND_WORDS, mentionKind, mentionOf, type MentionKind } from '../../supabase/functions/_shared/pageMentions.ts';
+import type { MentionCandidate } from './pageMentionSearch.ts';
 
 /** Blokken met een vast id (attrs.id): waar Gerrie straks per blok iets voorstelt. */
 export const PAGE_BLOCKS_WITH_ID = [
@@ -184,9 +185,31 @@ function backspaceInColumns(editor: Editor): boolean {
  */
 export type PageMentionNames = (kind: MentionKind, id: string) => string | null;
 
+type MentionStorage = {
+  names?: PageMentionNames | null;
+  /** De @-kiezer (stap 2-1b): wat je kunt noemen bij wat je typte. Zonder: geen kiezer. */
+  search?: ((query: string) => MentionCandidate[]) | null;
+  /** Openen wat een chip noemt: een klant, project, taak of factuur. Zonder: een chip opent niets. */
+  open?: ((kind: MentionKind, id: string) => void) | null;
+};
+
+const mentionStorageOf = (editor: Editor): MentionStorage | undefined =>
+  (editor.storage as unknown as Record<string, MentionStorage | undefined>).mention;
+
 export function mentionNamesOf(editor: Editor): PageMentionNames | null {
-  return (editor.storage as unknown as Record<string, { names?: PageMentionNames | null } | undefined>).mention?.names ?? null;
+  return mentionStorageOf(editor)?.names ?? null;
 }
+
+export function mentionSearchOf(editor: Editor): ((query: string) => MentionCandidate[]) | null {
+  return mentionStorageOf(editor)?.search ?? null;
+}
+
+export function mentionOpenOf(editor: Editor): ((kind: MentionKind, id: string) => void) | null {
+  return mentionStorageOf(editor)?.open ?? null;
+}
+
+/** Een collega heeft geen eigen scherm; de rest wel. */
+export const MENTION_OPENS: Readonly<Record<MentionKind, boolean>> = { client: true, project: true, task: true, invoice: true, member: false };
 
 const capitalized = (word: string) => word.charAt(0).toUpperCase() + word.slice(1);
 
@@ -204,8 +227,8 @@ export const Mention = Node.create({
   inline: true,
   atom: true,
   selectable: true,
-  addStorage() {
-    return { names: null as PageMentionNames | null };
+  addStorage(): MentionStorage {
+    return { names: null, search: null, open: null };
   },
   addAttributes() {
     return {
@@ -281,10 +304,23 @@ const mentionView: NodeViewRenderer = ({ editor, node }) => {
   dom.className = 'page-mention';
   dom.setAttribute('data-type', 'mention');
   dom.contentEditable = 'false';
+  let ref: ReturnType<typeof mentionOf> = null;
+  let named = false;
+  // Alleen lezen: een klik opent wat de chip noemt. Bij bewerken selecteert een
+  // klik de chip, en opent de knop "Openen" in de balk (PageEditor): daar klik je
+  // ook om de cursor te zetten, en openen sluit de pagina.
+  dom.addEventListener('click', event => {
+    if (editor.isEditable || !ref || !named || !MENTION_OPENS[ref.kind]) return;
+    const open = mentionOpenOf(editor);
+    if (!open) return;
+    event.preventDefault();
+    open(ref.kind, ref.id);
+  });
   const show = (current: PmNode) => {
-    const ref = mentionOf({ type: 'mention', attrs: current.attrs });
+    ref = mentionOf({ type: 'mention', attrs: current.attrs });
     const names = mentionNamesOf(editor);
     const name = ref && names ? names(ref.kind, ref.id) : null;
+    named = Boolean(name);
     dom.setAttribute('data-kind', ref?.kind ?? '');
     dom.classList.toggle('is-unknown', !name);
     dom.textContent = `@${name ?? (ref ? MENTION_KIND_WORDS[ref.kind] : 'vermelding')}`;

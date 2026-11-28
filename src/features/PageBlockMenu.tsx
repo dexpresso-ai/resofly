@@ -245,6 +245,19 @@ const MENU_WIDTH = 300;
 const MENU_MAX_HEIGHT = 340;
 
 /**
+ * Waar een lijst bij de cursor komt: eronder als daar plaats is, anders erboven,
+ * en nooit buiten het scherm. Ook voor de @-kiezer (PageMentionMenu.tsx).
+ */
+export function menuStyleAt(anchor: DOMRect | null): CSSProperties | undefined {
+  if (!anchor) return undefined;
+  const left = Math.max(8, Math.min(anchor.left, window.innerWidth - MENU_WIDTH - 8));
+  const below = window.innerHeight - anchor.bottom;
+  return below >= Math.min(MENU_MAX_HEIGHT, 220) || below >= anchor.top
+    ? { left, top: anchor.bottom + 6, maxHeight: Math.min(MENU_MAX_HEIGHT, below - 14) }
+    : { left, bottom: window.innerHeight - anchor.top + 6, maxHeight: Math.min(MENU_MAX_HEIGHT, anchor.top - 14) };
+}
+
+/**
  * Het menu zelf. Bij `/` en op een groot scherm een lijst bij de plek waar je
  * bent; bij de +-knop op een telefoon een paneel van onderen.
  */
@@ -280,15 +293,7 @@ export function BlockMenu({ menu, onHover, onClose }: {
     active?.scrollIntoView({ block: 'nearest' });
   }, [menu.active, menu.items]);
 
-  let style: CSSProperties | undefined;
-  if (!sheet && menu.anchor) {
-    const rect = menu.anchor;
-    const left = Math.max(8, Math.min(rect.left, window.innerWidth - MENU_WIDTH - 8));
-    const below = window.innerHeight - rect.bottom;
-    style = below >= Math.min(MENU_MAX_HEIGHT, 220) || below >= rect.top
-      ? { left, top: rect.bottom + 6, maxHeight: Math.min(MENU_MAX_HEIGHT, below - 14) }
-      : { left, bottom: window.innerHeight - rect.top + 6, maxHeight: Math.min(MENU_MAX_HEIGHT, rect.top - 14) };
-  }
+  const style = sheet ? undefined : menuStyleAt(menu.anchor);
 
   const list = (
     <div

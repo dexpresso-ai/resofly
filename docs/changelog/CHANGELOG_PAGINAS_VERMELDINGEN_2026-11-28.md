@@ -127,9 +127,63 @@ een naam (`label`) of inhoud wordt geweigerd.
   modules. De CI doet `deno check` (`pageMentions.ts` staat in de stap "Deno-typecheck
   pagina's").
 
+## Stap 2-1b: de @-kiezer, en een chip openen
+
+### Wat er nu kan
+
+- **Typ @ en een stuk van een naam.** Er verschijnt een lijst met klanten, projecten, taken,
+  facturen en collega's: alleen wat je mag lezen, want de lijst komt uit wat de app geladen
+  heeft.
+  - De beste eerst: de naam begint ermee, dan een woord in de naam ("@jan" vindt "Bakkerij
+    Jansen"), dan ergens in de naam, en dan waar het bij hoort (de klant van een project).
+  - Een gearchiveerd project en een afgeronde taak staan er niet in.
+  - Pijltjes, Enter, Tab en Escape werken zoals bij het blokmenu. Een spatie sluit de kiezer,
+    zoals daar: met spaties erin bleef hij open terwijl je de zin verder typte.
+  - Een @ midden in een woord, zoals in jan@bedrijf.nl, opent de kiezer niet.
+  - De terugknop van de telefoon sluit de kiezer, niet de pagina. Op een telefoon past de
+    lijst op het scherm.
+- **Een chip openen.**
+  - Bij bewerken selecteert een klik de chip; daar klik je ook om de cursor te zetten. De balk
+    toont dan de soort en de naam, met "Openen".
+  - Bij alleen lezen opent een klik meteen.
+  - Openen sluit de pagina eerst netjes: opslaan, een versie, de claim vrij. Mislukt het
+    opslaan, dan blijft de pagina open en opent er niets.
+  - Een klant of project opent zijn scherm, een taak of factuur haar venster. Een collega heeft
+    geen eigen scherm.
+- **De voorvertoning van een versie** toont de namen, maar opent niets en heeft geen kiezer.
+
+### Hoe het werkt
+
+- `src/lib/pageMentionSearch.ts`: de kandidaten uit de geladen gegevens en het zoeken. Puur, en
+  met een geheugen, zodat niet bij elke toets alles opnieuw wordt opgebouwd.
+- `src/features/PageMentionMenu.tsx`: de plugin (Suggestion met `@`) en de lijst, in de stijl
+  van het blokmenu. De plek van de lijst komt uit het blokmenu (`menuStyleAt`).
+- De editor bewaart `search` en `open` in `editor.storage.mention`. `main.tsx` geeft de
+  zoekfunctie en het openen mee, en opent wat de chip noemt.
+
+### Getest
+
+- `pageMentionSearch.test.ts` (4): de kandidaten, het zoeken, het geheugen, de collega's.
+- **`ui.mjs paginas`: 21 stappen, 0 fout.** De nieuwe stap:
+  - een e-mailadres opent geen kiezer;
+  - @ met het begin van de naam toont de klant;
+  - Escape en de terugknop sluiten alleen de kiezer;
+  - op 390 pixels past de lijst;
+  - kiezen met een klik maakt een chip, en die staat in de database;
+  - een klik op de chip opent niets, en de balk toont "Openen";
+  - "Openen" sluit de pagina en opent de klant, met de claim vrij en de tekst opgeslagen.
+
+  Na de terugknop is de focus weg; op een telefoon gaat dan ook het toetsenbord dicht. De test
+  tikt daarna eerst weer in de tekst.
+- `npm test` (2454) en `npm run typecheck`.
+
+### Uitrollen
+
+De migratie van 2-1a moet uiterlijk samen met de kiezer naar staging. Staat de app met de
+kiezer eerder live dan de migratie, dan weigert de database de vermeldingen die de kiezer maakt.
+
 ## Nog niet
 
-- **De @-kiezer** (2-1b) en **"Genoemd in"** bij een klant of project (2-1c).
-- **Een chip die je aanklikt** opent nog niets.
+- **"Genoemd in"** bij een klant of project (2-1c).
 - **Een hernoemde klant** krijgt in een open pagina pas bij opnieuw openen zijn nieuwe naam. De
   chip leest de naam bij het tekenen.

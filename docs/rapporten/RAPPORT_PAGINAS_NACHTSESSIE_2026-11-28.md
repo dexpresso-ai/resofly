@@ -35,7 +35,9 @@ op 1A-5d na. Fase 2 staat nu in stappen in §18 van het bouwplan.
   - In de pagina staan alleen de soort en het id, geen naam. De naam komt met de rechten van
     wie kijkt, en anders staat de soort er.
   - Een migratie: `20261128160000_paginas_vermeldingen.sql`.
-  - Kiezen met @ en "Genoemd in" volgen (2-1b en 2-1c).
+  - "Genoemd in" volgt (2-1c).
+- **2-1b, de @-kiezer**: typ @ en een stuk van een naam, en kies. Een chip opent wat hij noemt;
+  bij bewerken via "Openen" in de balk, zodat een klik om de cursor te zetten niets opent.
   - Een kopie voor het dossier (de Word-kopie, de vastgelegde PDF) krijgt geen namen meer,
     ook niet op het voorblad (vraag 12).
   - Nog niet door de CI: de migratie vanaf een lege database en `deno check` op de nieuwe
@@ -250,6 +252,7 @@ Na de merge van 14:39, op de branch (fase 2):
 | --- | --- | --- |
 | 2-0 | Kolommen: twee of drie naast elkaar, op de telefoon onder elkaar. | `CHANGELOG_PAGINAS_KOLOMMEN_2026-11-28.md` |
 | 2-1a | @-vermeldingen, de basis: de database, de chip in de editor, Word, de PDF en de klant. Alleen de soort en het id in de pagina. Migratie `20261128160000`. | `CHANGELOG_PAGINAS_VERMELDINGEN_2026-11-28.md` |
+| 2-1b | De @-kiezer, en een chip openen. Moet samen met de migratie van 2-1a naar staging. | `CHANGELOG_PAGINAS_VERMELDINGEN_2026-11-28.md` |
 
 ## Wat er op 28 november om 09:34 naar staging ging
 

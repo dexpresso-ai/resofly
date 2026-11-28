@@ -2299,6 +2299,78 @@ async function scenarioPaginas() {
     await sluitPagina(andere);
   });
 
+  await uiStap('de @-kiezer (stap 2-1b): @ en een stuk van de naam zoekt, Escape en terug sluiten alleen de kiezer, een e-mailadres opent hem niet; de chip openen sluit de pagina en opent de klant', async () => {
+    const titel = `Kiezer ${Date.now().toString(36)}`;
+    const body = { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Start.' }] }] };
+    sql(`insert into public.documents (organization_id, created_by, title, format, body, client_id)
+      values (${q(w.orgId)}, ${q(w.medewerker.id)}, ${q(titel)}, 'page', ${q(JSON.stringify(body))}::jsonb, ${q(w.klantA.id)})`);
+    const pagina = sqlRij(`select id from public.documents where organization_id = ${q(w.orgId)} and title = ${q(titel)}`);
+    const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+    const page = lid.page;
+    const adres = new URL(page.url());
+    adres.searchParams.set('pagina', pagina.id);
+    await page.goto(adres.toString());
+    await page.locator('.page-editor').waitFor({ timeout: 30000 });
+    await wachtOpgeslagen(page, 'de editor kwam niet in bewerken');
+    await editorVak(page).locator('p').first().click();
+    await page.keyboard.press('End');
+    const kiezer = page.locator('.page-mention-menu');
+    // Een @ midden in een woord (een e-mailadres) opent de kiezer niet.
+    await page.keyboard.type(' Mail jan@bedrijf.nl');
+    await page.waitForTimeout(400);
+    gelijk(await kiezer.count(), 0, 'een e-mailadres opende de kiezer');
+    // @ en het begin van de naam: de klant staat in de lijst.
+    const zoek = w.klantA.name.split(' ')[0].toLowerCase();
+    const optie = kiezer.locator('.page-block-item').filter({ has: page.locator('.page-block-label').getByText(w.klantA.name, { exact: true }) });
+    await page.keyboard.type(` Bel @${zoek}`);
+    await kiezer.waitFor({ timeout: 10000 });
+    await optie.waitFor({ timeout: 10000 });
+    // Escape sluit alleen de kiezer, de getypte tekst blijft staan.
+    await page.keyboard.press('Escape');
+    await kiezer.waitFor({ state: 'detached', timeout: 5000 });
+    verwacht(await page.locator('.page-editor').isVisible(), 'Escape sloot de pagina');
+    verwacht(tekst(await editorVak(page).innerText()).includes(`@${zoek}`), 'de getypte tekst verdween met Escape');
+    // Terug (de telefoon) sluit ook alleen de kiezer.
+    await page.keyboard.type(` @${zoek}`);
+    await kiezer.waitFor({ timeout: 10000 });
+    await page.goBack();
+    await kiezer.waitFor({ state: 'detached', timeout: 5000 });
+    verwacht(await page.locator('.page-editor').isVisible(), 'terug sloot de pagina in plaats van de kiezer');
+    // Op een telefoon: de kiezer past op het scherm. Kiezen met een klik. Na
+    // terug is de focus weg (op een telefoon gaat dan ook het toetsenbord
+    // dicht): eerst weer in de tekst tikken, zoals iemand dat doet.
+    const breed = page.viewportSize();
+    await page.setViewportSize({ width: 390, height: 844 });
+    try {
+      await editorVak(page).locator('p').first().click();
+      await page.keyboard.press('End');
+      await page.keyboard.type(` @${zoek}`);
+      await kiezer.waitFor({ timeout: 10000 });
+      const vak = await kiezer.boundingBox();
+      verwacht(vak && vak.x >= 0 && vak.x + vak.width <= 390, `de kiezer valt buiten een telefoon: ${JSON.stringify(vak)}`);
+      await optie.click();
+    } finally {
+      if (breed) await page.setViewportSize(breed);
+    }
+    await kiezer.waitFor({ state: 'detached', timeout: 5000 });
+    const chip = editorVak(page).locator('.page-mention');
+    await wachtTot(async () => (await chip.count()) === 1, { melding: 'geen chip na kiezen' });
+    gelijk(tekst(await chip.innerText()), `@${w.klantA.name}`, 'de chip');
+    await wachtOpgeslagen(page);
+    gelijk(sqlRij(`select count(*)::int as n from public.documents d, jsonb_path_query(d.body, ${q(`strict $.** ? (@.type == "mention" && @.attrs.kind == "client" && @.attrs.id == "${w.klantA.id}")`)}) m where d.id = ${q(pagina.id)}`).n, 1, 'de vermelding in de database');
+    // Bij bewerken selecteert een klik de chip; de balk biedt Openen. Openen sluit de pagina netjes.
+    await chip.click();
+    const balk = page.locator('.page-editor-subbar[aria-label="Vermelding"]');
+    await balk.waitFor({ timeout: 5000 });
+    verwacht(tekst(await balk.innerText()).includes(w.klantA.name), 'de balk noemt de klant niet');
+    gelijk(await page.locator('.page-editor').count(), 1, 'een klik op de chip opende al iets');
+    await balk.getByRole('button', { name: 'Klant openen' }).click();
+    await page.locator('.page-editor').waitFor({ state: 'detached', timeout: 15000 });
+    await inhoud(page).locator('.client-detail-page .client-detail-title').getByText(w.klantA.name).first().waitFor({ timeout: 15000 });
+    gelijk(sqlRij(`select count(*)::int as n from public.document_edit_claims where document_id = ${q(pagina.id)}`).n, 0, 'de claim is vrij');
+    verwacht(tekst(sqlRij(`select content from public.documents where id = ${q(pagina.id)}`).content).includes('Mail jan@bedrijf.nl'), 'de pagina is niet opgeslagen voor het openen');
+  });
+
   await uiStap('plakken uit Excel of Word wordt een tabel, zonder de stijl van buiten', async () => {
     if (!blokPagina) throw new Error('geen pagina');
     const { page } = await openBlokPagina(w.medewerker, 'medewerker');

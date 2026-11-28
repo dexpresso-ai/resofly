@@ -35,12 +35,18 @@ import { EditorContent, useEditor, useEditorState } from '@tiptap/react';
 import type { Editor, JSONContent } from '@tiptap/react';
 import {
   AlignCenter, AlignLeft, AlignRight, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, BetweenHorizontalEnd, BetweenHorizontalStart,
-  BetweenVerticalEnd, BetweenVerticalStart, Bold, Braces, ChevronLeft, Copy, FileOutput, Heading1, Heading2, Heading3, History, Info, Italic, Lightbulb, Link2,
+  BetweenVerticalEnd, BetweenVerticalStart, Bold, Braces, ChevronLeft, Copy, ExternalLink, FileOutput, Heading1, Heading2, Heading3, History, Info, Italic, Lightbulb, Link2,
   List, ListChecks, ListOrdered, Minus, OctagonAlert, PanelLeft, PanelTop, Pilcrow, Plus, Quote, Redo2, Share2, Strikethrough, TableCellsMerge,
   TableCellsSplit, Trash2, TriangleAlert, Underline as UnderlineIcon, Undo2, X,
 } from 'lucide-react';
 import { isInTable, moveTableColumn, moveTableRow, selectedRect } from '@tiptap/pm/tables';
-import { pageEditorExtensions, type PageLinks, type PageMedia, type PageMentionNames } from '../lib/pageEditorExtensions';
+import { NodeSelection } from '@tiptap/pm/state';
+import {
+  MENTION_OPENS, mentionNamesOf, mentionOpenOf, pageEditorExtensions, type PageLinks, type PageMedia, type PageMentionNames,
+} from '../lib/pageEditorExtensions';
+import { closeMentionMenu, MentionMenu, mentionMenuExtension, type MentionBridge, type MentionMenuState } from './PageMentionMenu';
+import type { MentionCandidate } from '../lib/pageMentionSearch';
+import { MENTION_KIND_WORDS, mentionOf, type MentionKind } from '../../supabase/functions/_shared/pageMentions.ts';
 import { fetchStoredFileBlob, uploadToR2 } from '../lib/r2';
 import { calloutVariant, isAllowedPageLink, type CalloutVariant } from '../lib/pageSchema';
 import { pageBodyFit } from '../lib/pageBodyCheck';
@@ -130,7 +136,7 @@ export type PageShareRequest = {
   done: () => void;
 };
 
-export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClose, onOpenPage, backTo = null, ownDossierName = 'Eigen dossier', houseStyle = null, onShare, onOpenDocument, mentionName }: {
+export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClose, onOpenPage, backTo = null, ownDossierName = 'Eigen dossier', houseStyle = null, onShare, onOpenDocument, mentionName, mentionSearch, onOpenMention }: {
   documentId: string;
   organizationId: string;
   /** Schrijfrechten op Inhoud. Zonder: alleen lezen, en geen claim. */
@@ -158,6 +164,10 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
    * de rechten van wie kijkt. null: niet te zien, of niet meer.
    */
   mentionName?: PageMentionNames;
+  /** De @-kiezer (stap 2-1b): wat je kunt noemen bij wat je typte, uit wat de app geladen heeft. */
+  mentionSearch?: (query: string) => MentionCandidate[];
+  /** Openen wat een chip noemt; de pagina is dan al netjes dicht (opgeslagen, een versie, de claim vrij). */
+  onOpenMention?: (kind: MentionKind, id: string) => void;
 }) {
   const [mode, setModeState] = useState<Mode>('laden');
   const [saveState, setSaveState] = useState<SaveState>('opgeslagen');
@@ -241,7 +251,13 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
   const menuRef = useRef<BlockMenuState | null>(null);
   const showMenu = (next: BlockMenuState | null) => { menuRef.current = next; setBlockMenu(next); };
   const slashBridge = useRef<SlashBridge | null>(null);
-  const extensions = useMemo(() => [...pageEditorExtensions(), slashMenuExtension(slashBridge)], []);
+  // De @-kiezer (stap 2-1b), net als het blokmenu: een plugin buiten React, en
+  // de lijst hier.
+  const [mentionMenu, setMentionMenu] = useState<MentionMenuState | null>(null);
+  const mentionMenuRef = useRef<MentionMenuState | null>(null);
+  const showMentionMenu = (next: MentionMenuState | null) => { mentionMenuRef.current = next; setMentionMenu(next); };
+  const mentionBridge = useRef<MentionBridge | null>(null);
+  const extensions = useMemo(() => [...pageEditorExtensions(), slashMenuExtension(slashBridge), mentionMenuExtension(mentionBridge)], []);
 
   // immediatelyRender: false. Met de standaard (true) maakt Tiptap de editor al
   // tijdens de eerste render, en plant hij meteen een destroy() over 1 ms, die
@@ -285,6 +301,36 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
       return false;
     },
     close: () => { if (menuRef.current?.source === 'slash') showMenu(null); },
+  };
+
+  mentionBridge.current = {
+    open: props => showMentionMenu({ items: props.items, active: 0, anchor: props.clientRect?.() ?? null, pick: candidate => props.command(candidate) }),
+    update: props => {
+      const previous = mentionMenuRef.current;
+      const active = previous ? Math.min(previous.active, Math.max(0, props.items.length - 1)) : 0;
+      showMentionMenu({ items: props.items, active, anchor: props.clientRect?.() ?? null, pick: candidate => props.command(candidate) });
+    },
+    keyDown: event => {
+      const menu = mentionMenuRef.current;
+      if (!menu) return false;
+      const count = menu.items.length;
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        if (count) showMentionMenu({ ...menu, active: (menu.active + (event.key === 'ArrowDown' ? 1 : count - 1)) % count });
+        return true;
+      }
+      if (event.key === 'Enter' || event.key === 'Tab') {
+        const candidate = menu.items[menu.active];
+        if (!candidate) return false;
+        menu.pick(candidate);
+        return true;
+      }
+      return false;
+    },
+    close: () => showMentionMenu(null),
+  };
+  const closeMentionPicker = () => {
+    if (mentionMenuRef.current && editorRef.current) closeMentionMenu(editorRef.current);
+    showMentionMenu(null);
   };
 
   const closeBlockMenu = () => {
@@ -600,9 +646,22 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
     if (mediaRef.current) store.image.media = { ...mediaRef.current, upload: async () => null, refuse: () => {}, chooseFile: async () => null };
     store.mention.names = mentionNames;
   }, [mentionNames]);
+  // De @-kiezer en het openen van een chip (stap 2-1b), ook altijd de laatste.
+  const mentionSearchRef = useRef(mentionSearch);
+  mentionSearchRef.current = mentionSearch;
+  const onOpenMentionRef = useRef(onOpenMention);
+  onOpenMentionRef.current = onOpenMention;
   useEffect(() => {
     if (!editor || editor.isDestroyed) return;
-    (editor.storage as unknown as Record<string, { names: PageMentionNames | null }>).mention.names = mentionNames;
+    const store = (editor.storage as unknown as Record<string, Record<string, unknown>>).mention;
+    store.names = mentionNames;
+    store.search = (query: string) => mentionSearchRef.current?.(query) ?? [];
+    // Eerst netjes dicht (opslaan, een versie, de claim vrij), dan pas openen.
+    // Lukt opslaan niet, dan blijft de pagina open en opent er niets.
+    store.open = (kind: MentionKind, id: string) => {
+      if (!onOpenMentionRef.current) return;
+      void closeRef.current().then(ok => { if (ok) onOpenMentionRef.current?.(kind, id); });
+    };
   }, [editor, mentionNames]);
   useEffect(() => {
     if (!editor || editor.isDestroyed) return;
@@ -1014,6 +1073,7 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
         onClose={() => setExportOpen(false)}
       />}
       {editable && blockMenu &&<BlockMenu menu={blockMenu} onHover={index => { if (menuRef.current) showMenu({ ...menuRef.current, active: index }); }} onClose={closeBlockMenu} />}
+      {editable && mentionMenu && <MentionMenu menu={mentionMenu} onHover={index => { if (mentionMenuRef.current) showMentionMenu({ ...mentionMenuRef.current, active: index }); }} onClose={closeMentionPicker} />}
 
       {(message || (mode === 'lezen' && holder)) && <div className={`page-editor-banner${mode === 'conflict' || mode === 'geen_recht' || mode === 'fout' || mode === 'onbekend' ? ' is-warning' : ''}`}>
         <span>{message ?? `${nameOf(holder as string)} bewerkt deze pagina. Je kunt meelezen; zodra die klaar is, kun je verder.`}</span>
@@ -1147,6 +1207,7 @@ function Toolbar({ editor, onInsert }: { editor: Editor; onInsert: (anchor: DOMR
         cellAlign,
         callout: ed.isActive('callout') ? calloutVariant(ed.getAttributes('callout').variant) : null,
         details: ed.isActive('details'),
+        mention: selectedMention(ed),
       };
     },
   });
@@ -1267,12 +1328,35 @@ function Toolbar({ editor, onInsert }: { editor: Editor; onInsert: (anchor: DOMR
         <span className="page-editor-subbar-label">Callout</span>
         <ToolButtons tools={calloutTools} />
       </div>}
+      {state.mention && <div className="page-editor-subbar" role="toolbar" aria-label="Vermelding">
+        <span className="page-editor-subbar-label">{state.mention.word}</span>
+        <span className="page-editor-subbar-name">{state.mention.name ?? 'Je ziet niet wat hier genoemd wordt, of het bestaat niet meer.'}</span>
+        {state.mention.opens && <ToolButtons tools={[{
+          label: `${state.mention.word} openen`, icon: <ExternalLink size={15} />, text: 'Openen',
+          run: () => { const open = mentionOpenOf(editor); if (open && state.mention) open(state.mention.kind, state.mention.id); },
+        }]} />}
+      </div>}
       {state.details && !place && !state.callout && <div className="page-editor-subbar" role="toolbar" aria-label="Uitklapper">
         <span className="page-editor-subbar-label">Uitklapper</span>
         <ToolButtons tools={[{ label: 'Uitklapper weghalen', icon: <Trash2 size={15} />, text: 'Uitklapper weg', run: () => chain().unsetDetails().run() }]} />
       </div>}
     </>
   );
+}
+
+/**
+ * De chip die geselecteerd is (stap 2-1b): een klik op een chip selecteert hem.
+ * Bij bewerken opent een klik niets, want daar zet je ook de cursor; de balk
+ * toont dan "Openen", en openen sluit de pagina netjes.
+ */
+function selectedMention(ed: Editor): { kind: MentionKind; id: string; word: string; name: string | null; opens: boolean } | null {
+  const { selection } = ed.state;
+  if (!(selection instanceof NodeSelection) || selection.node.type.name !== 'mention') return null;
+  const ref = mentionOf({ type: 'mention', attrs: selection.node.attrs });
+  if (!ref) return null;
+  const name = mentionNamesOf(ed)?.(ref.kind, ref.id) ?? null;
+  const word = MENTION_KIND_WORDS[ref.kind].charAt(0).toUpperCase() + MENTION_KIND_WORDS[ref.kind].slice(1);
+  return { kind: ref.kind, id: ref.id, word, name, opens: Boolean(name && MENTION_OPENS[ref.kind] && mentionOpenOf(ed)) };
 }
 
 /** Het versiepaneel (stap 1A-3b): de lijst, een voorvertoning, en terugzetten. */

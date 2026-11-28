@@ -118,6 +118,7 @@ import {
   type Table,
 } from './lib/repository';
 import { memberShortName, memberColor, memberInitials, memberEmail, memberName, projectTeamAdditions, taskAssigneeChoices } from './lib/members';
+import { cachedMentionCandidates, mentionMembers, searchMentions } from './lib/pageMentionSearch';
 import { uploadToR2 } from './lib/r2';
 import { listExternalCalendarEvents, createExternalCalendarEvent, updateCalendarEvent, deleteCalendarEvent, completeCalendarOAuth, takeCalendarOAuthReturn, invalidateCalendarEventsCache, type CalendarEventInput } from './lib/calendar-api';
 import { calendarOAuthErrorText } from './lib/calendarConnection';
@@ -5093,6 +5094,29 @@ function App() {
             const members = organizationContext.teamMembers ?? [];
             return members.some(member => member.user_id === id) ? memberShortName(id, members) : null;
           }
+        }
+      }}
+      // De @-kiezer (stap 2-1b): wat je kunt noemen, uit wat geladen is.
+      mentionSearch={(query) => searchMentions(query, cachedMentionCandidates({
+        clients: data.clients,
+        projects: data.projects,
+        tasks: data.tasks,
+        invoices: data.invoices,
+        members: mentionMembers(organizationContext.teamMembers ?? []),
+      }))}
+      // Wat een chip noemt, openen; de pagina is dan al dicht.
+      onOpenMention={(kind, id) => {
+        if (kind === 'client') { setClientId(id); setProjectId(null); setPage('client'); return; }
+        if (kind === 'project') { setProjectId(id); setClientId(null); setPage('project'); return; }
+        if (kind === 'task') {
+          const task = data.tasks.find(row => row.id === id);
+          if (task) setEdit({ kind: 'task', item: task, projectId: task.project_id });
+          return;
+        }
+        if (kind === 'invoice') {
+          const invoice = data.invoices.find(row => row.id === id);
+          setPage('invoices'); setProjectId(null); setClientId(null);
+          if (invoice) setEdit({ kind: 'invoice', item: invoice });
         }
       }}
       backTo={pageTrail[pageTrail.length - 1] ?? null}
