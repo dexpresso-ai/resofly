@@ -377,3 +377,54 @@ test('een lege of kapotte inhoud geeft een bestand met alleen de titel', () => {
   assert.match(documentXml(JSON.stringify(doc(p(t('uit-json'))))), /uit-json/);
   assert.match(files(doc(), {}, '   ').get('word/document.xml') as string, /Naamloze pagina/);
 });
+
+// ── De huisstijlletter (proef 1B-1) ─────────────────────────────────────────
+
+/** Terug uit de versleuteling, los nagebouwd uit ECMA-376 deel 1, 17.8.1. */
+function deobfuscate(data: Uint8Array, key: string): Uint8Array {
+  const guid = Buffer.from(key.replace(/[{}-]/g, ''), 'hex');
+  const out = Uint8Array.from(data);
+  for (let i = 0; i < 32; i += 1) out[i] ^= guid[15 - (i % 16)];
+  return out;
+}
+
+test('de huisstijlletter gaat versleuteld mee, en is de letter van het hele document', () => {
+  const regular = Uint8Array.from({ length: 64 }, (_, i) => i);
+  const bold = Uint8Array.from({ length: 48 }, (_, i) => 200 - i);
+  const all = files(doc(p(t('tekst'))), { font: { family: 'Poppins', regular, bold } });
+  const table = all.get('word/fontTable.xml') as string;
+  const keys = [...table.matchAll(/w:fontKey="(\{[0-9A-F-]{36}\})"/g)].map(match => match[1]);
+  assert.match(table, /<w:font w:name="Poppins"><w:embedRegular r:id="rId1" w:fontKey="\{[0-9A-F-]{36}\}"\/><w:embedBold r:id="rId2" w:fontKey="\{[0-9A-F-]{36}\}"\/><\/w:font>/);
+  assert.equal(new Set(keys).size, 2, 'elke letter een eigen sleutel');
+  assert.match(all.get('word/_rels/fontTable.xml.rels') as string, /Id="rId1" Type="[^"]+\/font" Target="fonts\/font1\.odttf".*Id="rId2" Type="[^"]+\/font" Target="fonts\/font2\.odttf"/);
+  // Versleuteld: de eerste 32 bytes anders, de rest gelijk, en terug te zetten.
+  const stored = all.get('word/fonts/font1.odttf') as Uint8Array;
+  assert.notDeepEqual(stored.slice(0, 32), regular.slice(0, 32));
+  assert.deepEqual(stored.slice(32), regular.slice(32));
+  assert.deepEqual(deobfuscate(stored, keys[0]), regular);
+  assert.deepEqual(deobfuscate(all.get('word/fonts/font2.odttf') as Uint8Array, keys[1]), bold);
+  // De letter van het document, en Word weet dat hij ingesloten is.
+  assert.match(all.get('word/styles.xml') as string, /<w:rPrDefault><w:rPr><w:rFonts w:ascii="Poppins" w:hAnsi="Poppins" w:eastAsia="Poppins" w:cs="Poppins"\/>/);
+  assert.match(all.get('word/settings.xml') as string, /<w:settings [^>]*><w:embedTrueTypeFonts\/><w:defaultTabStop /);
+  assert.match(all.get('word/_rels/document.xml.rels') as string, /<Relationship Id="rId5" Type="[^"]+\/fontTable" Target="fontTable\.xml"\/>/);
+  const types = all.get('[Content_Types].xml') as string;
+  assert.match(types, /<Default Extension="odttf" ContentType="application\/vnd\.openxmlformats-officedocument\.obfuscatedFont"\/>/);
+  assert.match(types, /<Override PartName="\/word\/fontTable\.xml" /);
+  for (const [path, data] of all) if (typeof data === 'string') assertWellFormed(data, path);
+});
+
+test('zonder letter blijft het Calibri, zonder lettertabel; met alleen vet krijgt vet de eerste plek', () => {
+  const zonder = files(doc(p(t('tekst'))));
+  assert.equal(zonder.has('word/fontTable.xml'), false);
+  assert.match(zonder.get('word/styles.xml') as string, /w:ascii="Calibri"/);
+  assert.doesNotMatch(zonder.get('word/settings.xml') as string, /embedTrueTypeFonts/);
+  assert.doesNotMatch(zonder.get('[Content_Types].xml') as string, /odttf|fontTable/);
+  // Een naam zonder bestanden: wel die naam, niets ingesloten.
+  const alleenNaam = files(doc(p(t('tekst'))), { font: { family: 'Arial' } });
+  assert.match(alleenNaam.get('word/styles.xml') as string, /w:ascii="Arial"/);
+  assert.equal(alleenNaam.has('word/fontTable.xml'), false);
+  // Alleen vet, en een naam met een teken dat XML niet zomaar neemt.
+  const vet = files(doc(p(t('tekst'))), { font: { family: 'Huis & Stijl', bold: new Uint8Array(40) } });
+  assert.match(vet.get('word/fontTable.xml') as string, /<w:font w:name="Huis &amp; Stijl"><w:embedBold r:id="rId1" /);
+  assert.equal(vet.has('word/fonts/font1.odttf'), true);
+});

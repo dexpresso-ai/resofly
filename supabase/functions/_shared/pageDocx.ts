@@ -30,6 +30,10 @@
 //    zonder internet compleet zijn, en zo'n adres zou laten zien wie het opent.
 //  - Een blok dat deze module niet kent, verliest zijn vorm maar niet zijn
 //    tekst. pageDocx.test.ts zet elk bloktype uit de database erin.
+//  - De huisstijlletter gaat als TTF mee in het bestand (context.font). Zonder
+//    die letter vervangt LibreOffice (en dus de PDF via Collabora) hem door een
+//    andere, en een .woff neemt hij niet aan (docs/rapporten/
+//    PROEF_1B1_LETTERS_EMOJI_2026-11-28.md). Een .woff zet woff.ts eerst om.
 // ============================================================
 
 import { ZipBuilder } from './zipWriter.ts';
@@ -44,8 +48,17 @@ export type PageDocxImage = {
   height?: number;
 };
 
+/**
+ * Een letter om in te sluiten, als TTF of OTF (geen WOFF: woffToSfnt in
+ * woff.ts zet die om). `family` is de naam zoals de letter zichzelf noemt
+ * (sfntFamilyName), anders vindt Word hem niet terug.
+ */
+export type PageDocxFont = { family: string; regular?: Uint8Array; bold?: Uint8Array };
+
 /** Wat de pagina zelf niet weet. De aanroeper zoekt het op, met de rechten van wie exporteert. */
 export type PageDocxContext = {
+  /** De letter van de huisstijl; zonder deze letter wordt het Calibri. */
+  font?: PageDocxFont;
   /** Titels van subpagina's (pageId → titel). Ontbreekt er een, dan "Pagina niet gevonden", zoals in de app. */
   pageTitles?: Record<string, string>;
   /** Namen van de bestanden in bestandsblokken (attachmentId → naam). */
@@ -565,12 +578,29 @@ function collectHeadings(node: PmNode, out: TocEntry[]): void {
 
 // ── De vaste onderdelen ─────────────────────────────────────────────────────
 
-function stylesXml(): string {
+/**
+ * Versleutelen zoals ECMA-376 deel 1, 17.8.1 vraagt: de eerste 32 bytes XOR met
+ * de bytes van de fontKey, van achter naar voren. Het is geen beveiliging, maar
+ * Word en LibreOffice lezen een ingesloten letter alleen zo.
+ */
+function obfuscateFont(bytes: Uint8Array, key: string): Uint8Array {
+  const hex = key.replace(/[{}-]/g, '');
+  const guid = Array.from({ length: 16 }, (_, i) => parseInt(hex.slice(i * 2, i * 2 + 2), 16));
+  const out = bytes.slice();
+  for (let i = 0; i < Math.min(32, out.length); i += 1) out[i] ^= guid[15 - (i % 16)];
+  return out;
+}
+
+/** Vaste sleutels: elke GUID is goed, en zo blijft de uitkomst van een export voorspelbaar. */
+const FONT_KEYS = { Regular: '{5C1A9D2E-7B3F-4E8A-9C6D-1F2E3A4B5C6D}', Bold: '{6D2B0E3F-8C4A-4F9B-AD7E-2A3F4B5C6D7E}' } as const;
+
+function stylesXml(fontFamily: string | null): string {
+  const family = escapeXml(fontFamily ?? 'Calibri');
   const style = (id: string, name: string, pPr: string, rPr: string) =>
     `<w:style w:type="paragraph" w:styleId="${id}"><w:name w:val="${name}"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/>`
     + `${pPr ? `<w:pPr>${pPr}</w:pPr>` : ''}${rPr ? `<w:rPr>${rPr}</w:rPr>` : ''}</w:style>`;
   return `${XML_HEAD}<w:styles xmlns:w="${W_NS}">`
-    + '<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:eastAsia="Calibri" w:cs="Calibri"/>'
+    + `<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="${family}" w:hAnsi="${family}" w:eastAsia="${family}" w:cs="${family}"/>`
     + '<w:sz w:val="22"/><w:szCs w:val="22"/><w:lang w:val="nl-NL"/></w:rPr></w:rPrDefault>'
     + '<w:pPrDefault><w:pPr><w:spacing w:after="120" w:line="276" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults>'
     + '<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style>'
@@ -611,11 +641,14 @@ function footerXml(): string {
     + '</w:ftr>';
 }
 
-const SETTINGS_XML = `${XML_HEAD}<w:settings xmlns:w="${W_NS}"><w:defaultTabStop w:val="720"/>`
-  + '<w:characterSpacingControl w:val="doNotCompress"/>'
-  // Zonder compatibilityMode 15 opent Word het bestand in compatibiliteitsmodus.
-  + '<w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat>'
-  + '</w:settings>';
+function settingsXml(embedsFonts: boolean): string {
+  // De volgorde van CT_Settings: embedTrueTypeFonts staat vóór defaultTabStop.
+  return `${XML_HEAD}<w:settings xmlns:w="${W_NS}">${embedsFonts ? '<w:embedTrueTypeFonts/>' : ''}<w:defaultTabStop w:val="720"/>`
+    + '<w:characterSpacingControl w:val="doNotCompress"/>'
+    // Zonder compatibilityMode 15 opent Word het bestand in compatibiliteitsmodus.
+    + '<w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat>'
+    + '</w:settings>';
+}
 
 // ── Samenvoegen ─────────────────────────────────────────────────────────────
 
@@ -637,6 +670,14 @@ export function pageDocxFiles(title: string, body: unknown, context: PageDocxCon
   collectHeadings(doc, toc);
   const name = title.trim() || 'Naamloze pagina';
   const ctx: Ctx = { indent: 0, width: TEXT_WIDTH, listDepth: 0, quote: false, bold: false, toc };
+  // De letter van de huisstijl, met wat er van mee kan: normaal en vet.
+  const fontFamily = context.font?.family.trim() || null;
+  const embedded = fontFamily
+    ? (['Regular', 'Bold'] as const)
+      .filter(style => (style === 'Regular' ? context.font?.regular : context.font?.bold)?.length)
+      .map((style, i) => ({ style, relId: `rId${i + 1}`, path: `fonts/font${i + 1}.odttf`, key: FONT_KEYS[style],
+        bytes: (style === 'Regular' ? context.font?.regular : context.font?.bold) as Uint8Array }))
+    : [];
   const content = para({ style: 'Title' }, run(name)) + blocksXml(doc.content, b, ctx);
   const documentXml = `${XML_HEAD}<w:document ${NS}><w:body>${content}`
     + '<w:sectPr><w:footerReference w:type="default" r:id="rId4"/>'
@@ -648,6 +689,7 @@ export function pageDocxFiles(title: string, body: unknown, context: PageDocxCon
     { id: 'rId2', type: `${REL}/numbering`, target: 'numbering.xml', external: false },
     { id: 'rId3', type: `${REL}/settings`, target: 'settings.xml', external: false },
     { id: 'rId4', type: `${REL}/footer`, target: 'footer1.xml', external: false },
+    ...(embedded.length ? [{ id: 'rId5', type: `${REL}/fontTable`, target: 'fontTable.xml', external: false }] : []),
     ...b.rels,
   ];
   const relsXml = `${XML_HEAD}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">`
@@ -658,11 +700,13 @@ export function pageDocxFiles(title: string, body: unknown, context: PageDocxCon
     + '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
     + '<Default Extension="xml" ContentType="application/xml"/>'
     + Object.entries(IMAGE_EXT).filter(([type]) => used.has(type)).map(([type, ext]) => `<Default Extension="${ext}" ContentType="${type}"/>`).join('')
+    + (embedded.length ? '<Default Extension="odttf" ContentType="application/vnd.openxmlformats-officedocument.obfuscatedFont"/>' : '')
     + '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
     + '<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>'
     + '<Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>'
     + '<Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>'
     + '<Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>'
+    + (embedded.length ? '<Override PartName="/word/fontTable.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.fontTable+xml"/>' : '')
     + '<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>'
     + '</Types>';
   const rootRelsXml = `${XML_HEAD}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">`
@@ -673,16 +717,26 @@ export function pageDocxFiles(title: string, body: unknown, context: PageDocxCon
   const coreXml = `${XML_HEAD}<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" `
     + 'xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
     + `<dc:title>${escapeXml(name)}</dc:title><dc:language>nl-NL</dc:language></cp:coreProperties>`;
+  const fontFiles: PageDocxFile[] = embedded.length && fontFamily ? [
+    { path: 'word/fontTable.xml', data: `${XML_HEAD}<w:fonts xmlns:w="${W_NS}" xmlns:r="${REL}"><w:font w:name="${escapeXml(fontFamily)}">`
+      + embedded.map(font => `<w:embed${font.style} r:id="${font.relId}" w:fontKey="${font.key}"/>`).join('')
+      + '</w:font></w:fonts>' },
+    { path: 'word/_rels/fontTable.xml.rels', data: `${XML_HEAD}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">`
+      + embedded.map(font => `<Relationship Id="${font.relId}" Type="${REL}/font" Target="${font.path}"/>`).join('')
+      + '</Relationships>' },
+    ...embedded.map(font => ({ path: `word/${font.path}`, data: obfuscateFont(font.bytes, font.key) })),
+  ] : [];
   return [
     { path: '[Content_Types].xml', data: contentTypesXml },
     { path: '_rels/.rels', data: rootRelsXml },
     { path: 'docProps/core.xml', data: coreXml },
     { path: 'word/document.xml', data: documentXml },
     { path: 'word/_rels/document.xml.rels', data: relsXml },
-    { path: 'word/styles.xml', data: stylesXml() },
+    { path: 'word/styles.xml', data: stylesXml(fontFamily) },
     { path: 'word/numbering.xml', data: numberingXml(b.orderedLists) },
-    { path: 'word/settings.xml', data: SETTINGS_XML },
+    { path: 'word/settings.xml', data: settingsXml(embedded.length > 0) },
     { path: 'word/footer1.xml', data: footerXml() },
+    ...fontFiles,
     ...b.media.map(item => ({ path: item.path, data: item.bytes })),
   ];
 }
@@ -691,8 +745,8 @@ export function pageDocxFiles(title: string, body: unknown, context: PageDocxCon
 export async function buildPageDocx(title: string, body: unknown, context: PageDocxContext = {}): Promise<Blob> {
   const zip = new ZipBuilder();
   for (const file of pageDocxFiles(title, body, context)) {
-    // De XML comprimeren; afbeeldingen zijn dat al.
-    await zip.add(file.path, file.data, { compress: typeof file.data === 'string' });
+    // De XML en de letters comprimeren; afbeeldingen zijn dat al.
+    await zip.add(file.path, file.data, { compress: typeof file.data === 'string' || file.path.endsWith('.odttf') });
   }
   return new Blob([zip.finish()], { type: DOCX_MIME });
 }

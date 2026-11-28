@@ -51,10 +51,35 @@ Verder:
 - Nederlands als taal;
 - compatibiliteitsmodus van Word 2013 en later, zodat Word niet in de oude modus opent.
 
+## Later die nacht: de huisstijlletter
+
+Na de proef 1B-1 (`docs/rapporten/PROEF_1B1_LETTERS_EMOJI_2026-11-28.md`).
+
+- **`pageDocx.ts` sluit een letter in** als de context er een meegeeft (`font`: de naam,
+  normaal en vet).
+  - De letter staat versleuteld in de DOCX, zoals ECMA-376 17.8.1 vraagt, en is de letter van
+    het hele document.
+  - Code blijft Consolas.
+  - Zonder letter blijft het Calibri, en het bestand blijft precies zoals het was.
+- **`_shared/woff.ts` zet een .woff om naar TTF** (`woffToSfnt`), want LibreOffice neemt geen
+  .woff aan. `sfntFamilyName` geeft de naam waaronder de letter in de DOCX moet staan.
+  - De huisstijlletters staan op de server al als .woff (`_shared/pdfFonts.ts`). `page-export`
+    kan ze dus zo meegeven.
+  - Voor Poppins, DM Sans, Playfair Display en Bebas Neue geeft dit exact dezelfde tabellen
+    als fonttools.
+- **Getest:**
+  - `woff.test.ts` (4 tests): elke letter in `public/fonts/pdf` wordt een geldige TTF, met
+    de juiste lengte, sommen en familienaam;
+  - `pageDocx.test.ts` (nu 19): de lettertabel, de versleuteling (terug te zetten met een
+    los nagebouwde ontsleuteling), en de letter van het document;
+  - met de hand een export met Poppins: goed volgens de XSD's van ECMA-376. LibreOffice 24.2
+    gebruikt de ingesloten Poppins, normaal en vet, terwijl Poppins niet geïnstalleerd is
+    (`pdffonts`).
+
 ## Bewust nog niet
 
-- **De huisstijl:** letters, logo, briefpapier en merkkleur. Dat komt met het exportvenster,
-  na de proef met letters en emoji (1B-1).
+- **De rest van de huisstijl:** logo, briefpapier en merkkleur. Dat komt met het
+  exportvenster.
 - **Een voorblad, en subpagina's als hoofdstukken.** Ook die horen bij het exportvenster.
 - **Webp en svg:** die worden een regel "[Afbeelding: …]". Omzetten naar png hoort bij
   `page-export`.
