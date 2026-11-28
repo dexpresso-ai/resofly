@@ -658,7 +658,12 @@ akkoord is.
   - run 307 (d7dfc69, met Gerrie die aanvult, het afdrukken en de reparatie van het zwarte
     scherm): helemaal groen, ook `deno check` van het pad waarlangs Gerrie aanvult, de
     mobiele lay-outtest, laden, de inrichting en de terugknop. Wat er daarna nog kwam (5f1b4e0
-    en later), is alleen tekst.
+    en later), is alleen tekst;
+  - run 308 (fe9a4d7, 1C-1 en 1C-2): helemaal groen, ook de nieuwe stap "Deno-typecheck
+    pagina's", `deno check` van `file-share-public` met `_shared/sharedPage.ts`, de
+    migraties vanaf nul met `paginas_delen.sql`, de mobiele lay-outtest, laden, de inrichting
+    en de terugknop;
+  - run 309 (a080604, 1C-3 en 1C-4): gestart op 28 november.
 - **`deno check` op de modules van pagina's:** sinds 1C-1 een eigen stap in
   `.github/workflows/frontend-checks.yml` ("Deno-typecheck pagina's"): `pageDocx.ts`,
   `woff.ts`, `zipWriter.ts`, `pageExportFonts.ts`, `pageHtml.ts` en `pageReferences.ts`. Geen

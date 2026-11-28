@@ -124,8 +124,8 @@ Ze mogen opnieuw draaien, en de databasetests lopen ze na.
 
 ## Getest
 
-- **De CI op de branch:** runs 304, 305, 306 en 307 zijn helemaal groen. 307 is de laatste
-  code-commit, d7dfc69; daarna kwam alleen tekst. Groen betekent:
+- **De CI op de branch:** runs 304 tot en met 308 zijn helemaal groen. 308 is fe9a4d7 (1C-1 en
+  1C-2). Run 309 (a080604, 1C-3 en 1C-4) is gestart. Groen betekent:
   - de migraties vanaf nul met de databasetests;
   - `deno check`;
   - typecheck en de unit tests;
