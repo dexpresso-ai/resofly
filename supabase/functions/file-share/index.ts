@@ -149,7 +149,19 @@ async function shareItem(
   if (!isUuid(itemId)) throw new HttpError('Ongeldig item.', 400);
 
   const recipients = parseRecipients(body.recipients);
-  const canDownload = body.canDownload !== false;
+  // Een pagina deel je met een vrijgegeven versie (stap 1C): de klant ziet die
+  // versie, niet de pagina van nu. De app maakt de versie met de rechten van
+  // wie deelt (save_page_version) en geeft het id mee; de database keurt het
+  // (drive_shares_page_version). Dit is de zin vooraf.
+  const documentVersionId = body.documentVersionId == null || body.documentVersionId === '' ? null : String(body.documentVersionId);
+  if (documentVersionId !== null && !isUuid(documentVersionId)) throw new HttpError('Ongeldige versie.', 400);
+  const isPage = itemType === 'document' && await documentIsPage(organizationId, itemId);
+  if (isPage && !documentVersionId) {
+    throw new HttpError('Een pagina deel je met een vrijgegeven versie. Deel haar vanuit de app, met Delen.', 400);
+  }
+  if (!isPage && documentVersionId) throw new HttpError('Alleen een pagina deel je met een versie.', 400);
+  const kindLabel = isPage ? 'Pagina' : ITEM_LABELS[itemType];
+  const canDownload = body.canDownload !== false && !isPage;
   const notify = body.notify !== false;
   const message = trimOrNull(body.message, 2000);
   const expiresAt = parseExpiry(body.expiresAt);
@@ -173,7 +185,7 @@ async function shareItem(
   // functie die de trigger straks gebruikt, dus wat hier "klantgerelateerd" heet
   // is precies wat de database ook zo noemt.
   const context = await resolveItemContext(organizationId, itemType, itemId);
-  const itemName = trimOrNull(body.itemName, 300) || context.item_name || ITEM_LABELS[itemType];
+  const itemName = trimOrNull(body.itemName, 300) || context.item_name || kindLabel;
 
   // Vroege, vriendelijke controle. Het echte slot zit in de database.
   if (context.client_id) {
@@ -204,7 +216,7 @@ async function shareItem(
   for (const recipient of recipients) {
     try {
       results.push(await shareWithOne({
-        user, organizationId, itemType, itemId, itemName, context,
+        user, organizationId, itemType, itemId, itemName, context, documentVersionId, kindLabel,
         recipient, canDownload, expiresAt, message, notify, company, content, senderName, sender,
       }));
     } catch (error) {
@@ -228,6 +240,9 @@ async function shareWithOne(input: {
   itemId: string;
   itemName: string;
   context: ItemContext;
+  /** Alleen bij een pagina: de vrijgegeven versie die de ontvanger ziet. */
+  documentVersionId: string | null;
+  kindLabel: string;
   recipient: Recipient;
   canDownload: boolean;
   expiresAt: string | null;
@@ -259,6 +274,7 @@ async function shareWithOne(input: {
     expires_at: input.expiresAt,
     message: input.message,
     token_hash: tokenHash,
+    document_version_id: input.documentVersionId,
   };
 
   // Opnieuw delen met dezelfde persoon werkt als bijwerken: de bestaande lopende
@@ -295,7 +311,7 @@ async function shareWithOne(input: {
     const outcome = await sendShareEmail({
       share, url, company: input.company, content: input.content, sender: input.sender,
       senderName: input.senderName, clientName: input.context.client_name,
-      itemKindLabel: ITEM_LABELS[input.itemType] || 'Bestand',
+      itemKindLabel: input.kindLabel || 'Bestand',
       personalMessage: input.message,
     });
     notified = outcome.ok;
@@ -354,7 +370,9 @@ async function resendNotice(
     sender: await resolveSenderIdentity(admin, organizationId, RESEND_FROM_EMAIL, RESEND_REPLY_TO),
     senderName: await resolveSenderName(user, organizationId),
     clientName: context?.client_name ?? null,
-    itemKindLabel: ITEM_LABELS[share.item_type] || 'Bestand',
+    itemKindLabel: (share.item_type === 'document' && await documentIsPage(organizationId, share.item_id))
+      ? 'Pagina'
+      : ITEM_LABELS[share.item_type] || 'Bestand',
     personalMessage: share.message,
   });
   if (outcome.ok) {
@@ -366,6 +384,14 @@ async function resendNotice(
 // ── Helpers ───────────────────────────────────────────────────────────
 
 type ItemContext = { client_id: string | null; project_id: string | null; item_name: string | null; client_name: string | null };
+
+/** Is dit document een pagina? Gefilterd op de organisatie: de service-role slaat RLS over. */
+async function documentIsPage(organizationId: string, documentId: string): Promise<boolean> {
+  const { data, error } = await admin.from('documents').select('format')
+    .eq('organization_id', organizationId).eq('id', documentId).maybeSingle();
+  if (error) throw new HttpError('Het document kon niet worden opgezocht. Probeer het opnieuw.', 500);
+  return (data as { format?: string | null } | null)?.format === 'page';
+}
 
 async function resolveItemContext(organizationId: string, itemType: string, itemId: string): Promise<ItemContext> {
   const { data, error } = await admin.rpc('drive_item_client', {

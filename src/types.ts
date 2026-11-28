@@ -481,6 +481,8 @@ export interface DriveShare extends OrgScopedRow {
   last_viewed_at: string | null;
   view_count: number;
   notified_at: string | null;
+  /** Alleen bij een pagina: de vrijgegeven versie die de ontvanger ziet (stap 1C). */
+  document_version_id?: UUID | null;
   created_at: string;
   updated_at: string;
 }

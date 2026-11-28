@@ -146,7 +146,9 @@ async function getShare(tokenHash: string) {
   return {
     share: {
       itemType: share.item_type,
-      itemName: share.item_name,
+      // Bij een losse deling de naam van het item zelf: bij een pagina de titel
+      // van de gedeelde versie, ook na "Bijwerken bij klant".
+      itemName: share.item_type === 'folder' ? share.item_name : (items[0]?.name ?? share.item_name),
       recipientName: share.recipient_name,
       message: share.message,
       canDownload: share.can_download === true,

@@ -9,7 +9,7 @@
 // die na intrekken nog werkt, of "laatst gewijzigd" dat niet meeloopt.
 //
 //   npm run test:stromen -- documenten
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { roep } from './functies.mjs';
 import { mailsAan } from './nepdiensten.mjs';
 import { maakGebruiker, rest, sql, sqlRij } from './supabase.mjs';
@@ -418,10 +418,10 @@ export default async function documentenScenario() {
     });
   }
 
-  // ── Pagina's: delen is vrijgeven (stap 1C-2, 20261128120000) ─────────────
+  // ── Pagina's: delen is vrijgeven (stap 1C, 20261128120000 en 20261128130000) ──
   // De klant ziet van een pagina de versie die gedeeld is, nooit de pagina
-  // zoals ze nu is. Het deelvenster komt in 1C-3; hier maakt de test de
-  // deling zoals de app dat gaat doen: een vrijgave, en de deling erbij.
+  // zoals ze nu is. Delen gaat zoals in de app: eerst een vrijgave
+  // (save_page_version), dan file-share met die versie.
   groep('Pagina\'s: de klant leest de gedeelde versie');
   const paginaBody = (tekst) => ({ type: 'doc', content: [
     { type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: 'Afspraken' }] },
@@ -430,25 +430,37 @@ export default async function documentenScenario() {
   const vrijgave = async (paginaId) => gelukt(await rest('rpc/save_page_version', {
     method: 'POST', token: w.medewerker.token, body: { p_document_id: paginaId, p_reason: 'vrijgave' },
   }), 'vrijgeven');
+  const deelPagina = (paginaId, versieId, recipients) => roep('file-share', {
+    token: w.medewerker.token,
+    body: { action: 'share', organizationId: w.orgId, itemType: 'document', itemId: paginaId, recipients, documentVersionId: versieId },
+  });
+  const status = async (paginaId) => gelukt(await rest('rpc/page_share_status', {
+    method: 'POST', token: w.medewerker.token, body: { p_document_id: paginaId },
+  }), 'status').map((rij) => (rij.is_current ? 'nu' : 'oud')).join(',');
 
   const klantpagina = await stap('een pagina bij klant A, vrijgegeven en gedeeld met de klant: het portaal toont die versie', async () => {
     const pagina = gelukt(await maak('documents', w.medewerker.token, {
       organization_id: w.orgId, created_by: w.medewerker.id, title: 'Werkwijze', format: 'page',
       body: paginaBody('Wij bellen elke maandag.'), client_id: w.klantA.id,
     }), 'pagina')[0];
-    // Zonder vrijgave weigert de database, ook via de app.
+    // Zonder vrijgave weigert file-share, en de database ook (rechtstreeks, zoals de API).
+    geweigerd(await deelPagina(pagina.id, null, [{ kind: 'client' }]), 'delen zonder vrijgave', [400]);
     geweigerd(await maak('drive_shares', w.medewerker.token, {
       organization_id: w.orgId, created_by: w.medewerker.id, item_type: 'document', item_id: pagina.id, item_name: 'Werkwijze', recipient_kind: 'client',
-    }), 'delen zonder vrijgave');
+    }), 'rechtstreeks zonder vrijgave');
     const versie = await vrijgave(pagina.id);
-    const deling = gelukt(await maak('drive_shares', w.medewerker.token, {
-      organization_id: w.orgId, created_by: w.medewerker.id, item_type: 'document', item_id: pagina.id, item_name: 'Werkwijze',
-      recipient_kind: 'client', document_version_id: versie.id,
-    }), 'delen')[0];
+    const voor = mailsAan(w.klantA.email).length;
+    const uitkomst = gelukt(await deelPagina(pagina.id, versie.id, [{ kind: 'client' }]), 'delen').results?.[0];
+    verwacht(uitkomst?.share && !uitkomst.error, `delen mislukt: ${JSON.stringify(uitkomst).slice(0, 300)}`);
+    const deling = uitkomst.share;
+    gelijk([deling.document_version_id, deling.can_download], [versie.id, false], 'de vrijgave, en niets om te downloaden');
+    const mail = mailsAan(w.klantA.email).at(-1);
+    verwacht(mailsAan(w.klantA.email).length === voor + 1 && `${mail?.subject} ${mail?.text}`.includes('Werkwijze'), 'een mail aan de klant, met de titel');
     gelijk(await portaalTitels(w.portaalA.token, deling.id), 'Werkwijze', 'in het portaal');
     const lezen = gelukt(await roep('client-portal', { token: w.portaalA.token, body: { action: 'downloadSharedFile', shareId: deling.id, itemType: 'document', itemId: pagina.id } }), 'lezen');
     gelijk(lezen.text?.title, 'Werkwijze', 'titel');
     verwacht(lezen.text?.html?.includes('<h2>Afspraken</h2>') && lezen.text.html.includes('Wij bellen elke maandag.'), `de versie als HTML: ${JSON.stringify(lezen).slice(0, 300)}`);
+    gelijk(await status(pagina.id), 'nu', 'de klant ziet de pagina van nu');
     return { pagina, deling, versie };
   });
 
@@ -459,19 +471,43 @@ export default async function documentenScenario() {
       const lezen = gelukt(await roep('client-portal', { token: w.portaalA.token, body: { action: 'downloadSharedFile', shareId: klantpagina.deling.id, itemType: 'document', itemId: klantpagina.pagina.id } }), 'lezen');
       const json = JSON.stringify(lezen);
       verwacht(json.includes('Wij bellen elke maandag.') && !json.includes('niet meer') && !json.includes('Concept'), `de levende pagina gelekt: ${json.slice(0, 300)}`);
+      gelijk(await status(klantpagina.pagina.id), 'oud', 'de app ziet: de klant ziet een oudere versie');
     });
 
-    await stap('bijwerken bij de klant: een nieuwe vrijgave, en de klant ziet die', async () => {
-      const nieuw = await vrijgave(klantpagina.pagina.id);
-      gelukt(await wijzig('drive_shares', w.medewerker.token, klantpagina.deling.id, { document_version_id: nieuw.id, item_name: 'Concept: nieuwe prijzen' }), 'bijwerken');
+    await stap('bijwerken bij de klant: een nieuwe vrijgave op de deling, en de klant ziet die', async () => {
+      if (zonderInhoud?.lezen) {
+        geweigerd(await rest('rpc/release_page_to_shares', { method: 'POST', token: zonderInhoud.lezen.token, body: { p_document_id: klantpagina.pagina.id } }), 'bijwerken als lezer');
+      }
+      const aantal = gelukt(await rest('rpc/release_page_to_shares', { method: 'POST', token: w.medewerker.token, body: { p_document_id: klantpagina.pagina.id } }), 'bijwerken');
+      gelijk(aantal, 1, 'één deling bijgewerkt');
+      gelijk(await status(klantpagina.pagina.id), 'nu', 'de klant ziet weer de pagina van nu');
+      gelijk(await portaalTitels(w.portaalA.token, klantpagina.deling.id), 'Concept: nieuwe prijzen', 'de titel van de nieuwe versie');
+      const portaal = gelukt(await roep('client-portal', { token: w.portaalA.token, body: { action: 'getSharedFiles' } }), 'portaal');
+      gelijk((portaal.shares ?? []).find((d) => d.id === klantpagina.deling.id)?.itemName, 'Concept: nieuwe prijzen', 'ook de naam van de deling');
       const lezen = gelukt(await roep('client-portal', { token: w.portaalA.token, body: { action: 'downloadSharedFile', shareId: klantpagina.deling.id, itemType: 'document', itemId: klantpagina.pagina.id } }), 'lezen');
       verwacht(JSON.stringify(lezen).includes('Wij bellen niet meer.'), 'de nieuwe versie');
+      gelijk(gelukt(await rest('rpc/release_page_to_shares', { method: 'POST', token: w.medewerker.token, body: { p_document_id: klantpagina.pagina.id } }), 'nog een keer'), 0, 'niets meer bij te werken');
     });
 
     await stap('klant B ziet de pagina niet, en kan haar niet openen', async () => {
       const portaal = gelukt(await roep('client-portal', { token: w.portaalB.token, body: { action: 'getSharedFiles' } }), 'portaal B');
       verwacht(!JSON.stringify(portaal).includes(klantpagina.deling.id), 'deling van klant A bij klant B');
       geweigerd(await roep('client-portal', { token: w.portaalB.token, body: { action: 'downloadSharedFile', shareId: klantpagina.deling.id, itemType: 'document', itemId: klantpagina.pagina.id } }), 'openen door klant B', [403]);
+    });
+
+    await stap('een subpagina: alleen zichtbaar als ze ook gedeeld is, met de titel van haar vrijgave', async () => {
+      const sub = gelukt(await maak('documents', w.medewerker.token, {
+        organization_id: w.orgId, created_by: w.medewerker.id, title: 'Tarieven', format: 'page', parent_id: klantpagina.pagina.id,
+        body: paginaBody('Een uur kost 95 euro.'),
+      }), 'subpagina')[0];
+      gelukt(await wijzig('documents', w.medewerker.token, klantpagina.pagina.id, {
+        body: { type: 'doc', content: [...paginaBody('Wij bellen niet meer.').content, { type: 'subpage', attrs: { pageId: sub.id } }] },
+      }), 'de subpagina in de pagina');
+      gelukt(await rest('rpc/release_page_to_shares', { method: 'POST', token: w.medewerker.token, body: { p_document_id: klantpagina.pagina.id } }), 'bijwerken');
+      const lees = async () => JSON.stringify(gelukt(await roep('client-portal', { token: w.portaalA.token, body: { action: 'downloadSharedFile', shareId: klantpagina.deling.id, itemType: 'document', itemId: klantpagina.pagina.id } }), 'lezen'));
+      verwacht(!(await lees()).includes('Tarieven'), 'de titel van een subpagina die niet gedeeld is');
+      gelijk(gelukt(await deelPagina(sub.id, (await vrijgave(sub.id)).id, [{ kind: 'client' }]), 'subpagina delen').results?.[0]?.error ?? null, null, 'subpagina gedeeld');
+      verwacht((await lees()).includes('→ Tarieven'), 'de gedeelde subpagina staat in de pagina');
     });
 
     await stap('in de prullenbak: weg uit het portaal; teruggezet: weer zichtbaar', async () => {
@@ -489,16 +525,16 @@ export default async function documentenScenario() {
       organization_id: w.orgId, created_by: w.medewerker.id, title: 'Handboek', format: 'page', body: paginaBody('Koffie is gratis.'),
     }), 'pagina')[0];
     const versie = await vrijgave(pagina.id);
-    const token = randomBytes(32).toString('base64url');
-    gelukt(await maak('drive_shares', w.medewerker.token, {
-      organization_id: w.orgId, created_by: w.medewerker.id, item_type: 'document', item_id: pagina.id, item_name: 'Handboek',
-      recipient_kind: 'link', recipient_email: `handboek.${randomUUID().slice(0, 8)}@elders.test`,
-      token_hash: createHash('sha256').update(token).digest('hex'), document_version_id: versie.id,
-    }), 'delen');
+    const adres = `handboek.${randomUUID().slice(0, 8)}@elders.test`;
+    const uitkomst = gelukt(await deelPagina(pagina.id, versie.id, [{ kind: 'link', email: adres }]), 'delen').results?.[0];
+    verwacht(uitkomst?.share && !uitkomst.error, `delen mislukt: ${JSON.stringify(uitkomst).slice(0, 300)}`);
+    const mail = mailsAan(adres).at(-1);
+    const token = `${mail?.html} ${mail?.text}`.match(/\/gedeeld\/([A-Za-z0-9_-]{20,})/)?.[1];
+    verwacht(token, 'geen deellink in de mail');
     gelukt(await wijzig('documents', w.medewerker.token, pagina.id, { title: 'Handboek (concept)', body: paginaBody('Koffie kost een euro.') }), 'wijzigen');
     const lijst = gelukt(await roep('file-share-public', { body: { action: 'get', token } }), 'openen');
     const item = (lijst.items ?? []).find((i) => i.itemId === pagina.id);
-    verwacht(item?.readable && item.name === 'Handboek' && !item.downloadable, `de pagina in de deling: ${JSON.stringify(lijst).slice(0, 300)}`);
+    verwacht(item?.readable && item.name === 'Handboek' && !item.downloadable && lijst.share?.itemName === 'Handboek', `de pagina in de deling: ${JSON.stringify(lijst).slice(0, 300)}`);
     const lezen = gelukt(await roep('file-share-public', { body: { action: 'download', token, itemType: 'document', itemId: pagina.id } }), 'lezen');
     gelijk(lezen.text?.title, 'Handboek', 'titel');
     verwacht(lezen.text?.html?.includes('Koffie is gratis.') && !JSON.stringify(lezen).includes('een euro'), `de gedeelde versie: ${JSON.stringify(lezen).slice(0, 300)}`);

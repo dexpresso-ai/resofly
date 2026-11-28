@@ -171,7 +171,9 @@ export const EXPORT_FORMAT_VERSION = 1;
 // bewerkt, een hartslag van een minuut of twee).
 // 20261128120000 (pagina's delen) zet document_version_id op drive_shares: de
 // versie van een pagina die de klant ziet. Gaat met de delingen mee.
-export const EXPORT_SCHEMA_VERSION = '20261128120000';
+// 20261128130000 (bijwerken bij klant) zet twee functies erbij; geen tabellen
+// of kolommen.
+export const EXPORT_SCHEMA_VERSION = '20261128130000';
 
 export type TableKind =
   | 'export'

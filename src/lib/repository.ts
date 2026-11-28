@@ -2028,6 +2028,34 @@ export async function savePageVersion(documentId: UUID, reason: 'sessie' | 'vast
   if (error) throw error;
 }
 
+/**
+ * Een vrijgave van een pagina: de versie die een klant ziet als je deelt
+ * (stap 1C). Met de rechten van wie deelt; geeft het id van de versie.
+ */
+export async function createPageRelease(documentId: UUID): Promise<UUID> {
+  const { data, error } = await supabase.rpc('save_page_version', { p_document_id: documentId, p_reason: 'vrijgave' });
+  if (error) throw error;
+  const id = (Array.isArray(data) ? data[0] : data)?.id;
+  if (!id) throw new Error('De vrijgave van de pagina is niet gelukt.');
+  return id as UUID;
+}
+
+/** Per lopende deling van een pagina: welke versie de ontvanger ziet, en of dat de pagina van nu is. */
+export type PageShareStatus = { share_id: UUID; document_version_id: UUID | null; version: number | null; released_at: string | null; is_current: boolean };
+
+export async function loadPageShareStatus(documentId: UUID): Promise<PageShareStatus[]> {
+  const { data, error } = await supabase.rpc('page_share_status', { p_document_id: documentId });
+  if (error) throw error;
+  return (data ?? []) as PageShareStatus[];
+}
+
+/** "Bijwerken bij klant": een nieuwe vrijgave op elke lopende deling. Geeft het aantal bijgewerkte delingen. */
+export async function releasePageToShares(documentId: UUID): Promise<number> {
+  const { data, error } = await supabase.rpc('release_page_to_shares', { p_document_id: documentId });
+  if (error) throw error;
+  return Number(data ?? 0);
+}
+
 /** Eén versie van een pagina, zonder inhoud: voor de lijst in het versiepaneel (stap 1A-3b). */
 export type PageVersionSummary = { id: UUID; version: number; reason: string; created_by: UUID | null; created_at: string };
 
@@ -2868,6 +2896,8 @@ export async function shareDriveItem(input: {
   expiresAt?: string | null;
   message?: string | null;
   notify?: boolean;
+  /** Alleen bij een pagina: de vrijgave die de ontvanger ziet (createPageRelease). */
+  documentVersionId?: UUID | null;
 }): Promise<DriveShareResult[]> {
   const { data, error } = await supabase.functions.invoke('file-share', {
     body: {
@@ -2881,6 +2911,7 @@ export async function shareDriveItem(input: {
       expiresAt: input.expiresAt ?? null,
       message: input.message ?? null,
       notify: input.notify ?? true,
+      documentVersionId: input.documentVersionId ?? null,
     },
   });
   if (error) await throwFunctionError(error, 'Delen is niet gelukt.');

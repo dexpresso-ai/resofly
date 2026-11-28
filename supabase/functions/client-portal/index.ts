@@ -870,7 +870,10 @@ async function getSharedFiles(user: PortalUser, body: Record<string, unknown>) {
       id: share.id,
       clientId: share.client_id,
       itemType: share.item_type,
-      itemName: share.item_name,
+      // Bij een losse deling de naam van het item zelf: bij een pagina is dat de
+      // titel van de gedeelde versie, ook na "Bijwerken bij klant". item_name is
+      // de naam van toen er gedeeld werd.
+      itemName: share.item_type === 'folder' ? share.item_name : (items[0]?.name ?? share.item_name),
       message: share.message,
       canDownload: share.can_download === true,
       expiresAt: share.expires_at,

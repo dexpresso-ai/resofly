@@ -95,12 +95,14 @@ stand voor de overdracht.
 | 1B-2 (deel) | De knop "Word" in de editor: de pagina als .docx, in de letters van de huisstijl. PDF en het exportvenster wachten op Collabora. | `CHANGELOG_PAGINAS_WORD_2026-11-28.md` |
 | 1C-1 | De omzetting van een pagina naar HTML voor de klant, op de server. Een klant ziet nog niets: delen blijft voor een pagina geweigerd tot de vrijgave er is (1C-2). | `CHANGELOG_PAGINAS_HTML_2026-11-28.md` |
 | 1C-2 | Delen is vrijgeven, in de database: een deling van een pagina draagt de vrijgegeven versie, en het portaal en de geheime link tonen alleen die. In de app kun je een pagina nog niet delen (dat is 1C-3). | `CHANGELOG_PAGINAS_DELEN_VRIJGAVE_2026-11-28.md` |
+| 1C-3a | Delen en "Bijwerken bij klant" in de database en de server: `file-share` deelt een pagina met haar vrijgave, en de app kan zien of de klant een oudere versie ziet. Het venster in de app volgt. | `CHANGELOG_PAGINAS_BIJWERKEN_BIJ_KLANT_2026-11-28.md` |
 
-Er komen vier migraties mee die nog niet op staging staan:
+Er komen vijf migraties mee die nog niet op staging staan:
 - `20261127140000_paginas_blokken`;
 - `20261127150000_paginas_verwijzingen`;
 - `20261128100000_paginas_prullenbak`;
-- `20261128120000_paginas_delen`.
+- `20261128120000_paginas_delen`;
+- `20261128130000_paginas_bijwerken_bij_klant`.
 
 Ze mogen opnieuw draaien, en de databasetests lopen ze na.
 
