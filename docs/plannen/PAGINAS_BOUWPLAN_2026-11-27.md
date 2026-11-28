@@ -751,7 +751,9 @@ nieuwe blokken niet, en opent zo'n pagina alleen om te lezen.
     - `deno check` van `page-export`, `pageExport.ts` en `pageTreeOrder.ts`;
     - de mobiele lay-outtest (39 minuten) met het exportvenster en zijn PDF-knoppen, laden, de
       inrichting en de terugknop;
-  - de run voor deel 4 (het briefpapier als PDF) is gestart na run 315.
+  - run 316 (6de3b5d, met 1B-5 deel 4, het briefpapier als PDF): helemaal groen. Daarbij waren
+    `deno check` van `pdfLetterhead.ts` en van `page-export`, dat pdf-lib van esm.sh doorgeeft,
+    en de mobiele lay-outtest (36 minuten), laden, de inrichting en de terugknop.
 - **`deno check` op de modules van pagina's:** sinds 1C-1 een eigen stap in
   `.github/workflows/frontend-checks.yml` ("Deno-typecheck pagina's"): `pageDocx.ts`,
   `woff.ts`, `zipWriter.ts`, `pageExportFonts.ts`, `pageHtml.ts` en `pageReferences.ts`. Geen

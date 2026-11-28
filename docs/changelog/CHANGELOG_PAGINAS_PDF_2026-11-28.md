@@ -158,13 +158,13 @@ gebruiker met de hand uit; zie `docs/setup/PAGINA_PDF_SETUP.md`.
   - De Word-opbouw (`pageDocx`) staat alleen in de stukken van de export, en pdf-lib in een
     eigen stuk. Beide laden pas bij een klik.
   - De CI bouwt de app niet; Cloudflare Pages doet dat pas bij een merge.
+- **De CI:**
+  - run 315 (504a3f9, deel 1 tot en met 3): helemaal groen;
+  - run 316 (6de3b5d, met deel 4): helemaal groen, ook `deno check` met de typen van esm.sh,
+    waar `page-export` pdf-lib aan `pdfLetterhead.ts` doorgeeft;
+  - de mobiele lay-outtest met het exportvenster liep in allebei mee.
 
 ## Wat hier niet te testen is
-
-- **`deno check` en de mobiele lay-outtest op deel 4.** Lokaal is `page-export` nagekeken met
-  `tsc` en de typen van pdf-lib uit `node_modules`; de CI-run voor deel 4 volgt. Die doet
-  `deno check` met de typen van esm.sh, waar `page-export` pdf-lib aan `pdfLetterhead.ts`
-  doorgeeft.
 
 - **Collabora zelf, en de uitgerolde worker.** In de proef met LibreOffice 24.2 werd de Word-file
   van de server een goede PDF.
