@@ -50,8 +50,8 @@ async function loadFont(font: PageExportFont): Promise<PageDocxFont> {
 
 /**
  * Wat de export van de bedrijfsinstellingen gebruikt: de letters; voor het
- * voorblad de naam en het logo; voor het briefpapier het bestand en de
- * marges uit Documentopmaak.
+ * voorblad, de kop en de voet de naam, het logo, de merkkleur en de
+ * voettekst; voor het briefpapier het bestand en de marges uit Documentopmaak.
  */
 export type PageWordHouseStyle = {
   organization_id?: string;
@@ -59,6 +59,10 @@ export type PageWordHouseStyle = {
   brand_body_font?: string | null;
   company_name?: string | null;
   brand_logo_data_url?: string | null;
+  /** De merkkleur (#RRGGBB): een lijn onder de kop (stap 1B-4c). */
+  brand_accent_color?: string | null;
+  /** De voettekst van de huisstijl; zonder: de naam van het bedrijf. */
+  brand_footer_text?: string | null;
   invoice_template_kind?: string | null;
   /** Ontbreekt (undefined) in de kern van de app: dan halen we het op (letterhead.ts). */
   invoice_template_data_url?: string | null;
@@ -80,22 +84,22 @@ export type PageWordOptions = {
 /** Zoveel subpagina's tegelijk ophalen: genoeg voor snelheid, zonder de verbinding te verstoppen. */
 const CHAPTER_LOADS = 6;
 
-/** Het logo als png, jpeg of gif; iets anders (svg, webp) kan Word niet tonen, en dan de naam (pageDocx). */
-function coverLogo(dataUrl: string | null | undefined): PageDocxImage | null {
+/** Het logo voor het voorblad en de kop, als png, jpeg of gif; iets anders (svg, webp) kan Word niet tonen (pageDocx laat het dan weg). */
+function logoImage(dataUrl: string | null | undefined): PageDocxImage | null {
   const logo = dataUrlBytes(dataUrl);
   if (!logo) return null;
   const contentType = logo.mime === 'image/jpg' ? 'image/jpeg' : logo.mime;
   return /^image\/(png|jpeg|gif)$/.test(contentType) ? { bytes: logo.bytes, contentType } : null;
 }
 
-async function coverOf(row: PageRow, organizationId: string, houseStyle: PageWordHouseStyle | null): Promise<PageDocxCover> {
+async function coverOf(row: PageRow, organizationId: string, houseStyle: PageWordHouseStyle | null, logo: PageDocxImage | null): Promise<PageDocxCover> {
   // Mag je de klant of het project niet zien, dan staat die regel er niet.
   const names = await dossierNames(row.client_id ?? null, row.project_id ?? null, organizationId).catch(() => ({ client: null, project: null }));
   return {
     lines: [names.client ? `Klant: ${names.client}` : '', names.project ? `Project: ${names.project}` : ''],
     date: new Date().toLocaleDateString('nl-NL', { day: 'numeric', month: 'long', year: 'numeric' }),
     company: houseStyle?.company_name?.trim() || null,
-    logo: coverLogo(houseStyle?.brand_logo_data_url),
+    logo,
   };
 }
 
@@ -181,6 +185,7 @@ export async function buildPageWord(
     images: unique(all.flatMap(found => found.images)),
   };
   const fonts = pageExportFonts(houseStyle);
+  const logo = logoImage(houseStyle?.brand_logo_data_url);
   type Entry<T> = [string, T | null];
   const [titles, fileNames, images, body, heading, cover, letterhead] = await Promise.all([
     Promise.all(refs.pages.map(async (id): Promise<Entry<string>> => [id, await pageTitle(id, organizationId).catch(() => null)])),
@@ -198,7 +203,7 @@ export async function buildPageWord(
     })),
     loadFont(fonts.body),
     fonts.heading.key === fonts.body.key ? null : loadFont(fonts.heading),
-    options.cover ? coverOf(row, organizationId, houseStyle) : null,
+    options.cover ? coverOf(row, organizationId, houseStyle, logo) : null,
     options.letterhead ? letterheadOf(houseStyle) : null,
   ]);
   const known = <T,>(entries: Entry<T>[]): Record<string, T> =>
@@ -210,6 +215,12 @@ export async function buildPageWord(
     images: known(images),
     font: body,
     headingFont: heading ?? body,
+    // Kop en voet in de huisstijl (stap 1B-4c); met briefpapier laat pageDocx ze weg.
+    brand: {
+      logo,
+      color: houseStyle?.brand_accent_color ?? null,
+      footerText: houseStyle?.brand_footer_text?.trim() || houseStyle?.company_name?.trim() || null,
+    },
   };
   const blob = await buildPageDocx(row.title, row.body, context, { cover, toc: Boolean(options.toc), chapters, letterhead });
   return { blob, fileName: wordFileName(row.title) };

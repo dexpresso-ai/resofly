@@ -13,6 +13,33 @@ van 27 november 17:07 (`416b997`), en wat ik je wil vragen.
 Het bouwplan is `docs/plannen/PAGINAS_BOUWPLAN_2026-11-27.md`. In §18 staan de stappen en de
 stand voor de overdracht.
 
+**Na de merge, op de branch: de export (1B-3 tot en met 1B-4c).** Het exportvenster, de
+Word-kopie, het voorblad, de inhoudsopgave, de hoofdstukken, het briefpapier, en de kop en voet
+in de huisstijl. Wat nu nog in fase 1 zit, wacht op jou. Daarom bouw ik niet verder.
+
+## Wat ik van je nodig heb, op volgorde
+
+1. **De PDF (1B-5): twee antwoorden** (vraag 10).
+   - Rol jij de media-worker uit?
+   - Moet de server de Word-file bouwen, of mag dat in de app blijven? Dat is ook vraag 5.
+2. **Open de vier proefbestanden in echte Word** (vragen 4 en 11):
+   - zonder huisstijl;
+   - met huisstijl;
+   - met alle opties;
+   - met briefpapier.
+
+   Zeg wat er niet klopt.
+3. **Bevestig de keuzes van 1C** (vraag 8).
+4. **Zeg of ik de export naar staging mag mergen.** Daarna op staging:
+   - één Word-kopie bewerken en bewaren in Collabora (vraag 11);
+   - één gedeelde pagina met een afbeelding in het portaal bekijken (vraag 9);
+   - open tabbladen verversen (vraag 6).
+5. **Tekstdocumenten omzetten (1A-5d): twee besluiten** (vraag 1). Omzetten kan niet terug.
+6. **Staging nakijken:**
+   - staat pg_cron aan (vraag 2)?
+   - wordt de opruimwachtrij geleegd (vraag 3)?
+   - de letterproef op de Collabora-container (vraag 7).
+
 ## Vragen voor jou
 
 1. **Tekstdocumenten omzetten naar pagina's (1A-5d).** Dat wacht op twee besluiten:
@@ -29,8 +56,8 @@ stand voor de overdracht.
    `file-transfer` (`?cron=purge`), als die is ingepland. Zie
    `docs/setup/BESTANDEN_VERSTUREN_SETUP.md`. Staat die taak er niet, dan blijven de bestanden
    in de opslag staan.
-4. **Open de twee proefbestanden in echte Word: dat is de voorwaarde om de knop "Word" te
-   mergen.**
+4. **Open de proefbestanden in echte Word: dat is de voorwaarde om de knop "Word" te
+   mergen.** (Sinds 1B-4c zijn het er vier; ze komen uit `scripts/proef-word-export.mjs`.)
    - In de editor staat nu een knop "Word": de pagina als .docx, in de letters van je
      huisstijl. Sinds 1B-3 heet die knop "Exporteren", met daarin "Word downloaden".
    - Het bestand voldoet aan het schema van Word (ECMA-376) en opent goed in LibreOffice.
@@ -150,6 +177,7 @@ stand voor de overdracht.
 | 1B-3 | "Exporteren" in de editor: Word downloaden, "Maak er een Word-document van" (een Word-document naast de pagina, dat meteen opent in Word) en afdrukken. | `CHANGELOG_PAGINAS_EXPORTEREN_2026-11-28.md` |
 | 1B-4a | De opties voor Word: een voorblad (logo, titel, klant, project, datum), een inhoudsopgave vooraan, en de subpagina's als hoofdstukken. | `CHANGELOG_PAGINAS_EXPORTEREN_2026-11-28.md` |
 | 1B-4b | Het briefpapier achter elke bladzijde, als het een afbeelding is (een PDF kan niet in Word), met de marges uit Documentopmaak. Gerepareerd: het voorblad overleefde opnieuw opslaan in Collabora niet goed. | `CHANGELOG_PAGINAS_EXPORTEREN_2026-11-28.md` |
+| 1B-4c | De kop en voet in de huisstijl: het logo en een lijn in de merkkleur, de voettekst en het paginanummer. De controle met LibreOffice is nu een script (`scripts/proef-word-rondgang.sh`). | `CHANGELOG_PAGINAS_EXPORTEREN_2026-11-28.md` |
 
 Geen migraties.
 

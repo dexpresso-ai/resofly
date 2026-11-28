@@ -268,3 +268,74 @@ pas naar staging als de gebruiker het zegt.
 - **`letterhead.test.ts`:** de Word-export staat in de lijst van plekken die het briefpapier
   gebruiken. De test eist dat ze het eerst ophaalt, en mislukt als dat niet lukt.
 - **`npm test`** (2417) en **`npm run typecheck`**.
+
+## Later die dag: kop en voet in de huisstijl (1B-4c)
+
+§9 vraagt om "een kop en voet met logo, briefpapier en merkkleur". Tot nu stond in de voet alleen
+het paginanummer, en het logo alleen op het voorblad.
+
+### Wat er nu is
+
+- **Een kop in de huisstijl op elke bladzijde:**
+  - het logo rechts, hoogstens 4,5 bij 1,1 cm (png, jpeg of gif);
+  - een lijn in de merkkleur eronder.
+
+  De tekst begint dan op 3 cm, en de kop staat op 1 cm van de rand. Met de gewone marge stond
+  de lijn tegen de eerste regel aan.
+- **De voet:** links de voettekst van de huisstijl (of anders de naam van het bedrijf), rechts
+  "Pagina 2 van 5".
+- **Met briefpapier niet.** Dat heeft zijn eigen kop en voet, en een logo of lijn kwam er dan
+  overheen. In de voet staat dan alleen het paginanummer, zoals de factuur de gekleurde balk
+  weglaat bij briefpapier.
+- **Het voorblad blijft kaal:** geen kop, geen voet. Alleen het briefpapier, als dat aan staat.
+- **Bij elke export, geen optie.** Een Word-bestand "in je huisstijl" heeft die kop en voet.
+  Zonder huisstijl (geen logo en geen geldige merkkleur) blijft het bestand dat van 1B-3.
+  Nagelopen met de module van 1B-3.
+- **Een lege bladzijde minder:** bij een lege bovenste pagina met subpagina's als hoofdstukken
+  (een handboek met alleen subpagina's) begint het eerste hoofdstuk direct. Eerst kwam er na
+  het voorblad een lege bladzijde.
+
+### De controle met LibreOffice, nu als script
+
+- **`scripts/proef-word-export.mjs`** maakt vier proefbestanden:
+  - zonder huisstijl;
+  - met huisstijl;
+  - met alle opties;
+  - met briefpapier.
+- **`scripts/proef-word-rondgang.sh <map>`** houdt ze tegen de XSD's van ECMA-376, laat
+  LibreOffice ze opnieuw opslaan, en houdt ze dan nog eens tegen het schema. Het faalt als één
+  controle niet slaagt, of als het aantal bladen verandert.
+  - Tegen het oude bestand met twee secties zegt het "ONGELDIG", zoals bedoeld.
+  - Eerst gebeurde dit met de hand, en een uitkomst werd verkeerd gelezen (zie 1B-4b).
+- **De vier proefbestanden naast het rapport komen nu uit dat script:**
+  - `PROEF_WORD_ZONDER_HUISSTIJL_2026-11-28.docx`;
+  - `PROEF_WORD_HUISSTIJL_PLAYFAIR_DMSANS_2026-11-28.docx`, nu met de kop en voet;
+  - `PROEF_WORD_OPTIES_2026-11-28.docx`;
+  - `PROEF_WORD_BRIEFPAPIER_2026-11-28.docx`.
+
+### Getest (1B-4c)
+
+- **`pageDocx.test.ts`, twee nieuwe tests:**
+  - de kop en voet:
+    - het logo op maat, rechts, als relatie van de kop;
+    - de lijn in de merkkleur (ook `#RGB`);
+    - de voet met de tekst en een tab naar rechts;
+    - alleen een kleur geeft een kop zonder logo;
+    - geen geldige kleur en geen logo geeft geen kop en de voet van 1B-3;
+    - met voorblad blijft de eerste bladzijde kaal;
+    - met briefpapier geen logo, lijn of voettekst;
+  - de lege bovenste pagina: zonder en met voorblad begint het eerste hoofdstuk direct, met
+    een inhoudsopgave op een nieuwe bladzijde.
+- **`scripts/proef-word-rondgang.sh`:** alle vier geldig, vóór en na opnieuw opslaan.
+  - Hetzelfde aantal bladen.
+  - "Pagina 2 van 5" klopt.
+  - Als PDF nagekeken: het logo en de lijn in de kop, de voettekst en het nummer in de voet,
+    het voorblad kaal, en bij briefpapier niets eroverheen.
+- **`ui.mjs paginaexport`:** de download heeft een lijn in de merkkleur van de organisatie, en
+  de voet noemt de voettekst of de bedrijfsnaam. Bij een PDF-briefpapier staat er geen
+  briefpapier in het bestand, wel de kop in de huisstijl. 6 stappen plus de voorbereiding,
+  0 fout.
+- **`ui.mjs paginas` (16) en `paginadrive` (8):** 0 fout, met de kop in hun Word-bestanden.
+- **De gedeelde modules van pagina's** met `tsc` in strikte modus, zoals de stap "Deno-typecheck
+  pagina's" in de CI ze controleert. Deno zelf draait hier niet.
+- **`npm test`** (2419) en **`npm run typecheck`**.

@@ -3490,8 +3490,15 @@ async function scenarioPaginaexport() {
     // Word downloaden slaat eerst op wat je net typte.
     const download = await exporteerWord(page);
     gelijk(download.suggestedFilename(), `Export-ouder-${tag}.docx`, 'de naam van het bestand');
-    const xml = docxDelen(readFileSync(await download.path())).get('word/document.xml')?.toString('utf8') ?? '';
+    const delen = docxDelen(readFileSync(await download.path()));
+    const xml = delen.get('word/document.xml')?.toString('utf8') ?? '';
     verwacht(xml.includes(`Net getypt ${tag}`), 'wat je net typte, staat niet in het Word-bestand');
+    // Kop en voet in de huisstijl (stap 1B-4c): een lijn in de merkkleur, en de voettekst of de bedrijfsnaam.
+    const stijl = sqlRij(`select brand_accent_color, brand_footer_text, company_name from public.company_settings where organization_id = ${q(w.orgId)}`);
+    const kleur = String(stijl.brand_accent_color ?? '').replace('#', '').toUpperCase();
+    verwacht(/^[0-9A-F]{6}$/.test(kleur) && (delen.get('word/header1.xml')?.toString('utf8') ?? '').includes(`w:color="${kleur}"`), `geen lijn in de merkkleur ${kleur} in de kop`);
+    const voettekst = (stijl.brand_footer_text ?? '').trim() || (stijl.company_name ?? '').trim();
+    verwacht(voettekst && (delen.get('word/footer1.xml')?.toString('utf8') ?? '').includes(voettekst), `de voet noemt "${voettekst}" niet`);
     // Afdrukken: het venster gaat dicht, en de browser drukt af (alleen CSS, zie CHANGELOG_PAGINAS_AFDRUKKEN).
     await page.evaluate(() => { window.__afgedrukt = 0; window.print = () => { window.__afgedrukt += 1; }; });
     await openVenster();
@@ -3732,7 +3739,9 @@ async function scenarioPaginaexport() {
       await venster2.locator('.page-editor-close').click();
       await venster2.waitFor({ state: 'detached', timeout: 5000 });
       const zonder = docxDelen(readFileSync(await (await exporteerWord(ander.page)).path()));
-      verwacht(!zonder.has('word/header1.xml'), 'met een PDF-briefpapier toch een kop');
+      // Geen briefpapier in het bestand; de kop in de huisstijl (stap 1B-4c) staat er wel.
+      verwacht(![...zonder.keys()].some(naam => naam.startsWith('word/media/briefpapier')), 'met een PDF-briefpapier toch een briefpapier');
+      verwacht(!/behindDoc="1"/.test(zonder.get('word/header1.xml')?.toString('utf8') ?? ''), 'met een PDF-briefpapier toch een afbeelding achter de tekst');
       await sluitPagina(ander.page);
     } finally {
       zet('none', null, null);

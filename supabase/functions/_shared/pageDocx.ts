@@ -37,6 +37,11 @@
 //  - De opties van het exportvenster (stap 1B-4, PageDocxOptions): een
 //    voorblad, een inhoudsopgave vooraan, subpagina's als hoofdstukken, en
 //    het briefpapier (een afbeelding achter elke bladzijde, in de kop).
+//  - Kop en voet in de huisstijl (stap 1B-4c, context.brand): het logo
+//    rechts in de kop met een lijn in de merkkleur, en in de voet de naam of
+//    voettekst links en het paginanummer rechts. Met briefpapier niet: dat
+//    heeft zijn eigen kop en voet. Zonder huisstijl in de context blijft het
+//    bestand dat van 1B-3.
 //    Zonder opties is het bestand precies dat van 1B-3; pageDocx.test.ts
 //    bewaakt dat. De aanroeper geeft namen, de datum en het logo mee: deze
 //    module kent geen klok en geen database.
@@ -73,6 +78,18 @@ export type PageDocxContext = {
   fileNames?: Record<string, string>;
   /** Afbeeldingen (attachmentId → bytes). */
   images?: Record<string, PageDocxImage>;
+  /** Kop en voet in de huisstijl (stap 1B-4c). Zonder: alleen het paginanummer, zoals in 1B-3. */
+  brand?: PageDocxBrand | null;
+};
+
+/** De huisstijl in kop en voet (stap 1B-4c). */
+export type PageDocxBrand = {
+  /** Png, jpeg of gif, rechts in de kop; iets anders laat de kop zonder logo. */
+  logo?: PageDocxImage | null;
+  /** De merkkleur, als #RRGGBB: een lijn onder de kop. */
+  color?: string | null;
+  /** Links in de voet: de voettekst van de huisstijl, of de naam van het bedrijf. */
+  footerText?: string | null;
 };
 
 /** Een subpagina als hoofdstuk (stap 1B-4). Diepte 1 is een directe subpagina. */
@@ -148,6 +165,9 @@ const MAX_HEADING = 6;
 /** Het logo op het voorblad: hoogstens 5 bij 2,5 cm. */
 const LOGO_MAX_CX = 1800000;
 const LOGO_MAX_CY = 900000;
+/** Het logo in de kop: hoogstens 4,5 bij 1,1 cm. */
+const HEADER_LOGO_MAX_CX = 1620000;
+const HEADER_LOGO_MAX_CY = 396000;
 
 const BORDER = 'CBD5E1';
 const SHADE = 'F1F5F9';
@@ -646,26 +666,66 @@ function inlineDrawing(b: DocxBuilder, relId: string, cx: number, cy: number, al
     + '</pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>';
 }
 
-/** Het logo op het voorblad, binnen 5 bij 2,5 cm; '' als het geen png, jpeg of gif is. */
-function logoXml(logo: PageDocxImage, b: DocxBuilder, company: string): string {
+/** De maat van een logo binnen een kader, in EMU; null als het geen png, jpeg of gif is. */
+function logoSize(logo: PageDocxImage, maxCx: number, maxCy: number): { ext: string; cx: number; cy: number } | null {
   const ext = IMAGE_EXT[logo.contentType];
   const given = logo.width && logo.height && logo.width > 0 && logo.height > 0 ? { width: logo.width, height: logo.height } : null;
   const size = ext ? given ?? imageSize(logo.bytes) : null;
-  if (!ext || !size) return '';
-  const scale = Math.min(1, LOGO_MAX_CX / (size.width * EMU_PER_PX), LOGO_MAX_CY / (size.height * EMU_PER_PX));
-  const cx = Math.max(1, Math.round(size.width * EMU_PER_PX * scale));
-  const cy = Math.max(1, Math.round(size.height * EMU_PER_PX * scale));
-  // Een sleutel die geen attachmentId kan zijn: het logo is geen bijlage van de pagina.
-  return inlineDrawing(b, b.image(':logo', logo, ext), cx, cy, company ? `Logo van ${company}` : 'Logo');
+  if (!ext || !size) return null;
+  const scale = Math.min(1, maxCx / (size.width * EMU_PER_PX), maxCy / (size.height * EMU_PER_PX));
+  return { ext, cx: Math.max(1, Math.round(size.width * EMU_PER_PX * scale)), cy: Math.max(1, Math.round(size.height * EMU_PER_PX * scale)) };
 }
 
-type Margins = { top: number; bottom: number; footer: number };
-const PLAIN_MARGINS: Margins = { top: MARGIN, bottom: MARGIN, footer: 709 };
+/** Het logo op het voorblad, binnen 5 bij 2,5 cm; '' als het geen png, jpeg of gif is. */
+function logoXml(logo: PageDocxImage, b: DocxBuilder, company: string): string {
+  const size = logoSize(logo, LOGO_MAX_CX, LOGO_MAX_CY);
+  if (!size) return '';
+  // Een sleutel die geen attachmentId kan zijn: het logo is geen bijlage van de pagina.
+  return inlineDrawing(b, b.image(':logo', logo, size.ext), size.cx, size.cy, company ? `Logo van ${company}` : 'Logo');
+}
 
-/** Papier en marges; voor de laatste sectie en voor die van het voorblad. */
+/** Een merkkleur als RRGGBB, of null. Alleen #RRGGBB (of #RGB): de rest kan Word niet lezen. */
+function brandColor(value: string | null | undefined): string | null {
+  const color = typeof value === 'string' ? value.trim() : '';
+  if (/^#[0-9a-f]{6}$/i.test(color)) return color.slice(1).toUpperCase();
+  if (/^#[0-9a-f]{3}$/i.test(color)) return color.slice(1).split('').map(c => c + c).join('').toUpperCase();
+  return null;
+}
+
+/**
+ * De kop in de huisstijl (stap 1B-4c): het logo rechts, en een lijn in de
+ * merkkleur eronder. Het logo is een relatie van de kop zelf (rId1 in
+ * header1.xml.rels), niet van document.xml.
+ */
+function brandHeaderXml(logo: { cx: number; cy: number } | null, color: string | null, docPr: number): string {
+  const border = color ? `<w:pBdr><w:bottom w:val="single" w:sz="8" w:space="6" w:color="${color}"/></w:pBdr>` : '';
+  const drawing = logo
+    ? '<w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0">'
+      + `<wp:extent cx="${logo.cx}" cy="${logo.cy}"/><wp:docPr id="${docPr}" name="Logo" descr="Logo"/>`
+      + '<wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>'
+      + '<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic>'
+      + '<pic:nvPicPr><pic:cNvPr id="0" name="Logo"/><pic:cNvPicPr/></pic:nvPicPr>'
+      + '<pic:blipFill><a:blip r:embed="rId1"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>'
+      + `<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${logo.cx}" cy="${logo.cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>`
+      + '</pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>'
+    : '';
+  // De volgorde van CT_PPrBase: pStyle, pBdr, jc.
+  return `${XML_HEAD}<w:hdr ${NS}><w:p><w:pPr><w:pStyle w:val="Header"/>${border}<w:jc w:val="right"/></w:pPr>${drawing}</w:p></w:hdr>`;
+}
+
+type Margins = { top: number; bottom: number; header: number; footer: number };
+const PLAIN_MARGINS: Margins = { top: MARGIN, bottom: MARGIN, header: 709, footer: 709 };
+/**
+ * Met de kop in de huisstijl (stap 1B-4c): de kop 1 cm van de rand, en de
+ * tekst pas op 3 cm. Met de gewone marges stond de lijn onder het logo
+ * tegen de eerste regel aan.
+ */
+const BRAND_MARGINS: Margins = { top: 1701, bottom: MARGIN, header: 567, footer: 709 };
+
+/** Papier en marges. */
 function pageSetup(margins: Margins): string {
   return `<w:pgSz w:w="${PAGE_WIDTH}" w:h="${PAGE_HEIGHT}"/>`
-    + `<w:pgMar w:top="${margins.top}" w:right="${MARGIN}" w:bottom="${margins.bottom}" w:left="${MARGIN}" w:header="709" w:footer="${margins.footer}" w:gutter="0"/>`;
+    + `<w:pgMar w:top="${margins.top}" w:right="${MARGIN}" w:bottom="${margins.bottom}" w:left="${MARGIN}" w:header="${margins.header}" w:footer="${margins.footer}" w:gutter="0"/>`;
 }
 
 /**
@@ -721,6 +781,11 @@ function coverXml(name: string, cover: PageDocxCover, b: DocxBuilder): string {
   return `${out}<w:p><w:r><w:br w:type="page"/></w:r></w:p>`;
 }
 
+/** Staat er iets op de pagina, behalve lege alinea's? */
+function hasVisibleContent(doc: PmNode): boolean {
+  return (doc.content ?? []).some(node => node.type !== 'paragraph' || textOf(node).trim() !== '');
+}
+
 function collectHeadings(node: PmNode, out: TocEntry[], shift = 0): void {
   // Zoals de inhoudsopgave in de app (pageEditorExtensions.ts): alle koppen,
   // ook die in een kader of uitklapper, in volgorde. In een hoofdstuk een of
@@ -753,7 +818,7 @@ function fontKey(n: number): string {
  * extra: de stijlen die alleen een optie van het exportvenster gebruikt. Alleen
  * dan erin, zodat het bestand zonder opties gelijk blijft aan dat van 1B-3.
  */
-function stylesXml(fontFamily: string | null, headingFamily: string | null, extra: { deepHeadings?: boolean; cover?: boolean } = {}): string {
+function stylesXml(fontFamily: string | null, headingFamily: string | null, extra: { deepHeadings?: boolean; cover?: boolean; header?: boolean } = {}): string {
   const family = escapeXml(fontFamily ?? 'Calibri');
   // De titel en de koppen in hun eigen letter. rFonts staat vooraan in rPr (CT_RPr).
   const heading = headingFamily && headingFamily !== fontFamily
@@ -785,6 +850,7 @@ function stylesXml(fontFamily: string | null, headingFamily: string | null, extr
     + style('TOC2', 'toc 2', '<w:spacing w:after="60"/><w:ind w:left="360"/>', '')
     + style('TOC3', 'toc 3', '<w:spacing w:after="60"/><w:ind w:left="720"/>', '')
     + style('Footer', 'footer', '<w:spacing w:after="0"/>', `<w:color w:val="${MUTED}"/><w:sz w:val="18"/><w:szCs w:val="18"/>`)
+    + (extra.header ? style('Header', 'header', '<w:spacing w:after="0"/>', '') : '')
     + '<w:style w:type="character" w:styleId="Hyperlink"><w:name w:val="Hyperlink"/><w:rPr><w:color w:val="2563EB"/><w:u w:val="single"/></w:rPr></w:style>'
     + '</w:styles>';
 }
@@ -802,11 +868,15 @@ function numberingXml(orderedLists: number[]): string {
     + '</w:numbering>';
 }
 
-function footerXml(): string {
-  // Paginanummers, zoals §9 vraagt. Kop en voet in de huisstijl komen met het exportvenster.
+function footerXml(text: string | null): string {
+  // Paginanummers, zoals §9 vraagt. Met een tekst van de huisstijl (stap
+  // 1B-4c): die links, het nummer rechts, op een tabstop aan de rechterkant.
   const field = (instr: string) => `<w:fldSimple w:instr=" ${instr} "><w:r><w:t>1</w:t></w:r></w:fldSimple>`;
+  const number = `${run('Pagina ')}${field('PAGE')}${run(' van ')}${field('NUMPAGES')}`;
   return `${XML_HEAD}<w:ftr xmlns:w="${W_NS}">`
-    + `<w:p><w:pPr><w:pStyle w:val="Footer"/><w:jc w:val="center"/></w:pPr>${run('Pagina ')}${field('PAGE')}${run(' van ')}${field('NUMPAGES')}</w:p>`
+    + (text
+      ? `<w:p><w:pPr><w:pStyle w:val="Footer"/><w:tabs><w:tab w:val="right" w:pos="${TEXT_WIDTH}"/></w:tabs></w:pPr>${run(text)}<w:r><w:tab/></w:r>${number}</w:p>`
+      : `<w:p><w:pPr><w:pStyle w:val="Footer"/><w:jc w:val="center"/></w:pPr>${number}</w:p>`)
     + '</w:ftr>';
 }
 
@@ -876,30 +946,43 @@ export function pageDocxFiles(title: string, body: unknown, context: PageDocxCon
   const paperExt = paperImage ? IMAGE_EXT[paperImage.contentType] : undefined;
   const paper = paperImage && paperExt ? { image: paperImage, ext: paperExt } : null;
   const clampMargin = (value: number | undefined) => Math.min(Math.round(PAGE_HEIGHT / 3), Math.max(MARGIN, whole(value, MARGIN, PAGE_HEIGHT)));
+  // Kop en voet in de huisstijl (stap 1B-4c). Met briefpapier niet: dat heeft
+  // zijn eigen kop en voet, en een logo of lijn kwam er dan overheen (zoals
+  // builtInLayout de gekleurde balk weglaat bij briefpapier).
+  const brand = paper ? null : context.brand ?? null;
+  const brandLogo = brand?.logo ? logoSize(brand.logo, HEADER_LOGO_MAX_CX, HEADER_LOGO_MAX_CY) : null;
+  const brandLine = brandColor(brand?.color);
+  const brandHeader = Boolean(brandLogo || brandLine);
+  const footerText = brand?.footerText?.trim() || null;
   const margins: Margins = paper
     ? (() => {
       const top = clampMargin(options.letterhead?.top);
       const bottom = clampMargin(options.letterhead?.bottom);
       // Het paginanummer net onder de tekst, boven de voet van het briefpapier
       // (zoals "Voor briefpapier" in Documentopmaak het zet).
-      return { top, bottom, footer: bottom > MARGIN ? bottom - 320 : 709 };
+      return { top, bottom, header: 709, footer: bottom > MARGIN ? bottom - 320 : 709 };
     })()
-    : PLAIN_MARGINS;
+    : brandHeader ? BRAND_MARGINS : PLAIN_MARGINS;
   // Het briefpapier op elke bladzijde; met een voorblad ook op die eerste
-  // (titlePg geeft de eerste bladzijde een eigen kop en voet).
+  // (titlePg geeft de eerste bladzijde een eigen kop en voet). Verder blijft
+  // het voorblad kaal: geen kop in de huisstijl, en geen voet.
   const header = paper
     ? `<w:headerReference w:type="default" r:id="rId6"/>${options.cover ? '<w:headerReference w:type="first" r:id="rId6"/>' : ''}`
-    : '';
+    : brandHeader ? '<w:headerReference w:type="default" r:id="rId6"/>' : '';
   // Met een voorblad staat de titel daar, en niet nog eens boven de tekst.
   let content = options.cover ? coverXml(name, options.cover, b) : para({ style: 'Title' }, run(name));
   if (options.toc) content += tocXml(ctx);
   content += blocksXml(doc.content, b, ctx);
+  // Een hoofdstuk begint op een nieuwe bladzijde; een subpagina daaronder
+  // loopt door. Maar alleen als er al iets staat: bij een lege bovenste pagina
+  // (een handboek met alleen subpagina's) begon het eerste hoofdstuk anders na
+  // een lege bladzijde. Een inhoudsopgave-blok in een hoofdstuk valt weg: het
+  // veld zou het hele bestand opsommen, net als dat van de pagina zelf.
+  let written = hasVisibleContent(doc) || (Boolean(options.toc) && toc.some(entry => entry.level <= 3));
   for (const chapter of chapters) {
-    // Een hoofdstuk begint op een nieuwe bladzijde; een subpagina daaronder
-    // loopt door. Een inhoudsopgave-blok in een hoofdstuk valt weg: het veld
-    // zou het hele bestand opsommen, net als dat van de pagina zelf.
-    content += para({ style: `Heading${Math.min(MAX_HEADING, chapter.depth)}`, pageBreak: chapter.depth === 1 }, run(chapter.title));
+    content += para({ style: `Heading${Math.min(MAX_HEADING, chapter.depth)}`, pageBreak: chapter.depth === 1 && written }, run(chapter.title));
     content += blocksXml(chapter.doc.content, b, { ...ctx, shift: chapter.depth, dropToc: true });
+    written = true;
   }
   const documentXml = `${XML_HEAD}<w:document ${NS}><w:body>${content}`
     + `<w:sectPr>${header}<w:footerReference w:type="default" r:id="rId4"/>${pageSetup(margins)}`
@@ -911,13 +994,17 @@ export function pageDocxFiles(title: string, body: unknown, context: PageDocxCon
     { id: 'rId3', type: `${REL}/settings`, target: 'settings.xml', external: false },
     { id: 'rId4', type: `${REL}/footer`, target: 'footer1.xml', external: false },
     ...(embedded.length ? [{ id: 'rId5', type: `${REL}/fontTable`, target: 'fontTable.xml', external: false }] : []),
-    ...(paper ? [{ id: 'rId6', type: `${REL}/header`, target: 'header1.xml', external: false }] : []),
+    ...(paper || brandHeader ? [{ id: 'rId6', type: `${REL}/header`, target: 'header1.xml', external: false }] : []),
     ...b.rels,
   ];
   const relsXml = `${XML_HEAD}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">`
     + rels.map(rel => `<Relationship Id="${rel.id}" Type="${rel.type}" Target="${escapeXml(rel.target)}"${rel.external ? ' TargetMode="External"' : ''}/>`).join('')
     + '</Relationships>';
-  const used = new Set([...b.media.map(item => item.contentType), ...(paper ? [paper.image.contentType] : [])]);
+  const used = new Set([
+    ...b.media.map(item => item.contentType),
+    ...(paper ? [paper.image.contentType] : []),
+    ...(brandLogo && brand?.logo ? [brand.logo.contentType] : []),
+  ]);
   const contentTypesXml = `${XML_HEAD}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">`
     + '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
     + '<Default Extension="xml" ContentType="application/xml"/>'
@@ -928,7 +1015,7 @@ export function pageDocxFiles(title: string, body: unknown, context: PageDocxCon
     + '<Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>'
     + '<Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>'
     + '<Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>'
-    + (paper ? '<Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>' : '')
+    + (paper || brandHeader ? '<Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>' : '')
     + (embedded.length ? '<Override PartName="/word/fontTable.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.fontTable+xml"/>' : '')
     + '<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>'
     + '</Types>';
@@ -957,15 +1044,23 @@ export function pageDocxFiles(title: string, body: unknown, context: PageDocxCon
     { path: 'docProps/core.xml', data: coreXml },
     { path: 'word/document.xml', data: documentXml },
     { path: 'word/_rels/document.xml.rels', data: relsXml },
-    { path: 'word/styles.xml', data: stylesXml(fontFamily, headingFamily, { deepHeadings: chapters.length > 0, cover: Boolean(options.cover) }) },
+    { path: 'word/styles.xml', data: stylesXml(fontFamily, headingFamily, { deepHeadings: chapters.length > 0, cover: Boolean(options.cover), header: brandHeader }) },
     { path: 'word/numbering.xml', data: numberingXml(b.orderedLists) },
     { path: 'word/settings.xml', data: settingsXml(embedded.length > 0) },
-    { path: 'word/footer1.xml', data: footerXml() },
+    { path: 'word/footer1.xml', data: footerXml(footerText) },
     ...(paper ? [
       { path: 'word/header1.xml', data: letterheadHeaderXml() },
       { path: 'word/_rels/header1.xml.rels', data: `${XML_HEAD}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">`
         + `<Relationship Id="rId1" Type="${REL}/image" Target="media/briefpapier.${paper.ext}"/></Relationships>` },
       { path: `word/media/briefpapier.${paper.ext}`, data: paper.image.bytes },
+    ] : []),
+    ...(brandHeader ? [
+      { path: 'word/header1.xml', data: brandHeaderXml(brandLogo, brandLine, 9001) },
+      ...(brandLogo && brand?.logo ? [
+        { path: 'word/_rels/header1.xml.rels', data: `${XML_HEAD}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">`
+          + `<Relationship Id="rId1" Type="${REL}/image" Target="media/logo-kop.${brandLogo.ext}"/></Relationships>` },
+        { path: `word/media/logo-kop.${brandLogo.ext}`, data: brand.logo.bytes },
+      ] : []),
     ] : []),
     ...fontFiles,
     ...b.media.map(item => ({ path: item.path, data: item.bytes })),
