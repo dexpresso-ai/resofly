@@ -2371,6 +2371,116 @@ async function scenarioPaginas() {
     verwacht(tekst(sqlRij(`select content from public.documents where id = ${q(pagina.id)}`).content).includes('Mail jan@bedrijf.nl'), 'de pagina is niet opgeslagen voor het openen');
   });
 
+  await uiStap('"Genoemd in" (stap 2-1c): bij de klant en het project de pagina\'s die hen noemen, met waar ze staan; zonder Projecten "Ander dossier", zonder Inhoud geen paneel en geen verzoek; een tik opent, de prullenbak haalt weg, en op een telefoon past het', async () => {
+    const tag = Date.now().toString(36);
+    const projectNaam = `Genoemd project ${tag}`;
+    sql(`insert into public.projects (organization_id, created_by, client_id, name) values (${q(w.orgId)}, ${q(w.medewerker.id)}, ${q(w.klantA.id)}, ${q(projectNaam)})`);
+    const project = sqlRij(`select id from public.projects where organization_id = ${q(w.orgId)} and name = ${q(projectNaam)}`);
+    const noem = (...refs) => ({ type: 'doc', content: [{ type: 'paragraph', content: refs.flatMap(([kind, id]) => [
+      { type: 'text', text: 'Zie ' }, { type: 'mention', attrs: { kind, id } }, { type: 'text', text: '. ' },
+    ]) }] });
+    // Elk een eigen insert: dan elk een eigen updated_at, en een vaste volgorde.
+    const maak = (titel, body, klant, projectId) => {
+      sql(`insert into public.documents (organization_id, created_by, title, format, body, client_id, project_id)
+        values (${q(w.orgId)}, ${q(w.medewerker.id)}, ${q(titel)}, 'page', ${q(JSON.stringify(body))}::jsonb, ${klant ? q(klant) : 'null'}, ${projectId ? q(projectId) : 'null'})`);
+      return sqlRij(`select id from public.documents where organization_id = ${q(w.orgId)} and title = ${q(titel)}`).id;
+    };
+    const inProject = { titel: `Genoemd in project ${tag}` };
+    inProject.id = maak(inProject.titel, noem(['client', w.klantA.id]), w.klantA.id, project.id);
+    const bijB = { titel: `Genoemd bij B ${tag}` };
+    bijB.id = maak(bijB.titel, noem(['client', w.klantA.id], ['project', project.id]), w.klantB.id, null);
+    const eigen = { titel: `Genoemd eigen ${tag}` };
+    eigen.id = maak(eigen.titel, noem(['client', w.klantA.id]), null, null);
+    const eigenDossier = tekst(sqlRij(`select company_name from public.company_settings where organization_id = ${q(w.orgId)}`)?.company_name ?? '') || 'Eigen dossier';
+    // Wat het paneel bij klant A hoort te tonen: alles wat de klant noemt en niet in de
+    // prullenbak ligt, ook de pagina's van eerdere stappen; het laatst bewerkt bovenaan.
+    const verwachtBijKlant = () => sqlRijen(`select d.title from public.page_mentions pm join public.documents d on d.id = pm.document_id
+      where pm.organization_id = ${q(w.orgId)} and pm.kind = 'client' and pm.entity_id = ${q(w.klantA.id)} and d.archived_at is null
+      order by d.updated_at desc`).map(rij => rij.title);
+    // Zes rijen staan er meteen (MENTIONED_IN_LIMIT); de rest achter "meer".
+    const zichtbaar = (lijst) => lijst.slice(0, 6);
+    const paneel = (page) => inhoud(page).locator('article.mentioned-in');
+    const titels = async (page) => (await paneel(page).locator('.proj-next-title').allInnerTexts()).map(tekst);
+    const rijVan = (page, titel) => paneel(page).locator('.proj-next-row').filter({ has: page.locator('.proj-next-title').getByText(titel, { exact: true }) });
+    const plekVan = async (page, titel) => tekst(await rijVan(page, titel).locator('.proj-next-meta').innerText());
+    const naarKlant = { page: 'client', projectId: null, clientId: w.klantA.id, statsReportId: null, galleryId: null };
+
+    // De medewerker: alles, met de plek, in de goede volgorde.
+    const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true, tabblad: naarKlant });
+    const page = lid.page;
+    await inhoud(page).locator('.client-detail-page').waitFor({ timeout: 30000 });
+    const eerst = verwachtBijKlant();
+    verwacht(eerst.length >= 3, `te weinig pagina's bij de klant: ${eerst.length}`);
+    await wachtTot(async () => JSON.stringify(await titels(page)) === JSON.stringify(zichtbaar(eerst)), { melding: `het paneel bij de klant: ${JSON.stringify(eerst)}` });
+    gelijk(tekst(await paneel(page).locator('.client-panel-head span').innerText()), String(eerst.length), 'het aantal in de kop');
+    gelijk(await plekVan(page, inProject.titel), `Project · ${projectNaam}`, 'de plek van een pagina in het project');
+    gelijk(await plekVan(page, bijB.titel), `Klant · ${w.klantB.name}`, 'de plek van een pagina bij klant B');
+    gelijk(await plekVan(page, eigen.titel), eigenDossier, 'de plek van een pagina in het eigen dossier');
+
+    // Op een telefoon past het paneel, zonder dat de pagina zijwaarts schuift.
+    const breed = page.viewportSize();
+    await page.setViewportSize({ width: 390, height: 844 });
+    try {
+      await paneel(page).scrollIntoViewIfNeeded();
+      const vak = await paneel(page).boundingBox();
+      verwacht(vak && vak.x >= 0 && vak.x + vak.width <= 390, `het paneel valt buiten een telefoon: ${JSON.stringify(vak)}`);
+      const zijwaarts = await page.evaluate(() => document.documentElement.scrollWidth);
+      verwacht(zijwaarts <= 390, `de pagina schuift zijwaarts op een telefoon: ${zijwaarts}`);
+    } finally {
+      if (breed) await page.setViewportSize(breed);
+    }
+
+    // Een tik opent de pagina; sluiten brengt je terug, met dezelfde lijst.
+    await rijVan(page, bijB.titel).click();
+    await page.locator('.page-editor').waitFor({ timeout: 20000 });
+    // De editor laadt de pagina na het openen: eerst is de titel nog leeg.
+    await wachtTot(async () => (await page.locator('.page-editor-title').inputValue().catch(() => '')) === bijB.titel, { melding: 'de geopende pagina is niet die uit het paneel' });
+    await wachtOpgeslagen(page, 'de pagina uit het paneel kwam niet in bewerken');
+    await sluitPagina(page);
+    await paneel(page).waitFor({ timeout: 15000 });
+    await wachtTot(async () => JSON.stringify(await titels(page)) === JSON.stringify(zichtbaar(verwachtBijKlant())), { melding: 'het paneel na het sluiten van de pagina' });
+
+    // De prullenbak: na verversen weg.
+    sql(`update public.documents set archived_at = now(), archived_by = ${q(w.medewerker.id)} where id = ${q(eigen.id)}`);
+    await ververs(lid);
+    const naPrullenbak = verwachtBijKlant();
+    verwacht(!naPrullenbak.includes(eigen.titel), 'de database telt de pagina in de prullenbak nog mee');
+    await wachtTot(async () => JSON.stringify(await titels(page)) === JSON.stringify(zichtbaar(naPrullenbak)), { melding: `na de prullenbak: ${JSON.stringify(naPrullenbak)}` });
+
+    // Het project: alleen wat het project noemt.
+    await inhoud(page).locator('.client-project-row').filter({ hasText: projectNaam }).first().click();
+    await inhoud(page).locator('.proj-dashboard').waitFor({ timeout: 15000 });
+    await wachtTot(async () => JSON.stringify(await titels(page)) === JSON.stringify([bijB.titel]), { melding: 'het paneel bij het project' });
+    gelijk(await plekVan(page, bijB.titel), `Klant · ${w.klantB.name}`, 'de plek bij het project');
+    await sluit(lid);
+
+    // Klanten en Inhoud wel, Projecten niet: de pagina's wel, het project heet "Ander dossier".
+    const zonderProjecten = await maakGebruiker('ui-zonder-projecten');
+    sql(`insert into public.organization_members (organization_id, user_id, email, role, status, module_access)
+      values (${q(w.orgId)}, ${q(zonderProjecten.id)}, ${q(zonderProjecten.email)}, 'member', 'active', '{"clients":"read","content":"read","projects":"none"}'::jsonb)`);
+    const zp = await openWerkruimte(zonderProjecten, 'zonder-projecten', w.orgId, { tijdelijk: true, tabblad: naarKlant });
+    await inhoud(zp.page).locator('.client-detail-page').waitFor({ timeout: 30000 });
+    await wachtTot(async () => (await titels(zp.page)).includes(inProject.titel), { melding: 'zonder Projecten: de pagina in het project ontbreekt' });
+    gelijk(await plekVan(zp.page, inProject.titel), 'Ander dossier', 'zonder Projecten: de plek');
+    verwacht(!tekst(await paneel(zp.page).innerText()).includes(projectNaam) && !tekst(await paneel(zp.page).innerText()).includes(project.id), 'zonder Projecten staat het project toch in het paneel');
+    await sluit(zp);
+
+    // Klanten wel, Inhoud niet: geen paneel, en geen vraag naar page_mentions.
+    const zonderInhoud = await maakGebruiker('ui-zonder-inhoud');
+    sql(`insert into public.organization_members (organization_id, user_id, email, role, status, module_access)
+      values (${q(w.orgId)}, ${q(zonderInhoud.id)}, ${q(zonderInhoud.email)}, 'member', 'active', '{"clients":"read","content":"none"}'::jsonb)`);
+    const vragen = [];
+    const zi = await openWerkruimte(zonderInhoud, 'zonder-inhoud', w.orgId, {
+      tijdelijk: true, tabblad: naarKlant,
+      voor: async (context) => { context.on('request', verzoek => { if (verzoek.url().includes('/rest/v1/page_mentions')) vragen.push(verzoek.url()); }); },
+    });
+    await inhoud(zi.page).locator('.client-detail-page').waitFor({ timeout: 30000 });
+    await rustig(zi);
+    gelijk(await paneel(zi.page).count(), 0, 'zonder Inhoud: een paneel');
+    gelijk(vragen.length, 0, 'zonder Inhoud: een vraag naar page_mentions');
+    await sluit(zi);
+  });
+
   await uiStap('plakken uit Excel of Word wordt een tabel, zonder de stijl van buiten', async () => {
     if (!blokPagina) throw new Error('geen pagina');
     const { page } = await openBlokPagina(w.medewerker, 'medewerker');

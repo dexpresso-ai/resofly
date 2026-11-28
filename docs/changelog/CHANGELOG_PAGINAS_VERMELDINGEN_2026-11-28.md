@@ -1,14 +1,15 @@
-# Pagina's: @-vermeldingen, de basis (stap 2-1a)
+# Pagina's: @-vermeldingen (stap 2-1a tot en met 2-1c)
 
 28 november 2026. Zie `docs/plannen/PAGINAS_BOUWPLAN_2026-11-27.md`, §13 en §18 (fase 2).
 
-De eerste stap van de @-vermeldingen uit fase 2: "@-vermeldingen van klanten, projecten, taken,
-facturen en collega's, als levende chips". Deze stap legt de basis:
+De @-vermeldingen uit fase 2: "@-vermeldingen van klanten, projecten, taken, facturen en
+collega's, als levende chips, met 'Genoemd in' op het scherm van de klant of het project". De
+eerste stap (2-1a) legt de basis:
 - de database neemt een vermelding aan, en houdt bij wat een pagina noemt;
 - de editor toont een vermelding;
 - Word, de PDF en de klant laten haar zien.
 
-Kiezen met @ komt in 2-1b, en "Genoemd in" bij een klant of project in 2-1c.
+Kiezen met @ kwam in 2-1b, en "Genoemd in" bij een klant of project in 2-1c (beide hieronder).
 
 ## Wat er nu kan
 
@@ -181,9 +182,75 @@ een naam (`label`) of inhoud wordt geweigerd.
 
 De migratie van 2-1a moet uiterlijk samen met de kiezer naar staging. Staat de app met de
 kiezer eerder live dan de migratie, dan weigert de database de vermeldingen die de kiezer maakt.
+Voor "Genoemd in" (2-1c) geldt hetzelfde, zie daar.
+
+## Stap 2-1c: "Genoemd in" bij een klant en een project
+
+### Wat er nu kan
+
+- **Een paneel "Genoemd in"** op het overzicht van een klant (onder Projecten) en van een project
+  (onder Notities & documenten).
+  - Het toont de pagina's die de klant of het project met @ noemen, het laatst bewerkt bovenaan.
+  - Bij elke pagina staat waar ze staat: "Project · Verbouwing", "Klant · Bakkerij Jansen", of
+    het eigen dossier.
+  - Een tik opent de pagina. Na het sluiten klopt de lijst weer.
+  - Zes staan er meteen; de rest achter "+3 meer".
+- **Alleen wat je mag lezen.**
+  - Wie Inhoud niet mag lezen, ziet geen paneel, en de app vraagt er ook niets voor op.
+  - Een pagina in de prullenbak telt niet mee.
+  - Mag je het project of de klant waar een pagina staat niet zien, dan heet die plek "Ander
+    dossier", nooit een id of een naam.
+- **Geen pagina's in de organisatie, geen paneel.** Dan kan niets de klant noemen, en stond er op
+  elk scherm een lege kaart. Zijn er wel pagina's, dan zegt een lege kaart hoe je iets noemt:
+  "Typ @ in een pagina en kies de klant."
+- **Alleen klanten en projecten.** Een taak, factuur of collega heeft (nog) geen eigen
+  "Genoemd in".
+
+### Hoe het werkt
+
+- `loadMentionedIn` in `src/lib/repository.ts` vraagt de ids op uit `page_mentions`. De database
+  laat alleen de rijen zien van pagina's die je mag lezen: de regels van `documents` (Inhoud
+  lezen, niet in de prullenbak) en de modulepoort.
+- `src/lib/pageMentionedIn.ts` maakt er pagina's van, met hun titel en plek, uit wat de app al
+  geladen heeft. Een id die de app nog niet kent, verschijnt na de volgende ververs.
+- `src/features/MentionedIn.tsx` is het paneel, op het klantscherm (`Clients.tsx`) en het
+  projectscherm (`Projects.tsx`).
+  - Het haalt opnieuw op als de app ververst, ook na het sluiten van een pagina.
+  - De lijst blijft daarbij staan tot het nieuwe antwoord er is. Leeg maken bij elke ververs
+    deed het paneel na elke opslag terugspringen naar "Laden…".
+- **Ontbreekt `page_mentions` nog** (de app eerder live dan de migratie), dan toont het paneel
+  niets in plaats van een fout op elk klant- en projectscherm. Alleen dat geval: elke andere fout
+  zegt het paneel.
+
+### Getest
+
+- `pageMentionedIn.test.ts` (3): de plek, ook "Ander dossier"; de volgorde; geen prullenbak,
+  geen andere documenten, en niets wat de app niet geladen heeft.
+- **`ui.mjs paginas`: 22 stappen, 0 fout.** De nieuwe stap draait tegen de echte database:
+  - bij de klant de pagina's die hem noemen, in de volgorde van de database, met het aantal en
+    de plek (project, klant B, het eigen dossier);
+  - op 390 pixels past het paneel, en schuift de pagina niet zijwaarts;
+  - een tik opent de pagina uit het paneel; na sluiten staat de lijst er weer;
+  - na de prullenbak en verversen is de pagina weg;
+  - bij het project alleen wat het project noemt;
+  - met Klanten en Inhoud maar zonder Projecten: de pagina in het project staat er, als "Ander
+    dossier", zonder de naam van het project;
+  - met Klanten maar zonder Inhoud: geen paneel, en geen enkele vraag naar `page_mentions`.
+
+  De eerste run faalde in de test zelf: die las de titel van de geopende pagina voordat de
+  editor haar had geladen. De test wacht nu, zoals de andere stappen.
+- `npm run test:mobile -- --pages=client,project --theme=both`: 12 metingen, 0 problemen. De
+  nagebootste backend heeft geen pagina's, dus daar staat geen paneel; het gevulde paneel op een
+  telefoon toetst de schermtest hierboven.
+- `npm run test:loading`: alle controles geslaagd.
+- `npm test` (2457) en `npm run typecheck`.
+
+### Uitrollen
+
+Net als de kiezer na of samen met migratie `20261128160000`. Zonder die migratie zegt het paneel
+dat nog niets de klant noemt.
 
 ## Nog niet
 
-- **"Genoemd in"** bij een klant of project (2-1c).
 - **Een hernoemde klant** krijgt in een open pagina pas bij opnieuw openen zijn nieuwe naam. De
   chip leest de naam bij het tekenen.
