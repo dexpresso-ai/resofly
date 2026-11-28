@@ -11,15 +11,19 @@
 // terwijl er iets loopt, dan gaat dat door, en kan er geen tweede bij komen.
 //
 // Stap 1B-4: de opties voor Word (voorblad, inhoudsopgave, subpagina's als
-// hoofdstukken). Ze staan bij de twee Word-knoppen: afdrukken toont de
-// pagina zoals ze op het scherm staat, en kent ze niet.
+// hoofdstukken). Ze staan bij de Word-knoppen: afdrukken toont de pagina
+// zoals ze op het scherm staat, en kent ze niet.
+//
+// Stap 1B-5: de PDF, met dezelfde opties. De server maakt hem (page-export),
+// uit dezelfde Word-file, zodat Word en PDF er hetzelfde uitzien (§9).
+// "Vastleggen in het dossier" zet de PDF als vast bestand in de map.
 // ============================================================
 
 import { useEffect } from 'react';
-import { FileDown, FilePlus2, Printer, X } from 'lucide-react';
+import { FileDown, FileLock2, FilePlus2, FileText, Printer, X } from 'lucide-react';
 import { useBackStep } from '../lib/useBackStep';
 
-export type PageExportAction = 'word' | 'kopie' | 'afdrukken';
+export type PageExportAction = 'word' | 'kopie' | 'pdf' | 'vastleggen' | 'afdrukken';
 
 /** De opties voor Word (stap 1B-4). Standaard alles uit: dan is het bestand dat van 1B-3. */
 export type PageExportOptions = { cover: boolean; toc: boolean; chapters: boolean; letterhead: boolean };
@@ -29,7 +33,7 @@ export const NO_EXPORT_OPTIONS: PageExportOptions = { cover: false, toc: false, 
 /** De subpagina's onder de pagina: hoeveel, of te veel. null zolang ze laden of als dat niet lukte. */
 export type PageExportSubpages = { count: number; tooMany: boolean; limit: number } | null;
 
-export function PageExportDialog({ busy, error, canCopy, options, subpages, letterhead, letterheadPdfNote, onOptions, onChoose, onClose }: {
+export function PageExportDialog({ busy, error, canCopy, options, subpages, letterhead, letterheadPdfNote, folder, onOptions, onChoose, onClose }: {
   /** Wat er nu loopt; zolang kun je niets anders kiezen. */
   busy: PageExportAction | null;
   error: string | null;
@@ -40,6 +44,11 @@ export function PageExportDialog({ busy, error, canCopy, options, subpages, lett
   /** Het briefpapier van Documentopmaak: een afbeelding kan in Word, een PDF niet. null: er is er geen. */
   letterhead: 'image' | 'pdf' | null;
   letterheadPdfNote: string;
+  /**
+   * De map waar "Vastleggen in het dossier" de PDF zet: die van de bovenste
+   * pagina. undefined zolang hij laadt; null als er geen map is.
+   */
+  folder: { name: string } | null | undefined;
   onOptions: (options: PageExportOptions) => void;
   onChoose: (action: PageExportAction) => void;
   onClose: () => void;
@@ -62,12 +71,12 @@ export function PageExportDialog({ busy, error, canCopy, options, subpages, lett
       <span>{label}</span>
     </label>
   );
-  const option = (action: PageExportAction, icon: JSX.Element, label: string, help: string) => (
+  const option = (action: PageExportAction, icon: JSX.Element, label: string, help: string, disabled = false) => (
     <button
       type="button"
       className={`page-export-option page-export-${action}`}
       onClick={() => onChoose(action)}
-      disabled={busy !== null}
+      disabled={busy !== null || disabled}
       aria-busy={busy === action}
     >
       {icon}
@@ -87,7 +96,7 @@ export function PageExportDialog({ busy, error, canCopy, options, subpages, lett
         </div>
         <p className="page-export-intro">Een kopie van de pagina zoals ze nu is, in je huisstijl. De pagina zelf verandert niet.</p>
         <fieldset className="page-export-word-group">
-          <legend>Word</legend>
+          <legend>Word en PDF</legend>
           <div className="page-export-checks">
             {check('cover', 'Voorblad: titel, klant, project, datum en logo')}
             {check('toc', 'Inhoudsopgave vooraan')}
@@ -106,7 +115,14 @@ export function PageExportDialog({ busy, error, canCopy, options, subpages, lett
             {option('word', <FileDown size={18} aria-hidden="true" />, 'Word downloaden', 'Een .docx-bestand op je computer.')}
             {canCopy && option('kopie', <FilePlus2 size={18} aria-hidden="true" />, 'Maak er een Word-document van',
               'Een Word-document naast de pagina, dat meteen opent. Voor de laatste puntjes: wat je daarin wijzigt, komt niet terug in de pagina.')}
+            {option('pdf', <FileText size={18} aria-hidden="true" />, 'PDF downloaden', 'Dezelfde opmaak als Word, als PDF op je computer.')}
+            {canCopy && option('vastleggen', <FileLock2 size={18} aria-hidden="true" />, 'Vastleggen in het dossier',
+              folder === undefined ? 'De PDF als vast bestand in de map van de pagina.'
+                : folder ? `De PDF als vast bestand in de map "${folder.name}". Wat je later aan de pagina wijzigt, verandert die PDF niet.`
+                  : 'Kan alleen als de pagina in een map staat: zet haar eerst in een map.',
+              folder === null)}
           </div>
+          {(busy === 'pdf' || busy === 'vastleggen') && <p className="page-export-note" role="status">De eerste PDF na een pauze kan tot een minuut duren.</p>}
         </fieldset>
         <div className="page-export-options">
           {option('afdrukken', <Printer size={18} aria-hidden="true" />, 'Afdrukken',

@@ -3478,7 +3478,7 @@ async function scenarioPaginaexport() {
       return Boolean(punt && el.contains(punt));
     });
     verwacht(vooraan, 'het exportvenster ligt achter de editor');
-    gelijk(await venster.locator('.page-export-option').count(), 3, 'Word downloaden, een Word-document maken en afdrukken');
+    gelijk(await venster.locator('.page-export-option').count(), 5, 'Word downloaden, een Word-document maken, PDF downloaden, vastleggen en afdrukken');
     await beideThemas(lid, 'paginaexport-venster');
     await page.goBack();
     await venster.waitFor({ state: 'detached', timeout: 5000 });
@@ -3696,6 +3696,61 @@ async function scenarioPaginaexport() {
     verwacht(xml.includes(`Net getypt ${tag}`), 'de kijker kreeg niet de opgeslagen pagina');
     await sluitPagina(page);
   });
+
+  await uiStap('PDF (stap 1B-5): downloaden met de opties, vastleggen in de map van de pagina, en een worker zonder het pad zegt dat', async () => {
+    const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+    const page = lid.page;
+    // De upload van "Vastleggen" gaat naar de media-worker (/upload), zoals elk bestand in de drive.
+    const geupload = [];
+    await page.route(/\/__media\/upload$/, async (route) => {
+      const kop = route.request().headers();
+      const naam = decodeURIComponent(kop['x-file-name'] ?? 'bestand');
+      const sleutel = `${kop['x-organization-id']}/${kop['x-entity-type']}/${kop['x-entity-id']}/${randomUUID()}-${naam}`;
+      geupload.push({ sleutel, soort: kop['x-file-type'], bytes: route.request().postDataBuffer() ?? Buffer.alloc(0) });
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, key: sleutel }) });
+    });
+    await openPagina(lid, kind);
+    const venster = page.locator('.page-export');
+    const openVenster = async () => {
+      await page.locator('.page-editor-export').click();
+      await venster.waitFor({ timeout: 10000 });
+    };
+    await openVenster();
+    await venster.locator('.page-export-check').filter({ hasText: 'Voorblad' }).locator('input').check();
+    // PDF downloaden: de server maakt hem uit dezelfde Word-file (page-export), met het voorblad.
+    const voor = post.paginaPdf.verzoeken.length;
+    const onderweg = page.waitForEvent('download', { timeout: 120000 });
+    onderweg.catch(() => {});
+    await venster.locator('.page-export-pdf').click();
+    const download = await onderweg;
+    gelijk(download.suggestedFilename(), `Export-kind-${tag}.pdf`, 'de naam van de PDF');
+    gelijk(readFileSync(await download.path()).subarray(0, 5).toString(), '%PDF-', 'een PDF');
+    gelijk(post.paginaPdf.verzoeken.length, voor + 1, 'één keer omgezet');
+    const xml = docxDelen(Buffer.from(post.paginaPdf.verzoeken.at(-1).bytes)).get('word/document.xml')?.toString('utf8') ?? '';
+    verwacht(xml.includes(`Tekst van het hoofdstuk ${tag}`) && xml.includes('<w:titlePg/>'), 'de Word-file van de PDF mist de tekst of het voorblad');
+    // Vastleggen: een vast bestand in de map van de bovenste pagina.
+    await openVenster();
+    await wachtTot(async () => tekst(await venster.locator('.page-export-vastleggen').innerText().catch(() => '')).includes(`Exportmap ${tag}`), { melding: 'het venster noemt de map niet' });
+    await venster.locator('.page-export-vastleggen').click();
+    await venster.waitFor({ state: 'detached', timeout: 120000 });
+    await wachtTot(async () => tekst(await page.locator('.page-editor-banner').innerText().catch(() => '')).includes(`De PDF staat in de map "Exportmap ${tag}"`), { melding: 'geen melding na vastleggen' });
+    const vast = sqlRij(`select name, mime_type, entity_type, entity_id, storage_key from public.attachments where organization_id = ${q(w.orgId)} and entity_type = 'folder' and entity_id = ${q(map)} and name like ${q(`Export kind ${tag} (%).pdf`)}`);
+    verwacht(vast && vast.mime_type === 'application/pdf', `de PDF staat niet in de map: ${JSON.stringify(vast)}`);
+    gelijk(geupload.length, 1, 'één upload');
+    gelijk([geupload[0].sleutel, geupload[0].soort, geupload[0].bytes.subarray(0, 5).toString()], [vast.storage_key, 'application/pdf', '%PDF-'], 'de PDF is wat er werd geüpload');
+    // Een worker zonder het pad (nog niet bijgewerkt): het venster zegt het, en Word kan wel.
+    post.paginaPdf.ontbreekt = true;
+    try {
+      await openVenster();
+      await venster.locator('.page-export-pdf').click();
+      await wachtTot(async () => /media-worker/.test(tekst(await venster.locator('.page-export-error').innerText().catch(() => ''))), { melding: 'het venster zegt niet waarom er geen PDF is' });
+      await venster.locator('.page-editor-close').click();
+      await venster.waitFor({ state: 'detached', timeout: 5000 });
+    } finally {
+      post.paginaPdf.ontbreekt = false;
+    }
+    await sluitPagina(page);
+  }, { toegestaan: [{ functie: 'page-export', status: 501 }] });
 
   await uiStap('briefpapier: een afbeelding achter elke bladzijde, met de marges van Documentopmaak; een briefpapier als PDF kan niet, en het venster zegt waarom', async () => {
     const papier = pngVlak(210, 297, [250, 246, 235]);

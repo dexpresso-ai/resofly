@@ -624,7 +624,9 @@ export default async function documentenScenario() {
       gelijk((await exporteer(w.kijker.token, {})).status, 200, 'de kijker');
       geweigerd(await exporteer(zonderInhoud?.geen.token, {}), 'Inhoud "geen"', [403, 404]);
       if (ander) geweigerd(await exporteer(ander.medewerker.token, {}), 'de buren', [403, 404]);
-      geweigerd(await exporteer(null, {}), 'zonder sessie', [401]);
+      // De rooktest na de uitrol zoekt naar precies deze woorden (scripts/supabase-smoke-test.sh).
+      const zonderSessie = geweigerd(await exporteer(null, {}), 'zonder sessie', [401]);
+      if (!String(zonderSessie?.error || '').includes('Niet ingelogd')) throw new Error(`zonder sessie: een andere melding dan de rooktest verwacht: ${JSON.stringify(zonderSessie)}`);
       geweigerd(await roep('page-export', { token: w.medewerker.token, body: { pageId: 'geen-uuid' } }), 'geen geldige pagina', [400]);
       geweigerd(await roep('page-export', { token: w.medewerker.token, body: { pageId: pdfPagina.weg.id } }), 'een pagina in de prullenbak', [404]);
     });

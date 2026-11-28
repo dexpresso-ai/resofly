@@ -24,10 +24,11 @@ met 1B-4c.
 
 ## Wat ik van je nodig heb, op volgorde
 
-1. **De PDF (1B-5)** (vraag 10).
-   - Na je "ga door met het plan" bouw ik hem zoals §9 zegt: de server maakt de Word-file.
-   - Wat ik nog van je nodig heb: rol jij de media-worker uit als het nieuwe pad klaar is? Tot
-     dan zegt het exportvenster dat de PDF er nog niet is.
+1. **De PDF (1B-5) is gebouwd, op de branch** (vraag 10). Na je "ga door met het plan" heb
+   ik hem gebouwd zoals §9 zegt: de server maakt de Word-file.
+   - Zeg of hij naar staging mag. Rol daarna de media-worker uit; hoe dat gaat, staat in
+     `docs/setup/PAGINA_PDF_SETUP.md`.
+   - Tot de worker is uitgerold, zegt het exportvenster dat de PDF er nog niet is.
 2. **Open de vier proefbestanden in echte Word** (vragen 4 en 11):
    - zonder huisstijl;
    - met huisstijl;
@@ -189,7 +190,10 @@ met 1B-4c.
     vast met precies deze fout; met de reparatie slaagt hij.
   - Zie `docs/changelog/CHANGELOG_PAGINAS_EDITOR_ZWART_SCHERM_2026-11-28.md`.
 
-## Na de merge gebouwd (op de branch, nog niet op staging)
+## Na de merge van 09:34 gebouwd
+
+1B-3 tot en met 1B-4c staan sinds 11:46 UTC op staging (`3be4452`). 1B-5 staat op de branch,
+en gaat pas naar staging als je het zegt.
 
 | Stap | Wat | Changelog |
 | --- | --- | --- |
@@ -197,10 +201,12 @@ met 1B-4c.
 | 1B-4a | De opties voor Word: een voorblad (logo, titel, klant, project, datum), een inhoudsopgave vooraan, en de subpagina's als hoofdstukken. | `CHANGELOG_PAGINAS_EXPORTEREN_2026-11-28.md` |
 | 1B-4b | Het briefpapier achter elke bladzijde, als het een afbeelding is (een PDF kan niet in Word), met de marges uit Documentopmaak. Gerepareerd: het voorblad overleefde opnieuw opslaan in Collabora niet goed. | `CHANGELOG_PAGINAS_EXPORTEREN_2026-11-28.md` |
 | 1B-4c | De kop en voet in de huisstijl: het logo en een lijn in de merkkleur, de voettekst en het paginanummer. De controle met LibreOffice is nu een script (`scripts/proef-word-rondgang.sh`). | `CHANGELOG_PAGINAS_EXPORTEREN_2026-11-28.md` |
+| 1B-5 | Na de merge van 11:46, op de branch: "PDF downloaden" en "Vastleggen in het dossier". De server maakt de Word-file (`page-export`) en de media-worker de PDF (`/internal/office/convert-page`). De worker rol jij uit. | `CHANGELOG_PAGINAS_PDF_2026-11-28.md` |
 
-Geen migraties.
+Geen migraties. 1B-5 brengt een nieuwe edge function mee (`page-export`), en een nieuw pad in
+de media-worker, die je zelf uitrolt.
 
-## Wat er op 28 november naar staging ging
+## Wat er op 28 november om 09:34 naar staging ging
 
 | Stap | Wat | Changelog |
 | --- | --- | --- |
@@ -231,14 +237,15 @@ Ze mogen opnieuw draaien, en de databasetests lopen ze na.
 
 ## Getest
 
-- **De CI op de branch:** runs 304 tot en met 310, en 312, zijn helemaal groen:
+- **De CI op de branch:** runs 304 tot en met 310, 312 en 313 zijn helemaal groen:
   - 308 is fe9a4d7 (1C-1 en 1C-2);
   - 309 is a080604 (1C-3 en 1C-4);
   - 310 is 983b12d, met de verhuisreparatie (migratie `20261128150000`);
-  - 312 is 9b92cc4: na de merge, 1B-3 en 1B-4a.
+  - 312 is 9b92cc4: na de merge, 1B-3 en 1B-4a;
+  - 313 is 0d3ccbe: 1B-4b en 1B-4c.
 
-  Run 311 op staging (59fab7e, dezelfde code na de merge) is ook helemaal groen. Run 313
-  (0d3ccbe, met 1B-4b en 1B-4c) loopt nog. Groen betekent:
+  Run 311 op staging (59fab7e, dezelfde code na de merge) is ook helemaal groen. Run 314 op
+  staging (3be4452, de export) loopt nog. Groen betekent:
   - de migraties vanaf nul met de databasetests;
   - `deno check`;
   - typecheck en de unit tests;

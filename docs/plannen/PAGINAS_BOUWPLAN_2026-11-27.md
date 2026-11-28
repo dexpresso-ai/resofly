@@ -516,7 +516,7 @@ akkoord is.
 | 1B-2 | Export: `page-export`, de DOCX-module, het interne PDF-pad, het exportvenster, vastleggen in het dossier, de Word-kopie. | gebouwd op 28 november, op staging gezet op 28 november: de DOCX-module (`_shared/pageDocx.ts`, met de huisstijlletters ingesloten via `_shared/woff.ts`), en de knop "Word" in de editor, die de DOCX in de app bouwt (zie de afwijking hieronder). Zie `docs/changelog/CHANGELOG_PAGINAS_WORD_2026-11-28.md`. Het exportvenster en de Word-kopie kwamen in 1B-3; `page-export`, de PDF en vastleggen in het dossier wachten op Collabora (1B-5). |
 | 1B-3 | Het exportvenster ("Exporteren" in de balk) met Word downloaden, "Maak er een Word-document van" (een Word-document naast de pagina, dat meteen opent in Collabora) en afdrukken. | gebouwd op 28 november, op staging gezet op 28 november om 11:46 UTC (3be4452); zie `docs/changelog/CHANGELOG_PAGINAS_EXPORTEREN_2026-11-28.md`. Op staging na te lopen: een Word-document bewerken en bewaren in Collabora. |
 | 1B-4 | De opties in het exportvenster: een voorblad (titel, klant, project, datum, logo), een inhoudsopgave vooraan, subpagina's als hoofdstukken, briefpapier aan of uit. | 1B-4a (voorblad, inhoudsopgave vooraan, subpagina's als hoofdstukken) gebouwd op 28 november; zie `docs/changelog/CHANGELOG_PAGINAS_EXPORTEREN_2026-11-28.md`. 1B-4b (briefpapier als afbeelding achter elke bladzijde, met de marges uit Documentopmaak) en 1B-4c (de kop en voet in de huisstijl: logo, merkkleur, voettekst) gebouwd op 28 november. Alle drie op staging gezet op 28 november om 11:46 UTC (3be4452). In een .docx kan alleen een briefpapier dat een afbeelding is. Een briefpapier als PDF hoort bij de PDF (1B-5), met pdf-lib zoals bij facturen. |
-| 1B-5 | De PDF: `page-export` (de DOCX op de server, in R2 onder `page-export`), een intern pad in de media-worker naar Collabora, en "Vastleggen in dossier". | wacht op twee antwoorden van de gebruiker: rolt hij de media-worker uit (met wrangler, niet vanuit een cloudsessie), en moet de server de DOCX bouwen (zodat Gerrie en de API zonder browser kunnen exporteren) of mag dat in de app blijven? |
+| 1B-5 | De PDF: `page-export` (de DOCX op de server, in R2 onder `page-export`), een intern pad in de media-worker naar Collabora, en "Vastleggen in dossier". | gebouwd op 28 november, op de branch, na "ga door met het plan": de server bouwt de DOCX (`page-export`), de worker zet hem om (`/internal/office/convert-page`, zonder bestand in R2), en de app downloadt of legt vast in de map. Zie `docs/changelog/CHANGELOG_PAGINAS_PDF_2026-11-28.md`. De media-worker rolt de gebruiker uit: `docs/setup/PAGINA_PDF_SETUP.md`. Nog niet: een briefpapier als PDF onder de PDF. |
 | 1C-1 | De omzetting van een pagina naar HTML voor de klant (`_shared/pageHtml.ts`, `renderPageHtml`), zonder browser, en `pageReferences` in `_shared`. Verandert nog niets aan wat een klant ziet. | gebouwd op 28 november, op staging gezet op 28 november; zie `docs/changelog/CHANGELOG_PAGINAS_HTML_2026-11-28.md` |
 | 1C-2 | De vrijgave in de database: `drive_shares.document_version_id`, alleen een vrijgegeven versie van die pagina en organisatie. In dezelfde stap lezen het portaal en de geheime link die versie, via `renderPageHtml`. | gebouwd op 28 november, op staging gezet op 28 november; zie `docs/changelog/CHANGELOG_PAGINAS_DELEN_VRIJGAVE_2026-11-28.md`. Migratie `20261128120000_paginas_delen`. |
 | 1C-3 | Het deelvenster voor een pagina: vrijgeven, subpagina's aanvinken, "De klant ziet een oudere versie" met "Bijwerken bij klant", het logboek. | gebouwd op 28 november, op staging gezet op 28 november: 1C-3a (database en server: `file-share` met de vrijgave, `page_share_status`, `release_page_to_shares`, migratie `20261128130000`) en 1C-3b (het venster, de knop en de melding in de editor, Gerrie); zie `docs/changelog/CHANGELOG_PAGINAS_BIJWERKEN_BIJ_KLANT_2026-11-28.md` |
@@ -587,8 +587,8 @@ akkoord is.
 **Op staging sinds 28 november 2026, 11:46 UTC (3be4452), op verzoek van de gebruiker:** de export,
 1B-3 tot en met 1B-4c, zonder migraties.
 - De uitrol (Deploy Supabase, run 267) is geslaagd, met de rooktest.
-- CI op de branch: run 312 (1B-3 en 1B-4a) helemaal groen. Run 313 (met 1B-4b en 1B-4c) en run
-  314 (staging) liepen nog bij de merge.
+- CI op de branch: runs 312 (1B-3 en 1B-4a) en 313 (met 1B-4b en 1B-4c) helemaal groen. Run 313
+  liep nog bij de merge en was om 11:55 klaar. Run 314 (staging) loopt nog.
 - Op staging na te lopen: een Word-kopie bewerken en bewaren in Collabora.
 
 **Op staging sinds 28 november 2026, 09:34 UTC (59fab7e), op verzoek van de gebruiker:** alles van
@@ -699,6 +699,16 @@ nieuwe blokken niet, en opent zo'n pagina alleen om te lezen.
   - Bij een lege bovenste pagina begint het eerste hoofdstuk niet meer na een lege bladzijde.
   - De controle met LibreOffice is nu een script: `scripts/proef-word-rondgang.sh`, met de
     proefbestanden uit `scripts/proef-word-export.mjs`.
+- **Daarna gebouwd, op de branch:** 1B-5, de PDF.
+  - `page-export` leest met de sessie van wie exporteert (RLS), en bouwt de DOCX met dezelfde
+    samensteller als de app (`_shared/pageExport.ts`).
+  - De media-worker zet hem om via `/internal/office/convert-page`, zonder bestand in R2. Dat is
+    een afwijking van §9: een onbekende map mag elk lid lezen.
+  - De app kan de PDF downloaden en hem vastleggen in de map van de pagina.
+  - De worker rolt de gebruiker met de hand uit (`docs/setup/PAGINA_PDF_SETUP.md`). Tot dan zegt
+    het venster waarom er geen PDF is.
+  - De rooktest na de uitrol kijkt of `page-export` er staat (zonder inlog: 401). De worker
+    kijkt hij niet na.
 - **Wat de CI niet bewaakt.** §14 vraagt `test:terugknop` en `test:mobile` voor de editor en het
   exportvenster. Die staan in `ui.mjs` (scenario's `paginas`, `paginadrive` en `paginaexport`:
   terug sluit het venster, en de telefoonmaat). `ui.mjs` draait niet in de CI; `test:terugknop`
@@ -728,7 +738,10 @@ nieuwe blokken niet, en opent zo'n pagina alleen om te lezen.
   - run 312 (9b92cc4, 1B-3 en 1B-4a, na de merge): helemaal groen. Daarbij waren:
     - de mobiele lay-outtest (37 minuten), laden, de inrichting en de terugknop;
     - `deno check` van `pageDocx.ts` met het voorblad en de hoofdstukken;
-  - run 313 (0d3ccbe, met 1B-4b en 1B-4c): loopt nog.
+  - run 313 (0d3ccbe, met 1B-4b en 1B-4c): helemaal groen. Daarbij waren:
+    - de mobiele lay-outtest (36 minuten), laden, de inrichting en de terugknop;
+    - `deno check` van `pageDocx.ts` met het briefpapier en de kop en voet;
+  - run 314 (staging, 3be4452, dezelfde code na de merge): loopt nog.
 - **`deno check` op de modules van pagina's:** sinds 1C-1 een eigen stap in
   `.github/workflows/frontend-checks.yml` ("Deno-typecheck pagina's"): `pageDocx.ts`,
   `woff.ts`, `zipWriter.ts`, `pageExportFonts.ts`, `pageHtml.ts` en `pageReferences.ts`. Geen

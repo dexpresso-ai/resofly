@@ -75,6 +75,12 @@ check "client-portal weigert zonder inlog" 401 'Niet ingelogd' \
   -X POST "$base/client-portal" -H 'Content-Type: application/json' --data '{"action":"getPortalData"}'
 check "client-portal weigert een verzonnen sleutel" 401 'session_unbound' \
   -X POST "$base/client-portal" -H 'x-portal-token: rooktest-rooktest-rooktest-rooktest-01' -H 'Content-Type: application/json' --data '{"action":"getPortalData"}'
+# De PDF van een pagina (stap 1B-5): ook hier controleert het platform geen JWT
+# (verify_jwt = false), dus de functie zelf moet zonder inlog weigeren. Zo zie
+# je na de uitrol ook dat page-export er staat: zonder de functie antwoordt
+# Supabase zelf met 404, en dan kan de PDF in de app niet.
+check "page-export weigert zonder inlog" 401 'Niet ingelogd' \
+  -X POST "$base/page-export" -H 'Content-Type: application/json' --data '{"pageId":"00000000-0000-4000-8000-000000000000"}'
 # De API-laag (docs/rapporten/CONTROLE_API_LAAG_2026-11-10.md): het
 # OpenAPI-document, de MCP-server en de autorisatieserver antwoorden in de echte
 # runtime, en de deuren zonder login weigeren zonder bewijs.

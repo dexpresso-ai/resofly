@@ -44,13 +44,13 @@ import { pageEditorExtensions, type PageLinks, type PageMedia } from '../lib/pag
 import { fetchStoredFileBlob, uploadToR2 } from '../lib/r2';
 import { calloutVariant, isAllowedPageLink, type CalloutVariant } from '../lib/pageSchema';
 import { pageBodyFit } from '../lib/pageBodyCheck';
-import { LETTERHEAD_PDF_MESSAGE } from '../lib/pageExportParts';
+import { LETTERHEAD_PDF_MESSAGE, wordFileName } from '../lib/pageExportParts';
 import { warmupOfficeEditor } from '../lib/office';
 import type { InternalDocument } from '../types';
 // Alleen het type: de export zelf laadt pas bij een klik (import()).
 import type { PageWordHouseStyle } from '../lib/pageWordExport';
 import {
-  attachmentInfo, attachmentStorageKey, claimPageEdit, createPage, EXPORT_SUBPAGE_LIMIT, listDossierFiles, listPageVersions, listSubpages, loadPage, loadPageShareStatus, loadPageVersion, pageAncestors, pageTitle,
+  attachmentInfo, attachmentStorageKey, claimPageEdit, createPage, EXPORT_SUBPAGE_LIMIT, exportPagePdf, listDossierFiles, listPageVersions, listSubpages, loadPage, loadPageShareStatus, loadPageVersion, pageAncestors, pageFolder, pageTitle,
   releasePageEdit, releasePageToShares, restorePageVersion, savePage, type DossierFile,
   savePageVersion, type PageShareStatus, type PageVersionSummary,
 } from '../lib/repository';
@@ -179,6 +179,8 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
   const [exportOptions, setExportOptionsState] = useState<PageExportOptions>(readExportOptions);
   const setExportOptions = (options: PageExportOptions) => { setExportOptionsState(options); saveExportOptions(options); };
   const [exportSubpages, setExportSubpages] = useState<Awaited<ReturnType<typeof listSubpages>> | null>(null);
+  /** De map voor "Vastleggen in het dossier" (stap 1B-5): undefined zolang hij laadt, null zonder map. */
+  const [exportFolder, setExportFolder] = useState<{ id: string; name: string } | null | undefined>(undefined);
   const letterheadKind = houseStyle?.invoice_template_kind === 'image' ? 'image' as const
     : houseStyle?.invoice_template_kind === 'pdf' ? 'pdf' as const : null;
   const [refreshHelps, setRefreshHelps] = useState(true);
@@ -826,6 +828,33 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
         letterhead: exportOptions.letterhead && letterheadKind === 'image',
         chapters: exportOptions.chapters ? (subpages?.subpages ?? []).map(({ page, depth }) => ({ id: page.id, title: page.title, depth })) : [],
       };
+      if (action === 'pdf' || action === 'vastleggen') {
+        // De PDF (stap 1B-5): de server leest wat er is opgeslagen, dus eerst opslaan.
+        if (!(await flushForShare())) {
+          throw new Error('De pagina kon niet worden opgeslagen, dus er is ook geen PDF van gemaakt. Probeer het zo nog eens.');
+        }
+        const pdf = await exportPagePdf(documentId, {
+          cover: wordOptions.cover, toc: wordOptions.toc, chapters: wordOptions.chapters.length > 0, letterhead: wordOptions.letterhead,
+        });
+        const base = wordFileName(title).replace(/\.docx$/, '');
+        if (action === 'pdf') {
+          const { saveFile } = await import('../lib/pageWordExport');
+          saveFile(pdf, `${base}.pdf`);
+          setExportOpen(false);
+          return;
+        }
+        // Vastleggen: een vast bestand in de map van de pagina, met de datum in
+        // de naam. Langs de gewone upload, met jouw rechten.
+        const folder = exportFolder ?? await pageFolder(documentId, organizationId);
+        if (!folder) throw new Error('Deze pagina staat niet in een map. Zet haar eerst in een map; dan kan de PDF ernaast.');
+        const date = new Date().toLocaleDateString('nl-NL', { day: '2-digit', month: '2-digit', year: 'numeric' });
+        const name = `${(title.trim() || 'Naamloze pagina').replace(/[\\/:*?"<>|]+/g, ' ').trim()} (${date}).pdf`;
+        await uploadToR2(new File([pdf], name, { type: 'application/pdf' }), organizationId, { entity_type: 'folder', entity_id: folder.id });
+        setExportOpen(false);
+        setMessage(`De PDF staat in de map "${folder.name}": ${name}`);
+        window.setTimeout(() => setMessage(current => (current?.startsWith('De PDF staat in de map') ? null : current)), 6000);
+        return;
+      }
       if (action === 'kopie') {
         if (!onOpenDocument) return;
         const edits = editCountRef.current;
@@ -861,7 +890,9 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
       // niet waarom.
       const raw = (error as { message?: unknown } | null)?.message;
       const text = typeof raw === 'string' && raw ? raw
-        : action === 'kopie' ? 'Het Word-document kon niet worden gemaakt.' : 'Het Word-bestand kon niet worden gemaakt.';
+        : action === 'kopie' ? 'Het Word-document kon niet worden gemaakt.'
+          : action === 'pdf' || action === 'vastleggen' ? 'De PDF kon niet worden gemaakt.'
+            : 'Het Word-bestand kon niet worden gemaakt.';
       // Is het venster al dicht (terug, Escape), dan in de melding van de editor.
       if (exportOpenRef.current) setExportError(text);
       else setMessage(text);
@@ -922,9 +953,12 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
             // Hoeveel subpagina's er nu onder staan: voor de optie "als hoofdstukken".
             setExportSubpages(null);
             listSubpages(documentId, organizationId).then(setExportSubpages, () => setExportSubpages(null));
-            // De Word-kopie opent in Collabora, en die start koud (tot een
-            // minuut). Zo loopt het opstarten al terwijl je kiest (§9).
-            if (canWrite && onOpenDocument) warmupOfficeEditor();
+            // De map voor "Vastleggen in het dossier".
+            setExportFolder(undefined);
+            if (canWrite) pageFolder(documentId, organizationId).then(setExportFolder, () => setExportFolder(null));
+            // De Word-kopie opent in Collabora, en de PDF komt er ook uit; die
+            // start koud (tot een minuut). Zo loopt het opstarten al terwijl je kiest (§9).
+            warmupOfficeEditor();
           }}
           aria-haspopup="dialog"
           aria-label="Exporteren"
@@ -951,6 +985,7 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
         subpages={exportSubpages ? { count: exportSubpages.subpages.length, tooMany: exportSubpages.tooMany, limit: EXPORT_SUBPAGE_LIMIT } : null}
         letterhead={letterheadKind}
         letterheadPdfNote={LETTERHEAD_PDF_MESSAGE}
+        folder={exportFolder ? { name: exportFolder.name } : exportFolder}
         onOptions={setExportOptions}
         onChoose={action => void runExport(action)}
         onClose={() => setExportOpen(false)}
