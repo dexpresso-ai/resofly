@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
-import { PAGE_LINK_PATTERN, PAGE_MARK_TYPES, PAGE_NODE_TYPES, isAllowedPageLink } from './pageSchema.ts';
+import { CALLOUT_VARIANTS, PAGE_LINK_PATTERN, PAGE_MARK_TYPES, PAGE_NODE_TYPES, TABLE_CELL_ALIGNS, calloutVariant, isAllowedPageLink } from './pageSchema.ts';
 
 /**
  * De database keurt een pagina af met een blok of opmaak die niet in
@@ -35,6 +35,23 @@ test('de opmaak en de linkregel zijn die van de database', () => {
   const marks = sql.slice(sql.indexOf("'marks'"), sql.indexOf("'link_pattern'"));
   assert.deepEqual(quoted(marks).filter((name) => name !== 'marks'), [...PAGE_MARK_TYPES]);
   assert.ok(sql.includes(`'link_pattern', '${PAGE_LINK_PATTERN}'`), 'de linkregel verschilt');
+});
+
+// Stap 1A-4a: de database kijkt ook wat er in een callout en een tabelcel
+// staat. Een soort die de app wel kent en de database niet, gaat verloren bij
+// opslaan; andersom komt er een stijl op de pagina die de app niet bedoelde.
+test('de soorten callout en het uitlijnen in een cel zijn die van de database', () => {
+  const sql = latestAllowedSql();
+  const variants = sql.slice(sql.indexOf("'callout_variants'"), sql.indexOf("'cell_aligns'"));
+  assert.deepEqual(quoted(variants).filter((name) => name !== 'callout_variants'), [...CALLOUT_VARIANTS]);
+  const aligns = sql.slice(sql.indexOf("'cell_aligns'"));
+  assert.deepEqual(quoted(aligns).filter((name) => name !== 'cell_aligns'), [...TABLE_CELL_ALIGNS]);
+});
+
+test('een onbekende soort callout wordt info', () => {
+  assert.equal(calloutVariant('tip'), 'tip');
+  assert.equal(calloutVariant('let-op'), 'let-op');
+  for (const value of ['', 'INFO', 'red; background: url(x)', null, undefined, 3]) assert.equal(calloutVariant(value), 'info');
 });
 
 test('links: https, http, mailto, tel en intern mogen; javascript en data niet', () => {

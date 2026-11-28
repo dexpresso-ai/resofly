@@ -7,7 +7,8 @@ import {
 } from 'lucide-react';
 import type { AppData, Attachment, ContentFolder, InternalDocument, Note, Project } from '../types';
 import { dateNL } from '../lib/format';
-import { insertRow, updateRow, deleteContentFolder, deleteAttachment, deleteEntityCascade, moveDriveItem, renameAttachment, addItemsToDriveShare, loadFolderShareGaps, notifyDriveShareAdded } from '../lib/repository';
+import { insertRow, updateRow, deleteContentFolder, deleteAttachment, deleteEntityCascade, moveDriveItem, nestPageUnder, renameAttachment, addItemsToDriveShare, loadFolderShareGaps, notifyDriveShareAdded, trashPage } from '../lib/repository';
+import { PageTrash, PageTrashButton } from '../components/PageTrash';
 import { uploadToR2, downloadAttachment } from '../lib/r2';
 import { createOfficeSession, createOfficeDocument, isOfficeEditable, NEW_OFFICE_LABEL, type NewOfficeType, type OfficeSession } from '../lib/office';
 import { OfficeEditor } from './OfficeEditor';
@@ -35,7 +36,7 @@ export type ContentView = 'all' | 'notes' | 'documents';
 /** Waar een nieuw item terechtkomt: klant, project en/of map worden vooringevuld in de editor. */
 export type ContentCreateTarget = { client_id?: string | null; project_id?: string | null; folder_id?: string | null };
 
-/** Sentinel voor de "Geen klant"-map (inhoud zonder gekoppelde klant). */
+/** Sentinel voor het eigen dossier (vroeger "Geen klant"): inhoud zonder gekoppelde klant. */
 const NO_CLIENT = '__no_client__';
 
 /** Gedeelde grid/lijst-voorkeur met de klantdossier-drive; hier is lijst (OneDrive-details) de standaard. */
@@ -95,10 +96,20 @@ type Row = {
   drag?: DriveDragItem;
   /** Waar een sleep landt: een dossiermap, of de wortel van een projectmap. */
   dropTarget?: DriveLocation;
+  /** Een pagina als doel: wat erop valt, wordt een subpagina (stap 1A-5). */
+  dropPage?: string;
+  /** Het eigen dossier (stap 1A-5c): het logo van het bedrijf in plaats van een map. */
+  logo?: string | null;
+  /** De boom van pagina's (stap 1A-5): hoe diep, hoeveel subpagina's, open of dicht. */
+  depth?: number;
+  childCount?: number;
+  expanded?: boolean;
+  toggle?: () => void;
 };
 const isFolderRow = (r: Row) => r.kind === 'client' || r.kind === 'project' || r.kind === 'folder';
 
 function RowGlyph({ row, size }: { row: Row; size: number }) {
+  if (row.logo) return <img className="odrv-logo" src={row.logo} alt="" width={size} height={size} />;
   if (row.kind === 'file' && row.att) return <AttachmentGlyph att={row.att} size={size} />;
   if (row.kind === 'document') return <DocumentGlyph doc={row.doc} size={size} />;
   if (isFolderRow(row)) return <Folder size={size} fill="currentColor" strokeWidth={1.4} />;
@@ -163,6 +174,8 @@ export function ContentLibrary({
   const [projectId, setProjectId] = useState<string | null>(null); // null = klantwortel
   const [folderId, setFolderId] = useState<string | null>(null);   // dossiermap binnen de klant
   const [query, setQuery] = useState('');
+  /** Welke pagina's in de lijst open staan, met hun subpagina's eronder. */
+  const [expandedPages, setExpandedPages] = useState<Set<string>>(() => new Set());
   const [view, setView] = useState<'grid' | 'list'>(readView);
   const [sortKey, setSortKey] = useState<SortKey>('name');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
@@ -185,6 +198,7 @@ export function ContentLibrary({
   const [sharing, setSharing] = useState<ShareTarget | null>(null);
   /** Het overzicht "wat hebben we allemaal gedeeld en verzonden". */
   const [sharedOpen, setSharedOpen] = useState(false);
+  const [trashOpen, setTrashOpen] = useState(false);
   /** Het venster "Bestanden versturen": wat er al in zit, en voor welke klant. */
   const [sendingFiles, setSendingFiles] = useState<{ sources: TransferSource[]; clientId: string | null; chooseClient: boolean } | null>(null);
   /** Waar de sleep op dit moment boven hangt — stuurt alleen de oplichting. */
@@ -303,11 +317,28 @@ export function ContentLibrary({
       out.push({ kind: 'note', id: n.id, title: n.title, content: n.content, modified: n.updated_at || n.created_at, clientId: p.clientId, projectId: p.projectId, folderId: n.folder_id ?? null, note: n });
     }
     if (showDocuments) for (const d of data.documents) {
+      // Een subpagina staat onder haar ouder (stap 1A-5), niet los in het
+      // dossier. Bij zoeken wel: dan moet je haar kunnen vinden.
+      if (d.parent_id && !query.trim()) continue;
       const p = place(d.client_id, d.project_id);
       out.push({ kind: 'document', id: d.id, title: d.title, content: d.excerpt ?? '', modified: d.updated_at || d.created_at, clientId: p.clientId, projectId: p.projectId, folderId: d.folder_id ?? null, doc: d });
     }
     return out;
-  }, [data.notes, data.documents, showNotes, showDocuments, place]);
+  }, [data.notes, data.documents, showNotes, showDocuments, place, query]);
+
+  // De boom van pagina's (stap 1A-5): per pagina haar subpagina's, in hun volgorde.
+  const docsById = useMemo(() => new Map(data.documents.map(d => [d.id, d] as const)), [data.documents]);
+  const subpagesByParent = useMemo(() => {
+    const map = new Map<string, InternalDocument[]>();
+    for (const d of data.documents) {
+      if (d.format !== 'page' || !d.parent_id) continue;
+      const list = map.get(d.parent_id) ?? [];
+      list.push(d);
+      map.set(d.parent_id, list);
+    }
+    for (const list of map.values()) list.sort((a, b) => (a.position ?? 0) - (b.position ?? 0) || a.title.localeCompare(b.title, 'nl', { numeric: true }));
+    return map;
+  }, [data.documents]);
 
   // Geüploade bestanden leven in dossiermappen; tel ze mee bij de klant van die map.
   const folderAttachments = useMemo(
@@ -321,8 +352,9 @@ export function ContentLibrary({
   const attCountByClient = useMemo(() => {
     const m = new Map<string, number>();
     for (const a of folderAttachments) {
-      const cid = foldersById.get(a.entity_id)?.client_id;
-      if (cid) m.set(cid, (m.get(cid) ?? 0) + 1);
+      // Een map zonder klant hoort bij het eigen dossier (stap 1A-5c).
+      const cid = foldersById.get(a.entity_id)?.client_id ?? NO_CLIENT;
+      m.set(cid, (m.get(cid) ?? 0) + 1);
     }
     return m;
   }, [folderAttachments, foldersById]);
@@ -361,19 +393,27 @@ export function ContentLibrary({
   const atRoot = clientId === null;
   const currentClient = clientId && clientId !== NO_CLIENT ? clientsById.get(clientId) ?? null : null;
   const realClient = currentClient !== null;
-  const currentClientName = clientId === NO_CLIENT ? 'Geen klant' : currentClient?.name ?? '';
+  /**
+   * Het eigen dossier (stap 1A-5c): wat bij geen klant hoort, zoals het
+   * bedrijfshandboek. Het was "Geen klant", zonder mappen; nu heeft het een
+   * eigen mappenboom (content_folders zonder klant en zonder project).
+   */
+  const ownDossier = clientId === NO_CLIENT;
+  const hasFolders = realClient || ownDossier;
+  const ownDossierName = data.companySettings?.company_name?.trim() || 'Eigen dossier';
+  const currentClientName = clientId === NO_CLIENT ? 'Eigen dossier' : currentClient?.name ?? '';
   const currentProject = projectId ? projectsById.get(projectId) ?? null : null;
 
   // Dossiermappen (content_folders) van de open plek. Op klantniveau zijn dat dezelfde
   // mappen als in het klantdossier-tabblad "Bestanden"; binnen een projectmap krijgt dat
   // project zijn eigen boom (content_folders.project_id). Beide nesten onbeperkt diep.
   const folderScope = useMemo(
-    () => realClient ? scopedFolders(data.folders, clientId, projectId) : [],
-    [data.folders, clientId, projectId, realClient],
+    () => hasFolders ? scopedFolders(data.folders, realClient ? clientId : null, projectId) : [],
+    [data.folders, clientId, projectId, realClient, hasFolders],
   );
   const currentFolderPath = folderId ? folderPath(folderScope, folderId) : [];
   const currentFolder = currentFolderPath.length ? currentFolderPath[currentFolderPath.length - 1] : null;
-  const subfolderList = realClient ? childFolders(folderScope, clientId, projectId, folderId) : [];
+  const subfolderList = hasFolders ? childFolders(folderScope, realClient ? clientId : null, projectId, folderId) : [];
   /** De klant van de open scope als échte id; "Geen klant" telt als geen klant. */
   const scopeClientId = realClient ? clientId : null;
   /** Waar je nu staat — startpunt van "Verplaatsen naar…". `null` = de wortel. */
@@ -422,11 +462,11 @@ export function ContentLibrary({
   }, [clientId, clientItems, data.projects, projectsById]);
 
   // Losse items op klantniveau: geen project én niet opgeborgen in een dossiermap
-  // (die verschijnen ín hun map). Voor "Geen klant" bestaat er geen mappenniveau,
-  // dus daar blijft alles zichtbaar.
+  // (die verschijnen ín hun map). Ook in het eigen dossier, sinds dat mappen
+  // heeft (stap 1A-5c).
   const generalItems = useMemo(
-    () => clientItems.filter(it => !it.projectId && (clientId === NO_CLIENT || !it.folderId)),
-    [clientItems, clientId],
+    () => clientItems.filter(it => !it.projectId && !it.folderId),
+    [clientItems],
   );
   // Idem binnen een projectmap: wat in een map van dit project is opgeborgen staat ín die map.
   const projectItems = useMemo(
@@ -447,7 +487,8 @@ export function ContentLibrary({
   const folderDocs = folderId && showDocuments ? data.documents.filter(d => d.folder_id === folderId) : [];
   const folderAtts = folderId && showFiles ? data.attachments.filter(a => a.entity_type === 'folder' && a.entity_id === folderId) : [];
 
-  // Klantmappen op de wortel: elke klant (zodat je overal direct kunt aanmaken) + "Geen klant" als die inhoud heeft.
+  // Klantmappen op de wortel: elke klant, zodat je overal direct kunt aanmaken. Het
+  // eigen dossier staat daar los van, altijd bovenaan (topRows).
   const clientFolders = useMemo(() => {
     const list = data.clients.map(c => ({
       id: c.id,
@@ -457,8 +498,6 @@ export function ContentLibrary({
       projects: data.projects.filter(p => p.client_id === c.id && !p.archived).length,
     }));
     list.sort((a, b) => a.name.localeCompare(b.name, 'nl'));
-    const none = countByClient.get(NO_CLIENT) ?? 0;
-    if (none > 0) list.push({ id: NO_CLIENT, name: 'Geen klant', color: '#94A3B8', count: none, projects: 0 });
     return list;
   }, [data.clients, data.projects, countByClient, attCountByClient, showFiles]);
 
@@ -480,6 +519,8 @@ export function ContentLibrary({
   // Create-context: nieuwe items belanden in de open map (klant/project/dossiermap).
   const createTarget: ContentCreateTarget | undefined =
     folderId && realClient ? { client_id: clientId, project_id: projectId, folder_id: folderId } :
+    // Een map in het eigen dossier (stap 1A-5c): zonder klant, wel die map.
+    folderId && ownDossier ? { client_id: null, project_id: null, folder_id: folderId } :
     projectId ? { client_id: currentClient?.id ?? null, project_id: projectId } :
     realClient ? { client_id: clientId } :
     undefined;
@@ -496,12 +537,13 @@ export function ContentLibrary({
 
   function createFolder() {
     setNewOpen(false);
-    if (!realClient || !clientId) return;
+    if (!hasFolders || !clientId) return;
     const name = window.prompt(folderId ? 'Naam van de nieuwe submap:' : 'Naam van de nieuwe map:');
     if (!name || !name.trim()) return;
     const position = subfolderList.length;
     const parent = folderId;
-    const cid = clientId;
+    // In het eigen dossier: een map zonder klant.
+    const cid = realClient ? clientId : null;
     const pid = projectId;
     run(async () => {
       await insertRow<ContentFolder>('content_folders', organizationId, { client_id: cid, project_id: pid, parent_id: parent, name: name.trim(), position });
@@ -552,6 +594,14 @@ export function ContentLibrary({
 
   /** Een notitie of document verwijderen — de bijlagen eraan gaan mee (ook uit Cloudflare). */
   function deleteContent(kind: 'note' | 'document', id: string, name: string) {
+    // Een pagina gaat naar de prullenbak (stap 1A-5b), met haar subpagina's:
+    // 30 dagen terug te zetten.
+    if (kind === 'document' && docsById.get(id)?.format === 'page') {
+      const subpages = subpagesByParent.get(id)?.length ?? 0;
+      if (!window.confirm(`"${name}"${subpages ? ` en ${subpages === 1 ? 'zijn subpagina' : `zijn ${subpages} subpagina's`}` : ''} naar de prullenbak? Je kunt ${subpages ? 'ze' : 'hem'} 30 dagen terugzetten.`)) return;
+      run(async () => { await trashPage(id); });
+      return;
+    }
     const what = kind === 'note' ? 'De notitie' : 'Het document';
     if (!window.confirm(`"${name}" verwijderen? ${what} en de bijlagen eraan worden definitief verwijderd.`)) return;
     run(async () => { await deleteEntityCascade(kind === 'note' ? 'notes' : 'documents', id, organizationId); });
@@ -665,6 +715,7 @@ export function ContentLibrary({
       shared: sharedKeys.has(shareKey(it.kind, it.id)),
       unshared: gapSummary.itemKeys.has(shareKey(it.kind, it.id)),
       drag: { kind: it.kind, id: it.id, name: label },
+      dropPage: canWrite && it.doc?.format === 'page' ? it.id : undefined,
       rename: canWrite
         ? typed => commitRename(label, typed, false, async name => {
             await updateRow(it.kind === 'note' ? 'notes' : 'documents', it.id, { title: name }, organizationId);
@@ -721,7 +772,18 @@ export function ContentLibrary({
 
   const folderRows: Row[] = [];
   const fileRows: Row[] = [];
+  /** Altijd bovenaan, los van het sorteren: het eigen dossier. */
+  const topRows: Row[] = [];
   if (atRoot) {
+    topRows.push({
+      key: `c-${NO_CLIENT}`, kind: 'client', name: ownDossierName, color: 'var(--accent)',
+      logo: data.companySettings?.brand_logo_data_url ?? null,
+      modified: [lastByClient.get(NO_CLIENT) ?? ''].sort().pop() || null,
+      size: plural((countByClient.get(NO_CLIENT) ?? 0) + (showFiles ? attCountByClient.get(NO_CLIENT) ?? 0 : 0)),
+      typeLabel: 'Eigen dossier',
+      onOpen: () => openClient(NO_CLIENT),
+      dropTarget: { clientId: null, projectId: null, folderId: null },
+    });
     for (const f of clientFolders) folderRows.push({
       key: `c-${f.id}`, kind: 'client', name: f.name, color: f.color || 'var(--accent)',
       modified: [lastByClient.get(f.id) ?? '', showFiles ? attLastByClient.get(f.id) ?? '' : ''].sort().pop() || null,
@@ -755,7 +817,42 @@ export function ContentLibrary({
     return sortDir === 'asc' ? r : -r;
   };
   const shown = (list: Row[]) => list.filter(r => hit(r.name)).sort(cmp);
-  const rows: Row[] = [...shown(folderRows), ...shown(fileRows)];
+
+  function togglePage(pageId: string) {
+    setExpandedPages(previous => {
+      const next = new Set(previous);
+      if (next.has(pageId)) next.delete(pageId); else next.add(pageId);
+      return next;
+    });
+  }
+
+  /** Zet onder elke open pagina haar subpagina's, inspringend. Niet bij zoeken. */
+  const withSubpages = (list: Row[]): Row[] => {
+    const out: Row[] = [];
+    const add = (row: Row, depth: number, seen: ReadonlySet<string>) => {
+      const pageId = row.kind === 'document' && row.doc?.format === 'page' ? row.doc.id : null;
+      const children = pageId && !q ? (subpagesByParent.get(pageId) ?? []) : [];
+      const open = pageId !== null && children.length > 0 && expandedPages.has(pageId);
+      out.push({
+        ...row,
+        depth,
+        childCount: children.length,
+        expanded: open,
+        toggle: pageId && children.length > 0 ? () => togglePage(pageId) : undefined,
+        size: children.length > 0 ? (children.length === 1 ? '1 subpagina' : `${children.length} subpagina's`) : row.size,
+      });
+      // `seen`: een kring in de boom kan de database niet hebben, maar de lijst
+      // mag er nooit eindeloos van worden.
+      if (!open || !pageId || seen.has(pageId)) return;
+      const next = new Set(seen).add(pageId);
+      for (const child of children) {
+        add(itemRow({ kind: 'document', id: child.id, title: child.title, content: child.excerpt ?? '', modified: child.updated_at || child.created_at, clientId: child.client_id ?? null, projectId: child.project_id ?? null, folderId: null, doc: child }), depth + 1, next);
+      }
+    };
+    for (const row of list) add(row, 0, new Set());
+    return out;
+  };
+  const rows: Row[] = withSubpages([...topRows.filter(r => hit(r.name)), ...shown(folderRows), ...shown(fileRows)]);
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
@@ -876,6 +973,60 @@ export function ContentLibrary({
     onDragLeave: leaveDrop(key),
     onDrop: (e: ReactDragEvent) => targetDrop(e, target),
   });
+
+  /**
+   * Mag dit onder die pagina? Alleen pagina's, niet onder zichzelf of onder
+   * een eigen subpagina (de database weigert een kring ook, maar dan wordt de
+   * rij eerst gemarkeerd als doel), en niet als ze er al onder staan.
+   */
+  const canNestUnder = (items: DriveDragItem[] | null, targetId: string): boolean => {
+    if (!items || items.length === 0) return false;
+    return items.every(item => {
+      const doc = item.kind === 'document' ? docsById.get(item.id) : undefined;
+      if (!doc || doc.format !== 'page' || doc.id === targetId || doc.parent_id === targetId) return false;
+      let current = docsById.get(targetId);
+      for (let step = 0; current && step < 25; step += 1) {
+        if (current.id === doc.id) return false;
+        current = current.parent_id ? docsById.get(current.parent_id) : undefined;
+      }
+      return true;
+    });
+  };
+
+  const nestPages = useCallback(async (items: DriveDragItem[], targetId: string) => {
+    setBusy(true); setError(null);
+    try {
+      for (const item of items) await nestPageUnder(item.id, targetId, organizationId);
+      setExpandedPages(previous => new Set(previous).add(targetId));
+      clearSelection();
+      onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Verplaatsen mislukt');
+    } finally {
+      setBusy(false);
+    }
+  }, [organizationId, onChanged, clearSelection]);
+
+  const pageDropProps = (key: string, targetId: string) => ({
+    onDragOver: (e: ReactDragEvent) => {
+      if (!canWrite || dragHasFiles(e.dataTransfer) || !dragHasDriveItems(e.dataTransfer)) return;
+      if (!canNestUnder(activeDriveDrag(), targetId)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = 'move';
+      if (dropKey !== key) setDropKey(key);
+    },
+    onDragLeave: leaveDrop(key),
+    onDrop: (e: ReactDragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setDropKey(null);
+      if (!canWrite) return;
+      const items = readDriveDrag(e.dataTransfer);
+      endDriveDrag();
+      if (canNestUnder(items, targetId)) void nestPages(items, targetId);
+    },
+  });
   /** Broodkruimels en "Terug" zijn óók doelen: zo sleep je iets weer naar boven — maar
    *  alleen voor eigen items; uploaden doe je op een maprij. Alleen de handlers, voor
    *  knoppen die hun eigen className al zetten. */
@@ -910,14 +1061,17 @@ export function ContentLibrary({
       docs.length ? `${docs.length} ${docs.length === 1 ? 'document' : 'documenten'}` : null,
       folders.length ? `${folders.length} ${folders.length === 1 ? 'map' : 'mappen'}` : null,
     ].filter(Boolean).join(' en ');
-    if (!window.confirm(`${what} verwijderen? Bestanden gaan ook uit de Cloudflare-opslag. Notities en documenten in verwijderde mappen blijven bestaan (ze worden ontkoppeld); geüploade bestanden erin gaan wel weg.`)) return;
+    const pages = docs.filter(row => row.doc?.format === 'page').length;
+    if (!window.confirm(`${what} verwijderen? Bestanden gaan ook uit de Cloudflare-opslag. Notities en documenten in verwijderde mappen blijven bestaan (ze worden ontkoppeld); geüploade bestanden erin gaan wel weg.${pages ? ` Pagina's gaan naar de prullenbak: die kun je 30 dagen terugzetten.` : ''}`)) return;
     setBusy(true); setError(null);
     try {
       for (const row of files) {
         await deleteAttachment({ id: row.att!.id, storage_key: row.att!.storage_key, organization_id: row.att!.organization_id });
       }
       for (const row of [...notes, ...docs]) {
-        await deleteEntityCascade(row.kind === 'note' ? 'notes' : 'documents', row.drag!.id, organizationId);
+        // Pagina's naar de prullenbak (stap 1A-5b), de rest weg.
+        if (row.kind === 'document' && row.doc?.format === 'page') await trashPage(row.drag!.id);
+        else await deleteEntityCascade(row.kind === 'note' ? 'notes' : 'documents', row.drag!.id, organizationId);
       }
       for (const row of folders) {
         const id = row.drag!.id;
@@ -1016,10 +1170,11 @@ export function ContentLibrary({
       <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setMenu(null); open(); }}><FilePen size={16} /> Openen</button>
       <button type="button" className="drive-pop-item" role="menuitem" onClick={() => beginRename(rowKey)}><Pencil size={16} /> Naam wijzigen</button>
       <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openMove([{ kind, id, name }])}><Folder size={16} /> Verplaatsen naar…</button>
-      {/* Een pagina delen of versturen kan pas met de vrijgave (1C) en de export (1B);
-          de database weigert het tot dan. Daarom staan de knoppen er niet. */}
+      {/* Een pagina versturen kan pas met de export naar PDF (1B); file-transfer
+          weigert het tot dan. Delen kan wel (1C): het deelvenster geeft de
+          ontvanger een vrijgegeven versie. */}
       {!isPage && <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openSend([{ type: kind, id }])}><Send size={16} /> Versturen…</button>}
-      {!isPage && <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openShare({ type: kind, id, name })}><Share2 size={16} /> Delen…</button>}
+      <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openShare({ type: kind, id, name })}><Share2 size={16} /> Delen…</button>
       <div className="drive-pop-sep" />
       <button type="button" className="drive-pop-item danger" role="menuitem" onClick={() => { setMenu(null); deleteContent(kind, id, name); }}><Trash2 size={16} /> Verwijderen</button>
     </>;
@@ -1061,7 +1216,7 @@ export function ContentLibrary({
         draggable={canWrite && Boolean(row.drag) && !isRenaming}
         onDragStart={e => startDrag(e, row)}
         onDragEnd={() => { endDriveDrag(); setDropKey(null); }}
-        {...(row.dropTarget ? dropProps(row.key, row.dropTarget) : {})}
+        {...(row.dropTarget ? dropProps(row.key, row.dropTarget) : row.dropPage ? pageDropProps(row.key, row.dropPage) : {})}
         onClick={isRenaming ? undefined : e => { if (!selection.handleRowClick(e, row.key)) row.onOpen(); }}
         onKeyDown={e => rowKeyDown(e, row)}
       >
@@ -1078,7 +1233,9 @@ export function ContentLibrary({
         </span>
         {isRenaming
           ? <DriveRenameInput value={row.name} keepExtension={row.keepExtension} onCommit={row.rename!} onCancel={() => setRenaming(null)} />
-          : <span className="odrv-td-name" title={row.name}><span className="odrv-name-text">{row.name}</span>{row.shared && <span className="odrv-shared" role="img" aria-label="Gedeeld" title="Gedeeld met anderen"><Users size={13} /></span>}{row.unshared && <span className="odrv-unshared" role="img" aria-label="Niet gedeeld" title="Staat in een gedeelde map, maar de ontvanger ziet het nog niet"><EyeOff size={12} aria-hidden="true" /><span className="odrv-unshared-text">Niet gedeeld</span></span>}{row.archived && <em className="odrv-arch">gearchiveerd</em>}</span>}
+          : <span className="odrv-td-name" title={row.name} style={row.depth ? { paddingLeft: row.depth * 22 } : undefined}>{row.toggle
+            ? <button type="button" className="odrv-tree-toggle" aria-expanded={Boolean(row.expanded)} aria-label={`${row.expanded ? 'Subpagina\'s verbergen' : 'Subpagina\'s tonen'}: ${row.name}`} onClick={e => { e.stopPropagation(); row.toggle!(); }}>{row.expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button>
+            : row.depth ? <span className="odrv-tree-spacer" aria-hidden="true" /> : null}<span className="odrv-name-text">{row.name}</span>{row.shared && <span className="odrv-shared" role="img" aria-label="Gedeeld" title="Gedeeld met anderen"><Users size={13} /></span>}{row.unshared && <span className="odrv-unshared" role="img" aria-label="Niet gedeeld" title="Staat in een gedeelde map, maar de ontvanger ziet het nog niet"><EyeOff size={12} aria-hidden="true" /><span className="odrv-unshared-text">Niet gedeeld</span></span>}{row.archived && <em className="odrv-arch">gearchiveerd</em>}</span>}
         <span className="odrv-td-mod">{row.modified ? dateNL(row.modified) : '—'}</span>
         <span className="odrv-td-size">{row.size}</span>
         <span className="odrv-td-type">{row.typeLabel}</span>
@@ -1192,7 +1349,7 @@ export function ContentLibrary({
           </button>
           {newOpen && <div className="drive-pop" role="menu" style={{ maxHeight: 'min(70vh, 460px)', overflowY: 'auto' }}>
             {!atRoot && <div className="drive-pop-head">In {currentFolder ? currentFolder.name : currentProject ? currentProject.name : currentClientName}</div>}
-            {realClient && <>
+            {hasFolders && <>
               <button type="button" className="drive-pop-item" role="menuitem" onClick={createFolder}><FolderPlus size={16} style={{ color: 'var(--accent)' }} /> {folderId ? 'Nieuwe submap' : 'Nieuwe map'}</button>
               <div className="drive-pop-sep" />
             </>}
@@ -1229,6 +1386,7 @@ export function ContentLibrary({
 
         <div className="odrv-cmdbar-right">
           <SharedOverviewButton data={data} onOpen={() => { setSharedOpen(true); setNewOpen(false); setSortOpen(false); setFilterOpen(false); setMenu(null); }} />
+          <PageTrashButton onOpen={() => { setTrashOpen(true); setNewOpen(false); setSortOpen(false); setFilterOpen(false); setMenu(null); }} />
           <div className="drive-new-wrap">
             <button type="button" className={`odrv-tool drive-pop-trigger${anyFilterOff ? ' is-active' : ''}`} onClick={() => { setFilterOpen(o => !o); setNewOpen(false); setSortOpen(false); setMenu(null); }} aria-haspopup="menu" aria-expanded={filterOpen}>
               <SlidersHorizontal size={14} /> <span className="odrv-tool-label">Weergeven</span> <ChevronDown size={13} />
@@ -1372,6 +1530,7 @@ export function ContentLibrary({
     {officeSession && <OfficeEditor session={officeSession} onClose={() => { setOfficeSession(null); setOfficeAtt(null); onChanged(); }} onDownload={officeAtt ? () => handleDownload(officeAtt) : undefined} />}
     {sharing && <ShareDialog data={data} organizationId={organizationId} target={sharing} onClose={() => setSharing(null)} onChanged={onChanged} />}
     {sharedOpen && <SharedOverview data={data} organizationId={organizationId} canWrite={canWrite} clientId={embedded ? rootClientId : null} onClose={() => setSharedOpen(false)} onChanged={onChanged} />}
+    {trashOpen && <PageTrash organizationId={organizationId} canWrite={canWrite} clientId={embedded ? rootClientId ?? null : null} onClose={() => setTrashOpen(false)} onChanged={onChanged} />}
     {sendingFiles && <SendFilesDialog
       data={data}
       organizationId={organizationId}

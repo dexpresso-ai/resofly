@@ -212,6 +212,21 @@ test('delen blijft binnen het eigen klantdossier', async () => {
   assert.ok(ok.warning);
 });
 
+test('een pagina delen: de kaart noemt het een pagina, zegt wat de klant ziet, en downloaden kan niet', async () => {
+  const share = action('drive.share');
+  const page = { documents: [{ title: 'Werkwijze', client_id: OTHER, format: 'page' }] };
+  const plan = await share.plan!(ctx({ ...page, client_contacts: [{ id: ME, name: 'Piet', email: 'piet@x.nl', client_id: OTHER, is_active: true }] }),
+    { item_type: 'document', item_id: ID, contact_ids: [ME], can_download: true });
+  assert.match(plan.title, /^Pagina "Werkwijze" delen/);
+  assert.match(plan.warning ?? '', /Bijwerken bij klant/);
+  assert.equal((plan.payload as { can_download: boolean }).can_download, false);
+  // Een gewoon document blijft zoals het was.
+  const doc = await share.plan!(ctx({ documents: [{ title: 'Offerte', client_id: OTHER, format: 'html' }], client_contacts: [{ id: ME, name: 'Piet', email: 'piet@x.nl', client_id: OTHER, is_active: true }] }),
+    { item_type: 'document', item_id: ID, contact_ids: [ME] });
+  assert.match(doc.title, /^Document "Offerte" delen/);
+  assert.equal((doc.payload as { can_download: boolean }).can_download, true);
+});
+
 test('een teamchatbericht draagt de afzender van het voorstel mee', async () => {
   const dm = action('teamchat.send_dm');
   await refuses(dm.plan!(ctx({ organization_members: [{ email: 'ik@org.nl', status: 'active' }] }), { user_id: ME, body: 'Hoi' }), /zelf/);
@@ -227,4 +242,33 @@ test('weekplanner-capaciteit is van wie het vraagt, niet van wie goedkeurt', asy
 test('instellingen zijn alleen voor owners en admins', () => {
   assert.equal(action('settings.set_ticket_emails').adminOnly, true);
   assert.equal(action('settings.save_jitsi_server').adminOnly, true);
+});
+
+test('een pagina vult Gerrie alleen aan: elke regel een alinea onderaan, vervangen kan niet (§12)', async () => {
+  const update = action('document.update');
+  const rows = { documents: [{ title: 'Handboek', content: 'Inleiding', client_id: null, project_id: null, storage_key: null, format: 'page' }] };
+  // Vervangen (de standaard) zou tabellen, afbeeldingen en subpagina's weghalen.
+  await refuses(update.plan!(ctx(rows), { document_id: ID, content: 'Nieuwe tekst' }), /content_mode "append"/);
+  const plan = await update.plan!(ctx(rows), { document_id: ID, content: '<p>Eerste regel</p><p> </p><p>Tweede &amp; <b>laatste</b></p>', content_mode: 'append' });
+  const payload = plan.payload as { page_paragraphs: string[]; patch: Record<string, unknown>; content_mode: string };
+  assert.deepEqual(payload.page_paragraphs, ['Eerste regel', 'Tweede & laatste']);
+  assert.equal(payload.content_mode, 'append');
+  assert.match(plan.title, /Pagina "Handboek" aanvullen/);
+  assert.equal(plan.risk, undefined);
+  // De tekst blijft in het patch: een oude app stuit dan op de database.
+  assert.equal(typeof payload.patch.content, 'string');
+  await refuses(update.plan!(ctx(rows), { document_id: ID, content: '<p> </p><br>', content_mode: 'append' }), /geen tekst/);
+  // De titel van een pagina kan wel, zonder tekst en zonder alinea's.
+  const titel = await update.plan!(ctx(rows), { document_id: ID, title: 'Handboek 2027' });
+  assert.equal((titel.payload as { page_paragraphs?: unknown }).page_paragraphs, undefined);
+  assert.match(titel.title, /Pagina "Handboek" bijwerken/);
+});
+
+test('de alinea\'s voor een pagina: per regel, zonder lege, en hoogstens 200', async () => {
+  const { pageParagraphs } = await import('./actions/content.ts');
+  assert.deepEqual(pageParagraphs('Regel 1\n\n  Regel   2  \n'), ['Regel 1', 'Regel 2']);
+  assert.deepEqual(pageParagraphs('<h2>Kop</h2><ul><li>een</li><li>twee</li></ul>'), ['Kop', '• een', '• twee']);
+  assert.deepEqual(pageParagraphs('a<br>b'), ['a', 'b']);
+  assert.deepEqual(pageParagraphs('<p></p>'), []);
+  assert.equal(pageParagraphs(Array.from({ length: 250 }, (_, i) => `r${i}`).join('\n')).length, 200);
 });

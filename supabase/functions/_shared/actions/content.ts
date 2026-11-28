@@ -71,6 +71,23 @@ export function plainText(html: unknown): string {
     .trim();
 }
 
+/** Zoveel alinea's zet één voorstel hoogstens onderaan een pagina. */
+const MAX_PAGE_PARAGRAPHS = 200;
+
+/**
+ * De tekst van een voorstel als alinea's voor een pagina (§12 van het bouwplan
+ * voor pagina's): elke regel een alinea, alleen tekst. Koppen, lijsten en opmaak
+ * komen met voorstellen per blok (fase 2). Lege regels gaan eruit: een alinea
+ * met een lege tekst neemt de editor niet aan, en dan ging de pagina niet meer
+ * open om te bewerken.
+ */
+export function pageParagraphs(content: string): string[] {
+  return plainText(content).split('\n')
+    .map((line) => line.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .slice(0, MAX_PAGE_PARAGRAPHS);
+}
+
 /** De woorden waarop gezocht wordt: minstens drie tekens, hoogstens zes. */
 function searchTerms(query: string): string[] {
   const words = query.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 3);
@@ -344,7 +361,8 @@ export const CONTENT_ACTIONS: ActionDef[] = [
     description:
       'Werkt een bestaand intern document bij: de titel, de tekst (vervangen of iets toevoegen onderaan), de soort (algemeen, contract, beleid, procedure, overig), of aan welke klant of welk project het hangt. ' +
       'Lees het eerst met `content.get`. Met `content_mode: "append"` voeg je tekst onderaan toe; met "replace" (standaard) vervang je de hele tekst — geef dan de volledige nieuwe tekst. ' +
-      'Een Word-document (format "word") bewerk je niet hier maar in de Word-editor; titel, soort, klant en project kunnen wel.',
+      'Een Word-document (format "word") bewerk je niet hier maar in de Word-editor; titel, soort, klant en project kunnen wel. ' +
+      'Een pagina (format "page") vul je alleen aan, met `content_mode: "append"`: elke regel wordt een alinea onderaan; vervangen kan niet.',
     keywords: ['document', 'bijwerken', 'aanpassen', 'wijzigen', 'bewerken', 'aanvullen', 'herschrijven', 'tekst', 'procedure', 'beleid', 'titel'],
     input: {
       document_id: { type: 'string', description: 'Id van het document (uit content.search of list_content).' },
@@ -508,7 +526,8 @@ export const CONTENT_ACTIONS: ActionDef[] = [
     description:
       'Deelt een map, notitie, document of bestand. Met wie: `contact_ids` (contactpersonen van de klant; zij zien het in het klantportaal), `client_portal: true` (iedereen met portaaltoegang bij de klant), ' +
       '`member_user_ids` (collega\'s; zij krijgen een melding met een link) of `emails` (een los e-mailadres met een geheime deellink — dat kan alleen voor iets dat NIET bij een klantdossier hoort). ' +
-      'Optioneel een bericht, een vervaldatum en of downloaden mag. De ontvanger krijgt een melding per e-mail. Zoek het item met `content.search` en de contactpersonen met `list_client_contacts`.',
+      'Optioneel een bericht, een vervaldatum en of downloaden mag. De ontvanger krijgt een melding per e-mail. Zoek het item met `content.search` en de contactpersonen met `list_client_contacts`. ' +
+      'Een pagina deel je zoals ze is op het moment van uitvoeren (een vrijgave); wat er daarna verandert, ziet de ontvanger pas na "Bijwerken bij klant". Subpagina\'s deel je elk apart.',
     keywords: ['delen', 'deel', 'portaal', 'klantportaal', 'deellink', 'toegang', 'sturen', 'beschikbaar', 'collega', 'map delen', 'document delen'],
     input: {
       item_type: { type: 'string', enum: ['folder', 'attachment', 'note', 'document'], description: 'Wat je deelt.' },
@@ -576,15 +595,20 @@ export const CONTENT_ACTIONS: ActionDef[] = [
       if (recipients.length === 0) throw new ActionError('Met wie deel je het? Geef contact_ids, client_portal, member_user_ids of emails.');
       const expires = optIsoDate(input, 'expires_at');
       if (expires && expires < ctx.today) throw new ActionError('De vervaldatum ligt in het verleden.');
-      const canDownload = bool(input, 'can_download', true);
+      // Bij een pagina valt niets te downloaden: de ontvanger leest haar als webpagina.
+      const canDownload = item.isPage ? false : bool(input, 'can_download', true);
       const message = optStr(input, 'message', 1000);
+      const who = labels.length === 1 ? 'De ontvanger ziet' : 'De ontvangers zien';
+      const gets = labels.length === 1 ? 'krijgt' : 'krijgen';
       return {
         title: `${item.label} "${item.name}" delen`,
         sub: joinShort([`met ${labels.join(', ')}`, expires ? `tot ${expires}` : 'zonder einddatum', canDownload ? 'downloaden mag' : 'alleen bekijken'], 160),
         kind: 'mail',
         // Een map is sinds 20261127120000 niet meer live: de ontvanger ziet wat
         // er bij het delen in staat. Wat er later bij komt, deel je apart.
-        warning: item.label.toLowerCase() === 'map'
+        warning: item.isPage
+          ? `${who} de pagina zoals ze is als je dit uitvoert, en ${gets} een melding per e-mail. Wat je daarna wijzigt, zien ze pas na "Bijwerken bij klant" in de editor.`
+          : item.label.toLowerCase() === 'map'
           ? `${labels.length === 1 ? 'De ontvanger ziet' : 'De ontvangers zien'} vanaf nu wat er nu in deze map staat en ${labels.length === 1 ? 'krijgt' : 'krijgen'} een melding per e-mail. Wat er later in de map komt, deel je apart.`
           : `${labels.length === 1 ? 'De ontvanger ziet' : 'De ontvangers zien'} dit vanaf nu en ${labels.length === 1 ? 'krijgt' : 'krijgen'} een melding per e-mail.`,
         payload: {
@@ -684,15 +708,21 @@ function idList(input: Record<string, unknown>, key: string): string[] {
 }
 
 /** Wat er gedeeld wordt: naam, soort en (via de map, notitie of het bestand) bij welke klant het hoort. */
-async function shareableItem(ctx: ActionCtx, itemType: 'folder' | 'attachment' | 'note' | 'document', itemId: string): Promise<{ name: string; label: string; clientId: string | null }> {
+async function shareableItem(ctx: ActionCtx, itemType: 'folder' | 'attachment' | 'note' | 'document', itemId: string): Promise<{ name: string; label: string; clientId: string | null; isPage?: boolean }> {
   if (itemType === 'folder') {
     const folder = await row<{ name: string; client_id: string | null }>(ctx, 'content_folders', itemId, 'name, client_id', 'Map');
     return { name: folder.name, label: 'Map', clientId: folder.client_id };
   }
-  if (itemType === 'note' || itemType === 'document') {
-    const table = itemType === 'note' ? 'notes' : 'documents';
-    const item = await row<{ title: string | null; client_id: string | null }>(ctx, table, itemId, 'title, client_id', itemType === 'note' ? 'Notitie' : 'Document');
-    return { name: item.title || (itemType === 'note' ? 'Notitie' : 'Document'), label: itemType === 'note' ? 'Notitie' : 'Document', clientId: item.client_id };
+  if (itemType === 'note') {
+    const note = await row<{ title: string | null; client_id: string | null }>(ctx, 'notes', itemId, 'title, client_id', 'Notitie');
+    return { name: note.title || 'Notitie', label: 'Notitie', clientId: note.client_id };
+  }
+  if (itemType === 'document') {
+    const doc = await row<{ title: string | null; client_id: string | null; format?: string | null }>(ctx, 'documents', itemId, 'title, client_id, format', 'Document');
+    // Een pagina deelt de versie van het moment van uitvoeren (stap 1C): de app
+    // maakt dan eerst een vrijgave, met de rechten van wie goedkeurt.
+    const isPage = doc.format === 'page';
+    return { name: doc.title || (isPage ? 'Pagina' : 'Document'), label: isPage ? 'Pagina' : 'Document', clientId: doc.client_id, isPage };
   }
   const file = await row<{ name: string; entity_type: string; entity_id: string }>(ctx, 'attachments', itemId, 'name, entity_type, entity_id', 'Bestand');
   if (file.entity_type !== 'folder') throw new ActionError('Alleen bestanden die in een map van de bibliotheek staan, kun je delen. Verplaats het bestand eerst naar een map (attachment.move).');
@@ -708,11 +738,12 @@ async function planContentUpdate(ctx: ActionCtx, input: Record<string, unknown>,
   const label = isNote ? 'Notitie' : 'Document';
   const current = await row<{ title: string | null; content: string | null; client_id: string | null; project_id: string | null; storage_key?: string | null; format?: string | null }>(
     ctx, table, itemId, isNote ? 'title, content, client_id, project_id' : 'title, content, client_id, project_id, storage_key, format', label);
-  // Bij een pagina komt de tekst uit de blokken; de database weigert een wijziging
-  // van alleen de tekst (20261127130000). Voorstellen per blok komen later.
-  if (!isNote && current.format === 'page' && typeof input.content === 'string' && input.content.trim()) {
-    throw new ActionError('Tekst toevoegen aan een pagina kan nog niet via Gerrie. Open de pagina en typ het erbij; de titel aanpassen kan wel.');
-  }
+  // Bij een pagina komt de tekst uit de blokken (body); de database weigert een
+  // wijziging van alleen de tekst (20261127130000). Aanvullen kan wel: de app
+  // zet de alinea's uit `page_paragraphs` onderaan body (§12). Vervangen niet,
+  // dat zou tabellen, afbeeldingen en subpagina's weghalen.
+  const isPage = !isNote && current.format === 'page';
+  let paragraphs: string[] | null = null;
 
   const patch: Record<string, unknown> = {};
   const changes: string[] = [];
@@ -727,6 +758,16 @@ async function planContentUpdate(ctx: ActionCtx, input: Record<string, unknown>,
       throw new ActionError('Dit is een Word-document: de tekst staat in het bestand zelf. Die bewerk je in de Word-editor in ResoFly; titel, soort, klant en project kan ik wel aanpassen.');
     }
     if (content.length > 100000) throw new ActionError('Die tekst is te lang (meer dan 100.000 tekens).');
+    if (isPage) {
+      if (mode !== 'append') {
+        throw new ActionError('Een pagina vul je alleen aan: geef content_mode "append" mee. Vervangen zou de tabellen, afbeeldingen en subpagina\'s van de pagina weghalen.');
+      }
+      paragraphs = pageParagraphs(content);
+      if (paragraphs.length === 0) throw new ActionError('Er staat geen tekst in om onderaan de pagina te zetten.');
+    }
+    // Ook bij een pagina blijft de tekst in het patch: een app van vóór het
+    // aanvullen van pagina's stuit dan op de weigering van de database, in
+    // plaats van "bijgewerkt" te melden zonder dat er iets bij kwam.
     patch.content = content;
     replaces = mode === 'replace' && plainText(current.content).length > 0;
     const preview = plainText(content).replace(/\s+/g, ' ').slice(0, 70);
@@ -765,9 +806,10 @@ async function planContentUpdate(ctx: ActionCtx, input: Record<string, unknown>,
   }
 
   if (Object.keys(patch).length === 0) throw new ActionError('Geef minstens één ding dat moet veranderen (titel, tekst, soort, klant of project).');
-  const name = current.title || label;
+  const shown = isPage ? 'Pagina' : label;
+  const name = current.title || shown;
   return {
-    title: `${label} "${name}" bijwerken`,
+    title: isPage && paragraphs ? `Pagina "${name}" aanvullen` : `${shown} "${name}" bijwerken`,
     sub: joinShort(changes, 160),
     kind: 'work' as const,
     // Vervangen gooit de oude tekst weg; er is geen vorige versie om naar terug te gaan.
@@ -775,6 +817,7 @@ async function planContentUpdate(ctx: ActionCtx, input: Record<string, unknown>,
     payload: {
       kind, item_id: itemId, title: name, patch, content_mode: content ? mode : null,
       client_name: clientName, project_name: projectName,
+      ...(paragraphs ? { page_paragraphs: paragraphs } : {}),
     },
   };
 }

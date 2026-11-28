@@ -1249,6 +1249,66 @@ html,body,#root{height:100%}body{background:var(--bg);color:var(--text);font-fam
 .rich-text-viewer .rf-task-list li[data-checked="true"]>.rf-task-content{text-decoration:line-through;text-decoration-color:rgba(var(--accent-rgb),.62);text-decoration-thickness:2px;color:var(--muted)}
 .rich-text-editor .rf-task-list li[data-checked="true"],
 .rich-text-viewer .rf-task-list li[data-checked="true"]{text-decoration:none!important}
+/* Afgevinkt, in het leesvenster van het portaal en de geheime link. Dat
+   haalt de HTML door sanitizeRichContentHtml, en die laat geen data-*
+   staan: li[data-checked] hierboven trof daar nooit, en een afgevinkte taak
+   leek open. Een pagina zegt het met een klasse (rf-task-checked), een
+   notitie met aria-checked op het vakje (dat blijft staan). */
+.rich-text-viewer .rf-task-list li.rf-task-checked,
+.rich-text-viewer .rf-task-list li:has(>.rf-task-checkbox[aria-checked="true"]){color:var(--muted)}
+.rich-text-viewer .rf-task-list li.rf-task-checked>.rf-task-checkbox,
+.rich-text-viewer .rf-task-list li>.rf-task-checkbox[aria-checked="true"]{border-color:var(--accent);background:rgba(var(--accent-rgb),.18)}
+.rich-text-viewer .rf-task-list li.rf-task-checked>.rf-task-checkbox:before,
+.rich-text-viewer .rf-task-list li>.rf-task-checkbox[aria-checked="true"]:before{content:'✓'}
+.rich-text-viewer .rf-task-list li.rf-task-checked>.rf-task-content,
+.rich-text-viewer .rf-task-list li:has(>.rf-task-checkbox[aria-checked="true"])>.rf-task-content{text-decoration:line-through;text-decoration-color:rgba(var(--accent-rgb),.62);text-decoration-thickness:2px;color:var(--muted)}
+.rich-text-viewer .rf-task-content>p{margin:0}
+
+/* Een gedeelde pagina (stap 1C-4): de HTML uit renderPageHtml
+   (supabase/functions/_shared/pageHtml.ts), na sanitizeRichContentHtml. Geen
+   id, style of data-*: alles via de rf-klassen. */
+.rich-text-viewer .rf-page{line-height:1.6;overflow-wrap:anywhere}
+.rich-text-viewer .rf-page h2{font-size:1.35em;margin:1.2em 0 .4em}
+.rich-text-viewer .rf-page h3{font-size:1.15em;margin:1.1em 0 .35em}
+.rich-text-viewer .rf-page h4{font-size:1em;margin:1em 0 .3em}
+.rich-text-viewer .rf-page p{margin:.5em 0}
+.rich-text-viewer .rf-page li>p{margin:.15em 0}
+.rich-text-viewer .rf-page blockquote{margin:.8em 0;padding:.1em 0 .1em 14px;border-left:3px solid var(--border2);color:var(--muted2)}
+.rich-text-viewer .rf-page pre{overflow-x:auto;margin:.8em 0;padding:10px 12px;border-radius:10px;background:var(--bg3);font-size:12.5px;line-height:1.5}
+.rich-text-viewer .rf-page code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.92em}
+.rich-text-viewer .rf-page :not(pre)>code{padding:1px 5px;border-radius:6px;background:var(--bg3)}
+.rich-text-viewer .rf-page mark{padding:0 2px;border-radius:3px;background:rgba(250,204,21,.38);color:inherit}
+.rich-text-viewer .rf-page hr{margin:1.2em 0;border:0;border-top:1px solid var(--border)}
+.rich-text-viewer .rf-page img{display:block;max-width:100%;height:auto;border-radius:10px}
+/* Sinds de sanitizer width en height laat staan (RICH_CONTENT_URI_SAFE_ATTRS),
+   mag een geplakte afbeelding in een gedeelde notitie het venster niet verbreden. */
+.share-read-modal .rich-text-viewer img{max-width:100%;height:auto}
+.rich-text-viewer .rf-image-missing,.rich-text-viewer .rf-file{color:var(--muted2);font-style:italic}
+.rich-text-viewer .rf-subpage{font-weight:600}
+.rich-text-viewer .rf-table-wrap{max-width:100%;margin:.8em 0;overflow-x:auto}
+.rich-text-viewer .rf-table{min-width:100%;border-collapse:collapse}
+.rich-text-viewer .rf-table th,.rich-text-viewer .rf-table td{padding:6px 9px;border:1px solid var(--border);text-align:left;vertical-align:top}
+.rich-text-viewer .rf-table th{background:var(--bg3);font-weight:600}
+.rich-text-viewer .rf-table p{margin:0}
+.rich-text-viewer .rf-table .rf-align-center{text-align:center}
+.rich-text-viewer .rf-table .rf-align-right{text-align:right}
+.rich-text-viewer .rf-callout{margin:.8em 0;padding:10px 14px;border:1px solid;border-left-width:4px;border-radius:10px}
+.rich-text-viewer .rf-callout>:first-child{margin-top:0}
+.rich-text-viewer .rf-callout>:last-child{margin-bottom:0}
+.rich-text-viewer .rf-callout-info{border-color:rgba(59,130,246,.45);background:rgba(59,130,246,.08)}
+.rich-text-viewer .rf-callout-tip{border-color:rgba(16,185,129,.45);background:rgba(16,185,129,.08)}
+.rich-text-viewer .rf-callout-let-op{border-color:rgba(245,158,11,.5);background:rgba(245,158,11,.09)}
+.rich-text-viewer .rf-callout-waarschuwing{border-color:rgba(239,68,68,.5);background:rgba(239,68,68,.08)}
+.rich-text-viewer .rf-details{margin:.6em 0;padding:6px 12px;border:1px solid var(--border);border-radius:10px}
+.rich-text-viewer .rf-details>summary{cursor:pointer;font-weight:600}
+.rich-text-viewer .rf-details-content{padding-top:4px}
+.rich-text-viewer .rf-columns{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;margin:.8em 0}
+.rich-text-viewer .rf-toc{margin:.8em 0;padding:10px 14px;border:1px solid var(--border);border-radius:10px;background:var(--bg2)}
+.rich-text-viewer .rf-toc-title{margin:0 0 4px;font-weight:600}
+.rich-text-viewer .rf-toc ul{margin:0;padding-left:0;list-style:none}
+.rich-text-viewer .rf-toc li:before{content:none!important}
+.rich-text-viewer .rf-toc-2{padding-left:14px}
+.rich-text-viewer .rf-toc-3{padding-left:28px}
 
 /* Quote approval + Resend workflow */
 .fin-item-rich { display: block; padding: 0; overflow: hidden; }
@@ -10582,6 +10642,15 @@ body.pgal-shielded .pgal-shield{position:fixed;inset:0;z-index:300;display:flex;
 .share-person strong{font-size:13px;font-weight:600;color:var(--text)}
 .share-person-meta{font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .share-tag{flex-shrink:0;padding:2px 7px;border-radius:999px;background:var(--bg3);border:1px solid var(--border);font-size:10px;font-weight:600;color:var(--muted2)}
+/* Een pagina delen (stap 1C). Het venster opent ook vanuit de editor, die
+   zelf op z-index 2000 ligt: zonder deze regel viel het erachter. */
+.modal-bg:has(> .share-modal-page){z-index:2005}
+.share-tag.is-outdated{margin-left:6px;border-color:rgba(var(--accent-o-rgb,245,158,11),.45);background:rgba(var(--accent-o-rgb,245,158,11),.12);color:var(--text)}
+.share-rule.share-outdated{align-items:center;flex-wrap:wrap;border-color:rgba(var(--accent-o-rgb,245,158,11),.45);background:rgba(var(--accent-o-rgb,245,158,11),.08)}
+.share-rule.share-outdated svg{color:var(--accent-o,#f59e0b)}
+.share-rule.share-outdated>span{flex:1 1 220px;min-width:0}
+.share-subpage-list li{border-bottom:0}
+.share-page-note{margin:0 0 12px}
 .share-warn{display:inline-flex;align-items:center;gap:5px;font-size:10.5px;color:var(--warn,var(--accent-o))}
 .share-warn button{border:1px solid var(--border2);background:var(--bg3);color:var(--text);border-radius:6px;padding:3px 7px;font-size:10.5px;font-weight:600;cursor:pointer}
 .share-warn button:hover:not(:disabled){border-color:var(--accent)}
@@ -13630,6 +13699,7 @@ button.alog-feed-row:hover{background:var(--bg3)}
 .page-editor-banner{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding:10px 16px;border-bottom:1px solid var(--border);background:var(--bg2);font-size:13px}
 .page-editor-banner>span{flex:1 1 240px;min-width:0}
 .page-editor-banner.is-warning{border-left:3px solid var(--accent-r,#e5484d)}
+.page-share-banner{border-left:3px solid var(--accent-o,#f59e0b)}
 .page-editor-scroll{flex:1 1 auto;min-height:0;overflow-y:auto}
 .page-editor-sheet{max-width:760px;margin:0 auto;padding:40px 24px 160px}
 .page-editor-title{display:block;width:100%;border:none;background:transparent;color:var(--text);font:inherit;font-size:34px;font-weight:700;line-height:1.2;letter-spacing:-.01em;padding:0;margin:0 0 18px;outline:none}
@@ -13682,4 +13752,202 @@ button.alog-feed-row:hover{background:var(--bg3)}
   .page-editor-action span{display:none}
   .page-editor-action{padding:0 9px}
   .page-versions{top:0;width:100vw;border-left:none}
+}
+/* Stap 1A-4a: de gewone tabel, de callout, de uitklapper, de inhoudsopgave
+   en het blokmenu. Geen stijl uit de pagina zelf: de soort callout en het
+   uitlijnen in een cel komen als data-attribuut of uit een vaste lijst. */
+.page-prose .tiptap .tableWrapper{max-width:100%;overflow-x:auto;margin:1em 0;padding-bottom:2px}
+.page-prose .tiptap table{border-collapse:collapse;table-layout:fixed;margin:0}
+.page-prose .tiptap td,.page-prose .tiptap th{position:relative;min-width:60px;box-sizing:border-box;padding:7px 10px;border:1px solid var(--border2);vertical-align:top}
+.page-prose .tiptap th{background:var(--bg2);font-weight:600;text-align:left}
+.page-prose .tiptap td>*+*,.page-prose .tiptap th>*+*{margin-top:.5em}
+.page-prose .tiptap .selectedCell::after{content:'';position:absolute;inset:0;background:rgba(var(--accent-rgb),.14);pointer-events:none}
+.page-prose .tiptap .column-resize-handle{position:absolute;top:0;right:-2px;bottom:-2px;width:4px;background:rgba(var(--accent-rgb),.65);pointer-events:none}
+.page-prose .tiptap.resize-cursor{cursor:col-resize}
+.page-prose .tiptap .page-callout{position:relative;padding:12px 14px 12px 44px;border:1px solid rgba(var(--accent-rgb),.28);border-radius:12px;background:rgba(var(--accent-rgb),.08)}
+.page-prose .tiptap .page-callout>*+*{margin-top:.5em}
+.page-prose .tiptap .page-callout::before{content:'';position:absolute;left:15px;top:15px;width:18px;height:18px;background:var(--accent-ink);-webkit-mask:var(--callout-icon) center/contain no-repeat;mask:var(--callout-icon) center/contain no-repeat}
+.page-prose .tiptap .page-callout[data-variant="info"]{--callout-icon:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpath d='M12 16v-4'/%3E%3Cpath d='M12 8h.01'/%3E%3C/svg%3E")}
+.page-prose .tiptap .page-callout[data-variant="tip"]{--callout-icon:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5'/%3E%3Cpath d='M9 18h6'/%3E%3Cpath d='M10 22h4'/%3E%3C/svg%3E");border-color:rgba(var(--ok-rgb),.32);background:rgba(var(--ok-rgb),.09)}
+.page-prose .tiptap .page-callout[data-variant="tip"]::before{background:var(--accent-g)}
+.page-prose .tiptap .page-callout[data-variant="let-op"]{--callout-icon:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3'/%3E%3Cpath d='M12 9v4'/%3E%3Cpath d='M12 17h.01'/%3E%3C/svg%3E");border-color:rgba(var(--warn-rgb),.38);background:rgba(var(--warn-rgb),.1)}
+.page-prose .tiptap .page-callout[data-variant="let-op"]::before{background:var(--accent-o)}
+.page-prose .tiptap .page-callout[data-variant="waarschuwing"]{--callout-icon:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 16h.01'/%3E%3Cpath d='M12 8v4'/%3E%3Cpath d='M15.312 2a2 2 0 0 1 1.414.586l4.688 4.688A2 2 0 0 1 22 8.688v6.624a2 2 0 0 1-.586 1.414l-4.688 4.688a2 2 0 0 1-1.414.586H8.688a2 2 0 0 1-1.414-.586l-4.688-4.688A2 2 0 0 1 2 15.312V8.688a2 2 0 0 1 .586-1.414l4.688-4.688A2 2 0 0 1 8.688 2z'/%3E%3C/svg%3E");border-color:rgba(var(--danger-rgb),.34);background:rgba(var(--danger-rgb),.08)}
+.page-prose .tiptap .page-callout[data-variant="waarschuwing"]::before{background:var(--accent-r)}
+.page-prose .tiptap .page-details{display:flex;align-items:flex-start;gap:6px;padding:8px 10px;border:1px solid var(--border);border-radius:12px}
+.page-prose .tiptap .page-details>button{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;width:24px;height:24px;margin-top:2px;padding:0;border:none;border-radius:7px;background:transparent;color:var(--muted2);cursor:pointer}
+.page-prose .tiptap .page-details>button:hover{background:var(--bg2);color:var(--text)}
+.page-prose .tiptap .page-details>button::before{content:'';width:0;height:0;border-left:6px solid currentColor;border-top:4.5px solid transparent;border-bottom:4.5px solid transparent;transition:transform .15s}
+.page-prose .tiptap .page-details.is-open>button::before{transform:rotate(90deg)}
+.page-prose .tiptap .page-details>div{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:.5em}
+.page-prose .tiptap .page-details summary{display:block;font-weight:600;list-style:none;cursor:text}
+.page-prose .tiptap .page-details summary::-webkit-details-marker{display:none}
+.page-prose .tiptap .page-details [data-type="detailsContent"]>*+*{margin-top:.5em}
+.page-prose .tiptap .page-details [data-type="detailsContent"][hidden]{display:none}
+.page-prose .tiptap .page-toc{padding:12px 16px;border:1px solid var(--border);border-radius:12px;background:var(--bg2)}
+.page-prose .tiptap .page-toc.ProseMirror-selectednode{outline:2px solid rgba(var(--accent-rgb),.5);outline-offset:2px}
+.page-toc-title{margin:0 0 4px;font-size:11.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted2)}
+.page-toc-list{list-style:none;margin:0;padding:0}
+.page-toc-item button{display:block;width:100%;padding:3px 0;border:none;background:none;color:var(--accent-ink);font:inherit;font-size:14.5px;line-height:1.5;text-align:left;cursor:pointer}
+.page-toc-item button:hover{text-decoration:underline;text-underline-offset:2px}
+.page-toc-item.is-level-2{padding-left:16px}
+.page-toc-item.is-level-3{padding-left:32px}
+.page-toc-empty{margin:0;font-size:13.5px;color:var(--muted2)}
+.page-prose .tiptap .suggestion{color:var(--accent-ink)}
+.page-editor-insert{color:var(--accent-ink)}
+.page-editor-tool.has-text{width:auto;gap:5px;padding:0 9px;font:inherit;font-size:12.5px;font-weight:600}
+.page-editor-subbar{display:flex;align-items:center;gap:2px;padding:4px 10px;border-bottom:1px solid var(--border);background:var(--bg2);overflow-x:auto;flex:0 0 auto;scrollbar-width:thin}
+.page-editor-subbar-label{flex:0 0 auto;padding:0 8px 0 2px;font-size:11.5px;font-weight:700;letter-spacing:.04em;color:var(--muted2);white-space:nowrap}
+.page-block-menu{position:fixed;z-index:2003;width:300px;max-width:calc(100vw - 16px);max-height:340px;overflow-y:auto;padding:6px;border:1px solid var(--border2);border-radius:14px;background:var(--bg);box-shadow:0 18px 48px rgba(var(--shade-rgb),calc(.35 * var(--shade-k)))}
+.page-block-item{display:flex;align-items:center;gap:11px;width:100%;padding:7px 9px;border:none;border-radius:10px;background:transparent;color:var(--text);font:inherit;text-align:left;cursor:pointer}
+.page-block-item.is-active,.page-block-item:focus-visible{background:rgba(var(--accent-rgb),.12);outline:none}
+.page-block-icon{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;width:34px;height:34px;border:1px solid var(--border);border-radius:9px;background:var(--bg2);color:var(--muted2)}
+.page-block-text{display:flex;flex-direction:column;min-width:0}
+.page-block-label{font-size:13.5px;font-weight:600}
+.page-block-hint{overflow:hidden;font-size:12px;color:var(--muted2);text-overflow:ellipsis;white-space:nowrap}
+.page-block-empty{padding:10px;font-size:13px;color:var(--muted2)}
+.page-block-backdrop{position:fixed;inset:0;z-index:2003;display:flex;align-items:flex-end;background:rgba(var(--shade-rgb),calc(.45 * var(--shade-k)))}
+.page-block-menu.is-sheet{position:static;width:100%;max-width:none;max-height:min(70vh,520px);padding:8px 8px calc(12px + env(safe-area-inset-bottom));border-radius:18px 18px 0 0}
+.page-block-menu-head{padding:6px 10px 10px;font-size:13px;font-weight:700;color:var(--muted2)}
+/* Stap 1A-4b: de subpagina als regel met een icoon, en de knop naar de
+   bovenliggende pagina in de balk. */
+.page-prose .tiptap .page-subpage{margin:0}
+.page-prose .tiptap .page-subpage.ProseMirror-selectednode .page-subpage-link{outline:2px solid rgba(var(--accent-rgb),.5);outline-offset:1px}
+.page-subpage-link{display:flex;align-items:center;gap:10px;width:100%;padding:8px 10px;border:1px solid transparent;border-radius:10px;background:transparent;color:var(--text);font:inherit;font-size:15px;font-weight:600;text-align:left;cursor:pointer}
+.page-subpage-link:hover{border-color:var(--border);background:var(--bg2)}
+.page-subpage-icon{flex:0 0 auto;width:18px;height:18px;background:var(--muted2);-webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z'/%3E%3Cpath d='M14 2v4a2 2 0 0 0 2 2h4'/%3E%3Cpath d='M10 9H8'/%3E%3Cpath d='M16 13H8'/%3E%3Cpath d='M16 17H8'/%3E%3C/svg%3E") center/contain no-repeat;mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z'/%3E%3Cpath d='M14 2v4a2 2 0 0 0 2 2h4'/%3E%3Cpath d='M10 9H8'/%3E%3Cpath d='M16 13H8'/%3E%3Cpath d='M16 17H8'/%3E%3C/svg%3E") center/contain no-repeat}
+.page-subpage-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-decoration:underline;text-decoration-color:rgba(var(--accent-rgb),.45);text-underline-offset:3px}
+.page-subpage.is-missing .page-subpage-link{color:var(--muted2);font-weight:500;cursor:default}
+.page-subpage.is-missing .page-subpage-title{text-decoration:none;font-style:italic}
+.page-editor-parent{display:inline-flex;align-items:center;gap:3px;min-width:0;max-width:30%;height:30px;padding:0 8px 0 4px;border:none;border-radius:8px;background:transparent;color:var(--muted2);font:inherit;font-size:13px;cursor:pointer;flex:0 1 auto}
+.page-editor-parent span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.page-editor-parent:hover{background:var(--bg2);color:var(--text)}
+@media (max-width:640px){
+  .page-editor-parent span{display:none}
+}
+/* Stap 1A-4b: een afbeelding uit ResoFly, met een melding als hij laadt of weg is. */
+.page-prose .tiptap .page-image{margin:1em 0}
+.page-image img{display:block;max-width:100%;height:auto;border-radius:10px}
+.page-image.is-loading img,.page-image.is-missing img{display:none}
+.page-image-note{font-size:13px;color:var(--muted2)}
+.page-image.is-loading,.page-image.is-missing{padding:18px;border:1px dashed var(--border2);border-radius:12px;background:var(--bg2);text-align:center}
+.page-image.is-missing .page-image-note{font-style:italic}
+.page-prose .tiptap .page-image.ProseMirror-selectednode img{outline:2px solid rgba(var(--accent-rgb),.6);outline-offset:2px}
+/* Stap 1A-4b: het bestandsblok (naam, grootte, opslaan) en de kiezer. */
+.page-prose .tiptap .page-file{margin:0}
+.page-file-link{display:flex;align-items:center;gap:10px;width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:12px;background:var(--bg2);color:var(--text);font:inherit;text-align:left;cursor:pointer}
+.page-file-link:hover{border-color:rgba(var(--accent-rgb),.45)}
+.page-prose .tiptap .page-file.ProseMirror-selectednode .page-file-link{outline:2px solid rgba(var(--accent-rgb),.5);outline-offset:1px}
+.page-file-icon{flex:0 0 auto;width:18px;height:18px;background:var(--muted2);-webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M13.234 20.252 21 12.3'/%3E%3Cpath d='m16 6-8.414 8.586a2 2 0 0 0 0 2.828 2 2 0 0 0 2.828 0l8.414-8.586a4 4 0 0 0 0-5.656 4 4 0 0 0-5.656 0l-8.415 8.585a6 6 0 1 0 8.486 8.486'/%3E%3C/svg%3E") center/contain no-repeat;mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M13.234 20.252 21 12.3'/%3E%3Cpath d='m16 6-8.414 8.586a2 2 0 0 0 0 2.828 2 2 0 0 0 2.828 0l8.414-8.586a4 4 0 0 0 0-5.656 4 4 0 0 0-5.656 0l-8.415 8.585a6 6 0 1 0 8.486 8.486'/%3E%3C/svg%3E") center/contain no-repeat}
+.page-file-name{flex:1 1 auto;min-width:0;overflow:hidden;font-size:14.5px;font-weight:600;text-overflow:ellipsis;white-space:nowrap}
+.page-file-meta{flex:0 0 auto;font-size:12.5px;color:var(--muted2)}
+.page-file.is-missing .page-file-link{border-style:dashed;color:var(--muted2);cursor:default}
+.page-file.is-missing .page-file-name{font-weight:500;font-style:italic}
+.page-file-picker-backdrop{position:fixed;inset:0;z-index:2004;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(var(--shade-rgb),calc(.55 * var(--shade-k)))}
+.page-file-picker{display:flex;flex-direction:column;gap:10px;width:min(520px,100%);max-height:min(640px,calc(100vh - 32px));padding:14px;border:1px solid var(--border2);border-radius:16px;background:var(--bg);box-shadow:0 24px 64px rgba(var(--shade-rgb),calc(.4 * var(--shade-k)))}
+.page-file-picker-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.page-file-picker-upload{align-self:flex-start;min-height:36px}
+.page-file-picker-search{display:flex;align-items:center;gap:8px;padding:0 10px;border:1px solid var(--border);border-radius:10px;background:var(--bg2);color:var(--muted2)}
+.page-file-picker-search input{flex:1 1 auto;min-width:0;height:36px;border:none;background:transparent;color:var(--text);font:inherit;font-size:14px;outline:none}
+.page-file-picker-list{display:flex;flex-direction:column;gap:2px;min-height:80px;overflow-y:auto}
+.page-file-picker-item{display:flex;align-items:center;gap:10px;width:100%;padding:9px 10px;border:none;border-radius:10px;background:transparent;color:var(--text);font:inherit;text-align:left;cursor:pointer}
+.page-file-picker-item:hover,.page-file-picker-item:focus-visible{background:rgba(var(--accent-rgb),.1);outline:none}
+.page-file-picker-name{flex:1 1 auto;min-width:0;overflow:hidden;font-size:14px;font-weight:600;text-overflow:ellipsis;white-space:nowrap}
+.page-file-picker-meta{flex:0 0 auto;font-size:12px;color:var(--muted2)}
+.page-file-picker-empty{margin:0;padding:12px 4px;font-size:13px;color:var(--muted2)}
+@media (max-width:640px){
+  .page-file-picker-backdrop{align-items:flex-end;padding:0}
+  .page-file-picker{width:100%;max-height:80vh;border-radius:18px 18px 0 0;padding-bottom:calc(14px + env(safe-area-inset-bottom))}
+}
+/* Stap 1A-5: het kruimelpad boven een subpagina. Op een groot scherm alle
+   bovenliggende pagina's, op een telefoon alleen een pijltje naar de directe ouder. */
+.page-editor-crumbs{display:flex;align-items:center;gap:2px;min-width:0;max-width:45%;flex:0 1 auto}
+.page-editor-crumbs::after{content:'›';flex:0 0 auto;padding:0 2px 0 4px;color:var(--muted)}
+.page-editor-crumbs .page-editor-parent{max-width:none;padding:0 6px;flex:0 1 auto}
+.page-editor-crumbs .page-editor-parent+.page-editor-parent::before{content:'›';margin-right:6px;color:var(--muted)}
+.page-editor-crumbs .page-editor-parent svg{display:none}
+@media (max-width:640px){
+  .page-editor-crumbs{max-width:none;flex:0 0 auto}
+  .page-editor-crumbs::after{display:none}
+  .page-editor-crumbs .page-editor-parent:not(.is-direct){display:none}
+  .page-editor-crumbs .page-editor-parent::before{display:none}
+  .page-editor-crumbs .page-editor-parent svg{display:inline}
+}
+/* Stap 1A-5: de boom van pagina's in de lijst van de drive. */
+.odrv-tree-toggle{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;width:22px;height:22px;margin-right:4px;padding:0;border:none;border-radius:6px;background:transparent;color:var(--muted2);cursor:pointer}
+.odrv-tree-toggle:hover{background:var(--bg3);color:var(--text)}
+.odrv-tree-spacer{display:inline-block;flex:0 0 auto;width:26px}
+/* Stap 1A-5b: de prullenbak van pagina's. */
+.modal.page-trash{width:640px}
+.page-trash-intro{margin:0 0 12px;color:var(--muted2);font-size:13px;line-height:1.5}
+.page-trash-empty{margin:0;color:var(--muted2);font-size:13px}
+.page-trash-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.page-trash-item{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:var(--bg3)}
+.page-trash-text{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1 1 260px}
+.page-trash-text strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.page-trash-text span{font-size:12px;color:var(--muted2)}
+.page-trash-actions{display:flex;flex-wrap:wrap;gap:6px}
+/* Stap 1A-5c: het logo van het bedrijf bij het eigen dossier. */
+.odrv-logo{display:block;object-fit:contain;border-radius:5px;background:var(--bg3)}
+/* De boom van het dossier naast de pagina (§4 van het bouwplan voor pagina's).
+   Op een breed scherm een kolom die je kunt verbergen, op een smal scherm een
+   lade over de pagina (PageTree.tsx: DRAWER_QUERY, tot 1099px). */
+.page-editor-main{flex:1 1 auto;min-height:0;display:flex}
+.page-editor-main>.page-editor-scroll{flex:1 1 auto;min-width:0}
+.page-tree{flex:0 0 260px;width:260px;display:flex;flex-direction:column;min-height:0;border-right:1px solid var(--border);background:var(--bg)}
+.page-tree.is-drawer{position:fixed;top:52px;left:0;bottom:0;z-index:2002;width:min(320px,86vw);box-shadow:18px 0 40px rgba(0,0,0,.18)}
+.page-tree-backdrop{position:fixed;top:52px;right:0;bottom:0;left:0;z-index:2001;background:rgba(0,0,0,.28)}
+.page-tree-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 8px 6px 14px}
+.page-tree-name{min-width:0;font-weight:700;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.page-tree-close{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;flex:0 0 auto;border:none;border-radius:8px;background:transparent;color:var(--muted2);cursor:pointer}
+.page-tree-close:hover{background:var(--bg2);color:var(--text)}
+.page-tree-scroll{flex:1 1 auto;min-height:0;overflow-y:auto;padding:0 6px 24px}
+.page-tree-group+.page-tree-group{margin-top:10px}
+.page-tree-label{padding:6px 8px 4px;font-size:11.5px;font-weight:600;color:var(--muted2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.page-tree-list{list-style:none;margin:0;padding:0}
+.page-tree-row{display:flex;align-items:center;gap:2px;border-radius:8px}
+.page-tree-row:hover{background:var(--bg2)}
+.page-tree-row.is-current{background:rgba(var(--accent-rgb),.12)}
+.page-tree-toggle{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;flex:0 0 24px;padding:0;border:none;border-radius:6px;background:transparent;color:var(--muted2);cursor:pointer}
+.page-tree-toggle:hover{background:var(--border);color:var(--text)}
+.page-tree-toggle svg{transition:transform .15s}
+.page-tree-toggle.is-open svg{transform:rotate(90deg)}
+.page-tree-toggle.is-empty{cursor:default}
+.page-tree-toggle.is-empty:hover{background:transparent}
+.page-tree-page{display:flex;align-items:center;gap:7px;flex:1 1 auto;min-width:0;min-height:32px;padding:4px 6px;border:none;border-radius:8px;background:transparent;color:inherit;font:inherit;font-size:13px;text-align:left;cursor:pointer}
+.page-tree-page svg{flex:0 0 auto;color:var(--muted2)}
+.page-tree-page span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.page-tree-page:focus-visible,.page-tree-toggle:focus-visible,.page-tree-close:focus-visible{outline:2px solid rgba(var(--accent-rgb),.6);outline-offset:-2px}
+.page-tree-row.is-current .page-tree-page{font-weight:600}
+.page-tree-note{margin:8px;color:var(--muted2);font-size:12.5px}
+/* Op de telefoon over de hele hoogte, zoals het versiepaneel, en ruimere regels voor de duim. */
+@media (max-width:640px){
+  .page-tree.is-drawer{top:0;width:min(320px,88vw)}
+  .page-tree-backdrop{top:0}
+  .page-tree.is-drawer .page-tree-page{min-height:40px}
+  .page-tree.is-drawer .page-tree-toggle{width:32px;height:32px;flex-basis:32px}
+}
+/* Ctrl+P op een open pagina (§9 van het bouwplan voor pagina's): alleen de
+   pagina, over de hele lengte, zwart op wit, met de uitklappers open. Zonder
+   deze regels is de editor een vast venster met een eigen schuifbalk: dan
+   kwam alleen het stuk dat in beeld stond op papier, met de app eromheen.
+   De app eromheen gaat weg (behalve de weg naar de editor), en die weg
+   verliest zijn vaste hoogtes, zodat de pagina kan doorlopen. */
+@media print{
+  body:has(.page-editor){background:#fff!important}
+  body:has(.page-editor)>*:not(#root){display:none!important}
+  body:has(.page-editor) #root *:not(:has(.page-editor)):not(.page-editor):not(.page-editor *){display:none!important}
+  body:has(.page-editor) #root,body:has(.page-editor) #root *:has(.page-editor){position:static!important;display:block!important;overflow:visible!important;width:auto!important;height:auto!important;min-height:0!important;max-height:none!important;margin:0!important;padding:0!important;border:0!important;background:none!important;box-shadow:none!important;transform:none!important;filter:none!important;contain:none!important}
+  /* Het donkere thema vult zijn kleuren al op :root in; daarom hier de lichte, op de editor zelf. */
+  .page-editor{--text:#1C1B18;--ink:#1C1B18;--muted:#6F6B63;--muted2:#55524B;--border:#D4D1CA;--border2:#C7C3BA;--bg:#fff;--bg2:#fff;--bg3:#F4F3F0;--panel:#fff;--accent-ink:#855800;--accent-rgb:244,188,46;--ok-rgb:11,107,78;--warn-rgb:163,71,10;--danger-rgb:189,31,49;--accent-g:#0B6B4E;--accent-o:#A3470A;--accent-r:#BD1F31;--shade-rgb:28,27,24;--shade-k:.3;color-scheme:light;position:static!important;display:block!important;background:#fff!important;color:#1C1B18!important}
+  .page-editor-bar,.page-editor-toolbar,.page-editor-subbar,.page-editor-banner,.page-tree,.page-tree-backdrop,.page-versions,.page-block-menu,.page-file-picker-backdrop{display:none!important}
+  .page-editor-main,.page-editor-scroll{display:block!important;overflow:visible!important;height:auto!important;min-height:0!important}
+  .page-editor-sheet{max-width:none;margin:0;padding:0}
+  .page-editor-title{display:block;width:100%;margin:0 0 12pt;padding:0;border:0;background:none;color:#1C1B18;font-size:24pt;font-weight:700}
+  .page-prose .tiptap{min-height:0;color:#1C1B18}
+  .page-prose .tiptap .is-editor-empty:first-child::before{content:none}
+  .page-prose .tiptap .page-details>button,.page-prose .tiptap .column-resize-handle{display:none}
+  .page-prose .tiptap .page-details [data-type="detailsContent"][hidden]{display:block}
+  .page-prose .tiptap h1,.page-prose .tiptap h2,.page-prose .tiptap h3{break-after:avoid}
+  .page-prose .tiptap tr,.page-prose .tiptap img,.page-prose .tiptap .page-callout,.page-prose .tiptap pre{break-inside:avoid}
 }

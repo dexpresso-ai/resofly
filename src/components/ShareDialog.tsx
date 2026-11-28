@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  AlertTriangle, Check, Copy, Download, Link2, Mail, RotateCcw, Send, Trash2, UserRound, Users,
+  AlertTriangle, Check, Copy, Download, FileText, Link2, Mail, RefreshCw, RotateCcw, Send, Trash2, UserRound, Users,
 } from 'lucide-react';
 import type { AppData, ClientContact, DriveShare, OrganizationMember } from '../types';
 import { Modal } from './Modal';
@@ -9,9 +9,11 @@ import { dateNL } from '../lib/format';
 import { supabaseAuth } from '../lib/supabase';
 import { memberEmail, memberName } from '../lib/members';
 import {
-  loadOrganizationMembers, resendDriveShareNotice, revokeDriveShare, shareDriveItem,
-  updateClientContact, updateDriveShare, type DriveShareRecipientInput, type DriveShareResult,
+  createPageRelease, loadOrganizationMembers, loadPageShareStatus, releasePageToShares, resendDriveShareNotice,
+  revokeDriveShare, shareDriveItem, updateClientContact, updateDriveShare,
+  type DriveShareRecipientInput, type DriveShareResult, type PageShareStatus,
 } from '../lib/repository';
+import { subpagesOf } from '../lib/pageTree';
 import {
   SHARE_EXPIRY_OPTIONS, SHARE_ITEM_LABEL, activeSharesFor, expiryToIso,
   resolveShareContext, shareChannelLabel, shareRecipientLabel, type ShareTarget,
@@ -26,15 +28,23 @@ import {
  * niets anders zien. Het echte slot zit in de database (trigger
  * `drive_shares_guard`); dit scherm zorgt er alleen voor dat je er niet tegenaan
  * loopt.
+ *
+ * Een pagina (stap 1C) delen is vrijgeven: de ontvanger ziet de versie van nu,
+ * en wat je daarna wijzigt pas na "Bijwerken bij klant". Subpagina's vink je
+ * apart aan; elke wordt een eigen deling, met een eigen vrijgave.
  */
 export function ShareDialog({
-  data, organizationId, target, onClose, onChanged,
+  data, organizationId, target, onClose, onChanged, beforeShare, isPage: isPageHint = false,
 }: {
   data: AppData;
   organizationId: string;
   target: ShareTarget;
   onClose: () => void;
   onChanged: () => void;
+  /** Vanuit de editor: eerst opslaan wat er nog staat, want de vrijgave neemt de opgeslagen pagina. */
+  beforeShare?: () => Promise<void>;
+  /** De editor weet zeker dat het een pagina is, ook als data haar (nog) niet kent. */
+  isPage?: boolean;
 }) {
   const context = useMemo(() => resolveShareContext(data, target.type, target.id), [data, target.type, target.id]);
   const isClientRelated = Boolean(context.clientId);
@@ -48,6 +58,30 @@ export function ShareDialog({
   ), [data.clientContacts, context.clientId]);
 
   const existing = useMemo(() => activeSharesFor(data, target.type, target.id), [data, target.type, target.id]);
+
+  const isPage = target.type === 'document' && (isPageHint || data.documents.some(d => d.id === target.id && d.format === 'page'));
+  const subpages = useMemo(() => (isPage
+    ? subpagesOf(data.documents.filter(d => d.format === 'page').map(d => ({
+      id: d.id, title: d.title, parent_id: d.parent_id ?? null, folder_id: d.folder_id,
+      client_id: d.client_id, project_id: d.project_id, position: d.position ?? null,
+    })), target.id)
+    : []), [isPage, data.documents, target.id]);
+  const [subpageIds, setSubpageIds] = useState<string[]>([]);
+  /** Per lopende deling van een pagina: welke versie de ontvanger ziet. */
+  const [pageStatus, setPageStatus] = useState<Map<string, PageShareStatus>>(new Map());
+  const [releasing, setReleasing] = useState(false);
+  const [pageNote, setPageNote] = useState<string | null>(null);
+  const reloadPageStatus = useCallback(async () => {
+    if (!isPage) return;
+    try {
+      const rows = await loadPageShareStatus(target.id);
+      setPageStatus(new Map(rows.map(row => [row.share_id, row])));
+    } catch {
+      // Zonder status geen knop "Bijwerken bij klant"; delen zelf werkt gewoon.
+    }
+  }, [isPage, target.id]);
+  useEffect(() => { void reloadPageStatus(); }, [reloadPageStatus, existing.length]);
+  const outdated = existing.filter(share => pageStatus.get(share.id)?.is_current === false);
 
   // Het hoofdadres van de klant (de klantkaart) kan ook iets ontvangen; dat
   // logt al in op het portaal. Alleen als het een geldig adres is.
@@ -134,7 +168,7 @@ export function ShareDialog({
 
   async function submit() {
     if (chosenCount === 0) { setError('Kies minstens één ontvanger.'); return; }
-    setBusy(true); setError(null);
+    setBusy(true); setError(null); setPageNote(null);
     try {
       const recipients: DriveShareRecipientInput[] = [
         ...(shareWithMain ? [{ kind: 'client' as const }] : []),
@@ -142,24 +176,74 @@ export function ShareDialog({
         ...memberIds.map(id => ({ kind: 'member' as const, memberUserId: id })),
         ...linkRecipients.map(email => ({ kind: 'link' as const, email })),
       ];
+      const expiresAt = expiryToIso(expiry);
+      // Een pagina: eerst opslaan, dan de vrijgave. Die versie ziet de ontvanger.
+      if (isPage && beforeShare) await beforeShare();
       const outcome = await shareDriveItem({
         organizationId,
         itemType: target.type,
         itemId: target.id,
         itemName: target.name,
         recipients,
-        canDownload,
-        expiresAt: expiryToIso(expiry),
+        canDownload: isPage ? false : canDownload,
+        expiresAt,
         message: message.trim() || null,
         notify,
+        documentVersionId: isPage ? await createPageRelease(target.id) : null,
       });
       setResults(outcome);
-      setContactIds([]); setMemberIds([]); setLinkRecipients([]); setMessage(''); setShareWithMain(false);
+      if (isPage && subpageIds.length > 0) setPageNote(await shareSubpages(recipients, expiresAt));
+      setContactIds([]); setMemberIds([]); setLinkRecipients([]); setMessage(''); setShareWithMain(false); setSubpageIds([]);
       onChanged();
+      void reloadPageStatus();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Delen is niet gelukt.');
     } finally {
       setBusy(false);
+    }
+  }
+
+  /**
+   * De aangevinkte subpagina's: elk een eigen vrijgave en deling, zonder eigen
+   * mail (de ontvanger kreeg er al een, en ziet ze in het portaal). Niet via
+   * een deellink: die is één pagina, en de link naar een subpagina zou
+   * niemand krijgen.
+   */
+  async function shareSubpages(recipients: DriveShareRecipientInput[], expiresAt: string | null): Promise<string> {
+    const forSubpages = recipients.filter(recipient => recipient.kind !== 'link');
+    if (forSubpages.length === 0) return 'Subpagina\'s gaan niet mee via een deellink; deel ze apart.';
+    const failed: string[] = [];
+    let shared = 0;
+    for (const { page } of subpages.filter(({ page }) => subpageIds.includes(page.id))) {
+      try {
+        const outcome = await shareDriveItem({
+          organizationId, itemType: 'document', itemId: page.id, itemName: page.title,
+          recipients: forSubpages, canDownload: false, expiresAt, message: null, notify: false,
+          documentVersionId: await createPageRelease(page.id),
+        });
+        const error = outcome.find(result => result.share === null)?.error;
+        if (error) failed.push(`${page.title || 'Naamloze pagina'}: ${error}`); else shared += 1;
+      } catch (e) {
+        failed.push(`${page.title || 'Naamloze pagina'}: ${e instanceof Error ? e.message : 'niet gelukt'}`);
+      }
+    }
+    const done = shared === 1 ? 'Ook 1 subpagina gedeeld.' : shared > 1 ? `Ook ${shared} subpagina's gedeeld.` : '';
+    return [done, failed.length ? `Niet gelukt: ${failed.join('; ')}` : ''].filter(Boolean).join(' ');
+  }
+
+  /** "Bijwerken bij klant": iedereen met wie de pagina gedeeld is, ziet daarna de pagina van nu. */
+  async function releaseToShares() {
+    setReleasing(true); setError(null); setPageNote(null);
+    try {
+      if (beforeShare) await beforeShare();
+      const count = await releasePageToShares(target.id);
+      setPageNote(count === 0 ? 'Iedereen ziet de pagina van nu al.' : count === 1 ? 'Bijgewerkt: de ontvanger ziet nu de pagina van nu.' : `Bijgewerkt: ${count} ontvangers zien nu de pagina van nu.`);
+      await reloadPageStatus();
+      onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Bijwerken is niet gelukt.');
+    } finally {
+      setReleasing(false);
     }
   }
 
@@ -212,11 +296,11 @@ export function ShareDialog({
     }
   }
 
-  const kindLabel = SHARE_ITEM_LABEL[target.type];
+  const kindLabel = isPage ? 'Pagina' : SHARE_ITEM_LABEL[target.type];
 
   return <Modal
     title={`${kindLabel} delen`}
-    className="share-modal"
+    className={`share-modal${isPage ? ' share-modal-page' : ''}`}
     onClose={onClose}
     footer={<>
       <Button onClick={onClose} disabled={busy}>Sluiten</Button>
@@ -228,6 +312,7 @@ export function ShareDialog({
     <p className="share-lede">
       <strong>{target.name}</strong>
       {target.type === 'folder' && <span> — alles wat er nu in deze map zit gaat mee, submappen inbegrepen. Wat je er later in zet, deel je apart.</span>}
+      {isPage && <span> — de ontvanger ziet de pagina zoals ze nu is. Wat je daarna wijzigt, ziet hij pas als je “Bijwerken bij klant” kiest.</span>}
     </p>
 
     {isClientRelated
@@ -352,6 +437,31 @@ export function ShareDialog({
       <p className="share-hint">Iedereen met de link kan erbij. Stuur hem alleen naar mensen die hem mogen hebben.</p>
     </section>}
 
+    {isPage && subpages.length > 0 && <section className="share-section share-subpages">
+      <h4><FileText size={14} /> Subpagina's</h4>
+      <label className="share-toggle">
+        <input
+          type="checkbox"
+          checked={subpageIds.length === subpages.length}
+          disabled={busy}
+          onChange={e => setSubpageIds(e.target.checked ? subpages.map(({ page }) => page.id) : [])}
+        />
+        <span>Alle subpagina's</span>
+      </label>
+      <ul className="share-people share-subpage-list">
+        {subpages.map(({ page, depth }) => <li key={page.id} style={{ paddingLeft: (depth - 1) * 18 }}>
+          <label>
+            <input type="checkbox" checked={subpageIds.includes(page.id)} disabled={busy} onChange={() => toggle(subpageIds, setSubpageIds, page.id)} />
+            <span className="share-person"><strong>{page.title || 'Naamloze pagina'}</strong></span>
+          </label>
+        </li>)}
+      </ul>
+      <p className="share-hint">
+        Elke subpagina die je aanvinkt, wordt een eigen deling met haar eigen versie. Een subpagina die je niet
+        aanvinkt, ziet de ontvanger niet, ook haar titel niet. Via een deellink gaat alleen deze pagina mee.
+      </p>
+    </section>}
+
     <section className="share-section">
       <h4>Instellingen</h4>
       <div className="share-options">
@@ -361,10 +471,10 @@ export function ShareDialog({
             {SHARE_EXPIRY_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
           </Select>
         </label>
-        <label className="share-toggle">
+        {!isPage && <label className="share-toggle">
           <input type="checkbox" checked={canDownload} disabled={busy} onChange={e => setCanDownload(e.target.checked)} />
           <span>Downloaden toestaan<em>Laat je dit uit, dan kan de ontvanger alleen kijken.</em></span>
-        </label>
+        </label>}
         <label className="share-toggle">
           <input type="checkbox" checked={notify} disabled={busy} onChange={e => setNotify(e.target.checked)} />
           <span>Stuur een e-mail met de link<em>Zet je dit uit, dan deel je stilletjes; de ontvanger ziet het pas als hij zelf kijkt.</em></span>
@@ -382,6 +492,8 @@ export function ShareDialog({
         />
       </label>
     </section>
+
+    {pageNote && <p className="share-hint share-page-note" role="status">{pageNote}</p>}
 
     {results && results.length > 0 && <section className="share-section share-results">
       <h4><Check size={14} /> {results.every(r => r.share === null) ? 'Niet gelukt' : 'Gedeeld'}</h4>
@@ -408,6 +520,13 @@ export function ShareDialog({
 
     <section className="share-section">
       <h4>Wie heeft nu toegang</h4>
+      {isPage && outdated.length > 0 && <div className="share-rule share-outdated">
+        <AlertTriangle size={16} />
+        <span>De klant ziet een oudere versie: wat je sindsdien wijzigde, staat er nog niet in.</span>
+        <Button onClick={() => void releaseToShares()} disabled={releasing || busy}>
+          <RefreshCw size={13} /> {releasing ? 'Bezig…' : 'Bijwerken bij klant'}
+        </Button>
+      </div>}
       {existing.length === 0
         ? <p className="share-empty">Nog met niemand gedeeld.</p>
         : <ul className="share-current">
@@ -416,15 +535,20 @@ export function ShareDialog({
                 <strong>{shareRecipientLabel(share)}</strong>
                 <span className="share-person-meta">
                   {shareChannelLabel(share)}
-                  {share.can_download ? ' · mag downloaden' : ' · alleen bekijken'}
+                  {isPage ? '' : share.can_download ? ' · mag downloaden' : ' · alleen bekijken'}
                   {share.expires_at ? ` · tot ${dateNL(share.expires_at)}` : ''}
                   {share.last_viewed_at ? ` · laatst bekeken ${dateNL(share.last_viewed_at)}` : ''}
                 </span>
+                {isPage && pageStatus.get(share.id) && <span className="share-person-meta">
+                  Ziet versie {pageStatus.get(share.id)?.version ?? '?'}
+                  {pageStatus.get(share.id)?.released_at ? ` van ${dateNL(pageStatus.get(share.id)?.released_at as string)}` : ''}
+                  {pageStatus.get(share.id)?.is_current === false && <span className="share-tag is-outdated">Oudere versie</span>}
+                </span>}
               </div>
               <div className="share-current-actions">
-                <button type="button" disabled={busyShareId === share.id} onClick={() => toggleDownload(share)} title="Downloaden aan- of uitzetten">
+                {!isPage && <button type="button" disabled={busyShareId === share.id} onClick={() => toggleDownload(share)} title="Downloaden aan- of uitzetten">
                   <Download size={14} /> {share.can_download ? 'Downloaden uit' : 'Downloaden aan'}
-                </button>
+                </button>}
                 <button type="button" disabled={busyShareId === share.id} onClick={() => resend(share)} title="Melding opnieuw versturen">
                   <Send size={14} /> Opnieuw sturen
                 </button>

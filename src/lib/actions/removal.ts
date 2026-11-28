@@ -1,7 +1,7 @@
 import {
   attachmentLockReason, clientHasFinanceDocuments, deleteAttachment, deleteCampaign, deleteClientCall, deleteClientContact,
   deleteClientEmail, deleteContentFolder, deleteEntityCascade, deleteFlow, deletePlannerNote, deleteProjectTemplate,
-  deleteSavedReport, deleteTicketNote, deleteTimeEntry, draftDeleteBlockReason, loadAttachmentRef,
+  deleteSavedReport, deleteTicketNote, deleteTimeEntry, documentFormat, draftDeleteBlockReason, loadAttachmentRef, trashPage,
 } from '../repository';
 import { deleteBookingLink } from '../meetingBookingApi';
 import { deleteRecording, getRecording } from '../meeting-api';
@@ -51,7 +51,15 @@ export const REMOVAL_EXECUTORS: Record<string, ActionExecutor> = {
     return done(payload, 'Notitie');
   },
   'document.delete': async (payload, ctx) => {
-    await deleteEntityCascade('documents', text(payload, 'id'), ctx.organizationId);
+    const id = text(payload, 'id');
+    // Een pagina gaat naar de prullenbak, met haar subpagina's (stap 1A-5b),
+    // net als via de drive. Eerst ging ze hier definitief weg, en bleven de
+    // bijlagen van haar subpagina's achter.
+    if (await documentFormat(id, ctx.organizationId) === 'page') {
+      await trashPage(id);
+      return done(payload, 'Pagina');
+    }
+    await deleteEntityCascade('documents', id, ctx.organizationId);
     return done(payload, 'Document');
   },
   // Bij een concept eerst kijken of het nog een concept IS, vóór deleteEntityCascade

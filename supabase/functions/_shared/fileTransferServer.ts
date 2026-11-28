@@ -184,6 +184,41 @@ export async function signedDownloadUrls(input: {
   return { files: Array.isArray(result.files) ? result.files : [], zipUrl: result.zipUrl ?? null };
 }
 
+/**
+ * Getekende adressen voor de afbeeldingen van een gedeelde pagina (stap 1C-4).
+ *
+ * - Alleen een afbeelding waarvan de sleutel van precies die bijlage is
+ *   (storageKeyBelongsOnlyTo): een tweede rij die naar hetzelfde object wijst,
+ *   kon anders een bestand uit een ander dossier tonen.
+ * - Een uur geldig, het maximum van de worker. Een lezer houdt een pagina langer
+ *   open dan een download duurt, en een afbeelding laadt pas als hij erheen
+ *   scrolt (loading="lazy").
+ * - Met inline=1: anders stuurt de worker het als download
+ *   (application/octet-stream, nosniff) en toont <img> niets. Inline doet hij
+ *   alleen bij een veilig beeldtype.
+ */
+export function pageImageSigner(admin: SupabaseClient, organizationId: string) {
+  return async (files: Array<{ id: string; key: string; name: string }>): Promise<Record<string, string>> => {
+    const owned: Array<{ id: string; key: string; name: string }> = [];
+    for (const file of files) {
+      if (await storageKeyBelongsOnlyTo(admin, organizationId, file.key, { table: 'attachments', id: file.id })) owned.push(file);
+    }
+    if (owned.length === 0) return {};
+    const signed = await signedDownloadUrls({
+      organizationId,
+      files: owned.map((file) => ({ key: file.key, fileName: file.name })),
+      ttlSeconds: 3600,
+    });
+    const byKey = new Map(signed.files.map((file) => [file.key, file.url]));
+    const out: Record<string, string> = {};
+    for (const file of owned) {
+      const url = byKey.get(file.key);
+      if (url) out[file.id] = `${url}${url.includes('?') ? '&' : '?'}inline=1`;
+    }
+    return out;
+  };
+}
+
 /** Haalt een object uit R2. Al weg telt als gelukt. */
 export async function deleteStorageObject(organizationId: string, key: string): Promise<void> {
   const { url, secret } = mediaWorker();

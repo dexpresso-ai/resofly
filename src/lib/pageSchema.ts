@@ -27,6 +27,20 @@ export const PAGE_MARK_TYPES = ['bold', 'italic', 'underline', 'strike', 'code',
 /** Waar een link in een pagina heen mag. Dezelfde regel als in de database. */
 export const PAGE_LINK_PATTERN = '^(https?:|mailto:|tel:|/|#)';
 
+/** De soorten callout (stap 1A-4a). Onbekend wordt in de app 'info'; de
+ *  database weigert het (migratie 20261127140000). */
+export const CALLOUT_VARIANTS = ['info', 'tip', 'let-op', 'waarschuwing'] as const;
+
+/** Uitlijnen in een tabelcel. Tiptap kent dezelfde drie (normalizeTableCellAlign). */
+export const TABLE_CELL_ALIGNS = ['left', 'center', 'right'] as const;
+
+export type CalloutVariant = (typeof CALLOUT_VARIANTS)[number];
+
+/** Een soort uit de lijst; al het andere wordt 'info'. */
+export function calloutVariant(value: unknown): CalloutVariant {
+  return (CALLOUT_VARIANTS as readonly unknown[]).includes(value) ? value as CalloutVariant : 'info';
+}
+
 export type PageNodeType = (typeof PAGE_NODE_TYPES)[number];
 export type PageMarkType = (typeof PAGE_MARK_TYPES)[number];
 

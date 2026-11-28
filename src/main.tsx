@@ -143,7 +143,7 @@ import { NoteInkSection, noteHandwritingSummary } from './components/NoteHandwri
 import type { InkDocument } from './lib/ink';
 import { inkSizeIssue } from './lib/ink';
 import { documentTypeLabels } from './features/Documents';
-import { clientFolderOptions } from './lib/folders';
+import { clientFolderOptions, contentPlace } from './lib/folders';
 import { clientEInvoiceChannel, clientWantsEInvoice, eInvoiceReadiness, invoiceRecipientFor, isValidEmail, mollieInvoicingAllowed } from './lib/eInvoicing';
 import type { CreditInput, RefundInput } from './features/Finance';
 import { creditInvoiceAmount, issueCreditNoteForRefund, issueInvoiceWithoutEmail, previewInvoiceSend, refundInvoice as refundInvoiceWithPurpose, type InvoiceBookingNotice } from './services/invoiceRecoveryService';
@@ -261,6 +261,8 @@ const PublicGalleryPage = lazyPage(() => import('./features/PublicGalleryPage'),
 const PublicSharePage = lazyPage(() => import('./features/PublicSharePage'), 'PublicSharePage');
 // De pagina-editor (stap 1A-3a): Tiptap en ProseMirror laden pas als je een pagina opent.
 const PageEditor = lazyPage(() => import('./features/PageEditor'), 'PageEditor');
+// Delen vanuit de editor (stap 1C): het deelvenster laadt pas bij een klik.
+const ShareDialog = lazyPage(() => import('./components/ShareDialog'), 'ShareDialog');
 const PublicUnsubscribePage = lazyPage(() => import('./features/PublicUnsubscribePage'), 'PublicUnsubscribePage');
 const PublicTransferPage = lazyPage(() => import('./features/PublicTransferPage'), 'PublicTransferPage');
 const ClientPortal = lazyPage(() => import('./features/portal/ClientPortal'), 'ClientPortal');
@@ -1314,6 +1316,10 @@ function App() {
   const [officeDoc, setOfficeDoc] = useState<InternalDocument | null>(null);
   /** De pagina die open staat in de pagina-editor (stap 1A-3a). */
   const [pageEditDoc, setPageEditDoc] = useState<InternalDocument | null>(null);
+  // De weg langs subpagina's (stap 1A-4b): de terugknop gaat een pagina terug.
+  const [pageTrail, setPageTrail] = useState<string[]>([]);
+  /** Het deelvenster van de open pagina (stap 1C), met hoe de editor eerst opslaat. */
+  const [pageShare, setPageShare] = useState<{ id: string; organizationId: string; name: string; flush: () => Promise<boolean>; done: () => void } | null>(null);
   // Terug uit een telefoongesprek. `returnedCall` is de vraag ("gesprek
   // loggen?"), `callDraft` het venster dat daarop volgt. Twee aparte waarden,
   // zodat wegklikken van de vraag niet hetzelfde is als het venster sluiten.
@@ -5068,7 +5074,45 @@ function App() {
       onClose={() => setCallDraft(null)}
       onSaved={refresh}
     /></DialogDeferred>}
-    {pageEditDoc && <DialogDeferred><PageEditor documentId={pageEditDoc.id} organizationId={pageEditDoc.organization_id} canWrite={orgCanWrite && permissions.canWrite('content')} nameOf={(userId: string) => memberName(userId, organizationContext.teamMembers ?? [], currentUserId)} onClose={() => { setPageEditDoc(null); refresh(); }}/></DialogDeferred>}
+    {pageEditDoc && <DialogDeferred><PageEditor
+      // Een andere pagina is een verse editor: geen claim, inhoud of geschiedenis van de vorige.
+      key={pageEditDoc.id}
+      documentId={pageEditDoc.id}
+      organizationId={pageEditDoc.organization_id}
+      canWrite={orgCanWrite && permissions.canWrite('content')}
+      nameOf={(userId: string) => memberName(userId, organizationContext.teamMembers ?? [], currentUserId)}
+      backTo={pageTrail[pageTrail.length - 1] ?? null}
+      ownDossierName={data.companySettings?.company_name?.trim() || 'Eigen dossier'}
+      houseStyle={data.companySettings}
+      onOpenPage={(step) => {
+        const from = pageEditDoc.id;
+        setPageTrail(trail => (step.how === 'terug' ? trail.slice(0, -1) : [...trail, from]));
+        setPageEditDoc(previous => (previous ? { ...previous, id: step.id } : previous));
+      }}
+      onShare={async (request) => {
+        const id = pageEditDoc.id;
+        const organizationId = pageEditDoc.organization_id;
+        // Eerst verversen. Een pagina die je in deze sessie maakte (een
+        // subpagina met /pagina), of een nieuwe subpagina eronder, staat nog niet
+        // in data. Het venster leest daaruit bij welke klant de pagina hoort en
+        // welke subpagina's er zijn; zonder verversen bood het een deellink aan
+        // bij een klantpagina, en lag het achter de editor.
+        await refresh().catch(() => undefined);
+        setPageShare({ id, organizationId, name: request.title || 'Pagina', flush: request.flush, done: request.done });
+      }}
+      onClose={() => { setPageTrail([]); setPageEditDoc(null); refresh(); }}
+    /></DialogDeferred>}
+    {pageShare && pageEditDoc?.id === pageShare.id && <DialogDeferred><ShareDialog
+      data={data}
+      organizationId={pageShare.organizationId}
+      target={{ type: 'document', id: pageShare.id, name: pageShare.name }}
+      isPage
+      beforeShare={async () => {
+        if (!(await pageShare.flush())) throw new Error('De pagina kon niet worden opgeslagen, dus ook niet gedeeld. Probeer het zo nog eens.');
+      }}
+      onChanged={refresh}
+      onClose={() => { pageShare.done(); setPageShare(null); }}
+    /></DialogDeferred>}
     {officeSession && <DialogDeferred><OfficeEditor session={officeSession} onClose={() => { setOfficeSession(null); setOfficeDoc(null); refresh(); }} onDownload={officeDoc ? downloadOfficeDoc : undefined} /></DialogDeferred>}
     {officeOpening && !officeSession && <div style={{ position: 'fixed', bottom: 16, right: 16, zIndex: 2100, background: 'var(--panel-strong)', border: '1px solid var(--border2)', borderRadius: 10, padding: '8px 14px', fontWeight: 600 }}>Editor openen…</div>}
     {/* Zwevend teamchat-paneel — overal beschikbaar, behalve op de volledige chatpagina. */}
@@ -5500,6 +5544,8 @@ function EditModal({ edit, data, dataStatus, organizationId, currentUserId, team
   // of allebei. Zodra er een project mét klant gekozen is, is dat project leidend voor de
   // klant — precies zoals de database het ook afdwingt.
   const taskProject = edit.kind === 'task' ? data.projects.find(p => p.id === form.project_id) ?? null : null;
+  // Notitie en document: waar het in de drive komt, voor de klantkeuze en de mappen.
+  const place = edit.kind === 'note' || edit.kind === 'document' ? contentPlace(form, data.projects, data.clients) : null;
   const taskClientFollowsProject = Boolean(taskProject?.client_id);
   const taskProjectOptions = edit.kind === 'task'
     ? data.projects.filter(p =>
@@ -5834,10 +5880,11 @@ function EditModal({ edit, data, dataStatus, organizationId, currentUserId, team
         disabled={disabled}
         onSaved={summary => { if (item) onNoteHandwritingChanged(item.id, summary); }}
       />
-      <Select value={form.client_id} onChange={e=>{set('client_id',e.target.value);set('folder_id','');}} disabled={disabled}><option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select>
+      {/* Zonder klant staat een notitie in het eigen dossier (stap 1A-5c), met eigen mappen, of bij de klant van het project. */}
+      <Select value={form.client_id} onChange={e=>{set('client_id',e.target.value);set('folder_id','');}} disabled={disabled}><option value="">{place?.emptyLabel ?? 'Eigen dossier'}</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select>
       <Select value={form.project_id} onChange={e=>{set('project_id',e.target.value);set('folder_id','');}} disabled={disabled}><option value="">Geen project</option>{data.projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</Select>
-      {form.client_id && <Field label="Map" hint={form.project_id ? 'Plaats deze notitie in een map van het gekozen project.' : 'Plaats deze notitie in een map van de gekozen klant.'}>
-        <Select value={form.folder_id} onChange={e=>set('folder_id',e.target.value)} disabled={disabled}><option value="">Geen map</option>{clientFolderOptions(data.folders, form.client_id || null, form.project_id || null).map(o=><option key={o.id} value={o.id}>{o.label}</option>)}</Select>
+      {(form.client_id || form.folder_id || clientFolderOptions(data.folders, place?.folderClientId ?? null, form.project_id || null).length > 0) && <Field label="Map" hint={form.project_id ? 'Plaats deze notitie in een map van het gekozen project.' : form.client_id ? 'Plaats deze notitie in een map van de gekozen klant.' : 'Plaats deze notitie in een map van het eigen dossier.'}>
+        <Select value={form.folder_id} onChange={e=>set('folder_id',e.target.value)} disabled={disabled}><option value="">Geen map</option>{clientFolderOptions(data.folders, place?.folderClientId ?? null, form.project_id || null).map(o=><option key={o.id} value={o.id}>{o.label}</option>)}</Select>
       </Field>}
       {noteCalEventsLoading && <div className="note-cal-hint">Meetings laden…</div>}
       {!noteCalEventsLoading && noteCalEvents.length > 0 && (
@@ -5877,13 +5924,13 @@ function EditModal({ edit, data, dataStatus, organizationId, currentUserId, team
       </div>}
       <RichTextEditor value={form.content} onChange={value=>set('content', value)} placeholder="Schrijf de inhoud van het document…" disabled={disabled}/>
       <Field label="Klant">
-        <Select value={form.client_id} onChange={e=>{set('client_id',e.target.value);set('folder_id','');}} disabled={disabled}><option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select>
+        <Select value={form.client_id} onChange={e=>{set('client_id',e.target.value);set('folder_id','');}} disabled={disabled}><option value="">{place?.emptyLabel ?? 'Eigen dossier'}</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select>
       </Field>
       <Field label="Project">
         <Select value={form.project_id} onChange={e=>{set('project_id',e.target.value);set('folder_id','');}} disabled={disabled}><option value="">Geen project</option>{data.projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</Select>
       </Field>
-      {form.client_id && <Field label="Map" hint={form.project_id ? 'Plaats dit document in een map van het gekozen project.' : 'Plaats dit document in een map van de gekozen klant.'}>
-        <Select value={form.folder_id} onChange={e=>set('folder_id',e.target.value)} disabled={disabled}><option value="">Geen map</option>{clientFolderOptions(data.folders, form.client_id || null, form.project_id || null).map(o=><option key={o.id} value={o.id}>{o.label}</option>)}</Select>
+      {(form.client_id || form.folder_id || clientFolderOptions(data.folders, place?.folderClientId ?? null, form.project_id || null).length > 0) && <Field label="Map" hint={form.project_id ? 'Plaats dit document in een map van het gekozen project.' : form.client_id ? 'Plaats dit document in een map van de gekozen klant.' : 'Plaats dit document in een map van het eigen dossier.'}>
+        <Select value={form.folder_id} onChange={e=>set('folder_id',e.target.value)} disabled={disabled}><option value="">Geen map</option>{clientFolderOptions(data.folders, place?.folderClientId ?? null, form.project_id || null).map(o=><option key={o.id} value={o.id}>{o.label}</option>)}</Select>
       </Field>}
       {item && <div className="document-export">
         <div className="document-export-actions">

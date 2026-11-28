@@ -1,6 +1,6 @@
 import {
-  attachmentLockReason, loadAttachmentRef, loadContentHtml, moveAttachmentToFolder, renameAttachment, revokeDriveShare,
-  shareDriveItem, updateRow, type DriveShareRecipientInput,
+  appendParagraphsToPage, attachmentLockReason, createPageRelease, documentFormat, loadAttachmentRef, loadContentHtml, moveAttachmentToFolder,
+  renameAttachment, revokeDriveShare, shareDriveItem, updateRow, type DriveShareRecipientInput,
 } from '../repository';
 import { sanitizeRichText } from '../../components/RichTextEditor';
 import { optText, patchOf, text, type ActionExecutor, type ActionRunCtx } from './types';
@@ -25,6 +25,21 @@ async function updateContent(payload: Record<string, unknown>, ctx: ActionRunCtx
   const table = kind === 'note' ? 'notes' : 'documents';
   const itemId = text(payload, 'item_id');
   const patch = { ...patchOf(payload) };
+  // Een pagina: de tekst komt als alinea's onderaan body (§12), nooit via
+  // content. Die weigert de database bij een pagina. Wat de kaart beloofde,
+  // staat in `page_paragraphs`; de app zet ze onder wat er NU staat.
+  if (kind === 'document' && typeof patch.content === 'string' && await documentFormat(itemId, ctx.organizationId) === 'page') {
+    const paragraphs = Array.isArray(payload.page_paragraphs)
+      ? (payload.page_paragraphs as unknown[]).filter((line): line is string => typeof line === 'string' && line.trim() !== '')
+      : [];
+    if (payload.content_mode !== 'append' || paragraphs.length === 0) {
+      throw new Error('Een pagina kan alleen worden aangevuld, met de alinea\'s uit het voorstel. Vraag Gerrie het opnieuw klaar te zetten.');
+    }
+    const { content: _content, title, ...rest } = patch;
+    await appendParagraphsToPage(itemId, ctx.organizationId, paragraphs, typeof title === 'string' ? title : undefined);
+    if (Object.keys(rest).length > 0) await updateRow(table, itemId, rest, ctx.organizationId);
+    return `Pagina "${String(title ?? optText(payload, 'title') ?? '')}" aangevuld`.replace(' ""', '');
+  }
   if (typeof patch.content === 'string') {
     const addition = sanitizeRichText(patch.content);
     if (payload.content_mode === 'append') {
@@ -60,13 +75,19 @@ export const CONTENT_EXECUTORS: Record<string, ActionExecutor> = {
   'drive.share': async (payload, ctx) => {
     const recipients = Array.isArray(payload.recipients) ? payload.recipients as DriveShareRecipientInput[] : [];
     if (recipients.length === 0) throw new Error('Deze deling heeft geen ontvangers.');
+    const itemType = text(payload, 'item_type') as DriveShareItemType;
+    const itemId = text(payload, 'item_id');
+    // Een pagina deelt de versie van nu (stap 1C): eerst een vrijgave, met de
+    // rechten van wie dit goedkeurt. Zonder vrijgave weigert de database.
+    const isPage = itemType === 'document' && await documentFormat(itemId, ctx.organizationId) === 'page';
     const results = await shareDriveItem({
       organizationId: ctx.organizationId,
-      itemType: text(payload, 'item_type') as DriveShareItemType,
-      itemId: text(payload, 'item_id'),
+      itemType,
+      itemId,
       itemName: optText(payload, 'item_name'),
       recipients,
-      canDownload: payload.can_download !== false,
+      canDownload: !isPage && payload.can_download !== false,
+      documentVersionId: isPage ? await createPageRelease(itemId) : null,
       // Het eind van de gekozen dag, zoals het deelvenster een vervaldatum ook als tijdstip opslaat.
       expiresAt: optText(payload, 'expires_date') ? new Date(`${optText(payload, 'expires_date')}T23:59:59`).toISOString() : null,
       message: optText(payload, 'message'),

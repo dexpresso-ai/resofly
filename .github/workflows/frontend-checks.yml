@@ -159,6 +159,16 @@ jobs:
           deno check supabase/functions/_shared/documentLayout.ts
           deno check supabase/functions/_shared/documentPdf.ts
 
+      # De modules van pagina's die (nog) geen edge function importeert: de
+      # Word-export draait nu in de app, en de HTML voor het portaal komt pas
+      # met stap 1C in client-portal, dat zelf nog buiten de controle staat.
+      # Zonder deze stap zou een Deno-fout pas blijken als een functie ze laadt.
+      - name: Deno-typecheck pagina's
+        run: |
+          deno check supabase/functions/_shared/pageDocx.ts supabase/functions/_shared/woff.ts \
+            supabase/functions/_shared/zipWriter.ts supabase/functions/_shared/pageExportFonts.ts \
+            supabase/functions/_shared/pageHtml.ts supabase/functions/_shared/pageReferences.ts
+
   # De hele migratieketen op een lege database, met de echte Supabase-images in
   # de versies uit supabase/.temp (Postgres 17.6.1.111, net als staging). Een
   # nieuwe omgeving bouw je met `supabase db push`; deze job bewijst dat dat

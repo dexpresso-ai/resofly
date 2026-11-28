@@ -41,6 +41,21 @@ Stap 1A-3b van het bouwplan voor pagina's (`docs/plannen/PAGINAS_BOUWPLAN_2026-1
 - **Leesbare adressen** (`/werkwijze/oplevering`) horen bij de openbare website (§17), niet
   bij dit adres voor collega's.
 
+## Ook hersteld: ongedaan maken direct na het openen
+
+- **Wat er misging:** de editor zette het laden van een pagina in de geschiedenis van
+  "ongedaan maken". Ctrl+Z direct na het openen maakte de pagina dan leeg, en het
+  automatisch opslaan schreef die lege pagina weg. Na "Terugzetten" haalde Ctrl+Z de
+  vervangen tekst terug.
+- **Nu** laadt de editor buiten die geschiedenis (`addToHistory: false` in
+  `src/features/PageEditor.tsx`). Direct na het openen en na het terugzetten van een versie
+  staat "Ongedaan maken" uit.
+- **Getest** in Chromium, op 27 november na de merge naar staging, met de stap "opnieuw
+  openen toont de tekst" van `tests/stromen/ui.mjs documenten` (16 stappen, 0 fout):
+  - de knop staat uit;
+  - Ctrl+Z laat de tekst staan;
+  - `edit_version` en "laatst gewijzigd" blijven gelijk.
+
 ## Getest
 
 - `tests/stromen/ui.mjs documenten`, 16 stappen, waarvan 2 nieuw:

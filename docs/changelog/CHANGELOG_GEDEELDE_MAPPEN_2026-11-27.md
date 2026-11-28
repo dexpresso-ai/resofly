@@ -108,8 +108,9 @@ op één moment.
   standaardtekst; namen worden ge-escaped en een lange lijst wordt afgekort.
 - `npm test`, `npm run typecheck`, `npm run test:database` (de keten vanaf nul) en
   `npm run test:mobile -- --theme=both` voor de vier Inhoud-pagina's: groen.
-- **Niet gedraaid:** `deno check`. De proxy van de cloudsessie blokkeert deno.land; dat doet
-  CI bij de push naar staging.
+- **Niet gedraaid in de cloudsessie:** `deno check`. De proxy blokkeert deno.land. CI deed
+  het wel: de workflow Frontend checks op de branch (job `edge-functions`), groen op 27
+  november, vóór de merge naar staging.
 
 Ook hersteld: de testhulp `naarKlantdossier` in `tests/stromen/ui.mjs` zocht in het menu
 naar "Inhoud". Sinds 23 november heet dat "Alle inhoud", onder het kopje Documenten.

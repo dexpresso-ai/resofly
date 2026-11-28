@@ -15,8 +15,10 @@ export function getDocumentTypeLabel(type?: string | null) {
 }
 
 export function DocumentCard({ doc, data, onEdit }: { doc: InternalDocument; data: AppData; onEdit: (d: InternalDocument) => void }) {
-  const client = data.clients.find(c => c.id === doc.client_id);
   const project = data.projects.find(p => p.id === doc.project_id);
+  // Zonder klant maar in een project van een klant staat het document bij die
+  // klant (de regel van de drive); pas zonder beide is het het eigen dossier.
+  const client = data.clients.find(c => c.id === (doc.client_id ?? project?.client_id));
 
   return <article className="note-card" onClick={() => onEdit(doc)}>
     <div className="note-card-head">
@@ -27,7 +29,7 @@ export function DocumentCard({ doc, data, onEdit }: { doc: InternalDocument; dat
     {/* De korte tekst die de database bijhoudt: de volledige tekst laadt pas bij openen (stap 1A-2). */}
     <div className="note-content-preview">{doc.excerpt?.trim() ? <p>{doc.excerpt}</p> : <span className="rich-text-empty">Geen inhoud</span>}</div>
     <div className="note-relations">
-      <span>{client ? `Klant: ${client.name}` : 'Geen klant'}</span>
+      <span>{client ? `Klant: ${client.name}` : 'Eigen dossier'}</span>
       <span>{project ? `Project: ${project.name}` : 'Geen project'}</span>
     </div>
   </article>;

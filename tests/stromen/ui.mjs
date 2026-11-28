@@ -3,7 +3,7 @@
  * UI-test — de knoppen en formulieren van offertes, facturen, herinneringen en
  * contracten in Chromium, tegen de echte backend.
  *
- *   node --enable-source-maps --import ./tests/stromen/register.mjs tests/stromen/ui.mjs [offerte] [factuur] [intrekken] [contract] [rollen] [agenda] [mollie] [documenten] [bank] [inrichten] [opname] [klantdomein] [rapportage] [tickets] [vooruitbetaald] [galerij] [prognose]
+ *   node --enable-source-maps --import ./tests/stromen/register.mjs tests/stromen/ui.mjs [offerte] [factuur] [intrekken] [contract] [rollen] [agenda] [mollie] [documenten] [paginas] [paginadrive] [paginadelen] [bank] [inrichten] [opname] [klantdomein] [rapportage] [tickets] [vooruitbetaald] [galerij] [prognose]
  *
  *   --schermafdrukken=<map>   waar schermafdrukken van mislukte stappen heen gaan
  *                             (standaard <tmp>/stromen-ui; ook STROMEN_UI_SCHERMAFDRUKKEN)
@@ -23,8 +23,9 @@
  */
 import path from 'node:path';
 import os from 'node:os';
-import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync } from 'node:fs';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { crc32, deflateSync, inflateRawSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
 import { chromium } from '@playwright/test';
@@ -49,7 +50,7 @@ const opties = Object.fromEntries(argumenten.filter((a) => a.startsWith('--')).m
   const m = /^--([^=]+)(?:=(.*))?$/.exec(a);
   return [m[1], m[2] ?? 'true'];
 }));
-const ALLE = ['offerte', 'factuur', 'intrekken', 'contract', 'rollen', 'agenda', 'mollie', 'documenten', 'bank', 'inrichten', 'opname', 'klantdomein', 'rapportage', 'tickets', 'vooruitbetaald', 'galerij', 'prognose'];
+const ALLE = ['offerte', 'factuur', 'intrekken', 'contract', 'rollen', 'agenda', 'mollie', 'documenten', 'paginas', 'paginadrive', 'paginadelen', 'bank', 'inrichten', 'opname', 'klantdomein', 'rapportage', 'tickets', 'vooruitbetaald', 'galerij', 'prognose'];
 const gekozen = argumenten.filter((a) => !a.startsWith('-'));
 for (const naam of gekozen) {
   if (!ALLE.includes(naam)) throw new Error(`Onbekend scenario "${naam}". Kies uit: ${ALLE.join(', ')}`);
@@ -65,10 +66,45 @@ const TOTAAL = '€ 173,63';
 /** Tekst zoals een mens hem leest: elke witruimte (ook de harde spatie na €) wordt één spatie. */
 const tekst = (waarde) => String(waarde ?? '').replace(/\s+/g, ' ').trim();
 const q = (waarde) => `'${String(waarde).replace(/'/g, "''")}'`;
+
+/** De delen van een zip (zoals een .docx): naam en inhoud. Alleen opgeslagen of met deflate ingepakt. */
+function leesZip(buffer) {
+  const einde = buffer.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+  if (einde < 0) throw new Error('geen zip: geen einde van de centrale map');
+  const aantal = buffer.readUInt16LE(einde + 10);
+  let pos = buffer.readUInt32LE(einde + 16);
+  const delen = [];
+  for (let i = 0; i < aantal; i += 1) {
+    const methode = buffer.readUInt16LE(pos + 10);
+    const ingepakt = buffer.readUInt32LE(pos + 20);
+    const naamLengte = buffer.readUInt16LE(pos + 28);
+    const plek = buffer.readUInt32LE(pos + 42);
+    const name = buffer.subarray(pos + 46, pos + 46 + naamLengte).toString('utf8');
+    const start = plek + 30 + buffer.readUInt16LE(plek + 26) + buffer.readUInt16LE(plek + 28);
+    const ruw = buffer.subarray(start, start + ingepakt);
+    delen.push({ name, data: methode === 8 ? inflateRawSync(ruw) : Buffer.from(ruw) });
+    pos += 46 + naamLengte + buffer.readUInt16LE(pos + 30) + buffer.readUInt16LE(pos + 32);
+  }
+  return delen;
+}
 const regexVan = (woorden) => new RegExp(`^${String(woorden).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`);
 const slaap = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** De datum van vandaag in Nederland (JJJJ-MM-DD), plus `dagen`. */
+/** Een PNG van één kleur, voor een afbeelding die de nep-media-worker "levert". */
+function pngVlak(breedte, hoogte, [r, g, b]) {
+  const blok = (soort, data) => {
+    const lengte = Buffer.alloc(4); lengte.writeUInt32BE(data.length);
+    const som = Buffer.alloc(4); som.writeUInt32BE(crc32(Buffer.concat([Buffer.from(soort), data])) >>> 0);
+    return Buffer.concat([lengte, Buffer.from(soort), data, som]);
+  };
+  const kop = Buffer.alloc(13);
+  kop.writeUInt32BE(breedte, 0); kop.writeUInt32BE(hoogte, 4); kop[8] = 8; kop[9] = 2;
+  const regel = Buffer.concat([Buffer.from([0]), Buffer.from(Array.from({ length: breedte }, () => [r, g, b]).flat())]);
+  const pixels = deflateSync(Buffer.concat(Array.from({ length: hoogte }, () => regel)));
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), blok('IHDR', kop), blok('IDAT', pixels), blok('IEND', Buffer.alloc(0))]);
+}
+
 function datum(dagen = 0) {
   const vandaag = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
   const d = new Date(`${vandaag}T12:00:00Z`);
@@ -412,6 +448,22 @@ function uiStap(naam, fn, { toegestaan = [], foutmelding = null } = {}) {
     } catch (error) {
       const afdrukken = [];
       for (const s of betrokken()) afdrukken.push(await schermafdruk(naam, s));
+      // Ook de JavaScript-fouten van deze stap: een stap die op iets wacht dat
+      // nooit kwam, meldde anders alleen de wachttijd, terwijl de app was
+      // vastgelopen (een zwart scherm, en geen woord over waarom).
+      const fouten = betrokken().flatMap((s) => {
+        const b = begin.get(s) ?? { fouten: 0, console: 0 };
+        return [
+          ...s.fouten.slice(b.fouten).map((f) => `JavaScript-fout bij ${s.naam}: ${f.split('\n').slice(0, 3).join(' | ')}`),
+          ...s.console.slice(b.console).filter((c) => !RUIS_CONSOLE.some((r) => r.test(c.tekst))).map((c) => `console.error bij ${s.naam}: ${c.tekst.slice(0, 300)}`),
+        ];
+      });
+      if (fouten.length) {
+        error.message = `${error.message}\n${fouten.join('\n')}`;
+        // toets.mjs drukt de eerste regels van de stack af: de fouten daar vooraan.
+        const stack = String(error.stack || error.message).split('\n');
+        error.stack = [stack[0], ...fouten.slice(0, 3), ...stack.slice(1)].join('\n');
+      }
       if (afdrukken.length) error.message = `${error.message}\nschermafdruk: ${afdrukken.join(', ')}`;
       throw error;
     } finally {
@@ -1817,6 +1869,16 @@ async function scenarioDocumenten() {
     await wachtTot(async () => (await editor.innerText().catch(() => '')).includes(woord), { melding: 'de hele tekst staat niet in de editor' });
   });
 
+}
+
+/**
+ * Pagina's: de editor en zijn blokken (stap 1A-3 en 1A-4). Een eigen scenario,
+ * los van "documenten": samen duurden ze langer dan de tien minuten die een
+ * begrensde Docker-run in een cloudsessie heeft.
+ */
+async function scenarioPaginas() {
+  groep('UI: pagina\'s');
+  const { w } = t;
   // ── Pagina's (stap 1A-3a) ──────────────────────────────────────────────────
   const paginaTitel = `Werkwijze ${Date.now().toString(36)}`;
   const paginaStatus = (page) => page.locator('.page-editor .page-editor-status');
@@ -1895,7 +1957,7 @@ async function scenarioDocumenten() {
     await lidA.page.locator('.page-editor').waitFor({ state: 'detached', timeout: 15000 });
   });
 
-  await uiStap('een pagina heeft geen Delen of Versturen, en op een telefoon past de werkbalk', async () => {
+  await uiStap('een pagina deel je (stap 1C), maar versturen kan nog niet; op een telefoon past de werkbalk', async () => {
     if (!pagina) throw new Error('geen pagina');
     const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
     const page = lid.page;
@@ -1903,7 +1965,8 @@ async function scenarioDocumenten() {
     await paginaRij(page).locator('.odrv-td-act button').first().click();
     const menu = page.locator('.drive-pop');
     await menu.getByRole('menuitem', { name: 'Openen', exact: true }).waitFor({ timeout: 10000 });
-    gelijk(await menu.getByRole('menuitem', { name: 'Delen…', exact: true }).count(), 0, 'Delen bij een pagina');
+    // Delen is vrijgeven (scenario paginadelen); versturen wacht op de export naar PDF.
+    gelijk(await menu.getByRole('menuitem', { name: 'Delen…', exact: true }).count(), 1, 'Delen bij een pagina');
     gelijk(await menu.getByRole('menuitem', { name: 'Versturen…', exact: true }).count(), 0, 'Versturen bij een pagina');
     await page.keyboard.press('Escape');
     await page.setViewportSize({ width: 390, height: 844 });
@@ -1979,12 +2042,1349 @@ async function scenarioDocumenten() {
     await page.locator('.page-editor-close').click();
     await page.locator('.page-editor').waitFor({ state: 'detached', timeout: 15000 });
   });
+
+  // ── Blokken en het blokmenu (stap 1A-4a) ───────────────────────────────────
+  const blokTitel = `Blokken ${Date.now().toString(36)}`;
+  const blokRij = (page) => inhoud(page).locator('.odrv-row').filter({ hasText: blokTitel }).first();
+  const editorVak = (page) => page.locator('.page-editor .tiptap');
+  const wachtOpgeslagen = (page, melding = 'niet opgeslagen') =>
+    wachtTot(async () => tekst(await paginaStatus(page).innerText().catch(() => '')) === 'Opgeslagen', { melding, timeout: 20000 });
+  const blokRijInDb = () => sqlRij(`select id, body, content, edit_version, updated_at::text as gewijzigd from public.documents where organization_id = ${q(w.orgId)} and title = ${q(blokTitel)}`);
+  const telBlok = (id, filter) => sqlRij(`select count(*)::int as n from public.documents d, jsonb_path_query(d.body, ${q(`strict $.** ? (${filter})`)}) x where d.id = ${q(id)}`).n;
+  /** Typ `/zoekwoord`; het genoemde blok staat bovenaan, en Enter kiest het. */
+  const kiesBlok = async (page, zoekwoord, naam) => {
+    await page.keyboard.type(`/${zoekwoord}`);
+    const menu = page.locator('.page-block-menu');
+    await menu.waitFor({ timeout: 10000 });
+    await wachtTot(async () => tekst(await menu.locator('.page-block-item.is-active .page-block-label').innerText().catch(() => '')) === naam,
+      { melding: `bovenaan staat niet ${naam}: ${tekst(await menu.innerText().catch(() => ''))}` });
+    await page.keyboard.press('Enter');
+    await menu.waitFor({ state: 'detached', timeout: 10000 });
+  };
+  const openBlokPagina = async (gebruiker, naam) => {
+    const lid = await openWerkruimte(gebruiker, naam, w.orgId, { tijdelijk: true });
+    await naarKlantdossier(lid, w.klantA.name);
+    await blokRij(lid.page).click();
+    await lid.page.locator('.page-editor').waitFor({ timeout: 20000 });
+    return lid;
+  };
+  const sluitPagina = async (page) => {
+    await page.locator('.page-editor-close').click();
+    await page.locator('.page-editor').waitFor({ state: 'detached', timeout: 15000 });
+  };
+
+  const blokPagina = await uiStap('het blokmenu: /tab maakt een tabel met kopregel; typen, een rij erbij, uitlijnen en een kolom breder slepen', async () => {
+    const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+    const page = lid.page;
+    await naarKlantdossier(lid, w.klantA.name);
+    await inhoud(page).locator('.drive-new').click();
+    await page.locator('.drive-pop').getByRole('menuitem', { name: 'Pagina', exact: true }).click();
+    await page.locator('.page-editor').waitFor({ timeout: 20000 });
+    await wachtOpgeslagen(page, 'de editor kwam niet in bewerken');
+    await page.locator('.page-editor-title').fill(blokTitel);
+    await editorVak(page).click();
+    await page.keyboard.type('Intro');
+    await page.keyboard.press('Enter');
+    await kiesBlok(page, 'tab', 'Tabel');
+    const tabel = editorVak(page).locator('table').first();
+    await tabel.waitFor({ timeout: 10000 });
+    gelijk(await tabel.locator('th').count(), 3, 'een kopregel met drie kolommen');
+    await page.keyboard.type('Naam');
+    await page.keyboard.press('Tab');
+    await page.keyboard.type('Bedrag');
+    await page.keyboard.press('Tab');
+    await page.keyboard.press('Tab');
+    await page.keyboard.type('Koffie');
+    await page.keyboard.press('Tab');
+    await page.keyboard.type('2,50');
+    const tabelBalk = page.locator('.page-editor-subbar[aria-label="Tabel"]');
+    await tabelBalk.waitFor({ timeout: 5000 });
+    await tabelBalk.getByRole('button', { name: 'Rechts uitlijnen', exact: true }).click();
+    await tabelBalk.getByRole('button', { name: 'Rij eronder', exact: true }).click();
+    gelijk(await tabel.locator('tr').count(), 4, 'rijen na Rij eronder');
+    // Een kolom breder slepen, aan de rechterrand van de eerste kop. Tiptap zette
+    // dat alleen aan als de editor bij het maken al bewerkbaar was.
+    const kop = await tabel.locator('th').first().boundingBox();
+    await page.mouse.move(kop.x + kop.width - 2, kop.y + kop.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(kop.x + kop.width + 80, kop.y + kop.height / 2, { steps: 8 });
+    await page.mouse.up();
+    await wachtTot(async () => ((await tabel.locator('th').first().boundingBox())?.width ?? 0) > kop.width + 40, { melding: 'de kolom werd niet breder' });
+    await wachtOpgeslagen(page);
+    const rij = blokRijInDb();
+    verwacht(rij, 'pagina niet in de database');
+    verwacht(rij.content.includes('Naam Bedrag') && rij.content.includes('Koffie 2,50'), `tekst uit de tabel: ${rij.content}`);
+    gelijk(telBlok(rij.id, '@.type == "tableHeader"'), 3, 'kopcellen in body');
+    gelijk(telBlok(rij.id, '@.type == "tableRow"'), 4, 'rijen in body');
+    gelijk(telBlok(rij.id, '@.type == "tableCell" && @.attrs.align == "right"'), 1, 'de cel met 2,50 rechts uitgelijnd');
+    gelijk(telBlok(rij.id, '@.type == "tableHeader" && @.attrs.colwidth.type() == "array"'), 1, 'de gesleepte breedte staat in body');
+    await sluitPagina(page);
+    return rij;
+  });
+
+  await uiStap('callout, uitklapper en inhoudsopgave via het menu; uitklappen slaat niets op', async () => {
+    if (!blokPagina) throw new Error('geen pagina');
+    const { page } = await openBlokPagina(w.medewerker, 'medewerker');
+    await wachtOpgeslagen(page, 'de editor kwam niet in bewerken');
+    await editorVak(page).locator('p').filter({ hasText: 'Intro' }).first().click();
+    await page.keyboard.press('Control+End');
+    await kiesBlok(page, 'callout', 'Callout');
+    await page.keyboard.type('Let op de deadline.');
+    const calloutBalk = page.locator('.page-editor-subbar[aria-label="Callout"]');
+    await calloutBalk.waitFor({ timeout: 5000 });
+    await calloutBalk.getByRole('button', { name: 'Waarschuwing', exact: true }).click();
+    await editorVak(page).locator('.page-callout[data-variant="waarschuwing"]').waitFor({ timeout: 5000 });
+    // In een callout geen kop: het menu toont alleen wat daar kan. Escape
+    // sluit het menu, niet de pagina.
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('/kop');
+    const menu = page.locator('.page-block-menu');
+    await menu.waitFor({ timeout: 10000 });
+    verwacht(tekst(await menu.innerText()).includes('Geen blok gevonden'), `koppen in een callout: ${tekst(await menu.innerText())}`);
+    await page.keyboard.press('Escape');
+    await menu.waitFor({ state: 'detached', timeout: 5000 });
+    verwacht(await page.locator('.page-editor').isVisible(), 'Escape sloot de pagina');
+    for (let i = 0; i < 5; i += 1) await page.keyboard.press('Backspace');
+    await page.keyboard.press('Control+End');
+    await kiesBlok(page, 'uitklapper', 'Uitklapper');
+    await page.keyboard.type('Meer weten?');
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('Uitleg hier.');
+    await page.keyboard.press('Control+End');
+    await kiesBlok(page, 'kop2', 'Kop 2');
+    await page.keyboard.type('Planning');
+    // De inhoudsopgave bovenaan, op een nieuwe lege regel.
+    await page.keyboard.press('Control+Home');
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('ArrowUp');
+    await kiesBlok(page, 'inh', 'Inhoudsopgave');
+    const toc = editorVak(page).locator('.page-toc');
+    await toc.waitFor({ timeout: 5000 });
+    // Na het invoegen staat de cursor op tekst, niet op de inhoudsopgave: typen
+    // overschreef die anders.
+    await page.keyboard.type('Welkom. ');
+    await wachtTot(async () => tekst(await editorVak(page).locator('p').filter({ hasText: 'Intro' }).first().innerText().catch(() => '')) === 'Welkom. Intro',
+      { melding: 'de tekst kwam niet voor Intro' });
+    gelijk(await toc.count(), 1, 'de inhoudsopgave staat er nog na typen');
+    await wachtTot(async () => tekst(await toc.innerText().catch(() => '')).includes('Planning'), { melding: `de kop staat niet in de inhoudsopgave: ${tekst(await toc.innerText().catch(() => ''))}` });
+    await wachtOpgeslagen(page);
+    // Open of dicht is weergave: in- en uitklappen slaat niets op.
+    const voor = blokRijInDb();
+    await editorVak(page).locator('.page-details > button').first().click();
+    await page.waitForTimeout(2500);
+    gelijk(tekst(await paginaStatus(page).innerText()), 'Opgeslagen', 'status na inklappen');
+    gelijk(blokRijInDb().edit_version, voor.edit_version, 'edit_version na inklappen');
+    const rij = blokRijInDb();
+    gelijk(telBlok(rij.id, '@.type == "callout" && @.attrs.variant == "waarschuwing"'), 1, 'de callout als waarschuwing');
+    gelijk(telBlok(rij.id, '@.type == "details"'), 1, 'de uitklapper');
+    gelijk(telBlok(rij.id, '@.type == "detailsContent" && @.content[0].content[0].text == "Uitleg hier."'), 1, 'de uitleg staat ín de uitklapper');
+    gelijk(telBlok(rij.id, '@.type == "tableOfContents"'), 1, 'de inhoudsopgave');
+    gelijk(telBlok(rij.id, '@.type == "heading" && @.attrs.level == 2'), 1, 'de kop');
+    verwacht(rij.content.includes('Let op de deadline.') && rij.content.includes('Meer weten? Uitleg hier.') && rij.content.includes('Planning'),
+      `de platte tekst: ${rij.content}`);
+    await sluitPagina(page);
+  });
+
+  await uiStap('plakken uit Excel of Word wordt een tabel, zonder de stijl van buiten', async () => {
+    if (!blokPagina) throw new Error('geen pagina');
+    const { page } = await openBlokPagina(w.medewerker, 'medewerker');
+    await wachtOpgeslagen(page, 'de editor kwam niet in bewerken');
+    // Eerst buiten de tabel: in een tabel plakt prosemirror-tables de cellen
+    // over de bestaande heen (zo hoort het daar), en Ctrl+End verlaat een cel niet.
+    await editorVak(page).locator('h2').filter({ hasText: 'Planning' }).click();
+    await page.keyboard.press('Control+End');
+    const bijlagenVoor = sqlRij(`select count(*)::int as n from public.attachments where entity_id = ${q(blokPagina.id)}`).n;
+    await page.evaluate((png) => {
+      const html = '<meta charset="utf-8"><table border=0 cellpadding=0 cellspacing=0 width=200 style="border-collapse:collapse;width:150pt">'
+        + '<col width=100 style="width:75pt"><col width=100>'
+        + '<tr height=20><td class=xl65 style="background:url(https://volg.test/pixel.gif);text-align:center">Product</td><td>Prijs</td></tr>'
+        + '<tr><td>Thee</td><td align=right>1,80</td></tr></table>';
+      const data = new DataTransfer();
+      data.setData('text/html', html);
+      data.setData('text/plain', 'Product\tPrijs\nThee\t1,80');
+      // Excel zet er ook een plaatje van de cellen bij: dat hoort geen
+      // afbeelding te worden.
+      data.items.add(new File([Uint8Array.from(atob(png), (teken) => teken.charCodeAt(0))], 'cellen.png', { type: 'image/png' }));
+      document.querySelector('.page-editor .tiptap').dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+    }, PNG.toString('base64'));
+    await wachtTot(async () => (await editorVak(page).locator('table').count()) === 2, { melding: 'geen tweede tabel na plakken' });
+    await wachtOpgeslagen(page);
+    const rij = blokRijInDb();
+    verwacht(rij.content.includes('Product Prijs Thee 1,80'), `tekst uit de geplakte tabel: ${rij.content}`);
+    verwacht(!JSON.stringify(rij.body).includes('volg.test'), 'een adres van buiten staat in body');
+    gelijk(telBlok(rij.id, '@.type == "tableCell" && @.attrs.align == "center"'), 1, 'uitlijnen uit de stijl van de geplakte cel');
+    gelijk(telBlok(rij.id, '@.type == "image"'), 0, 'het plaatje van Excel werd een afbeelding');
+    gelijk(sqlRij(`select count(*)::int as n from public.attachments where entity_id = ${q(blokPagina.id)}`).n, bijlagenVoor, 'bijlagen na plakken uit Excel');
+    await sluitPagina(page);
+  });
+
+  await uiStap('opnieuw openen met elk nieuw blok verandert niets, en ongedaan maken staat uit', async () => {
+    if (!blokPagina) throw new Error('geen pagina');
+    const voor = blokRijInDb();
+    const { page } = await openBlokPagina(w.medewerker, 'medewerker');
+    await wachtOpgeslagen(page, 'de editor kwam niet in bewerken');
+    await editorVak(page).locator('.page-toc').waitFor({ timeout: 10000 });
+    gelijk(await editorVak(page).locator('table').count(), 2, 'twee tabellen');
+    gelijk(await editorVak(page).locator('.page-callout').count(), 1, 'de callout');
+    gelijk(await editorVak(page).locator('.page-details').count(), 1, 'de uitklapper');
+    gelijk(await page.getByRole('button', { name: 'Ongedaan maken', exact: true }).isDisabled(), true, 'ongedaan maken direct na openen');
+    await page.waitForTimeout(2500);
+    gelijk(tekst(await paginaStatus(page).innerText()), 'Opgeslagen', 'status na alleen openen');
+    await sluitPagina(page);
+    const na = blokRijInDb();
+    gelijk([na.edit_version, na.gewijzigd], [voor.edit_version, voor.gewijzigd], 'edit_version en "laatst gewijzigd" na alleen openen');
+  });
+
+  await uiStap('een pagina met een blok dat deze app niet kent, gaat alleen open om te lezen en blijft zoals hij was', async () => {
+    // Tiptap maakte van zo'n pagina stilletjes een lege; de eerste toets
+    // schreef die dan over de echte heen.
+    const body = { type: 'doc', content: [
+      { type: 'paragraph', content: [{ type: 'text', text: 'Boven de kolommen.' }] },
+      { type: 'columns', content: [{ type: 'column', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Links' }] }] }] },
+    ] };
+    const titel = `Uit de toekomst ${Date.now().toString(36)}`;
+    sql(`insert into public.documents (organization_id, created_by, title, format, body, client_id)
+      values (${q(w.orgId)}, ${q(w.medewerker.id)}, ${q(titel)}, 'page', ${q(JSON.stringify(body))}::jsonb, ${q(w.klantA.id)})`);
+    const nieuw = sqlRij(`select id, edit_version, updated_at::text as gewijzigd, body::text as body from public.documents
+      where organization_id = ${q(w.orgId)} and title = ${q(titel)}`);
+    const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+    const page = lid.page;
+    const adres = new URL(page.url());
+    adres.searchParams.set('pagina', nieuw.id);
+    await page.goto(adres.toString());
+    await page.locator('.page-editor').waitFor({ timeout: 30000 });
+    const banner = page.locator('.page-editor-banner');
+    await wachtTot(async () => tekst(await banner.innerText().catch(() => '')).includes('Ververs de app'), { melding: 'geen melding over een onbekend blok' });
+    gelijk(tekst(await paginaStatus(page).innerText()), 'Alleen lezen', 'status');
+    gelijk(await editorVak(page).getAttribute('contenteditable'), 'false', 'niet bewerkbaar');
+    gelijk(await page.locator('.page-editor-toolbar').count(), 0, 'geen werkbalk');
+    gelijk(await page.getByRole('button', { name: 'App verversen', exact: true }).count(), 1, 'een knop om te verversen');
+    gelijk(sqlRij(`select count(*)::int as n from public.document_edit_claims where document_id = ${q(nieuw.id)}`).n, 0, 'geen claim');
+    await editorVak(page).click();
+    await page.keyboard.type('xyz');
+    await page.waitForTimeout(2500);
+    await sluitPagina(page);
+    const na = sqlRij(`select edit_version, updated_at::text as gewijzigd, body::text as body from public.documents where id = ${q(nieuw.id)}`);
+    gelijk([na.edit_version, na.gewijzigd, na.body], [nieuw.edit_version, nieuw.gewijzigd, nieuw.body], 'de pagina is onveranderd');
+    gelijk(sqlRij(`select count(*)::int as n from public.document_versions where document_id = ${q(nieuw.id)}`).n, 0, 'geen versie');
+  });
+
+  await uiStap('op een telefoon: de +-knop opent het blokmenu als paneel, terug sluit het menu, en een brede tabel schuift binnen de pagina', async () => {
+    if (!blokPagina) throw new Error('geen pagina');
+    const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+    const page = lid.page;
+    // Eerst naar het dossier: op een telefoon zit het menu achter een knop.
+    await naarKlantdossier(lid, w.klantA.name);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await rustig(lid);
+    await blokRij(page).click();
+    await page.locator('.page-editor').waitFor({ timeout: 20000 });
+    await wachtOpgeslagen(page, 'de editor kwam niet in bewerken');
+    await editorVak(page).locator('td').filter({ hasText: 'Koffie' }).first().click();
+    const tabelBalk = page.locator('.page-editor-subbar[aria-label="Tabel"]');
+    await tabelBalk.waitFor({ timeout: 5000 });
+    for (let i = 0; i < 4; i += 1) await tabelBalk.getByRole('button', { name: 'Kolom rechts', exact: true }).click();
+    await wachtOpgeslagen(page);
+    const maat = async (el) => el.evaluate((node) => ({ sw: node.scrollWidth, cw: node.clientWidth }));
+    const pagina = await maat(page.locator('.page-editor-scroll'));
+    verwacht(pagina.sw <= pagina.cw + 1, `de pagina schuift opzij: ${JSON.stringify(pagina)}`);
+    const omhulsel = await maat(editorVak(page).locator('.tableWrapper').first());
+    verwacht(omhulsel.sw > omhulsel.cw, `de tabel schuift niet binnen de pagina: ${JSON.stringify(omhulsel)}`);
+    await editorVak(page).locator('p').filter({ hasText: 'Intro' }).first().click();
+    const plus = page.getByRole('button', { name: 'Blok invoegen', exact: true });
+    await plus.click();
+    const paneel = page.locator('.page-block-menu.is-sheet');
+    await paneel.waitFor({ timeout: 5000 });
+    const vak = await paneel.boundingBox();
+    verwacht(vak && vak.x >= 0 && vak.x + vak.width <= 391 && vak.y + vak.height <= 845, `het paneel past niet: ${JSON.stringify(vak)}`);
+    await page.goBack();
+    await paneel.waitFor({ state: 'detached', timeout: 5000 });
+    verwacht(await page.locator('.page-editor').isVisible(), 'terug sloot de pagina in plaats van het menu');
+    await plus.click();
+    await paneel.getByRole('option', { name: /Scheidingslijn/ }).click();
+    await paneel.waitFor({ state: 'detached', timeout: 5000 });
+    await wachtTot(async () => (await editorVak(page).locator('hr').count()) === 1, { melding: 'geen scheidingslijn' });
+    // Na de lijn komt de tabel. Typen hoort op een nieuwe regel te komen; de
+    // tabel bleef eerst geselecteerd en werd overschreven.
+    await page.keyboard.type('Na de lijn');
+    await wachtTot(async () => (await editorVak(page).locator('p').filter({ hasText: 'Na de lijn' }).count()) === 1, { melding: 'de tekst na de lijn staat niet op een eigen regel' });
+    verwacht(tekst(await editorVak(page).locator('table').first().innerText()).includes('Bedrag'), 'de tabel na de lijn is overschreven');
+    await wachtOpgeslagen(page);
+    await page.screenshot({ path: path.join(os.tmpdir(), 'stromen-ui-blokken-telefoon.png') });
+    await sluitPagina(page);
+    // Alleen lezen (de kijker): de tabel schuift ook dan binnen de pagina.
+    const kijker = await openWerkruimte(w.kijker, 'kijker', w.orgId, { tijdelijk: true });
+    await kijker.page.setViewportSize({ width: 390, height: 844 });
+    await rustig(kijker);
+    const adres = new URL(kijker.page.url());
+    adres.searchParams.set('pagina', blokPagina.id);
+    await kijker.page.goto(adres.toString());
+    await kijker.page.locator('.page-editor .tableWrapper').first().waitFor({ timeout: 30000 });
+    gelijk(await editorVak(kijker.page).getAttribute('contenteditable'), 'false', 'de kijker leest alleen');
+    const kijkPagina = await maat(kijker.page.locator('.page-editor-scroll'));
+    verwacht(kijkPagina.sw <= kijkPagina.cw + 1, `de pagina schuift opzij bij alleen lezen: ${JSON.stringify(kijkPagina)}`);
+    await kijker.page.screenshot({ path: path.join(os.tmpdir(), 'stromen-ui-blokken-lezen.png') });
+    await sluitPagina(kijker.page);
+  });
+
+  await uiStap('een lijn via de werkbalk of met --- boven een tabel: typen komt op een eigen regel, de tabel blijft heel', async () => {
+    if (!blokPagina) throw new Error('geen pagina');
+    const { page } = await openBlokPagina(w.medewerker, 'medewerker');
+    await wachtOpgeslagen(page, 'de editor kwam niet in bewerken');
+    // "Na de lijn" staat direct boven de tabel (stap hiervoor).
+    await editorVak(page).locator('p').filter({ hasText: 'Na de lijn' }).first().click();
+    await page.keyboard.press('End');
+    await page.locator('.page-editor-toolbar').getByRole('button', { name: 'Scheidingslijn', exact: true }).click();
+    await page.keyboard.type('Na de knop');
+    await wachtTot(async () => (await editorVak(page).locator('p').filter({ hasText: 'Na de knop' }).count()) === 1, { melding: 'de tekst na de knop staat niet op een eigen regel' });
+    verwacht(tekst(await editorVak(page).locator('table').first().innerText()).includes('Bedrag'), 'de tabel na de knop is overschreven');
+    // De derde ingang: --- aan het begin van een regel.
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('---');
+    await page.keyboard.type('Na de streepjes');
+    await wachtTot(async () => (await editorVak(page).locator('p').filter({ hasText: 'Na de streepjes' }).count()) === 1, { melding: 'de tekst na --- staat niet op een eigen regel' });
+    verwacht(tekst(await editorVak(page).locator('table').first().innerText()).includes('Bedrag'), 'de tabel na --- is overschreven');
+    gelijk(await editorVak(page).locator('hr').count(), 3, 'drie lijnen: menu, werkbalk en ---');
+    await wachtOpgeslagen(page);
+    // Licht thema: kaders, kopcellen en het menu ook eens zo bekeken.
+    await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'light'));
+    await editorVak(page).locator('td').filter({ hasText: 'Koffie' }).first().click();
+    await page.screenshot({ path: path.join(os.tmpdir(), 'stromen-ui-blokken-licht.png') });
+    await page.keyboard.press('Control+End');
+    await page.keyboard.type('/');
+    await page.locator('.page-block-menu').waitFor({ timeout: 5000 });
+    await page.screenshot({ path: path.join(os.tmpdir(), 'stromen-ui-blokken-licht-menu.png') });
+    await page.keyboard.press('Escape');
+    await page.keyboard.press('Backspace');
+    await wachtOpgeslagen(page);
+    await sluitPagina(page);
+  });
+  // ── Subpagina's (stap 1A-4b) ──────────────────────────────────────────────
+  await uiStap('subpagina via /pagina: een pagina onder deze; openen, omhoog, en de terugknop volgt de weg', async () => {
+    if (!blokPagina) throw new Error('geen pagina');
+    const titelVan = async (page) => page.locator('.page-editor-title').inputValue().catch(() => '');
+    const { page } = await openBlokPagina(w.medewerker, 'medewerker');
+    await wachtOpgeslagen(page, 'de editor kwam niet in bewerken');
+    await editorVak(page).locator('h2').filter({ hasText: 'Planning' }).click();
+    await page.keyboard.press('Control+End');
+    await kiesBlok(page, 'pagina', 'Subpagina');
+    const blok = editorVak(page).locator('.page-subpage');
+    await wachtTot(async () => tekst(await blok.innerText().catch(() => '')) === 'Naamloze pagina', { melding: `het subpagina-blok: ${tekst(await blok.innerText().catch(() => ''))}` });
+    await wachtOpgeslagen(page);
+    const kind = sqlRij(`select id, client_id, folder_id from public.documents where parent_id = ${q(blokPagina.id)}`);
+    verwacht(kind, 'geen subpagina in de database');
+    gelijk([kind.client_id, kind.folder_id], [w.klantA.id, null], 'de subpagina hoort bij klant A, zonder map');
+    gelijk(telBlok(blokPagina.id, `@.type == "subpage" && @.attrs.pageId == "${kind.id}"`), 1, 'het blok wijst naar de subpagina');
+    // Openen: eerst opslaan en de claim los, dan de subpagina.
+    await blok.locator('button').click();
+    await wachtTot(async () => (await titelVan(page)) === 'Naamloze pagina', { melding: 'de subpagina ging niet open' });
+    await wachtTot(async () => page.url().includes(`pagina=${kind.id}`), { melding: `het adres volgt niet: ${page.url()}` });
+    gelijk(sqlRij(`select count(*)::int as n from public.document_edit_claims where document_id = ${q(blokPagina.id)}`).n, 0, 'de claim op de bovenliggende pagina is los');
+    await wachtOpgeslagen(page, 'de subpagina kwam niet in bewerken');
+    await page.locator('.page-editor-title').fill('Onderpagina');
+    await editorVak(page).click();
+    await page.keyboard.type('Tekst op de subpagina.');
+    await wachtOpgeslagen(page);
+    // Omhoog met de knop in de balk; het blok toont dan de nieuwe titel.
+    const omhoog = page.locator('.page-editor-parent');
+    await wachtTot(async () => tekst(await omhoog.innerText().catch(() => '')).includes(blokTitel), { melding: `de knop omhoog: ${tekst(await omhoog.innerText().catch(() => ''))}` });
+    await omhoog.click();
+    await wachtTot(async () => (await titelVan(page)) === blokTitel, { melding: 'omhoog ging niet naar de bovenliggende pagina' });
+    await wachtTot(async () => tekst(await editorVak(page).locator('.page-subpage').innerText().catch(() => '')) === 'Onderpagina', { melding: 'het blok toont de nieuwe titel niet' });
+    // De terugknop volgt de weg: de subpagina, weer de bovenliggende, dan dicht.
+    await page.goBack();
+    await wachtTot(async () => (await titelVan(page)) === 'Onderpagina', { melding: 'terug ging niet naar de subpagina' });
+    await page.goBack();
+    await wachtTot(async () => (await titelVan(page)) === blokTitel, { melding: 'terug ging niet naar de bovenliggende pagina' });
+    await page.goBack();
+    await page.locator('.page-editor').waitFor({ state: 'detached', timeout: 15000 });
+    gelijk(sqlRij(`select content from public.documents where id = ${q(kind.id)}`).content, 'Tekst op de subpagina.', 'de tekst van de subpagina is bewaard');
+    // Een subpagina die niet meer bestaat: het blok zegt het, en klikken doet niets.
+    sql(`delete from public.documents where id = ${q(kind.id)}`);
+    const { page: opnieuw } = await openBlokPagina(w.medewerker, 'medewerker');
+    const weg = editorVak(opnieuw).locator('.page-subpage');
+    await wachtTot(async () => tekst(await weg.innerText().catch(() => '')) === 'Pagina niet gevonden', { melding: 'een verdwenen subpagina toont geen melding' });
+    await weg.locator('button').click();
+    await opnieuw.waitForTimeout(800);
+    gelijk(await titelVan(opnieuw), blokTitel, 'klikken op een verdwenen subpagina opende iets');
+    await sluitPagina(opnieuw);
+  });
+  // ── Afbeeldingen (stap 1A-4b) ──────────────────────────────────────────────
+  /** De media-worker voor dit tabblad: uploads in nep-R2, en weer ophalen met de sleutel. */
+  const mediaVoor = async (page) => {
+    const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': 'GET, POST, OPTIONS' };
+    await page.route(/\/__media\/(upload|file\/.+)$/, async (route) => {
+      const verzoek = route.request();
+      if (verzoek.method() === 'OPTIONS') { await route.fulfill({ status: 204, headers: cors }); return; }
+      const url = new URL(verzoek.url());
+      if (url.pathname.endsWith('/upload')) {
+        const kop = verzoek.headers();
+        const naam = decodeURIComponent(kop['x-file-name'] ?? 'bestand');
+        const sleutel = `${kop['x-organization-id']}/${kop['x-entity-type']}/${kop['x-entity-id']}/${randomUUID()}-${naam}`;
+        post.r2.set(sleutel, new Uint8Array(verzoek.postDataBuffer() ?? Buffer.alloc(0)));
+        await route.fulfill({ status: 200, contentType: 'application/json', headers: cors, body: JSON.stringify({ ok: true, key: sleutel }) });
+        return;
+      }
+      const bytes = post.r2.get(decodeURIComponent(url.pathname.replace(/^.*\/__media\/file\//, '')));
+      if (!bytes) { await route.fulfill({ status: 404, headers: cors, body: 'niet gevonden' }); return; }
+      await route.fulfill({ status: 200, contentType: 'image/png', headers: cors, body: Buffer.from(bytes) });
+    });
+  };
+  const openMetMedia = async () => {
+    const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+    await mediaVoor(lid.page);
+    await naarKlantdossier(lid, w.klantA.name);
+    await blokRij(lid.page).click();
+    await lid.page.locator('.page-editor').waitFor({ timeout: 20000 });
+    await wachtOpgeslagen(lid.page, 'de editor kwam niet in bewerken');
+    return lid.page;
+  };
+  const geladen = (beelden) => beelden.evaluateAll((imgs) => imgs.length > 0 && imgs.every((img) => img.complete && img.naturalWidth > 0));
+
+  await uiStap('afbeeldingen: kiezen, plakken en slepen; een plaatje van buiten wordt niets; uit een ander dossier zegt de editor waarom; een verdwenen afbeelding zegt het', async () => {
+    if (!blokPagina) throw new Error('geen pagina');
+    const page = await openMetMedia();
+    await editorVak(page).locator('h2').filter({ hasText: 'Planning' }).click();
+    await page.keyboard.press('Control+End');
+    // Eerst luisteren, dan pas Enter: Playwright vangt de bestandskiezer pas op
+    // als het luisteren loopt, en dat wordt los van de toets aangezet.
+    const kiezerOnderweg = page.waitForEvent('filechooser', { timeout: 30000 });
+    kiezerOnderweg.catch(() => {});
+    await page.keyboard.type('/afb');
+    const menu = page.locator('.page-block-menu');
+    await menu.waitFor({ timeout: 10000 });
+    await wachtTot(async () => tekst(await menu.locator('.page-block-item.is-active .page-block-label').innerText().catch(() => '')) === 'Afbeelding', { melding: 'Afbeelding staat niet bovenaan' });
+    await page.keyboard.press('Enter');
+    const kiezer = await kiezerOnderweg;
+    await kiezer.setFiles({ name: 'foto.png', mimeType: 'image/png', buffer: PNG });
+    const beeld = editorVak(page).locator('.page-image img');
+    await wachtTot(async () => (await beeld.count()) === 1 && (await geladen(beeld)), { melding: 'de afbeelding staat niet in beeld' });
+    await wachtOpgeslagen(page);
+    const bijlage = sqlRij(`select id, entity_type from public.attachments where organization_id = ${q(w.orgId)} and entity_id = ${q(blokPagina.id)} and name = 'foto.png'`);
+    verwacht(bijlage, 'geen bijlage bij de pagina');
+    gelijk(bijlage.entity_type, 'document', 'de afbeelding is een bijlage van de pagina');
+    gelijk(telBlok(blokPagina.id, `@.type == "image" && @.attrs.attachmentId == "${bijlage.id}"`), 1, 'het blok wijst naar de bijlage');
+    gelijk(telBlok(blokPagina.id, '@.type == "image" && exists(@.attrs.src)'), 0, 'geen adres in body');
+    // Na het invoegen staat de cursor onder de afbeelding: typen vervangt hem niet.
+    await page.keyboard.type('Onder de foto');
+    await wachtTot(async () => (await editorVak(page).locator('p').filter({ hasText: 'Onder de foto' }).count()) === 1, { melding: 'de tekst kwam niet onder de afbeelding' });
+    gelijk(await beeld.count(), 1, 'de afbeelding staat er nog na typen');
+    // Een plaatje als bestand plakken wordt een tweede afbeelding.
+    await page.evaluate((png) => {
+      const bytes = Uint8Array.from(atob(png), (teken) => teken.charCodeAt(0));
+      const data = new DataTransfer();
+      data.items.add(new File([bytes], 'geplakt.png', { type: 'image/png' }));
+      document.querySelector('.page-editor .tiptap').dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+    }, PNG.toString('base64'));
+    await wachtTot(async () => (await beeld.count()) === 2 && (await geladen(beeld)), { melding: 'een geplakt plaatje werd geen afbeelding' });
+    // Een plaatje van buiten (HTML met een adres) wordt niets; de tekst eromheen wel.
+    await page.evaluate(() => {
+      const data = new DataTransfer();
+      data.setData('text/html', '<p>Van internet</p><img src="https://volg.test/pixel.png" alt="volg">');
+      data.setData('text/plain', 'Van internet');
+      document.querySelector('.page-editor .tiptap').dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+    });
+    await wachtTot(async () => (await editorVak(page).locator('p').filter({ hasText: 'Van internet' }).count()) === 1, { melding: 'de geplakte tekst kwam er niet bij' });
+    gelijk(await beeld.count(), 2, 'afbeeldingen na een plaatje van buiten');
+    await wachtOpgeslagen(page);
+    verwacht(!JSON.stringify(blokRijInDb().body).includes('volg.test'), 'het adres van buiten staat in body');
+    // Slepen: een plaatje op de regel "Onder de foto" wordt een derde afbeelding.
+    const doel = await editorVak(page).locator('p').filter({ hasText: 'Onder de foto' }).first().boundingBox();
+    await page.evaluate(({ png, x, y }) => {
+      const data = new DataTransfer();
+      data.items.add(new File([Uint8Array.from(atob(png), (teken) => teken.charCodeAt(0))], 'gesleept.png', { type: 'image/png' }));
+      document.querySelector('.page-editor .tiptap').dispatchEvent(new DragEvent('drop', { dataTransfer: data, clientX: x, clientY: y, bubbles: true, cancelable: true }));
+    }, { png: PNG.toString('base64'), x: doel.x + 4, y: doel.y + doel.height / 2 });
+    await wachtTot(async () => (await beeld.count()) === 3 && (await geladen(beeld)), { melding: 'een gesleept plaatje werd geen afbeelding' });
+    await wachtOpgeslagen(page);
+    verwacht(sqlRij(`select count(*)::int as n from public.attachments where entity_id = ${q(blokPagina.id)} and name = 'gesleept.png'`).n === 1, 'het gesleepte plaatje is geen bijlage');
+    // Een afbeelding uit een ander dossier (geplakt uit een andere pagina): de
+    // database weigert het opslaan, de editor zegt waarom, en zonder dat blok
+    // slaat hij weer op.
+    sql(`insert into public.attachments (organization_id, entity_type, entity_id, name, mime_type, size_bytes, storage_key)
+      values (${q(w.orgId)}, 'client', ${q(w.klantB.id)}, 'vreemd.png', 'image/png', 10, ${q(`${w.orgId}/client/${w.klantB.id}/${randomUUID()}-vreemd.png`)})`);
+    const vreemd = sqlRij(`select id from public.attachments where organization_id = ${q(w.orgId)} and name = 'vreemd.png'`);
+    await page.evaluate((id) => {
+      const data = new DataTransfer();
+      data.setData('text/html', `<img data-attachment-id="${id}" alt="">`);
+      document.querySelector('.page-editor .tiptap').dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+    }, vreemd.id);
+    const banner = page.locator('.page-editor-banner');
+    await wachtTot(async () => tekst(await banner.innerText().catch(() => '')).includes('ander dossier'), { melding: `geen uitleg bij een geweigerde opslag: ${tekst(await banner.innerText().catch(() => ''))}` });
+    await editorVak(page).locator(`.page-image[data-attachment-id="${vreemd.id}"]`).click();
+    await page.keyboard.press('Backspace');
+    await wachtOpgeslagen(page, 'zonder het vreemde blok slaat de pagina niet op');
+    gelijk(await banner.count(), 0, 'de melding staat er nog na opslaan');
+    gelijk(telBlok(blokPagina.id, `@.type == "image" && @.attrs.attachmentId == "${vreemd.id}"`), 0, 'het vreemde blok in body');
+    await sluitPagina(page);
+    // Opnieuw openen: de afbeeldingen komen terug van de worker, en openen verandert niets.
+    const voor = blokRijInDb();
+    const terug = await openMetMedia();
+    const beeldTerug = editorVak(terug).locator('.page-image img');
+    await wachtTot(async () => (await beeldTerug.count()) === 3 && (await geladen(beeldTerug)), { melding: 'de afbeeldingen komen niet terug' });
+    await terug.waitForTimeout(1500);
+    // Word: de afbeeldingen komen van de worker en gaan mee in het bestand. De
+    // export slaat alleen op als er iets veranderd is, dus ook dit verandert niets.
+    const wordOnderweg = terug.waitForEvent('download', { timeout: 30000 });
+    wordOnderweg.catch(() => {});
+    await terug.locator('.page-editor-word').click();
+    const docx = new Map(leesZip(readFileSync(await (await wordOnderweg).path())).map((deel) => [deel.name, deel.data]));
+    const media = [...docx.keys()].filter((naam) => naam.startsWith('word/media/'));
+    gelijk(media.length, 3, `de afbeeldingen in het Word-bestand: ${media.join(', ')}`);
+    gelijk((docx.get('word/document.xml')?.toString('utf8').match(/<w:drawing>/g) ?? []).length, 3, 'de afbeeldingen in document.xml');
+    await sluitPagina(terug);
+    const na = blokRijInDb();
+    gelijk([na.edit_version, na.gewijzigd], [voor.edit_version, voor.gewijzigd], 'openen met afbeeldingen verandert niets');
+    // Een verdwenen afbeelding: het blok zegt het.
+    sql(`delete from public.attachments where id = ${q(bijlage.id)}`);
+    const zonder = await openMetMedia();
+    const weg = editorVak(zonder).locator('.page-image.is-missing');
+    await wachtTot(async () => tekst(await weg.innerText().catch(() => '')) === 'Afbeelding niet gevonden', { melding: 'een verdwenen afbeelding toont geen melding' });
+    await sluitPagina(zonder);
+  // De geweigerde opslag met de vreemde afbeelding is precies wat deze stap toetst.
+  }, { toegestaan: [{ tabel: 'documents', methode: 'PATCH', status: 400, antwoord: /ander dossier/ }] });
+  // ── Bestanden (stap 1A-4b) ─────────────────────────────────────────────────
+  await uiStap('bestanden: kiezen uit het dossier (alleen dat dossier), opslaan via een download, van de computer en slepen; een verdwenen bestand zegt het', async () => {
+    if (!blokPagina) throw new Error('geen pagina');
+    // Een bestand in het dossier van klant A, en een in dat van klant B (dat hoort niet in de kiezer).
+    const bijlageIn = (klant, naam) => {
+      sql(`insert into public.content_folders (organization_id, client_id, name) values (${q(w.orgId)}, ${q(klant)}, ${q(`Map ${naam}`)})`);
+      const map = sqlRij(`select id from public.content_folders where organization_id = ${q(w.orgId)} and name = ${q(`Map ${naam}`)}`);
+      const sleutel = `${w.orgId}/folder/${map.id}/${randomUUID()}-${naam}`;
+      post.r2.set(sleutel, new TextEncoder().encode(`inhoud van ${naam}`));
+      sql(`insert into public.attachments (organization_id, entity_type, entity_id, name, mime_type, size_bytes, storage_key)
+        values (${q(w.orgId)}, 'folder', ${q(map.id)}, ${q(naam)}, 'application/pdf', 2048, ${q(sleutel)})`);
+      return sqlRij(`select id from public.attachments where organization_id = ${q(w.orgId)} and name = ${q(naam)}`).id;
+    };
+    const offerte = bijlageIn(w.klantA.id, 'Offerte.pdf');
+    bijlageIn(w.klantB.id, 'Geheim.pdf');
+    const page = await openMetMedia();
+    const bestanden = editorVak(page).locator('.page-file');
+    await editorVak(page).locator('h2').filter({ hasText: 'Planning' }).click();
+    // De laatste regel heeft tekst ("Van internet"): eerst een nieuwe regel, want
+    // een / direct na een letter is geen opdracht.
+    await page.keyboard.press('Control+End');
+    await page.keyboard.press('Enter');
+    await kiesBlok(page, 'bestand', 'Bestand');
+    const kiezer = page.locator('.page-file-picker');
+    await kiezer.waitFor({ timeout: 10000 });
+    await wachtTot(async () => (await kiezer.locator('.page-file-picker-item').filter({ hasText: 'Offerte.pdf' }).count()) === 1, { melding: `het bestand van klant A staat niet in de kiezer: ${tekst(await kiezer.innerText().catch(() => ''))}` });
+    gelijk(await kiezer.locator('.page-file-picker-item').filter({ hasText: 'Geheim.pdf' }).count(), 0, 'een bestand van klant B in de kiezer');
+    await kiezer.locator('.page-file-picker-item').filter({ hasText: 'Offerte.pdf' }).click();
+    await kiezer.waitFor({ state: 'detached', timeout: 5000 });
+    await wachtTot(async () => tekst(await bestanden.first().innerText().catch(() => '')).includes('Offerte.pdf'), { melding: 'het bestandsblok toont de naam niet' });
+    verwacht(tekst(await bestanden.first().innerText()).includes('2 kB'), `de grootte: ${tekst(await bestanden.first().innerText())}`);
+    // Na het invoegen typ je gewoon verder, onder het blok.
+    await page.keyboard.type('Na het bestand');
+    await wachtTot(async () => (await editorVak(page).locator('p').filter({ hasText: 'Na het bestand' }).count()) === 1, { melding: 'de tekst kwam niet onder het bestand' });
+    gelijk(await bestanden.count(), 1, 'het bestandsblok staat er nog na typen');
+    await wachtOpgeslagen(page);
+    gelijk(telBlok(blokPagina.id, `@.type == "fileBlock" && @.attrs.attachmentId == "${offerte}"`), 1, 'het blok wijst naar het dossierbestand');
+    // Klikken slaat het bestand op (een download), en opent niets in de app.
+    const downloadOnderweg = page.waitForEvent('download', { timeout: 15000 });
+    // Mislukt de stap eerder, dan mag deze wachtende belofte het proces niet laten vallen.
+    downloadOnderweg.catch(() => {});
+    await bestanden.first().locator('button').click();
+    const download = await downloadOnderweg;
+    gelijk(download.suggestedFilename(), 'Offerte.pdf', 'de naam van de download');
+    gelijk(page.url().includes('blob:'), false, 'de app opende het bestand');
+    // Van de computer: via de kiezer, als bijlage van de pagina.
+    await page.keyboard.press('End');
+    await page.keyboard.press('Enter');
+    await kiesBlok(page, 'bestand', 'Bestand');
+    await kiezer.waitFor({ timeout: 10000 });
+    const kiezerOnderweg = page.waitForEvent('filechooser', { timeout: 30000 });
+    kiezerOnderweg.catch(() => {});
+    await page.waitForTimeout(500);
+    await kiezer.getByRole('button', { name: /Van je computer/ }).click();
+    const bestandskiezer = await kiezerOnderweg;
+    await bestandskiezer.setFiles({ name: 'notitie.txt', mimeType: 'text/plain', buffer: Buffer.from('een notitie') });
+    await wachtTot(async () => (await bestanden.filter({ hasText: 'notitie.txt' }).count()) === 1, { melding: 'het geüploade bestand staat er niet' });
+    // Slepen: een PDF wordt een bestandsblok, geen afbeelding, en de browser opent hem niet.
+    const doel = await editorVak(page).locator('p').filter({ hasText: 'Na het bestand' }).first().boundingBox();
+    await page.evaluate(({ x, y }) => {
+      const data = new DataTransfer();
+      data.items.add(new File([new TextEncoder().encode('%PDF-1.4 brief')], 'brief.pdf', { type: 'application/pdf' }));
+      document.querySelector('.page-editor .tiptap').dispatchEvent(new DragEvent('drop', { dataTransfer: data, clientX: x, clientY: y, bubbles: true, cancelable: true }));
+    }, { x: doel.x + 4, y: doel.y + doel.height / 2 });
+    await wachtTot(async () => (await bestanden.filter({ hasText: 'brief.pdf' }).count()) === 1, { melding: 'een gesleepte PDF werd geen bestandsblok' });
+    await wachtOpgeslagen(page);
+    const eigen = sqlRij(`select count(*)::int as n from public.attachments where entity_type = 'document' and entity_id = ${q(blokPagina.id)} and name in ('notitie.txt', 'brief.pdf')`);
+    gelijk(eigen.n, 2, 'de geüploade en gesleepte bestanden zijn bijlagen van de pagina');
+    gelijk(telBlok(blokPagina.id, '@.type == "fileBlock"'), 3, 'bestandsblokken in body');
+    await sluitPagina(page);
+    // Een verdwenen bestand: het blok zegt het, en klikken doet niets.
+    sql(`delete from public.attachments where id = ${q(offerte)}`);
+    const zonder = await openMetMedia();
+    const weg = editorVak(zonder).locator(`.page-file[data-attachment-id="${offerte}"]`);
+    await wachtTot(async () => tekst(await weg.innerText().catch(() => '')) === 'Bestand niet gevonden', { melding: 'een verdwenen bestand toont geen melding' });
+    await sluitPagina(zonder);
+  });
+
+}
+
+/**
+ * Pagina's in de drive (stap 1A-5): de boom en de prullenbak. Een eigen
+ * scenario, los van "documenten": de stappen maken hun eigen pagina's, en zo
+ * draait dit in een paar minuten.
+ */
+async function scenarioPaginadrive() {
+  groep('UI: pagina\'s in de drive');
+  const { w } = t;
+  const sluitPagina = async (page) => {
+    await page.locator('.page-editor-close').click();
+    await page.locator('.page-editor').waitFor({ state: 'detached', timeout: 15000 });
+  };
+  // ── De boom in de drive (stap 1A-5) ────────────────────────────────────────
+  await uiStap('de drive: subpagina\'s onder hun pagina, uitklappen, een pagina op een pagina slepen, het kruimelpad, en terug naar een map', async () => {
+    const boom = Date.now().toString(36);
+    const nieuwePagina = (titel, ouder = null) => {
+      sql(`insert into public.documents (organization_id, created_by, title, format, body, client_id, parent_id)
+        values (${q(w.orgId)}, ${q(w.medewerker.id)}, ${q(titel)}, 'page', '{"type":"doc","content":[{"type":"paragraph"}]}'::jsonb, ${q(w.klantA.id)}, ${ouder ? q(ouder) : 'null'})`);
+      return sqlRij(`select id from public.documents where organization_id = ${q(w.orgId)} and title = ${q(titel)}`).id;
+    };
+    const ouder = nieuwePagina(`Boom ouder ${boom}`);
+    nieuwePagina(`Boom kind ${boom}`, ouder);
+    const los = nieuwePagina(`Boom los ${boom}`);
+    sql(`insert into public.content_folders (organization_id, client_id, name) values (${q(w.orgId)}, ${q(w.klantA.id)}, ${q(`Boommap ${boom}`)})`);
+    const map = sqlRij(`select id from public.content_folders where organization_id = ${q(w.orgId)} and name = ${q(`Boommap ${boom}`)}`).id;
+    const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+    const page = lid.page;
+    await naarKlantdossier(lid, w.klantA.name);
+    const rij = (titel) => inhoud(page).locator('.odrv-row').filter({ hasText: titel }).first();
+    await rij(`Boom ouder ${boom}`).waitFor({ timeout: 15000 });
+    verwacht(tekst(await rij(`Boom ouder ${boom}`).innerText()).includes('1 subpagina'), `de pagina noemt haar subpagina niet: ${tekst(await rij(`Boom ouder ${boom}`).innerText())}`);
+    gelijk(await inhoud(page).locator('.odrv-row').filter({ hasText: `Boom kind ${boom}` }).count(), 0, 'de subpagina staat los in het dossier');
+    // Uitklappen: de subpagina komt eronder.
+    await rij(`Boom ouder ${boom}`).locator('.odrv-tree-toggle').click();
+    await rij(`Boom kind ${boom}`).waitFor({ timeout: 5000 });
+    // Een pagina op een pagina slepen: ze wordt een subpagina.
+    await rij(`Boom los ${boom}`).dragTo(rij(`Boom ouder ${boom}`));
+    await wachtTot(async () => sqlRij(`select parent_id from public.documents where id = ${q(los)}`).parent_id === ouder, { melding: 'slepen maakte geen subpagina' });
+    await wachtTot(async () => tekst(await rij(`Boom ouder ${boom}`).innerText().catch(() => '')).includes("2 subpagina's"), { melding: 'de lijst toont de nieuwe subpagina niet' });
+    gelijk(sqlRij(`select folder_id, client_id from public.documents where id = ${q(los)}`).client_id, w.klantA.id, 'de subpagina hoort bij klant A');
+    // Het kruimelpad in de editor.
+    await rij(`Boom los ${boom}`).click();
+    await page.locator('.page-editor').waitFor({ timeout: 20000 });
+    await wachtTot(async () => tekst(await page.locator('.page-editor-crumbs').innerText().catch(() => '')).includes(`Boom ouder ${boom}`), { melding: 'geen kruimelpad naar de bovenliggende pagina' });
+    await sluitPagina(page);
+    // Een subpagina naar een map slepen: ze komt los van haar ouder en staat in de map.
+    await rij(`Boom kind ${boom}`).dragTo(rij(`Boommap ${boom}`));
+    await wachtTot(async () => {
+      const kind = sqlRij(`select parent_id, folder_id from public.documents where organization_id = ${q(w.orgId)} and title = ${q(`Boom kind ${boom}`)}`);
+      return kind.parent_id === null && kind.folder_id === map;
+    }, { melding: 'een subpagina in een map gesleept, kwam niet los van haar ouder' });
+  });
+  // ── De prullenbak (stap 1A-5b) ─────────────────────────────────────────────
+  await uiStap('de prullenbak: een pagina met subpagina weggooien, onzichtbaar, terugzetten, en definitief verwijderen', async () => {
+    const tag = Date.now().toString(36);
+    const nieuwePagina = (titel, ouder = null) => {
+      sql(`insert into public.documents (organization_id, created_by, title, format, body, client_id, parent_id)
+        values (${q(w.orgId)}, ${q(w.medewerker.id)}, ${q(titel)}, 'page', '{"type":"doc","content":[{"type":"paragraph"}]}'::jsonb, ${q(w.klantA.id)}, ${ouder ? q(ouder) : 'null'})`);
+      return sqlRij(`select id from public.documents where organization_id = ${q(w.orgId)} and title = ${q(titel)}`).id;
+    };
+    const ouder = nieuwePagina(`Weg ouder ${tag}`);
+    const kind = nieuwePagina(`Weg kind ${tag}`, ouder);
+    const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+    const page = lid.page;
+    await naarKlantdossier(lid, w.klantA.name);
+    const rij = () => inhoud(page).locator('.odrv-row').filter({ hasText: `Weg ouder ${tag}` }).first();
+    await rij().waitFor({ timeout: 15000 });
+    // Weggooien via het menu: de pagina en haar subpagina gaan samen.
+    await rij().locator('.odrv-td-act button').first().click();
+    await page.locator('.drive-pop').getByRole('menuitem', { name: 'Verwijderen', exact: true }).click();
+    await wachtTot(async () => sqlRij(`select count(*)::int as n from public.documents where id in (${q(ouder)}, ${q(kind)}) and archived_at is not null`).n === 2, { melding: 'de pagina en haar subpagina gingen niet naar de prullenbak' });
+    await wachtTot(async () => (await inhoud(page).locator('.odrv-row').filter({ hasText: `Weg ouder ${tag}` }).count()) === 0, { melding: 'een weggegooide pagina staat nog in de lijst' });
+    // De prullenbak toont één regel, met de subpagina erbij.
+    await inhoud(page).getByRole('button', { name: /Prullenbak/ }).click();
+    const bak = page.locator('.page-trash');
+    await bak.waitFor({ timeout: 10000 });
+    const regel = bak.locator('.page-trash-item').filter({ hasText: `Weg ouder ${tag}` });
+    await regel.waitFor({ timeout: 10000 });
+    verwacht(tekst(await regel.innerText()).includes('met 1 subpagina'), `de regel: ${tekst(await regel.innerText())}`);
+    gelijk(await bak.locator('.page-trash-item').filter({ hasText: `Weg kind ${tag}` }).count(), 0, 'de subpagina heeft geen eigen regel');
+    // Terugzetten: samen terug, en weer in de lijst.
+    await regel.getByRole('button', { name: /Terugzetten/ }).click();
+    await wachtTot(async () => (await regel.count()) === 0, { melding: 'na terugzetten staat de pagina nog in de prullenbak' });
+    gelijk(sqlRij(`select count(*)::int as n from public.documents where id in (${q(ouder)}, ${q(kind)}) and archived_at is null`).n, 2, 'beide terug');
+    await page.keyboard.press('Escape');
+    await bak.locator('.modal-close').click();
+    await bak.waitFor({ state: 'detached', timeout: 5000 });
+    await rij().waitFor({ timeout: 15000 });
+    // Nog eens weg, en nu definitief.
+    await rij().locator('.odrv-td-act button').first().click();
+    await page.locator('.drive-pop').getByRole('menuitem', { name: 'Verwijderen', exact: true }).click();
+    await wachtTot(async () => sqlRij(`select count(*)::int as n from public.documents where id = ${q(ouder)} and archived_at is not null`).n === 1, { melding: 'niet opnieuw in de prullenbak' });
+    await inhoud(page).getByRole('button', { name: /Prullenbak/ }).click();
+    await regel.waitFor({ timeout: 10000 });
+    await regel.getByRole('button', { name: /Definitief verwijderen/ }).click();
+    await wachtTot(async () => sqlRij(`select count(*)::int as n from public.documents where id in (${q(ouder)}, ${q(kind)})`).n === 0, { melding: 'definitief verwijderen liet de pagina staan' });
+    await wachtTot(async () => tekst(await bak.innerText().catch(() => '')).includes('De prullenbak is leeg') || (await regel.count()) === 0, { melding: 'de regel blijft staan' });
+    await bak.locator('.modal-close').click();
+  });
+  // ── Het eigen dossier (stap 1A-5c) ─────────────────────────────────────────
+  await uiStap('het eigen dossier: bovenaan in plaats van "Geen klant", met een eigen map, en een pagina en een notitie in die map', async () => {
+    const tag = Date.now().toString(36);
+    const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+    const page = lid.page;
+    await sluitAlles(lid);
+    await page.locator('.sidebar-nav .nav-item').filter({ hasText: /^Alle inhoud/ }).first().click();
+    await rustig(lid);
+    const wortel = inhoud(page).locator('.odrv-crumbs button').first();
+    if (await wortel.isVisible().catch(() => false)) { await wortel.click(); await rustig(lid); }
+    const eerste = inhoud(page).locator('.odrv-row').first();
+    await eerste.waitFor({ timeout: 15000 });
+    verwacht(tekst(await eerste.innerText()).includes('Eigen dossier'), `de eerste rij is niet het eigen dossier: ${tekst(await eerste.innerText())}`);
+    gelijk(await inhoud(page).locator('.odrv-row').filter({ hasText: 'Geen klant' }).count(), 0, '"Geen klant" in de lijst');
+    await eerste.click();
+    await rustig(lid);
+    // Een eigen map, via het menu: zonder klant in de database.
+    lid.plan.push({ antwoord: `Handboek ${tag}` });
+    await inhoud(page).locator('.drive-new').click();
+    await page.locator('.drive-pop').getByRole('menuitem', { name: 'Nieuwe map', exact: true }).click();
+    await wachtTot(async () => sqlRij(`select count(*)::int as n from public.content_folders where organization_id = ${q(w.orgId)} and name = ${q(`Handboek ${tag}`)} and client_id is null and project_id is null`).n === 1,
+      { melding: 'geen map zonder klant gemaakt' });
+    const mapRij = inhoud(page).locator('.odrv-row').filter({ hasText: `Handboek ${tag}` }).first();
+    await mapRij.waitFor({ timeout: 15000 });
+    await mapRij.click();
+    await rustig(lid);
+    // Een pagina in die map.
+    await inhoud(page).locator('.drive-new').click();
+    await page.locator('.drive-pop').getByRole('menuitem', { name: 'Pagina', exact: true }).click();
+    await page.locator('.page-editor').waitFor({ timeout: 20000 });
+    const status = page.locator('.page-editor .page-editor-status');
+    await wachtTot(async () => tekst(await status.innerText().catch(() => '')) === 'Opgeslagen', { melding: 'de editor kwam niet in bewerken' });
+    await page.locator('.page-editor-title').fill(`Werkwijze ${tag}`);
+    await page.locator('.page-editor .tiptap').click();
+    await page.keyboard.type('Zo werken wij.');
+    await wachtTot(async () => tekst(await status.innerText().catch(() => '')) === 'Opgeslagen', { melding: 'niet opgeslagen' });
+    const map = sqlRij(`select id from public.content_folders where organization_id = ${q(w.orgId)} and name = ${q(`Handboek ${tag}`)}`).id;
+    const pagina = sqlRij(`select folder_id, client_id from public.documents where organization_id = ${q(w.orgId)} and title = ${q(`Werkwijze ${tag}`)}`);
+    gelijk([pagina.folder_id, pagina.client_id], [map, null], 'de pagina staat in de map van het eigen dossier, zonder klant');
+    await sluitPagina(page);
+    await inhoud(page).locator('.odrv-row').filter({ hasText: `Werkwijze ${tag}` }).first().waitFor({ timeout: 15000 });
+    // Een notitie in die map: het venster noemt het eigen dossier (niet "Geen
+    // klant") en toont de map, en zo komt ze in de database.
+    await inhoud(page).locator('.drive-new').click();
+    await page.locator('.drive-pop').getByRole('menuitem', { name: 'Notitie', exact: true }).click();
+    const venster = page.locator('section.modal').filter({ has: page.getByPlaceholder('Titel') });
+    await venster.waitFor({ timeout: 10000 });
+    // De keuzelijsten van de app tonen hun keuze in .select-value.
+    gelijk(await venster.locator('.select-value').filter({ hasText: /^Eigen dossier$/ }).count(), 1, 'de klantkeuze in het venster van de notitie');
+    gelijk(tekst(await veld(venster, 'Map').locator('.select-value').innerText()), `Handboek ${tag}`, 'de map in het venster van de notitie');
+    await venster.getByPlaceholder('Titel').fill(`Notitie ${tag}`);
+    await venster.locator('.modal-foot').getByRole('button', { name: 'Opslaan', exact: true }).click();
+    await wachtTot(async () => {
+      const notitie = sqlRij(`select folder_id, client_id from public.notes where organization_id = ${q(w.orgId)} and title = ${q(`Notitie ${tag}`)}`);
+      return Boolean(notitie) && notitie.folder_id === map && notitie.client_id === null;
+    }, { melding: 'de notitie staat niet in de map van het eigen dossier' });
+  });
+  // ── De boom van het dossier naast de pagina (§4, het pagina-scherm) ────────
+  await uiStap('de boom naast de pagina: het dossier met map en subpagina\'s, wisselen, de terugknop, verbergen, en op de telefoon een lade', async () => {
+    const tag = Date.now().toString(36);
+    const nieuwePagina = (titel, { ouder = null, map = null } = {}) => {
+      sql(`insert into public.documents (organization_id, created_by, title, format, body, client_id, parent_id, folder_id)
+        values (${q(w.orgId)}, ${q(w.medewerker.id)}, ${q(titel)}, 'page', '{"type":"doc","content":[{"type":"paragraph"}]}'::jsonb, ${q(w.klantA.id)}, ${ouder ? q(ouder) : 'null'}, ${map ? q(map) : 'null'})`);
+      return sqlRij(`select id from public.documents where organization_id = ${q(w.orgId)} and title = ${q(titel)}`).id;
+    };
+    sql(`insert into public.content_folders (organization_id, client_id, name) values (${q(w.orgId)}, ${q(w.klantA.id)}, ${q(`Boekenkast ${tag}`)})`);
+    const map = sqlRij(`select id from public.content_folders where organization_id = ${q(w.orgId)} and name = ${q(`Boekenkast ${tag}`)}`).id;
+    const handboek = nieuwePagina(`Handboek ${tag}`);
+    const hoofdstuk = nieuwePagina(`Hoofdstuk ${tag}`, { ouder: handboek });
+    nieuwePagina(`Paragraaf ${tag}`, { ouder: hoofdstuk });
+    const los = nieuwePagina(`Los ${tag}`);
+    nieuwePagina(`In de kast ${tag}`, { map });
+    const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+    const page = lid.page;
+    await naarKlantdossier(lid, w.klantA.name);
+    await inhoud(page).locator('.odrv-row').filter({ hasText: `Handboek ${tag}` }).first().click();
+    await page.locator('.page-editor').waitFor({ timeout: 20000 });
+    const boom = page.locator('.page-tree');
+    const regel = (titel) => boom.locator('.page-tree-row').filter({ hasText: titel }).first();
+    const titelVan = async () => page.locator('.page-editor-title').inputValue().catch(() => '');
+    const huidig = async () => tekst(await boom.locator('[aria-current="page"]').innerText().catch(() => ''));
+    const knop = page.locator('.page-editor-tree-button');
+    // Breed: de boom staat er, met de klant erboven, de map als groep, en de
+    // subpagina van de open pagina eronder. Dieper is nog dichtgeklapt.
+    await regel(`Hoofdstuk ${tag}`).waitFor({ timeout: 15000 });
+    gelijk(tekst(await boom.locator('.page-tree-name').innerText()), w.klantA.name, 'de naam boven de boom');
+    gelijk(await huidig(), `Handboek ${tag}`, 'de open pagina in de boom');
+    await boom.locator('.page-tree-label').filter({ hasText: `Boekenkast ${tag}` }).waitFor({ timeout: 5000 });
+    await regel(`In de kast ${tag}`).waitFor({ timeout: 5000 });
+    await regel(`Los ${tag}`).waitFor({ timeout: 5000 });
+    gelijk(await regel(`Paragraaf ${tag}`).count(), 0, 'een dichtgeklapte tak toont zijn subpagina');
+    await regel(`Hoofdstuk ${tag}`).locator('.page-tree-toggle').click();
+    await regel(`Paragraaf ${tag}`).waitFor({ timeout: 5000 });
+    // Wisselen: de andere pagina gaat open, en de boom blijft zoals hij was.
+    await regel(`Los ${tag}`).locator('.page-tree-page').click();
+    await wachtTot(async () => (await titelVan()) === `Los ${tag}`, { melding: 'een klik in de boom opende de pagina niet' });
+    await wachtTot(async () => (await huidig()) === `Los ${tag}`, { melding: 'de boom wijst de open pagina niet aan' });
+    verwacht(await regel(`Paragraaf ${tag}`).isVisible(), 'de boom klapte dicht bij het wisselen');
+    // Een titel die je typt, staat meteen in de boom.
+    await wachtTot(async () => tekst(await page.locator('.page-editor-status').innerText().catch(() => '')) === 'Opgeslagen', { melding: 'de editor kwam niet in bewerken' });
+    await page.locator('.page-editor-title').fill(`Los hernoemd ${tag}`);
+    await wachtTot(async () => (await huidig()) === `Los hernoemd ${tag}`, { melding: 'de boom volgt de titel niet' });
+    // Een subpagina maken met /pagina: ze komt in de boom.
+    await page.locator('.page-editor .tiptap').click();
+    await page.keyboard.type('/pagina');
+    const menu = page.locator('.page-block-menu');
+    await menu.waitFor({ timeout: 10000 });
+    await wachtTot(async () => tekst(await menu.locator('.page-block-item.is-active .page-block-label').innerText().catch(() => '')) === 'Subpagina', { melding: 'het blokmenu biedt geen subpagina' });
+    await page.keyboard.press('Enter');
+    await wachtTot(async () => sqlRij(`select count(*)::int as n from public.documents where parent_id = ${q(los)}`).n === 1, { melding: 'geen subpagina gemaakt' });
+    await wachtTot(async () => (await boom.locator('.page-tree-row').filter({ hasText: 'Naamloze pagina' }).count()) === 1, { melding: 'de nieuwe subpagina staat niet in de boom' });
+    await wachtTot(async () => tekst(await page.locator('.page-editor-status').innerText().catch(() => '')) === 'Opgeslagen', { melding: 'niet opgeslagen' });
+    // De terugknop gaat naar de pagina waar je vandaan kwam.
+    await page.goBack();
+    await wachtTot(async () => (await titelVan()) === `Handboek ${tag}`, { melding: 'terug ging niet naar de vorige pagina' });
+    // Verbergen: weg, ook bij de volgende pagina. De knop in de balk haalt hem terug.
+    await boom.locator('.page-tree-close').click();
+    await wachtTot(async () => (await boom.count()) === 0, { melding: 'de boom ging niet weg' });
+    await sluitPagina(page);
+    await inhoud(page).locator('.odrv-row').filter({ hasText: `Los hernoemd ${tag}` }).first().click();
+    await page.locator('.page-editor').waitFor({ timeout: 20000 });
+    await wachtTot(async () => (await titelVan()) === `Los hernoemd ${tag}`, { melding: 'de pagina ging niet open' });
+    gelijk(await boom.count(), 0, 'de verborgen boom kwam terug bij een andere pagina');
+    await knop.click();
+    await regel(`Handboek ${tag}`).waitFor({ timeout: 10000 });
+    // Op de telefoon: geen kolom maar een lade, die met terug dichtgaat.
+    const breed = page.viewportSize();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await wachtTot(async () => (await boom.count()) === 0, { melding: 'op de telefoon staat de boom over de pagina' });
+    await knop.click();
+    await page.locator('.page-tree.is-drawer').waitFor({ timeout: 5000 });
+    await page.goBack();
+    await wachtTot(async () => (await boom.count()) === 0, { melding: 'terug sloot de lade niet' });
+    gelijk(await titelVan(), `Los hernoemd ${tag}`, 'terug sloot de pagina in plaats van de lade');
+    await knop.click();
+    await regel(`Handboek ${tag}`).locator('.page-tree-page').click();
+    await wachtTot(async () => (await titelVan()) === `Handboek ${tag}`, { melding: 'kiezen in de lade opende de pagina niet' });
+    await wachtTot(async () => (await boom.count()) === 0, { melding: 'de lade bleef open na het kiezen' });
+    if (breed) await page.setViewportSize(breed);
+    // Weer breed: de kolom staat er weer.
+    await regel(`Handboek ${tag}`).waitFor({ timeout: 10000 });
+    await sluitPagina(page);
+  });
+  // ── Word (stap 1B-2): de opgeslagen pagina, in de huisstijl ────────────────
+  await uiStap('Word: de pagina als .docx met wat je net typte, de subpagina en de huisstijlletter; de balk past op de telefoon', async () => {
+    const tag = Date.now().toString(36);
+    const nieuwePagina = (titel, body, ouder = null) => {
+      sql(`insert into public.documents (organization_id, created_by, title, format, body, client_id, parent_id)
+        values (${q(w.orgId)}, ${q(w.medewerker.id)}, ${q(titel)}, 'page', ${q(JSON.stringify(body))}::jsonb, ${q(w.klantA.id)}, ${ouder ? q(ouder) : 'null'})`);
+      return sqlRij(`select id from public.documents where organization_id = ${q(w.orgId)} and title = ${q(titel)}`).id;
+    };
+    const woord = (text) => ({ type: 'text', text });
+    const ouder = nieuwePagina(`Exportproef ${tag}`, { type: 'doc', content: [{ type: 'paragraph' }] });
+    const kind = nieuwePagina(`Hoofdstuk export ${tag}`, { type: 'doc', content: [{ type: 'paragraph' }] }, ouder);
+    sql(`update public.documents set body = ${q(JSON.stringify({ type: 'doc', content: [
+      { type: 'heading', attrs: { level: 1 }, content: [woord('Werkafspraken')] },
+      { type: 'callout', attrs: { variant: 'tip' }, content: [{ type: 'paragraph', content: [woord(`Kadertekst ${tag}`)] }] },
+      { type: 'subpage', attrs: { pageId: kind } },
+      { type: 'paragraph' },
+    ] }))}::jsonb where id = ${q(ouder)}`);
+    const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+    const page = lid.page;
+    await naarKlantdossier(lid, w.klantA.name);
+    await inhoud(page).locator('.odrv-row').filter({ hasText: `Exportproef ${tag}` }).first().click();
+    await page.locator('.page-editor').waitFor({ timeout: 20000 });
+    const status = page.locator('.page-editor .page-editor-status');
+    await wachtTot(async () => tekst(await status.innerText().catch(() => '')) === 'Opgeslagen', { melding: 'de editor kwam niet in bewerken' });
+    // Net getypt, nog niet opgeslagen: de export slaat eerst op.
+    await page.locator('.page-editor .tiptap p').last().click();
+    await page.keyboard.type(`Net getypt ${tag}`);
+    const downloadOnderweg = page.waitForEvent('download', { timeout: 30000 });
+    downloadOnderweg.catch(() => {});
+    await page.locator('.page-editor-word').click();
+    const download = await downloadOnderweg;
+    gelijk(download.suggestedFilename(), `Exportproef-${tag}.docx`, 'de naam van het bestand');
+    const delen = new Map(leesZip(readFileSync(await download.path())).map(deel => [deel.name, deel.data]));
+    const documentXml = delen.get('word/document.xml')?.toString('utf8') ?? '';
+    for (const verwacht_ of [`Exportproef ${tag}`, 'Werkafspraken', `Kadertekst ${tag}`, `→ Hoofdstuk export ${tag}`, `Net getypt ${tag}`]) {
+      verwacht(documentXml.includes(verwacht_), `"${verwacht_}" staat niet in document.xml`);
+    }
+    // De huisstijlletter is ingesloten, en de letter van het document.
+    const letters = delen.get('word/fontTable.xml')?.toString('utf8') ?? '';
+    verwacht(/<w:embedRegular /.test(letters), `geen ingesloten letter: ${letters.slice(0, 200)}`);
+    verwacht([...delen.keys()].some(naam => naam.endsWith('.odttf')), 'geen letterbestand in de .docx');
+    const familie = letters.match(/<w:font w:name="([^"]+)"/)?.[1];
+    verwacht(familie && (delen.get('word/styles.xml')?.toString('utf8') ?? '').includes(`w:ascii="${familie}"`), `de stijl gebruikt de ingesloten letter niet (${familie})`);
+    gelijk(sqlRij(`select content from public.documents where id = ${q(ouder)}`).content.includes(`Net getypt ${tag}`), true, 'opgeslagen vóór de export');
+    // Op de telefoon: de balk met de nieuwe knop past, zonder dat de pagina opzij schuift.
+    const breed = page.viewportSize();
+    await page.setViewportSize({ width: 390, height: 844 });
+    try {
+      await wachtTot(async () => page.locator('.page-editor-word').isVisible(), { melding: 'de Word-knop staat niet in beeld op de telefoon' });
+      const maten = await page.evaluate(() => {
+        const balk = document.querySelector('.page-editor-bar');
+        return { pagina: document.documentElement.scrollWidth, scherm: window.innerWidth, balk: balk ? balk.scrollWidth - balk.clientWidth : -1 };
+      });
+      verwacht(maten.pagina <= maten.scherm && maten.balk <= 0, `de balk loopt over op 390px: ${JSON.stringify(maten)}`);
+    } finally {
+      if (breed) await page.setViewportSize(breed);
+    }
+    await sluitPagina(page);
+  });
+  // ── Een trage computer (de editor mag niet al weg zijn bij zijn eerste effect) ──
+  await uiStap('een nieuwe pagina op een trage computer: de editor komt in bewerken, en wat je typt wordt opgeslagen', async () => {
+    const tag = Date.now().toString(36);
+    const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+    const page = lid.page;
+    await naarKlantdossier(lid, w.klantA.name);
+    // Zes keer trager rekenen: dan duurt de eerste render van de editor langer
+    // dan de 1 ms waarna Tiptap een editor opruimt die nog niet in gebruik is.
+    // Zonder immediatelyRender: false werd de app hier zwart.
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: 6 });
+    try {
+      await inhoud(page).locator('.drive-new').click();
+      await page.locator('.drive-pop').getByRole('menuitem', { name: 'Pagina', exact: true }).click();
+      await page.locator('.page-editor').waitFor({ timeout: 30000 });
+      const status = page.locator('.page-editor .page-editor-status');
+      await wachtTot(async () => tekst(await status.innerText().catch(() => '')) === 'Opgeslagen', { timeout: 30000, melding: 'de editor kwam niet in bewerken op een trage computer' });
+      await page.locator('.page-editor-title').fill(`Traag ${tag}`);
+      await page.locator('.page-editor .tiptap').click();
+      await page.keyboard.type(`Getypt op een trage computer ${tag}`);
+      await wachtTot(async () => (sqlRij(`select content from public.documents where organization_id = ${q(w.orgId)} and title = ${q(`Traag ${tag}`)}`)?.content ?? '').includes(tag),
+        { timeout: 30000, melding: 'wat je typte, is niet opgeslagen' });
+    } finally {
+      await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 }).catch(() => {});
+    }
+    await sluitPagina(page);
+  });
+  // ── Gerrie vult een pagina aan (§12) ──────────────────────────────────────
+  await uiStap('Gerrie vult een pagina aan: een voorstel via een gekoppelde AI, "Uitvoeren" in de wachtrij, en de alinea\'s staan onderaan met een versie', async () => {
+    const tag = Date.now().toString(36);
+    const body = { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Bestaande tekst.' }] }, { type: 'paragraph' }] };
+    sql(`insert into public.documents (organization_id, created_by, title, format, body, client_id)
+      values (${q(w.orgId)}, ${q(w.medewerker.id)}, ${q(`Aanvulproef ${tag}`)}, 'page', ${q(JSON.stringify(body))}::jsonb, ${q(w.klantA.id)})`);
+    const pagina = sqlRij(`select id, edit_version from public.documents where organization_id = ${q(w.orgId)} and title = ${q(`Aanvulproef ${tag}`)}`);
+    // Een echte MCP-koppeling van de beheerder, zoals mcp-oauth hem uitgeeft (zie videovergadering.mjs).
+    const clientId = `stromen-${randomUUID()}`;
+    sql(`insert into public.mcp_clients (client_id, client_name, redirect_uris) values (${q(clientId)}, 'Stromen-AI', array['https://stromen.test/cb'])`);
+    const grantId = sql(`insert into public.mcp_grants (organization_id, user_id, client_id, scope, label)
+                         values (${q(w.orgId)}, ${q(w.beheerder.id)}, ${q(clientId)}, 'read propose', 'stromen') returning id`);
+    const selector = randomBytes(16).toString('base64url');
+    const verifier = randomBytes(32).toString('base64url');
+    const salt = randomBytes(16).toString('hex');
+    sql(`insert into public.mcp_tokens (grant_id, kind, selector, verifier_hash, salt, expires_at)
+         values (${q(grantId)}, 'access', ${q(selector)}, ${q(createHash('sha256').update(`${salt}:${verifier}`).digest('hex'))}, ${q(salt)}, now() + interval '1 hour')`);
+    const voorstel = async (input) => {
+      const res = await roep('mcp', { token: `rsfmcp.${selector}.${verifier}`, body: { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'propose_action', arguments: { action_id: 'document.update', input } } } });
+      return { fout: res.json?.result?.isError === true, tekst: res.json?.result?.content?.[0]?.text ?? '' };
+    };
+    // Vervangen weigert de server, met de reden voor de AI.
+    const vervangen = await voorstel({ document_id: pagina.id, content: 'Alles nieuw' });
+    verwacht(vervangen.fout && /append/.test(vervangen.tekst), `vervangen werd niet geweigerd: ${vervangen.tekst}`);
+    const aanvullen = await voorstel({ document_id: pagina.id, content: `<p>Eerste regel ${tag}</p><p>Tweede regel ${tag}</p>`, content_mode: 'append' });
+    verwacht(!aanvullen.fout, `aanvullen klaarzetten: ${aanvullen.tekst}`);
+    const audit = sqlRij(`select id, params from public.ai_action_audit where mcp_grant_id = ${q(grantId)} and status = 'proposed' order by created_at desc limit 1`);
+    verwacht(audit, 'geen voorstel in de wachtrij');
+    gelijk(sqlRij(`select content from public.documents where id = ${q(pagina.id)}`).content.includes(tag), false, 'er is al iets veranderd vóór het akkoord');
+    // Het akkoord: als beheerder, op het startscherm.
+    const beheer = await openWerkruimte(w.beheerder, 'beheerder', w.orgId, { tijdelijk: true });
+    const page = beheer.page;
+    await page.locator('.sidebar-nav .nav-item').filter({ hasText: /^Dashboard/ }).first().click();
+    const rij = page.locator('.ag-queue-row').filter({ hasText: `Aanvulproef ${tag}` }).first();
+    await rij.waitFor({ timeout: 20000 });
+    verwacht(/aanvullen/.test(tekst(await rij.innerText())), `de regel in de wachtrij: ${tekst(await rij.innerText())}`);
+    const versies = Number(sqlRij(`select count(*)::int as n from public.document_versions where document_id = ${q(pagina.id)}`).n);
+    await rij.locator('.ag-btn-go').click();
+    await wachtTot(async () => sqlRij(`select content from public.documents where id = ${q(pagina.id)}`).content.includes(`Tweede regel ${tag}`), { melding: 'de alinea\'s kwamen niet op de pagina' });
+    const na = sqlRij(`select body, edit_version from public.documents where id = ${q(pagina.id)}`);
+    const teksten = na.body.content.map((blok) => (blok.content ?? []).map((t) => t.text).join(''));
+    gelijk(teksten, ['Bestaande tekst.', `Eerste regel ${tag}`, `Tweede regel ${tag}`], 'de alinea\'s onderaan, zonder lege regel ertussen');
+    gelijk(na.edit_version, pagina.edit_version + 1, 'edit_version');
+    await wachtTot(async () => Number(sqlRij(`select count(*)::int as n from public.document_versions where document_id = ${q(pagina.id)}`).n) === versies + 1, { melding: 'geen versie na het aanvullen' });
+    await wachtTot(async () => sqlRij(`select status from public.ai_action_audit where id = ${q(audit.id)}`).status !== 'proposed', { melding: 'het voorstel bleef in de wachtrij staan' });
+    // De aangevulde blokken komen door de controle van de editor: de pagina gaat
+    // gewoon open om te bewerken, met de nieuwe tekst erin.
+    await naarKlantdossier(beheer, w.klantA.name);
+    await inhoud(page).locator('.odrv-row').filter({ hasText: `Aanvulproef ${tag}` }).first().click();
+    await page.locator('.page-editor').waitFor({ timeout: 20000 });
+    await wachtTot(async () => tekst(await page.locator('.page-editor .page-editor-status').innerText().catch(() => '')) === 'Opgeslagen', { melding: 'de aangevulde pagina gaat niet open om te bewerken' });
+    await page.locator('.page-editor .tiptap').getByText(`Tweede regel ${tag}`).waitFor({ timeout: 10000 });
+    await sluitPagina(page);
+  }, { toegestaan: [{ soort: 'functie', functie: 'mcp' }] });
+  // ── Afdrukken (§9: "Ctrl+P blijft werken, met een nette printstijl") ───────
+  await uiStap('afdrukken: alleen de pagina, over de hele lengte, met de uitklapper open', async () => {
+    const tag = Date.now().toString(36);
+    const tekstblok = (text) => ({ type: 'paragraph', content: [{ type: 'text', text }] });
+    const body = { type: 'doc', content: [
+      { type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: 'Printkop' }] },
+      { type: 'details', content: [
+        { type: 'detailsSummary', content: [{ type: 'text', text: 'Meer lezen' }] },
+        { type: 'detailsContent', content: [tekstblok(`Ingeklapte tekst ${tag}`)] },
+      ] },
+      ...Array.from({ length: 80 }, (_, i) => tekstblok(`Alinea ${i + 1} van de printproef, lang genoeg om een regel te vullen.`)),
+      tekstblok(`Laatste regel ${tag}`),
+    ] };
+    sql(`insert into public.documents (organization_id, created_by, title, format, body, client_id)
+      values (${q(w.orgId)}, ${q(w.medewerker.id)}, ${q(`Printproef ${tag}`)}, 'page', ${q(JSON.stringify(body))}::jsonb, ${q(w.klantA.id)})`);
+    const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+    const page = lid.page;
+    await naarKlantdossier(lid, w.klantA.name);
+    await inhoud(page).locator('.odrv-row').filter({ hasText: `Printproef ${tag}` }).first().click();
+    await page.locator('.page-editor').waitFor({ timeout: 20000 });
+    const vak = page.locator('.page-editor .tiptap');
+    await vak.getByText(`Laatste regel ${tag}`).waitFor({ timeout: 15000 });
+    gelijk(await vak.getByText(`Ingeklapte tekst ${tag}`).isVisible(), false, 'de uitklapper is op het scherm dicht');
+    await page.emulateMedia({ media: 'print' });
+    try {
+      for (const [kiezer, wat] of [['.page-editor-bar', 'de balk van de editor'], ['.page-editor-toolbar', 'de knoppen'], ['.page-tree', 'de boom'], ['.sidebar-nav', 'de zijbalk van de app']]) {
+        gelijk(await page.locator(kiezer).first().isVisible().catch(() => false), false, `${wat} op papier`);
+      }
+      verwacht(await vak.getByText(`Ingeklapte tekst ${tag}`).isVisible(), 'een dichte uitklapper staat op papier niet open');
+      verwacht(await page.locator('.page-editor-title').isVisible(), 'de titel staat niet op papier');
+      // Over de hele lengte: 80 alinea's lopen door over meer bladen, zonder lege bladen erachter.
+      const pdf = await page.pdf({ format: 'A4' });
+      const { PDFDocument } = await import('pdf-lib');
+      const bladen = (await PDFDocument.load(pdf)).getPageCount();
+      verwacht(bladen >= 2 && bladen <= 6, `de pagina op papier: ${bladen} bladen`);
+    } finally {
+      await page.emulateMedia({ media: 'screen' });
+    }
+    await sluitPagina(page);
+  });
 }
 
 // ── Bank: mutaties met de hand boeken ──────────────────────────────────────
 
 /** Een transactie in de lijst "Af te letteren", op een stuk tekst. */
 const bankRij = (page, patroon) => inhoud(page).locator('.bank-tx').filter({ hasText: patroon });
+
+/**
+ * Pagina's delen (stap 1C): delen is vrijgeven. De klant ziet de versie van het
+ * moment van delen, en pas na "Bijwerken bij klant" wat je daarna wijzigde.
+ * De database en de functies toetst run.mjs (scenario documenten); hier gaat
+ * het om wat de gebruiker doet: delen vanuit de editor, subpagina's aanvinken,
+ * de melding na een wijziging, bijwerken, en "Delen…" in de drive.
+ */
+async function scenarioPaginadelen() {
+  groep('UI: pagina\'s delen');
+  const { w } = t;
+  const tag = Date.now().toString(36);
+  const woord = (text) => ({ type: 'text', text });
+  const nieuwePagina = (titel, body, ouder = null) => {
+    sql(`insert into public.documents (organization_id, created_by, title, format, body, client_id, parent_id)
+      values (${q(w.orgId)}, ${q(w.medewerker.id)}, ${q(titel)}, 'page', ${q(JSON.stringify(body))}::jsonb, ${q(w.klantA.id)}, ${ouder ? q(ouder) : 'null'})`);
+    return sqlRij(`select id from public.documents where organization_id = ${q(w.orgId)} and title = ${q(titel)}`).id;
+  };
+  const ouder = nieuwePagina(`Delen ouder ${tag}`, { type: 'doc', content: [{ type: 'paragraph' }] });
+  const kind = nieuwePagina(`Delen kind ${tag}`, { type: 'doc', content: [{ type: 'paragraph', content: [woord('Tekst van de subpagina')] }] }, ouder);
+  sql(`update public.documents set body = ${q(JSON.stringify({ type: 'doc', content: [
+    { type: 'heading', attrs: { level: 1 }, content: [woord('Werkwijze')] },
+    { type: 'subpage', attrs: { pageId: kind } },
+    { type: 'paragraph' },
+  ] }))}::jsonb where id = ${q(ouder)}`);
+  const lezenInPortaal = async (paginaId) => {
+    const deling = sqlRij(`select id from public.drive_shares where item_id = ${q(paginaId)} and revoked_at is null and recipient_kind = 'client'`);
+    const res = await roep('client-portal', { token: w.portaalA.token, body: { action: 'downloadSharedFile', shareId: deling.id, itemType: 'document', itemId: paginaId } });
+    verwacht(res.status === 200, `lezen in het portaal: ${res.status} ${res.tekst?.slice(0, 200)}`);
+    return res.json?.text?.html ?? '';
+  };
+  // Licht en donker vastleggen, om te zien of het venster en de melding in beide thema's leesbaar zijn.
+  const beideThemas = async (lid, naam) => {
+    const voor = await lid.page.evaluate(() => document.documentElement.getAttribute('data-theme'));
+    try {
+      for (const thema of ['light', 'dark']) {
+        await lid.page.evaluate((waarde) => document.documentElement.setAttribute('data-theme', waarde), thema);
+        await schermafdruk(`${naam}-${thema}`, lid);
+      }
+    } finally {
+      await lid.page.evaluate((waarde) => {
+        if (waarde) document.documentElement.setAttribute('data-theme', waarde); else document.documentElement.removeAttribute('data-theme');
+      }, voor);
+    }
+  };
+  const openPagina = async (lid, titel) => {
+    await naarKlantdossier(lid, w.klantA.name);
+    await inhoud(lid.page).locator('.odrv-row').filter({ hasText: titel }).first().click();
+    await lid.page.locator('.page-editor').waitFor({ timeout: 20000 });
+    const status = lid.page.locator('.page-editor .page-editor-status');
+    await wachtTot(async () => tekst(await status.innerText().catch(() => '')) === 'Opgeslagen', { melding: 'de editor kwam niet in bewerken' });
+  };
+
+  await uiStap('delen vanuit de editor: met de klant, met de subpagina, en wat je net typte gaat mee; het venster ligt boven de editor', async () => {
+    const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+    const page = lid.page;
+    await openPagina(lid, `Delen ouder ${tag}`);
+    await page.locator('.page-editor .tiptap p').last().click();
+    await page.keyboard.type(`Net getypt ${tag}`);
+    await page.locator('.page-editor-share').click();
+    const venster = page.locator('.modal.share-modal-page');
+    await venster.waitFor({ timeout: 15000 });
+    gelijk(tekst(await venster.locator('.modal-head h3').innerText()), 'Pagina delen', 'de titel van het venster');
+    const vooraan = await page.evaluate(() => {
+      const modal = document.querySelector('.modal.share-modal-page');
+      if (!modal) return false;
+      const r = modal.getBoundingClientRect();
+      const punt = document.elementFromPoint(r.left + r.width / 2, r.top + 24);
+      return Boolean(punt && modal.contains(punt));
+    });
+    verwacht(vooraan, 'het deelvenster ligt achter de editor');
+    gelijk(await venster.getByText('Downloaden toestaan').count(), 0, 'bij een pagina valt niets te downloaden');
+    await venster.locator('.share-people li').filter({ hasText: w.klantA.email }).locator('input[type="checkbox"]').check();
+    await venster.locator('.share-subpages').getByText('Alle subpagina\'s').click();
+    verwacht(await venster.locator('.share-subpage-list input[type="checkbox"]').first().isChecked(), 'de subpagina is niet aangevinkt');
+    await venster.getByRole('button', { name: /Deel met 1 persoon/ }).click();
+    await venster.locator('.share-results').waitFor({ timeout: 30000 });
+    await wachtTot(async () => tekst(await venster.locator('.share-page-note').innerText().catch(() => '')).includes('Ook 1 subpagina gedeeld'), { melding: 'de subpagina is niet gedeeld' });
+    const delingen = sqlRijen(`select s.item_id, v.reason, v.body::text as body from public.drive_shares s join public.document_versions v on v.id = s.document_version_id
+      where s.item_id in (${q(ouder)}, ${q(kind)}) and s.revoked_at is null`);
+    gelijk(delingen.length, 2, 'twee delingen: de pagina en haar subpagina');
+    verwacht(delingen.every(rij => rij.reason === 'vrijgave'), 'elke deling heeft een vrijgave');
+    verwacht(delingen.find(rij => rij.item_id === ouder)?.body.includes(`Net getypt ${tag}`), 'wat je net typte, zit niet in de vrijgave');
+    await wachtTot(async () => tekst(await venster.locator('.share-current').innerText().catch(() => '')).includes('Ziet versie'), { melding: 'de versie per ontvanger staat er niet' });
+    await beideThemas(lid, 'paginadelen-venster');
+    const html = await lezenInPortaal(ouder);
+    verwacht(html.includes(`Net getypt ${tag}`) && html.includes(`→ Delen kind ${tag}`), `het portaal: ${html.slice(0, 300)}`);
+    await venster.getByRole('button', { name: 'Sluiten', exact: true }).click();
+    await venster.waitFor({ state: 'detached', timeout: 5000 });
+    // Op de telefoon: de knop staat in de balk, en het venster ligt vooraan.
+    const breed = page.viewportSize();
+    await page.setViewportSize({ width: 390, height: 844 });
+    try {
+      await wachtTot(async () => page.locator('.page-editor-share').isVisible(), { melding: 'de knop Delen staat niet in beeld op de telefoon' });
+      const maten = await page.evaluate(() => {
+        const balk = document.querySelector('.page-editor-bar');
+        return { pagina: document.documentElement.scrollWidth, scherm: window.innerWidth, balk: balk ? balk.scrollWidth - balk.clientWidth : -1 };
+      });
+      verwacht(maten.pagina <= maten.scherm && maten.balk <= 0, `de balk loopt over op 390px: ${JSON.stringify(maten)}`);
+      await page.locator('.page-editor-share').click();
+      await venster.waitFor({ timeout: 15000 });
+      verwacht(await venster.isVisible(), 'het venster staat niet in beeld op de telefoon');
+      await beideThemas(lid, 'paginadelen-telefoon');
+      await venster.locator('.modal-close').click();
+      await venster.waitFor({ state: 'detached', timeout: 5000 });
+    } finally {
+      if (breed) await page.setViewportSize(breed);
+    }
+  });
+
+  await uiStap('een subpagina die je net in de editor maakte, deel je meteen: het venster weet dat het een pagina van de klant is', async () => {
+    const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+    const page = lid.page;
+    await openPagina(lid, `Delen ouder ${tag}`);
+    await page.locator('.page-editor .tiptap').click();
+    await page.keyboard.press('Control+End');
+    // Het blokmenu opent met / aan het begin van een regel.
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('/pagina');
+    const menu = page.locator('.page-block-menu');
+    await menu.waitFor({ timeout: 10000 });
+    await wachtTot(async () => tekst(await menu.locator('.page-block-item.is-active .page-block-label').innerText().catch(() => '')) === 'Subpagina', { melding: 'het blokmenu biedt geen subpagina' });
+    await page.keyboard.press('Enter');
+    await menu.waitFor({ state: 'detached', timeout: 10000 });
+    const blok = page.locator('.page-editor .tiptap .page-subpage').last();
+    await wachtTot(async () => tekst(await blok.innerText().catch(() => '')) === 'Naamloze pagina', { melding: 'geen nieuw subpagina-blok' });
+    await blok.locator('button').click();
+    await wachtTot(async () => (await page.locator('.page-editor-title').inputValue().catch(() => '')) === 'Naamloze pagina', { melding: 'de nieuwe subpagina ging niet open' });
+    const status = page.locator('.page-editor .page-editor-status');
+    await wachtTot(async () => tekst(await status.innerText().catch(() => '')) === 'Opgeslagen', { melding: 'de subpagina kwam niet in bewerken' });
+    await page.locator('.page-editor-title').fill(`Vers ${tag}`);
+    await page.locator('.page-editor .tiptap').click();
+    await page.keyboard.type(`Verse tekst ${tag}`);
+    await page.locator('.page-editor-share').click();
+    const venster = page.locator('.modal.share-modal-page');
+    await venster.waitFor({ timeout: 15000 });
+    gelijk(tekst(await venster.locator('.modal-head h3').innerText()), 'Pagina delen', 'de titel van het venster');
+    verwacht(tekst(await venster.innerText()).includes('klantdossier'), `het venster weet niet dat dit een klantpagina is: ${tekst(await venster.innerText()).slice(0, 300)}`);
+    gelijk(await venster.getByText('Deellink per e-mail').count(), 0, 'een deellink bij een klantpagina');
+    await venster.locator('.share-people li').filter({ hasText: w.klantA.email }).locator('input[type="checkbox"]').check();
+    await venster.getByRole('button', { name: /Deel met 1 persoon/ }).click();
+    await venster.locator('.share-results').waitFor({ timeout: 30000 });
+    verwacht(!tekst(await venster.innerText()).includes('Niet gelukt'), `delen mislukte: ${tekst(await venster.locator('.share-results').innerText())}`);
+    const vers = sqlRij(`select id from public.documents where organization_id = ${q(w.orgId)} and title = ${q(`Vers ${tag}`)}`);
+    verwacht(vers, 'de titel is niet opgeslagen');
+    verwacht((await lezenInPortaal(vers.id)).includes(`Verse tekst ${tag}`), 'het portaal toont de verse tekst niet');
+  });
+
+  await uiStap('na een wijziging: "De klant ziet een oudere versie", en "Bijwerken bij klant" geeft de klant de nieuwe tekst', async () => {
+    // Iemand anders wijzigde de pagina intussen: bij openen staat de melding er meteen.
+    sql(`update public.documents set body = jsonb_set(body, '{content,2}', ${q(JSON.stringify({ type: 'paragraph', content: [woord(`Elders gewijzigd ${tag}`)] }))}::jsonb) where id = ${q(ouder)}`);
+    const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+    const page = lid.page;
+    await openPagina(lid, `Delen ouder ${tag}`);
+    const melding = page.locator('.page-share-banner');
+    await wachtTot(async () => tekst(await melding.innerText().catch(() => '')).includes('De klant ziet een oudere versie'), { melding: 'geen melding dat de klant een oudere versie ziet' });
+    verwacht(!(await lezenInPortaal(ouder)).includes(`Elders gewijzigd ${tag}`), 'de klant ziet de wijziging al vóór het bijwerken');
+    await beideThemas(lid, 'paginadelen-oudere-versie');
+    // En wat je zelf typt, gaat mee met het bijwerken.
+    await page.locator('.page-editor .tiptap p').last().click();
+    await page.keyboard.press('End');
+    await page.keyboard.type(` en hier getypt ${tag}`);
+    await melding.getByRole('button', { name: 'Bijwerken bij klant' }).click();
+    await wachtTot(async () => tekst(await melding.innerText().catch(() => '')).includes('Bijgewerkt'), { melding: 'geen bevestiging na bijwerken' });
+    const html = await lezenInPortaal(ouder);
+    verwacht(html.includes(`Elders gewijzigd ${tag}`) && html.includes(`en hier getypt ${tag}`), `het portaal na bijwerken: ${html.slice(0, 300)}`);
+    gelijk(sqlRij(`select count(*)::int as n from public.audit_logs where entity_type = 'drive_share' and action = 'updated'
+      and metadata->'changes' ? 'document_version_id' and entity_id in (select id from public.drive_shares where item_id = ${q(ouder)})`).n >= 1, true, 'het bijwerken staat in het logboek');
+    await wachtTot(async () => (await melding.count()) === 0, { timeout: 10000, melding: 'de melding blijft staan na bijwerken' });
+  });
+
+  await uiStap('Gerrie deelt een pagina: een voorstel via een gekoppelde AI, en na "Uitvoeren" ziet de klant de versie van dat moment', async () => {
+    const titel = `Gerrie deelt ${tag}`;
+    const pagina = nieuwePagina(titel, { type: 'doc', content: [{ type: 'paragraph', content: [woord(`Versie van het akkoord ${tag}`)] }] });
+    // Een echte MCP-koppeling van de beheerder, zoals mcp-oauth hem uitgeeft (zie paginadrive).
+    const clientId = `stromen-${randomUUID()}`;
+    sql(`insert into public.mcp_clients (client_id, client_name, redirect_uris) values (${q(clientId)}, 'Stromen-AI', array['https://stromen.test/cb'])`);
+    const grantId = sql(`insert into public.mcp_grants (organization_id, user_id, client_id, scope, label)
+                         values (${q(w.orgId)}, ${q(w.beheerder.id)}, ${q(clientId)}, 'read propose', 'stromen') returning id`);
+    const selector = randomBytes(16).toString('base64url');
+    const verifier = randomBytes(32).toString('base64url');
+    const salt = randomBytes(16).toString('hex');
+    sql(`insert into public.mcp_tokens (grant_id, kind, selector, verifier_hash, salt, expires_at)
+         values (${q(grantId)}, 'access', ${q(selector)}, ${q(createHash('sha256').update(`${salt}:${verifier}`).digest('hex'))}, ${q(salt)}, now() + interval '1 hour')`);
+    const res = await roep('mcp', { token: `rsfmcp.${selector}.${verifier}`, body: { jsonrpc: '2.0', id: 1, method: 'tools/call', params: {
+      name: 'propose_action', arguments: { action_id: 'drive.share', input: { item_type: 'document', item_id: pagina, client_portal: true, can_download: true } },
+    } } });
+    verwacht(res.json?.result?.isError !== true, `delen klaarzetten: ${res.json?.result?.content?.[0]?.text ?? res.tekst}`);
+    gelijk(sqlRij(`select count(*)::int as n from public.drive_shares where item_id = ${q(pagina)}`).n, 0, 'er is al gedeeld vóór het akkoord');
+    const beheer = await openWerkruimte(w.beheerder, 'beheerder', w.orgId, { tijdelijk: true });
+    const page = beheer.page;
+    await page.locator('.sidebar-nav .nav-item').filter({ hasText: /^Dashboard/ }).first().click();
+    const rij = page.locator('.ag-queue-row').filter({ hasText: titel }).first();
+    await rij.waitFor({ timeout: 20000 });
+    verwacht(/Pagina/.test(tekst(await rij.innerText())), `de regel in de wachtrij noemt het geen pagina: ${tekst(await rij.innerText())}`);
+    // Na het voorstel, vóór het akkoord, verandert de pagina nog: de klant ziet wat er bij het akkoord staat.
+    sql(`update public.documents set body = ${q(JSON.stringify({ type: 'doc', content: [{ type: 'paragraph', content: [woord(`Na het voorstel gewijzigd ${tag}`)] }] }))}::jsonb where id = ${q(pagina)}`);
+    await rij.locator('.ag-btn-go').click();
+    await wachtTot(async () => sqlRij(`select count(*)::int as n from public.drive_shares where item_id = ${q(pagina)} and document_version_id is not null`).n === 1, { melding: 'na het akkoord is de pagina niet gedeeld met een vrijgave' });
+    const deling = sqlRij(`select s.can_download, v.reason, v.created_by from public.drive_shares s join public.document_versions v on v.id = s.document_version_id where s.item_id = ${q(pagina)}`);
+    gelijk([deling.can_download, deling.reason, deling.created_by], [false, 'vrijgave', w.beheerder.id], 'een vrijgave van wie goedkeurde, en niets te downloaden');
+    const html = await lezenInPortaal(pagina);
+    verwacht(html.includes(`Na het voorstel gewijzigd ${tag}`) && !html.includes('Versie van het akkoord'), `het portaal: ${html.slice(0, 300)}`);
+  }, { toegestaan: [{ soort: 'functie', functie: 'mcp' }] });
+
+  await uiStap('de geheime link in de browser: de pagina met opmaak, kader, tabel, taken, uitklapper, link en afbeelding; ook een afgevinkte taak in een notitie', async () => {
+    // Een pagina in het eigen dossier: die mag via een geheime link.
+    const titel = `Leesproef ${tag}`;
+    sql(`insert into public.documents (organization_id, created_by, title, format, body)
+      values (${q(w.orgId)}, ${q(w.medewerker.id)}, ${q(titel)}, 'page', '{"type":"doc","content":[{"type":"paragraph"}]}'::jsonb)`);
+    const pagina = sqlRij(`select id from public.documents where organization_id = ${q(w.orgId)} and title = ${q(titel)}`).id;
+    const foto = sql(`insert into public.attachments (organization_id, entity_type, entity_id, name, mime_type, size_bytes, storage_key)
+      values (${q(w.orgId)}, 'document', ${q(pagina)}, 'plattegrond.png', 'image/png', 10, ${q(`${w.orgId}/document/${pagina}/${randomUUID()}-plattegrond.png`)}) returning id`);
+    const cel = (type, text, attrs = {}) => ({ type, attrs: { colspan: 1, rowspan: 1, colwidth: null, ...attrs }, content: [{ type: 'paragraph', content: [woord(text)] }] });
+    const taak = (checked, text) => ({ type: 'taskItem', attrs: { checked }, content: [{ type: 'paragraph', content: [woord(text)] }] });
+    sql(`update public.documents set body = ${q(JSON.stringify({ type: 'doc', content: [
+      { type: 'heading', attrs: { level: 1 }, content: [woord('Afspraken')] },
+      { type: 'callout', attrs: { variant: 'tip' }, content: [{ type: 'paragraph', content: [woord('Bel ons gerust.')] }] },
+      { type: 'table', content: [
+        { type: 'tableRow', content: [cel('tableHeader', 'Brede kop', { colspan: 2 })] },
+        { type: 'tableRow', content: [cel('tableCell', 'Links'), cel('tableCell', 'Midden', { align: 'center' })] },
+      ] },
+      { type: 'taskList', content: [taak(true, 'Klaar'), taak(false, 'Nog te doen')] },
+      { type: 'details', content: [{ type: 'detailsSummary', content: [woord('Meer lezen')] }, { type: 'detailsContent', content: [{ type: 'paragraph', content: [woord('Verborgen tekst')] }] }] },
+      { type: 'paragraph', content: [{ type: 'text', text: 'onze site', marks: [{ type: 'link', attrs: { href: 'https://voorbeeld.nl' } }] }] },
+      { type: 'image', attrs: { attachmentId: foto, alt: 'Plattegrond' } },
+    ] }))}::jsonb where id = ${q(pagina)}`);
+    const versie = gelukt(await rest('rpc/save_page_version', { method: 'POST', token: w.medewerker.token, body: { p_document_id: pagina, p_reason: 'vrijgave' } }), 'vrijgeven');
+    const adres = `lezer.${tag}@elders.test`;
+    gelukt(await roep('file-share', { token: w.medewerker.token, body: {
+      action: 'share', organizationId: w.orgId, itemType: 'document', itemId: pagina, recipients: [{ kind: 'link', email: adres }], documentVersionId: versie.id,
+    } }), 'pagina delen');
+    // Een notitie met een afgevinkte taak, zoals de editor van notities hem opslaat.
+    const notitie = sql(`insert into public.notes (organization_id, created_by, title, content)
+      values (${q(w.orgId)}, ${q(w.medewerker.id)}, ${q(`Takennotitie ${tag}`)}, ${q('<ul class="rf-task-list"><li data-checked="true" aria-checked="true"><span class="rf-task-checkbox" contenteditable="false" role="checkbox" aria-checked="true" tabindex="0"></span><span class="rf-task-content">Notitie klaar</span></li><li data-checked="false" aria-checked="false"><span class="rf-task-checkbox" contenteditable="false" role="checkbox" aria-checked="false" tabindex="0"></span><span class="rf-task-content">Notitie open</span></li></ul>')}) returning id`);
+    const notitieAdres = `notitie.${tag}@elders.test`;
+    gelukt(await roep('file-share', { token: w.medewerker.token, body: {
+      action: 'share', organizationId: w.orgId, itemType: 'note', itemId: notitie, recipients: [{ kind: 'link', email: notitieAdres }],
+    } }), 'notitie delen');
+
+    const lezer = await openAlsKlant(linkUit(mailsAan(adres).at(-1), 'gedeeld'), 'lezer');
+    const page = lezer.page;
+    // De getekende links van de nep-media-worker wijzen naar een verzonnen
+    // https-adres (nepdiensten.mjs); hier levert de browser er een echte PNG.
+    const gevraagd = [];
+    await lezer.context.route(/^https:\/\/media\.stromen\.test\//, (route) => {
+      gevraagd.push(route.request().url());
+      return route.fulfill({ status: 200, contentType: 'image/png', body: pngVlak(320, 120, [220, 38, 38]) });
+    });
+    gelijk(await page.getByText('De afzender heeft downloaden voor deze deling uitgezet.').count(), 0, 'bij een pagina is "downloaden staat uit" geen beperking');
+    await page.locator('.share-public-row').filter({ hasText: titel }).getByRole('button', { name: 'Lezen' }).click();
+    const venster = page.locator('.share-read-modal .rich-text-viewer');
+    await venster.locator('.rf-page').waitFor({ timeout: 15000 });
+    const dom = await venster.evaluate((root) => {
+      const stijl = (el, pseudo) => (el ? getComputedStyle(el, pseudo ?? null) : null);
+      const kader = root.querySelector('.rf-callout.rf-callout-tip');
+      const afgevinkt = root.querySelector('li.rf-task-checked > .rf-task-checkbox[role="img"][aria-label="Afgevinkt"]');
+      const open = root.querySelector('li:not(.rf-task-checked) > .rf-task-checkbox[aria-label="Niet afgevinkt"]');
+      const link = root.querySelector('a[href="https://voorbeeld.nl"]');
+      const img = root.querySelector('img');
+      return {
+        kop: root.querySelector('h2')?.textContent ?? null,
+        kader: kader ? stijl(kader).backgroundColor : null,
+        brede: root.querySelector('table.rf-table th[colspan="2"]')?.textContent ?? null,
+        midden: root.querySelector('td.rf-align-center') ? stijl(root.querySelector('td.rf-align-center')).textAlign : null,
+        vinkje: afgevinkt ? stijl(afgevinkt, '::before').content : null,
+        open: open ? stijl(open, '::before').content : null,
+        doorgestreept: root.querySelector('li.rf-task-checked > .rf-task-content') ? stijl(root.querySelector('li.rf-task-checked > .rf-task-content')).textDecorationLine : null,
+        uitklapper: root.querySelector('details.rf-details > summary')?.textContent ?? null,
+        dicht: root.querySelector('details.rf-details')?.open ?? null,
+        link: link ? [link.getAttribute('target'), link.getAttribute('rel')] : null,
+        img: img ? [img.getAttribute('src'), img.getAttribute('alt')] : null,
+        verboden: [...root.querySelectorAll('[style],[id]')].length + [...root.querySelectorAll('*')].filter((el) => [...el.attributes].some((a) => a.name.startsWith('data-'))).length,
+      };
+    });
+    gelijk(dom.kop, 'Afspraken', 'de kop');
+    verwacht(dom.kader && dom.kader !== 'rgba(0, 0, 0, 0)', `het kader heeft geen kleur: ${dom.kader}`);
+    gelijk(dom.brede, 'Brede kop', 'een kopcel over twee kolommen');
+    gelijk(dom.midden, 'center', 'uitlijnen in een cel');
+    gelijk([dom.vinkje, dom.open], ['"✓"', '""'], 'een afgevinkte taak toont een vinkje, een open taak niet');
+    gelijk(dom.doorgestreept, 'line-through', 'een afgevinkte taak is doorgestreept');
+    gelijk([dom.uitklapper, dom.dicht], ['Meer lezen', false], 'de uitklapper, dicht');
+    gelijk(dom.link, ['_blank', 'noopener noreferrer nofollow'], 'een link opent in een nieuw tabblad');
+    verwacht(dom.img && dom.img[0].startsWith('https://media.stromen.test/signed/') && dom.img[0].includes('inline=1') && dom.img[1] === 'Plattegrond', `de afbeelding: ${JSON.stringify(dom.img)}`);
+    gelijk(dom.verboden, 0, 'geen style, id of data-* na de sanitizer');
+    await wachtTot(async () => venster.locator('img').evaluate((img) => img.complete && img.naturalWidth === 320).catch(() => false), { melding: 'de afbeelding laadt niet' });
+    verwacht(gevraagd.length >= 1 && gevraagd.every((url) => url.includes('inline=1')), `de afbeelding is niet inline gevraagd: ${JSON.stringify(gevraagd)}`);
+    // De openbare pagina volgt het thema van de huisstijl (brand_client_theme),
+    // niet dat van de app: donker is de standaard, dan licht.
+    await schermafdruk('paginadelen-geheime-link-donker', lezer);
+    sql(`update public.company_settings set brand_client_theme = 'light' where organization_id = ${q(w.orgId)}`);
+    try {
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await page.locator('.share-public-row').filter({ hasText: titel }).getByRole('button', { name: 'Lezen' }).click();
+      await venster.locator('.rf-page').waitFor({ timeout: 15000 });
+      await schermafdruk('paginadelen-geheime-link-licht', lezer);
+    } finally {
+      sql(`update public.company_settings set brand_client_theme = 'dark' where organization_id = ${q(w.orgId)}`);
+    }
+    // Op de telefoon: de tabel schuift in haar eigen vak, de pagina niet opzij.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await rustig(lezer);
+    const smal = await page.evaluate(() => ({ pagina: document.documentElement.scrollWidth, scherm: window.innerWidth }));
+    verwacht(smal.pagina <= smal.scherm, `het leesvenster loopt over op 390px: ${JSON.stringify(smal)}`);
+    await schermafdruk('paginadelen-geheime-link-telefoon', lezer);
+    await page.locator('.share-read-modal .modal-close').click();
+
+    // De notitie: de afgevinkte taak was na de sanitizer open (data-checked weg).
+    const notitieLezer = await openAlsKlant(linkUit(mailsAan(notitieAdres).at(-1), 'gedeeld'), 'notitielezer');
+    await notitieLezer.page.locator('.share-public-row').filter({ hasText: `Takennotitie ${tag}` }).getByRole('button', { name: 'Lezen' }).click();
+    const notitieVenster = notitieLezer.page.locator('.share-read-modal .rich-text-viewer');
+    await notitieVenster.locator('.rf-task-list').waitFor({ timeout: 15000 });
+    const vinkjes = await notitieVenster.evaluate((root) => [...root.querySelectorAll('.rf-task-list > li > .rf-task-checkbox')].map((el) => getComputedStyle(el, '::before').content));
+    gelijk(vinkjes, ['"✓"', '""'], 'in een gedeelde notitie toont een afgevinkte taak een vinkje');
+  });
+
+  await uiStap('de drive: "Delen…" bij een pagina opent het venster voor een pagina, met wie de klant ziet', async () => {
+    const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+    const page = lid.page;
+    await naarKlantdossier(lid, w.klantA.name);
+    const rij = inhoud(page).locator('.odrv-row').filter({ hasText: `Delen ouder ${tag}` }).first();
+    await rij.waitFor({ timeout: 15000 });
+    await rij.locator('.odrv-td-act button').first().click();
+    gelijk(await page.locator('.drive-pop').getByRole('menuitem', { name: 'Versturen…' }).count(), 0, 'een pagina versturen kan nog niet');
+    await page.locator('.drive-pop').getByRole('menuitem', { name: 'Delen…' }).click();
+    const venster = page.locator('.modal.share-modal-page');
+    await venster.waitFor({ timeout: 15000 });
+    await venster.locator('.share-subpages').waitFor({ timeout: 5000 });
+    await wachtTot(async () => tekst(await venster.locator('.share-current').innerText().catch(() => '')).includes('Ziet versie'), { melding: 'de versie per ontvanger staat er niet' });
+    gelijk(await venster.locator('.share-outdated').count(), 0, 'na bijwerken geen melding van een oudere versie');
+    await venster.locator('.modal-close').click();
+    await venster.waitFor({ state: 'detached', timeout: 5000 });
+  });
+}
 
 async function bankTab(scherm, naam) {
   await inhoud(scherm.page).locator('.bank-toolbar .bk-seg button').filter({ hasText: new RegExp(`^${naam}`) }).click();
@@ -3936,7 +5336,7 @@ try {
       // De app praat met deze testserver, niet met een ander Supabase-adres.
       verwacht(server.verkeer.some((r) => r.soort === 'rpc' && r.status < 400), 'de app deed geen enkele aanroep via de testserver');
     });
-    const scenarios = { offerte: scenarioOfferte, factuur: scenarioFactuur, intrekken: scenarioIntrekken, contract: scenarioContract, rollen: scenarioRollen, agenda: scenarioAgenda, mollie: scenarioMollie, documenten: scenarioDocumenten, bank: scenarioBank, inrichten: scenarioInrichten, opname: scenarioOpname, klantdomein: scenarioKlantdomein, rapportage: scenarioRapportage, tickets: scenarioTickets, vooruitbetaald: scenarioVooruitbetaald, galerij: scenarioGalerij, prognose: scenarioPrognose };
+    const scenarios = { offerte: scenarioOfferte, factuur: scenarioFactuur, intrekken: scenarioIntrekken, contract: scenarioContract, rollen: scenarioRollen, agenda: scenarioAgenda, mollie: scenarioMollie, documenten: scenarioDocumenten, paginas: scenarioPaginas, paginadrive: scenarioPaginadrive, paginadelen: scenarioPaginadelen, bank: scenarioBank, inrichten: scenarioInrichten, opname: scenarioOpname, klantdomein: scenarioKlantdomein, rapportage: scenarioRapportage, tickets: scenarioTickets, vooruitbetaald: scenarioVooruitbetaald, galerij: scenarioGalerij, prognose: scenarioPrognose };
     for (const naam of SCENARIOS) await scenarios[naam]();
   }
   fouten = samenvatting();

@@ -455,7 +455,7 @@ async function gesprekEnRechten() {
 
 // ── 5. De meeting komt vanzelf in Inhoud (sinds 24 november) ─────────────────
 // Zodra het transcript er is, zet de server een meeting uit de agenda in de
-// map Meetings van de klant (of onder Geen klant). Eerst vroeg de opnamekaart
+// map Meetings van de klant (of in het eigen dossier). Eerst vroeg de opnamekaart
 // erom; die vraag kwam alleen als je de afspraak open had toen het transcript
 // binnenkwam. Getoetst wordt wat de recorder meestuurt bij 'create', en wat er
 // daarna zonder browser gebeurt: synchroon, via de webhook, met het tegoed op,
@@ -546,11 +546,11 @@ async function vanzelfInInhoud() {
     gelijk(meetingsMappen(w.orgId, w.klantA.id), 1, 'mappen Meetings bij klant A');
   });
 
-  await stap('zonder klant: in de map Meetings onder Geen klant', async () => {
+  await stap('zonder klant: in de map Meetings van het eigen dossier', async () => {
     const opname_ = await opnemen(w.medewerker, afspraak({ clientId: null, eventTitle: 'Teamoverleg' }));
     const n = inInhoud(opname_.id);
     gelijk([n.title, n.client_id, n.map, n.map_klant], ['Teamoverleg — 20 november 2026', null, 'Meetings', null], 'notitie en map');
-    gelijk(meetingsMappen(w.orgId, null), 1, 'mappen Meetings onder Geen klant');
+    gelijk(meetingsMappen(w.orgId, null), 1, 'mappen Meetings in het eigen dossier');
   });
 
   await stap('zonder dag van de afspraak: de dag van de opname, op Nederlandse tijd', async () => {

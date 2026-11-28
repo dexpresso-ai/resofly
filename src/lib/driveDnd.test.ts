@@ -55,11 +55,12 @@ test('een geüpload bestand moet in een map blijven staan — ook bij een andere
   assert.equal(planDriveMove([bestand('f1')], plek('Y', 'p', 'q1'), inMapA).moves.length, 1);
 });
 
-test('een map hoort bij een klant: "Geen klant" is geen doel voor mappen', () => {
+// Stap 1A-5c: "Geen klant" is het eigen dossier geworden, met een eigen
+// mappenboom (bijvoorbeeld voor het bedrijfshandboek). Een map mag daar heen.
+test('een map mag naar het eigen dossier (zonder klant), net als een notitie', () => {
   const plan = planDriveMove([map('a', 'Archief')], plek(null), ctx());
-  assert.equal(plan.moves.length, 0);
-  assert.match(plan.blocked[0].reason, /bij een klant blijven/);
-  // Een notitie mag daar wél heen: losmaken van de klant is een besluit dat je mag nemen.
+  assert.deepEqual(plan.moves.map(i => i.id), ['a']);
+  assert.equal(plan.blocked.length, 0);
   assert.equal(planDriveMove([notitie('n1')], plek(null), ctx()).moves.length, 1);
 });
 
@@ -155,4 +156,18 @@ test('een notitie ligt in zijn map, anders bij zijn project (en dus bij de klant
 test('de teller schrijft enkelvoud en meervoud uit', () => {
   assert.equal(itemCountLabel(1), '1 item');
   assert.equal(itemCountLabel(3), '3 items');
+});
+
+
+// Stap 1A-5: een subpagina naar de wortel van haar eigen dossier slepen maakt
+// haar los. Met de wortel als "plek" vond de verkenner dat ze er al stond.
+test('een subpagina staat niet zelf in een map: naar de wortel van haar dossier is een verplaatsing', () => {
+  const bron = {
+    folders: [], projects: [], notes: [], attachments: [],
+    documents: [{ id: 'kind', client_id: 'X', project_id: null, folder_id: null, parent_id: 'ouder' }],
+  };
+  assert.equal(driveItemLocation(bron, document('kind')), null);
+  const plan = planDriveMove([document('kind')], plek('X'), { locationOf: item => driveItemLocation(bron, item), descendantIds: () => [] });
+  assert.deepEqual(plan.moves.map(i => i.id), ['kind']);
+  assert.equal(plan.unchanged.length, 0);
 });

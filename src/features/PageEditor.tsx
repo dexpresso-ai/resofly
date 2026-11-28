@@ -25,22 +25,36 @@
 //  - Sluiten in een vaste volgorde: laatste wijziging opslaan, een versie
 //    vastleggen (alleen als er deze keer iets is opgeslagen), de claim
 //    loslaten. Mislukt het opslaan, dan blijft de editor open.
+//  - Een pagina met een blok dat deze versie van de app niet kent, gaat niet
+//    open om te bewerken (pageBodyCheck.ts). Tiptap maakte er stilletjes een
+//    lege pagina van, en de eerste toets schreef die over de echte heen.
 // ============================================================
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { EditorContent, useEditor, useEditorState } from '@tiptap/react';
 import type { Editor, JSONContent } from '@tiptap/react';
 import {
-  Bold, Braces, Copy, Heading1, Heading2, Heading3, History, Italic, Link2, List, ListChecks, ListOrdered, Minus, Pilcrow,
-  Quote, Redo2, Strikethrough, Underline as UnderlineIcon, Undo2, X,
+  AlignCenter, AlignLeft, AlignRight, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, BetweenHorizontalEnd, BetweenHorizontalStart,
+  BetweenVerticalEnd, BetweenVerticalStart, Bold, Braces, ChevronLeft, Copy, FileDown, Heading1, Heading2, Heading3, History, Info, Italic, Lightbulb, Link2,
+  List, ListChecks, ListOrdered, Minus, OctagonAlert, PanelLeft, PanelTop, Pilcrow, Plus, Quote, Redo2, Share2, Strikethrough, TableCellsMerge,
+  TableCellsSplit, Trash2, TriangleAlert, Underline as UnderlineIcon, Undo2, X,
 } from 'lucide-react';
-import { pageEditorExtensions } from '../lib/pageEditorExtensions';
-import { isAllowedPageLink } from '../lib/pageSchema';
+import { isInTable, moveTableColumn, moveTableRow, selectedRect } from '@tiptap/pm/tables';
+import { pageEditorExtensions, type PageLinks, type PageMedia } from '../lib/pageEditorExtensions';
+import { fetchStoredFileBlob, uploadToR2 } from '../lib/r2';
+import { calloutVariant, isAllowedPageLink, type CalloutVariant } from '../lib/pageSchema';
+import { pageBodyFit } from '../lib/pageBodyCheck';
 import {
-  claimPageEdit, listPageVersions, loadPage, loadPageVersion, releasePageEdit, restorePageVersion, savePage, savePageVersion,
-  type PageVersionSummary,
+  attachmentInfo, attachmentStorageKey, claimPageEdit, createPage, listDossierFiles, listPageVersions, loadPage, loadPageShareStatus, loadPageVersion, pageAncestors, pageTitle,
+  releasePageEdit, releasePageToShares, restorePageVersion, savePage, type DossierFile,
+  savePageVersion, type PageShareStatus, type PageVersionSummary,
 } from '../lib/repository';
 import { useBackStep } from '../lib/useBackStep';
+import { PageFilePicker, type FileChoice } from './PageFilePicker';
+import { PageTree, saveTreePreference, treePreference, useTreeDrawer } from './PageTree';
+import {
+  BlockMenu, closeSlashMenu, pageBlocksFor, runPageBlock, slashMenuExtension, type BlockMenuState, type SlashBridge,
+} from './PageBlockMenu';
 
 const SAVE_DELAY_MS = 1500;
 const HEARTBEAT_MS = 30_000;
@@ -49,7 +63,20 @@ const CLAIM_FRESH_MS = 75_000;
 /** Tijdens een lange sessie elk kwartier een versie. */
 const VERSION_EVERY_MS = 15 * 60_000;
 
-type Mode = 'laden' | 'bewerken' | 'lezen' | 'conflict' | 'geen_recht' | 'fout';
+type Mode = 'laden' | 'bewerken' | 'lezen' | 'conflict' | 'geen_recht' | 'fout' | 'onbekend';
+
+const TOO_NEW_MESSAGE = 'Deze pagina heeft blokken die deze versie van de app nog niet kent. Ververs de app om hem te openen; er gaat niets verloren.';
+const BROKEN_MESSAGE = 'De inhoud van deze pagina klopt niet, daarom kun je hem niet bewerken. Er wordt niets opgeslagen.';
+
+/** De opgeslagen pagina past niet in deze editor (pageBodyCheck.ts). Alleen
+ *  bij onbekende blokken helpt verversen; een kapotte pagina blijft kapot. */
+class PageTooNewError extends Error {
+  readonly canRefresh: boolean;
+  constructor(reason: string, canRefresh: boolean) {
+    super(`De pagina past niet in deze editor (${reason}).`);
+    this.canRefresh = canRefresh;
+  }
+}
 type SaveState = 'opgeslagen' | 'wijzigingen' | 'bezig' | 'fout';
 
 function snapshotOf(title: string, body: JSONContent): string {
@@ -65,7 +92,19 @@ function whenLabel(value: string): string {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString('nl-NL', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
-export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClose }: {
+/** Naar een andere pagina: verder (een subpagina, of omhoog) of terug langs de weg die je kwam. */
+export type PageStep = { id: string; how: 'vooruit' | 'terug' };
+
+/** Wat de editor meegeeft aan het deelvenster (main.tsx toont het, met de gegevens van de app). */
+export type PageShareRequest = {
+  title: string;
+  /** Eerst opslaan wat er nog staat; false als dat niet lukte. */
+  flush: () => Promise<boolean>;
+  /** Het venster is dicht: kijk opnieuw wat de klant ziet. */
+  done: () => void;
+};
+
+export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClose, onOpenPage, backTo = null, ownDossierName = 'Eigen dossier', houseStyle = null, onShare }: {
   documentId: string;
   organizationId: string;
   /** Schrijfrechten op Inhoud. Zonder: alleen lezen, en geen claim. */
@@ -73,6 +112,16 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
   /** De naam van een collega, voor "Sanne bewerkt deze pagina". */
   nameOf: (userId: string) => string;
   onClose: () => void;
+  /** Een andere pagina openen nadat deze netjes dicht is (stap 1A-4b). */
+  onOpenPage?: (step: PageStep) => void;
+  /** De pagina waar je vandaan kwam: de terugknop gaat daarheen in plaats van dicht. */
+  backTo?: string | null;
+  /** De naam van het eigen dossier (het bedrijf), boven de boom. */
+  ownDossierName?: string;
+  /** De letters van de huisstijl, voor de Word-export. */
+  houseStyle?: { brand_heading_font?: string | null; brand_body_font?: string | null } | null;
+  /** Delen (stap 1C): het deelvenster openen; klaar als het open is. Zonder deze functie geen knop. */
+  onShare?: (request: PageShareRequest) => Promise<void> | void;
 }) {
   const [mode, setModeState] = useState<Mode>('laden');
   const [saveState, setSaveState] = useState<SaveState>('opgeslagen');
@@ -82,6 +131,33 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
   const [closeAnyway, setCloseAnyway] = useState(false);
   const [versionsOpen, setVersionsOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [refreshHelps, setRefreshHelps] = useState(true);
+  /** Het kruimelpad: de bovenliggende pagina's, van boven naar de directe ouder. */
+  const [ancestors, setAncestors] = useState<Array<{ id: string; title: string }>>([]);
+  /** De kiezer van het bestandsblok, met de belofte die de keuze teruggeeft. */
+  const [filePicker, setFilePicker] = useState<{ files: DossierFile[] | null; error: string | null; resolve: (choice: FileChoice) => void } | null>(null);
+  /** Het dossier van de pagina, voor de kiezer. */
+  const placeRef = useRef<{ client_id: string | null; project_id: string | null }>({ client_id: null, project_id: null });
+  /** Hetzelfde voor de boom links, die opnieuw moet tekenen als het bekend is. */
+  const [place, setPlace] = useState<{ client_id: string | null; project_id: string | null } | null>(null);
+  /** De boom van het dossier (§4): een kolom op een breed scherm, een lade op een smal. */
+  const treeDrawer = useTreeDrawer();
+  const [treeOpen, setTreeOpen] = useState(() => !treeDrawer && treePreference());
+  /** Telt op als hier een subpagina bij komt: dan haalt de boom opnieuw op. */
+  const [treeVersion, setTreeVersion] = useState(0);
+  /**
+   * Met wie deze pagina gedeeld is, en of die de pagina van nu ziet (stap 1C).
+   * Na een wijziging hier ziet de ontvanger een oudere versie, ook zonder
+   * opnieuw te vragen: daarvoor telt changedSinceShareStatus.
+   */
+  const [shareStatus, setShareStatus] = useState<PageShareStatus[]>([]);
+  const [changedSinceShareStatus, setChangedSinceShareStatus] = useState(false);
+  const [releasing, setReleasing] = useState(false);
+  const [shareNote, setShareNote] = useState<string | null>(null);
+  const [openingShare, setOpeningShare] = useState(false);
+  /** Telt elke wijziging: een antwoord over de status mag een wijziging van daarna niet wissen. */
+  const editCountRef = useRef(0);
 
   const modeRef = useRef<Mode>('laden');
   const titleRef = useRef('');
@@ -97,17 +173,82 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
   const releasedRef = useRef(false);
   const editorRef = useRef<Editor | null>(null);
   const scheduleRef = useRef<() => void>(() => {});
+  /** Staat er een melding dat opslaan mislukte? Die verdwijnt zodra het weer klopt. */
+  const saveErrorShownRef = useRef(false);
 
   const setMode = (next: Mode) => { modeRef.current = next; setModeState(next); };
   const setTitle = (next: string) => { titleRef.current = next; setTitleState(next); };
 
+  // Het blokmenu: `/` in de tekst en de +-knop (PageBlockMenu.tsx). menuRef
+  // loopt synchroon mee, zodat Enter direct na een pijltje het goede blok kiest.
+  const [blockMenu, setBlockMenu] = useState<BlockMenuState | null>(null);
+  const menuRef = useRef<BlockMenuState | null>(null);
+  const showMenu = (next: BlockMenuState | null) => { menuRef.current = next; setBlockMenu(next); };
+  const slashBridge = useRef<SlashBridge | null>(null);
+  const extensions = useMemo(() => [...pageEditorExtensions(), slashMenuExtension(slashBridge)], []);
+
+  // immediatelyRender: false. Met de standaard (true) maakt Tiptap de editor al
+  // tijdens de eerste render, en plant hij meteen een destroy() over 1 ms, die
+  // pas afgeblazen wordt als het eerste effect draait. Duurde die eerste
+  // render en commit langer (de eerste keer de pagina openen, "Nieuw → Pagina"
+  // na het wachten op de database, een trage telefoon), dan kregen de
+  // effecten hieronder een editor die al weg was. Zijn storage is dan leeg,
+  // `storage.subpage.links = …` gooide, en de hele app werd zwart: de
+  // UI-test zag dat met de boom naast de pagina erbij. Zo maakt useEditor de
+  // editor pas in zijn effect, als de component er staat.
   const editor = useEditor({
-    extensions: pageEditorExtensions(),
+    extensions,
     editable: false,
     content: '',
+    immediatelyRender: false,
     onUpdate: () => scheduleRef.current(),
   });
   editorRef.current = editor;
+
+  slashBridge.current = {
+    open: props => showMenu({ source: 'slash', items: props.items, active: 0, anchor: props.clientRect?.() ?? null, pick: block => props.command(block) }),
+    update: props => {
+      const previous = menuRef.current;
+      const active = previous?.source === 'slash' ? Math.min(previous.active, Math.max(0, props.items.length - 1)) : 0;
+      showMenu({ source: 'slash', items: props.items, active, anchor: props.clientRect?.() ?? null, pick: block => props.command(block) });
+    },
+    keyDown: event => {
+      const menu = menuRef.current;
+      if (!menu || menu.source !== 'slash') return false;
+      const count = menu.items.length;
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        if (count) showMenu({ ...menu, active: (menu.active + (event.key === 'ArrowDown' ? 1 : count - 1)) % count });
+        return true;
+      }
+      if (event.key === 'Enter' || event.key === 'Tab') {
+        const block = menu.items[menu.active];
+        if (!block) return false;
+        menu.pick(block);
+        return true;
+      }
+      return false;
+    },
+    close: () => { if (menuRef.current?.source === 'slash') showMenu(null); },
+  };
+
+  const closeBlockMenu = () => {
+    const menu = menuRef.current;
+    if (menu?.source === 'slash' && editorRef.current) closeSlashMenu(editorRef.current);
+    showMenu(null);
+  };
+
+  const openPlusMenu = (anchor: DOMRect) => {
+    const ed = editorRef.current;
+    if (!ed || modeRef.current !== 'bewerken') return;
+    if (menuRef.current) { closeBlockMenu(); return; }
+    showMenu({
+      source: 'plus',
+      items: pageBlocksFor(ed, ''),
+      active: -1,
+      anchor,
+      pick: block => { showMenu(null); runPageBlock(ed, block.key); },
+    });
+  };
 
   const currentSnapshot = useCallback((): string | null => {
     const ed = editorRef.current;
@@ -120,16 +261,47 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
     const ed = editorRef.current;
     if (!ed) return;
     const row = await loadPage(documentId, organizationId);
+    // Vóór de controle op de blokken: ook een pagina die hier niet open kan,
+    // hoort in de boom van haar dossier.
+    setPlace(current => (current && current.client_id === row.client_id && current.project_id === row.project_id
+      ? current : { client_id: row.client_id, project_id: row.project_id }));
+    const fit = pageBodyFit(ed.schema, row.body);
+    if (!fit.ok) {
+      // Niets in de editor zetten: Tiptap zou er een lege pagina van maken.
+      setTitle(row.title);
+      throw new PageTooNewError(fit.reason, fit.unknown.length > 0);
+    }
     // Niet in de geschiedenis van "ongedaan maken": anders maakte Ctrl+Z direct
     // na het openen de pagina leeg (en sloeg dat op), en haalde het na
     // "Terugzetten" of "Opnieuw laden" de vervangen tekst terug. setContent zet
     // alleen preventUpdate, niet addToHistory (nagekeken in @tiptap/core 3.35.1).
     ed.chain().setMeta('addToHistory', false).setContent(row.body as JSONContent, { emitUpdate: false }).run();
     setTitle(row.title);
+    placeRef.current = { client_id: row.client_id, project_id: row.project_id };
+    if (row.parent_id) {
+      pageAncestors(documentId, organizationId).then(setAncestors, () => setAncestors([]));
+    } else {
+      setAncestors([]);
+    }
     versionRef.current = row.edit_version;
     baselineRef.current = snapshotOf(row.title.trim() || 'Naamloze pagina', ed.getJSON());
     setSaveState('opgeslagen');
   }, [documentId, organizationId]);
+
+  /** Past de pagina niet in deze editor: alleen lezen, geen claim, niets opslaan. */
+  const stopIfTooNew = useCallback(async (error: unknown): Promise<boolean> => {
+    if (!(error instanceof PageTooNewError)) return false;
+    editorRef.current?.setEditable(false, false);
+    setHolder(null);
+    setMode('onbekend');
+    setRefreshHelps(error.canRefresh);
+    setMessage(error.canRefresh ? TOO_NEW_MESSAGE : BROKEN_MESSAGE);
+    if (claimedEverRef.current && !releasedRef.current) {
+      releasedRef.current = true;
+      await releasePageEdit(documentId).catch(() => {});
+    }
+    return true;
+  }, [documentId]);
 
   const tryClaim = useCallback(async () => {
     const ed = editorRef.current;
@@ -142,7 +314,12 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
         releasedRef.current = false;
         if (modeRef.current === 'lezen') {
           // De pagina kwam vrij: eerst vers laden, dan pas verder schrijven.
-          await loadFresh();
+          try {
+            await loadFresh();
+          } catch (error) {
+            if (await stopIfTooNew(error)) return;
+            throw error;
+          }
         }
         if (modeRef.current === 'lezen' || modeRef.current === 'laden') {
           setHolder(null);
@@ -160,7 +337,7 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
       // Geen verbinding: niets veranderen. Zonder verse claim slaat de editor
       // vanzelf niet meer op (CLAIM_FRESH_MS).
     }
-  }, [canWrite, documentId, loadFresh]);
+  }, [canWrite, documentId, loadFresh, stopIfTooNew]);
 
   const doSave = useCallback(async (): Promise<boolean> => {
     const ed = editorRef.current;
@@ -175,6 +352,7 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
       if (modeRef.current !== 'bewerken' || Date.now() - lastClaimOkRef.current > CLAIM_FRESH_MS) {
         setSaveState('fout');
         setMessage('Er is geen verbinding: je laatste wijzigingen zijn nog niet opgeslagen.');
+        saveErrorShownRef.current = true;
         return false;
       }
     }
@@ -187,6 +365,7 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
         baselineRef.current = snap;
         savedThisSessionRef.current = true;
         setMessage(null);
+        saveErrorShownRef.current = false;
         setSaveState(currentSnapshot() === baselineRef.current ? 'opgeslagen' : 'wijzigingen');
         if (Date.now() - lastVersionAtRef.current > VERSION_EVERY_MS) {
           lastVersionAtRef.current = Date.now();
@@ -206,9 +385,16 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
       }
       setSaveState('fout');
       return false;
-    } catch {
+    } catch (error) {
       setSaveState('fout');
-      setMessage('Opslaan is niet gelukt. Het wordt opnieuw geprobeerd bij je volgende wijziging.');
+      // De database weigerde de inhoud (22023): zeg waarom, want opnieuw
+      // proberen helpt dan niet. Bijvoorbeeld een geplakte afbeelding uit een
+      // ander dossier. Haal je dat blok weg, dan slaat de pagina weer op.
+      const refused = (error as { code?: string; message?: string } | null);
+      setMessage(refused?.code === '22023' && refused.message
+        ? `Opslaan lukt niet: ${refused.message} Haal dat weg; dan slaat de pagina weer op.`
+        : 'Opslaan is niet gelukt. Het wordt opnieuw geprobeerd bij je volgende wijziging.');
+      saveErrorShownRef.current = true;
       return false;
     }
   }, [currentSnapshot, documentId, organizationId, tryClaim]);
@@ -228,16 +414,27 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
     if (currentSnapshot() === baselineRef.current) {
       if (timerRef.current) { window.clearTimeout(timerRef.current); timerRef.current = null; }
       setSaveState('opgeslagen');
+      // Weer precies wat er is opgeslagen (bijvoorbeeld een geweigerd blok weer
+      // weggehaald): dan klopt een melding dat opslaan mislukte niet meer.
+      if (saveErrorShownRef.current) { saveErrorShownRef.current = false; setMessage(null); }
       return;
     }
     setSaveState('wijzigingen');
+    editCountRef.current += 1;
+    setChangedSinceShareStatus(true);
     if (timerRef.current) window.clearTimeout(timerRef.current);
     timerRef.current = window.setTimeout(() => { timerRef.current = null; void queueSave(); }, SAVE_DELAY_MS);
   };
 
   // Laden, dan claimen.
+  //
+  // Elk effect hier stopt bij een vernietigde editor (isDestroyed): een vangnet
+  // naast immediatelyRender: false hierboven. Een vernietigde editor heeft een
+  // lege storage, en een fout in een effect legt de hele app stil
+  // (PageLoadBoundary vangt alleen laadfouten). Ze wachten dan op de editor die
+  // useEditor daarna zelf maakt.
   useEffect(() => {
-    if (!editor) return;
+    if (!editor || editor.isDestroyed) return;
     let cancelled = false;
     (async () => {
       try {
@@ -248,12 +445,13 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
         if (modeRef.current === 'laden') setMode('lezen');
       } catch (error) {
         if (cancelled) return;
+        if (await stopIfTooNew(error)) return;
         setMode('fout');
         setMessage((error as { message?: string } | null)?.message || 'Deze pagina kon niet worden geopend.');
       }
     })();
     return () => { cancelled = true; };
-  }, [editor, loadFresh, tryClaim, canWrite]);
+  }, [editor, loadFresh, tryClaim, canWrite, stopIfTooNew]);
 
   // De hartslag, en meteen claimen als het tabblad weer zichtbaar wordt.
   useEffect(() => {
@@ -289,7 +487,7 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
     };
   }, [currentSnapshot, documentId]);
 
-  const close = useCallback(async (discard = false) => {
+  const close = useCallback(async (discard = false, next?: PageStep) => {
     if (closingRef.current) return;
     closingRef.current = true;
     if (timerRef.current) { window.clearTimeout(timerRef.current); timerRef.current = null; }
@@ -306,11 +504,141 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
       releasedRef.current = true;
       await releasePageEdit(documentId).catch(() => {});
     }
-    onClose();
-  }, [documentId, onClose, queueSave]);
+    if (next && onOpenPage) onOpenPage(next);
+    else onClose();
+  }, [documentId, onClose, onOpenPage, queueSave]);
 
-  // De terugknop van de telefoon sluit de editor, zoals Sluiten.
-  useBackStep(true, () => { void close(); });
+  // De terugknop van de telefoon: terug naar de pagina waar je vandaan kwam,
+  // anders dicht, zoals Sluiten.
+  useBackStep(true, () => { void close(false, backTo ? { id: backTo, how: 'terug' } : undefined); });
+
+  // Van breed naar smal (een tablet draaien): de lade komt dan niet ineens over
+  // de pagina. Terug naar breed: de kolom zoals je hem had.
+  useEffect(() => { setTreeOpen(!treeDrawer && treePreference()); }, [treeDrawer]);
+  const showTree = useCallback((open: boolean) => {
+    setTreeOpen(open);
+    if (!treeDrawer) saveTreePreference(open);
+  }, [treeDrawer]);
+  // Een open lade sluit met terug, vóór de pagina zelf.
+  useBackStep(treeDrawer && treeOpen, () => setTreeOpen(false));
+
+  // Subpagina's (stap 1A-4b): wat het blok nodig heeft. Een andere pagina
+  // openen gaat via close(), zodat deze eerst is opgeslagen, een versie heeft
+  // en de claim los is.
+  const closeRef = useRef(close);
+  closeRef.current = close;
+  const linksRef = useRef<PageLinks | null>(null);
+  const mediaRef = useRef<PageMedia | null>(null);
+  /** De voorvertoning van een versie: titels en afbeeldingen wel, openen en uploaden niet. */
+  const connectPreview = useCallback((preview: Editor) => {
+    const store = preview.storage as unknown as Record<string, Record<string, unknown>>;
+    if (linksRef.current) store.subpage.links = { ...linksRef.current, open: () => {}, create: async () => null };
+    if (mediaRef.current) store.image.media = { ...mediaRef.current, upload: async () => null, refuse: () => {}, chooseFile: async () => null };
+  }, []);
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return;
+    const titles = new Map<string, Promise<string | null>>();
+    const links: PageLinks = {
+      titleOf: pageId => {
+        let title = titles.get(pageId);
+        if (!title) {
+          title = pageTitle(pageId, organizationId);
+          titles.set(pageId, title);
+          title.catch(() => titles.delete(pageId));
+        }
+        return title;
+      },
+      open: pageId => { void closeRef.current(false, { id: pageId, how: 'vooruit' }); },
+      create: async () => {
+        try {
+          const page = await createPage(organizationId, { parent_id: documentId, title: 'Naamloze pagina' });
+          titles.set(page.id, Promise.resolve(page.title));
+          setTreeVersion(count => count + 1);
+          return page.id;
+        } catch (error) {
+          setMessage((error as { message?: string } | null)?.message || 'De subpagina kon niet worden gemaakt.');
+          return null;
+        }
+      },
+    };
+    (editor.storage as unknown as Record<string, { links: PageLinks | null }>).subpage.links = links;
+    linksRef.current = links;
+  }, [editor, documentId, organizationId]);
+
+  // Afbeeldingen (stap 1A-4b): tonen via een blob-URL (de worker wil een
+  // Bearer-token, dat kan een <img> niet sturen), uploaden als bijlage van deze
+  // pagina. De blob-URL's gaan weg als de editor sluit.
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return;
+    const urls = new Map<string, Promise<string | null>>();
+    const made: string[] = [];
+    const remember = (blob: Blob) => { const url = URL.createObjectURL(blob); made.push(url); return url; };
+    const media: PageMedia = {
+      imageUrl: attachmentId => {
+        let url = urls.get(attachmentId);
+        if (!url) {
+          url = (async () => {
+            // Niet te zien (weg, of geen recht): null, en het blok zegt "niet gevonden".
+            const key = await attachmentStorageKey(attachmentId, organizationId);
+            if (!key) return null;
+            const blob = await fetchStoredFileBlob(key);
+            return blob ? remember(blob) : null;
+          })();
+          urls.set(attachmentId, url);
+          url.catch(() => urls.delete(attachmentId));
+        }
+        return url;
+      },
+      upload: async file => {
+        try {
+          const attachment = await uploadToR2(file, organizationId, { entity_type: 'document', entity_id: documentId });
+          // Meteen tonen wat er net is gekozen, zonder het terug te halen.
+          urls.set(attachment.id, Promise.resolve(remember(file)));
+          return attachment.id;
+        } catch (error) {
+          setMessage((error as { message?: string } | null)?.message || 'De afbeelding kon niet worden geüpload.');
+          return null;
+        }
+      },
+      refuse: reason => setMessage(reason),
+      fileInfo: async attachmentId => {
+        const info = await attachmentInfo(attachmentId, organizationId);
+        return info ? { name: info.name, size: info.size_bytes } : null;
+      },
+      // Altijd opslaan via een downloadlink, nooit openen: een blob-URL draait
+      // in de herkomst van de app, zonder de sandbox van de worker.
+      download: async attachmentId => {
+        try {
+          const info = await attachmentInfo(attachmentId, organizationId);
+          const blob = info ? await fetchStoredFileBlob(info.storage_key) : null;
+          if (!info || !blob) { setMessage('Dit bestand is er niet meer.'); return; }
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = info.name;
+          link.rel = 'noopener';
+          link.hidden = true;
+          document.body.append(link);
+          link.click();
+          link.remove();
+          window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+        } catch (error) {
+          setMessage((error as { message?: string } | null)?.message || 'Het bestand kon niet worden opgehaald.');
+        }
+      },
+      chooseFile: () => new Promise<FileChoice>(resolve => {
+        setFilePicker({ files: null, error: null, resolve });
+        listDossierFiles(organizationId, placeRef.current)
+          .then(files => setFilePicker(current => (current ? { ...current, files } : current)))
+          .catch(() => setFilePicker(current => (current ? { ...current, error: 'De bestanden van dit dossier konden niet worden geladen.' } : current)));
+      }),
+    };
+    (editor.storage as unknown as Record<string, { media: PageMedia | null }>).image.media = media;
+    mediaRef.current = media;
+    return () => { for (const url of made) URL.revokeObjectURL(url); };
+  }, [editor, documentId, organizationId]);
+
+
 
   const reloadAfterConflict = async () => {
     setMessage(null);
@@ -319,6 +647,7 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
       setMode('lezen');
       await tryClaim();
     } catch (error) {
+      if (await stopIfTooNew(error)) return;
       setMode('fout');
       setMessage((error as { message?: string } | null)?.message || 'Opnieuw laden is niet gelukt.');
     }
@@ -340,6 +669,7 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
       setMessage(`Versie ${version.version} is teruggezet.`);
       setVersionsOpen(false);
     } catch (error) {
+      if (await stopIfTooNew(error)) return;
       setMessage((error as { message?: string } | null)?.message || 'Terugzetten is niet gelukt.');
     }
   };
@@ -355,8 +685,87 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
     }
   };
 
+  // Delen (stap 1C): met wie de pagina gedeeld is, en of die de pagina van nu
+  // ziet. Alleen voor wie mag delen; zonder antwoord gewoon geen melding.
+  const reloadShareStatus = useCallback(async () => {
+    if (!canWrite) return;
+    const editsBefore = editCountRef.current;
+    try {
+      const rows = await loadPageShareStatus(documentId);
+      setShareStatus(rows);
+      // Typte je terwijl de vraag liep, dan ziet de klant dat nog niet: de melding blijft.
+      if (editCountRef.current === editsBefore) setChangedSinceShareStatus(false);
+    } catch {
+      setShareStatus([]);
+    }
+  }, [canWrite, documentId]);
+  useEffect(() => { void reloadShareStatus(); }, [reloadShareStatus]);
+  const shareOutdated = shareStatus.length > 0 && (changedSinceShareStatus || shareStatus.some(row => !row.is_current));
+
+  /**
+   * Eerst opslaan wat er nog staat: delen en bijwerken nemen de opgeslagen
+   * pagina. Bij een conflict of een mislukte opslag staat er op het scherm iets
+   * anders dan wat er is opgeslagen; dan niet, anders kreeg de klant iets
+   * anders dan je ziet.
+   */
+  const flushForShare = useCallback(async () => {
+    if (modeRef.current === 'bewerken') return queueSave();
+    return modeRef.current !== 'conflict' && modeRef.current !== 'fout';
+  }, [queueSave]);
+
+  const releaseToShares = async () => {
+    if (releasing) return;
+    setReleasing(true);
+    setShareNote(null);
+    try {
+      if (!(await flushForShare())) throw new Error('De pagina kon niet worden opgeslagen, dus ook niet bijgewerkt bij de klant. Probeer het zo nog eens.');
+      const count = await releasePageToShares(documentId);
+      await reloadShareStatus();
+      setShareNote(count === 1 ? 'Bijgewerkt: de ontvanger ziet nu deze versie.' : count > 1 ? `Bijgewerkt: ${count} ontvangers zien nu deze versie.` : 'Iedereen ziet deze versie al.');
+      window.setTimeout(() => setShareNote(null), 5000);
+    } catch (error) {
+      setMessage(error instanceof Error && error.message ? error.message : 'Bijwerken bij de klant is niet gelukt.');
+    } finally {
+      setReleasing(false);
+    }
+  };
+
+  const openShare = async () => {
+    if (openingShare || !onShare) return;
+    setOpeningShare(true);
+    try {
+      await onShare({ title, flush: flushForShare, done: () => { void reloadShareStatus(); } });
+    } finally {
+      setOpeningShare(false);
+    }
+  };
+
+  // Word (stap 1B-2): de opgeslagen pagina, in de huisstijl. Eerst opslaan wat
+  // er nog staat: de export leest uit de database, net als de server straks.
+  // Het bouwen laadt pas bij een klik, zodat de editor er niet zwaarder van wordt.
+  const exportWord = async () => {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      if (modeRef.current === 'bewerken' && !(await queueSave())) {
+        throw new Error('De pagina kon niet worden opgeslagen, dus ook niet als Word-bestand. Probeer het zo nog eens.');
+      }
+      const { buildPageWord, saveFile } = await import('../lib/pageWordExport');
+      const { blob, fileName } = await buildPageWord(documentId, organizationId, houseStyle);
+      saveFile(blob, fileName);
+    } catch (error) {
+      setMessage(error instanceof Error && error.message ? error.message : 'Het Word-bestand kon niet worden gemaakt.');
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const editable = mode === 'bewerken';
+  useEffect(() => {
+    if (!editable && menuRef.current) showMenu(null);
+  }, [editable]);
   const statusText = mode === 'laden' ? 'Laden…'
+    : mode === 'onbekend' ? 'Alleen lezen'
     : mode === 'lezen' ? (holder ? `${nameOf(holder)} bewerkt deze pagina` : 'Alleen lezen')
       : mode === 'bewerken' ? (saveState === 'bezig' ? 'Opslaan…' : saveState === 'wijzigingen' ? 'Niet opgeslagen' : saveState === 'fout' ? 'Niet opgeslagen' : 'Opgeslagen')
         : 'Niet opgeslagen';
@@ -365,25 +774,66 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
     <div className="page-editor" role="dialog" aria-modal="true" aria-label={title || 'Pagina'}>
       <div className="page-editor-bar">
         <button type="button" className="page-editor-close" onClick={() => void close()} aria-label="Pagina sluiten"><X size={18} /></button>
+        <button
+          type="button"
+          className={`page-editor-action page-editor-tree-button${treeOpen ? ' is-active' : ''}`}
+          onClick={() => showTree(!treeOpen)}
+          aria-expanded={treeOpen}
+          aria-controls={treeOpen ? 'page-tree' : undefined}
+          title="De pagina's van dit dossier"
+        ><PanelLeft size={15} /><span>Pagina's</span></button>
+        {ancestors.length > 0 && <nav className="page-editor-crumbs" aria-label="Bovenliggende pagina's">
+          {ancestors.map((ancestor, index) => (
+            <button
+              key={ancestor.id}
+              type="button"
+              className={`page-editor-parent${index === ancestors.length - 1 ? ' is-direct' : ''}`}
+              onClick={() => void close(false, { id: ancestor.id, how: 'vooruit' })}
+              title={`Naar ${ancestor.title || 'Naamloze pagina'}`}
+              aria-label={index === ancestors.length - 1 ? `Naar de bovenliggende pagina: ${ancestor.title || 'Naamloze pagina'}` : `Naar ${ancestor.title || 'Naamloze pagina'}`}
+            >{index === ancestors.length - 1 && <ChevronLeft size={15} />}<span>{ancestor.title || 'Naamloze pagina'}</span></button>
+          ))}
+        </nav>}
         <span className="page-editor-crumb" title={title}>{title || 'Pagina'}</span>
         <span className={`page-editor-status is-${mode === 'bewerken' ? saveState : mode}`} role="status">{statusText}</span>
+        {canWrite && onShare && <button type="button" className="page-editor-action page-editor-share" onClick={() => void openShare()} disabled={openingShare} title="Deel deze pagina met een klant of via een deellink">
+          <Share2 size={15} /><span>{openingShare ? 'Bezig…' : 'Delen'}</span>
+        </button>}
         <button type="button" className="page-editor-action" onClick={() => void copyLink()} title="Een link naar deze pagina, voor collega's">
           <Copy size={15} /><span>{copied ? 'Gekopieerd' : 'Link'}</span>
+        </button>
+        <button type="button" className="page-editor-action page-editor-word" onClick={() => void exportWord()} disabled={exporting} title="Download deze pagina als Word-bestand (.docx), in je huisstijl">
+          <FileDown size={15} /><span>{exporting ? 'Bezig…' : 'Word'}</span>
         </button>
         <button type="button" className={`page-editor-action${versionsOpen ? ' is-active' : ''}`} onClick={() => setVersionsOpen(open => !open)} aria-expanded={versionsOpen}>
           <History size={15} /><span>Versies</span>
         </button>
       </div>
 
-      {editable && editor && <Toolbar editor={editor} />}
+      {editable && editor && <Toolbar editor={editor} onInsert={openPlusMenu} />}
+      {editable && filePicker && <PageFilePicker
+        files={filePicker.files}
+        error={filePicker.error}
+        onChoose={choice => { filePicker.resolve(choice); setFilePicker(null); }}
+      />}
+      {editable && blockMenu && <BlockMenu menu={blockMenu} onHover={index => { if (menuRef.current) showMenu({ ...menuRef.current, active: index }); }} onClose={closeBlockMenu} />}
 
-      {(message || (mode === 'lezen' && holder)) && <div className={`page-editor-banner${mode === 'conflict' || mode === 'geen_recht' || mode === 'fout' ? ' is-warning' : ''}`}>
+      {(message || (mode === 'lezen' && holder)) && <div className={`page-editor-banner${mode === 'conflict' || mode === 'geen_recht' || mode === 'fout' || mode === 'onbekend' ? ' is-warning' : ''}`}>
         <span>{message ?? `${nameOf(holder as string)} bewerkt deze pagina. Je kunt meelezen; zodra die klaar is, kun je verder.`}</span>
         {mode === 'conflict' && <button type="button" className="btn" onClick={() => void reloadAfterConflict()}>Opnieuw laden</button>}
+        {mode === 'onbekend' && refreshHelps && <button type="button" className="btn" onClick={() => window.location.reload()}>App verversen</button>}
         {closeAnyway && <button type="button" className="btn" onClick={() => void close(true)}>Toch sluiten</button>}
       </div>}
 
+      {(shareOutdated || shareNote) && <div className="page-editor-banner page-share-banner" role="status">
+        <span>{shareNote ?? 'De klant ziet een oudere versie van deze pagina.'}</span>
+        {!shareNote && <button type="button" className="btn" onClick={() => void releaseToShares()} disabled={releasing}>
+          {releasing ? 'Bezig…' : 'Bijwerken bij klant'}
+        </button>}
+      </div>}
+
       {versionsOpen && <VersionsPanel
+        connectPreview={connectPreview}
         documentId={documentId}
         organizationId={organizationId}
         canRestore={editable}
@@ -392,45 +842,116 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
         onClose={() => setVersionsOpen(false)}
       />}
 
-      <div className="page-editor-scroll">
-        <div className="page-editor-sheet">
-          <input
-            className="page-editor-title"
-            value={title}
-            placeholder="Naamloze pagina"
-            aria-label="Titel van de pagina"
-            readOnly={!editable}
-            onChange={event => { setTitle(event.target.value); scheduleRef.current(); }}
-            onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); editor?.commands.focus('start'); } }}
-          />
-          <EditorContent editor={editor} className="page-prose" />
+      <div className="page-editor-main">
+        {treeOpen && <PageTree
+          organizationId={organizationId}
+          pageId={documentId}
+          place={place}
+          currentTitle={title}
+          ownDossierName={ownDossierName}
+          version={treeVersion}
+          drawer={treeDrawer}
+          onOpen={pageId => {
+            if (treeDrawer) setTreeOpen(false);
+            void close(false, { id: pageId, how: 'vooruit' });
+          }}
+          onClose={() => showTree(false)}
+        />}
+        {treeDrawer && treeOpen && <div className="page-tree-backdrop" aria-hidden="true" onClick={() => setTreeOpen(false)} />}
+        <div className="page-editor-scroll">
+          <div className="page-editor-sheet">
+            <input
+              className="page-editor-title"
+              value={title}
+              placeholder="Naamloze pagina"
+              aria-label="Titel van de pagina"
+              readOnly={!editable}
+              onChange={event => { setTitle(event.target.value); scheduleRef.current(); }}
+              onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); editor?.commands.focus('start'); } }}
+            />
+            <EditorContent editor={editor} className="page-prose" />
+          </div>
         </div>
       </div>
     </div>
   );
 }
 
-function Toolbar({ editor }: { editor: Editor }) {
+/** `text`: een woord naast het icoon, waar iconen alleen te veel op elkaar lijken (weghalen). */
+type Tool = { label: string; icon: JSX.Element; text?: string; active?: boolean; disabled?: boolean; run: () => void } | 'sep';
+
+function ToolButtons({ tools }: { tools: Tool[] }) {
+  return <>{tools.map((tool, index) => tool === 'sep'
+    ? <span key={`sep-${index}`} className="page-editor-sep" aria-hidden="true" />
+    : <button
+        key={tool.label}
+        type="button"
+        className={`page-editor-tool${tool.active ? ' is-active' : ''}${tool.text ? ' has-text' : ''}`}
+        title={tool.label}
+        aria-label={tool.label}
+        aria-pressed={tool.active ?? undefined}
+        disabled={tool.disabled}
+        // Muisklik houdt de cursor in de tekst.
+        onMouseDown={event => event.preventDefault()}
+        onClick={tool.run}
+      >{tool.icon}{tool.text && <span>{tool.text}</span>}</button>)}</>;
+}
+
+const CALLOUT_CHOICES: Array<{ variant: CalloutVariant; label: string; icon: JSX.Element }> = [
+  { variant: 'info', label: 'Info', icon: <Info size={16} /> },
+  { variant: 'tip', label: 'Tip', icon: <Lightbulb size={16} /> },
+  { variant: 'let-op', label: 'Let op', icon: <TriangleAlert size={16} /> },
+  { variant: 'waarschuwing', label: 'Waarschuwing', icon: <OctagonAlert size={16} /> },
+];
+
+/** Waar de cursor in een tabel staat, voor verplaatsen (null buiten een tabel). */
+function tablePlace(editor: Editor): { top: number; bottom: number; left: number; right: number; rows: number; cols: number; header: boolean } | null {
+  const { state } = editor;
+  if (!isInTable(state)) return null;
+  try {
+    const rect = selectedRect(state);
+    const firstCell = rect.table.firstChild?.firstChild;
+    return {
+      top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right,
+      rows: rect.map.height, cols: rect.map.width,
+      header: firstCell?.type.name === 'tableHeader',
+    };
+  } catch {
+    return null;
+  }
+}
+
+function Toolbar({ editor, onInsert }: { editor: Editor; onInsert: (anchor: DOMRect) => void }) {
   const state = useEditorState({
     editor,
-    selector: ({ editor: ed }) => ({
-      p: ed.isActive('paragraph'),
-      h1: ed.isActive('heading', { level: 1 }),
-      h2: ed.isActive('heading', { level: 2 }),
-      h3: ed.isActive('heading', { level: 3 }),
-      bold: ed.isActive('bold'),
-      italic: ed.isActive('italic'),
-      underline: ed.isActive('underline'),
-      strike: ed.isActive('strike'),
-      link: ed.isActive('link'),
-      bullet: ed.isActive('bulletList'),
-      ordered: ed.isActive('orderedList'),
-      task: ed.isActive('taskList'),
-      quote: ed.isActive('blockquote'),
-      code: ed.isActive('codeBlock'),
-      canUndo: ed.can().undo(),
-      canRedo: ed.can().redo(),
-    }),
+    selector: ({ editor: ed }) => {
+      const place = tablePlace(ed);
+      const cellAlign = (ed.getAttributes('tableCell').align ?? ed.getAttributes('tableHeader').align ?? null) as string | null;
+      return {
+        p: ed.isActive('paragraph'),
+        h1: ed.isActive('heading', { level: 1 }),
+        h2: ed.isActive('heading', { level: 2 }),
+        h3: ed.isActive('heading', { level: 3 }),
+        bold: ed.isActive('bold'),
+        italic: ed.isActive('italic'),
+        underline: ed.isActive('underline'),
+        strike: ed.isActive('strike'),
+        link: ed.isActive('link'),
+        bullet: ed.isActive('bulletList'),
+        ordered: ed.isActive('orderedList'),
+        task: ed.isActive('taskList'),
+        quote: ed.isActive('blockquote'),
+        code: ed.isActive('codeBlock'),
+        canUndo: ed.can().undo(),
+        canRedo: ed.can().redo(),
+        table: place,
+        canMerge: place ? ed.can().mergeCells() : false,
+        canSplit: place ? ed.can().splitCell() : false,
+        cellAlign,
+        callout: ed.isActive('callout') ? calloutVariant(ed.getAttributes('callout').variant) : null,
+        details: ed.isActive('details'),
+      };
+    },
   });
   const chain = () => editor.chain().focus();
   const setLink = () => {
@@ -445,7 +966,28 @@ function Toolbar({ editor }: { editor: Editor }) {
     }
     chain().extendMarkRange('link').setLink({ href: value }).run();
   };
-  const tools: Array<{ label: string; icon: JSX.Element; active?: boolean; disabled?: boolean; run: () => void } | 'sep'> = [
+  // Rijen en kolommen verplaatsen: prosemirror-tables kent het, Tiptap heeft
+  // er geen opdracht voor. Eén stap per klik, binnen de tabel.
+  const moveRow = (step: -1 | 1) => {
+    const place = tablePlace(editor);
+    if (!place) return;
+    const from = step < 0 ? place.top : place.bottom - 1;
+    const to = from + step;
+    if (to < 0 || to >= place.rows) return;
+    moveTableRow({ from, to })(editor.state, editor.view.dispatch);
+    editor.commands.focus();
+  };
+  const moveColumn = (step: -1 | 1) => {
+    const place = tablePlace(editor);
+    if (!place) return;
+    const from = step < 0 ? place.left : place.right - 1;
+    const to = from + step;
+    if (to < 0 || to >= place.cols) return;
+    moveTableColumn({ from, to })(editor.state, editor.view.dispatch);
+    editor.commands.focus();
+  };
+
+  const tools: Tool[] = [
     { label: 'Tekst', icon: <Pilcrow size={16} />, active: state.p, run: () => chain().setParagraph().run() },
     { label: 'Kop 1', icon: <Heading1 size={16} />, active: state.h1, run: () => chain().toggleHeading({ level: 1 }).run() },
     { label: 'Kop 2', icon: <Heading2 size={16} />, active: state.h2, run: () => chain().toggleHeading({ level: 2 }).run() },
@@ -462,33 +1004,83 @@ function Toolbar({ editor }: { editor: Editor }) {
     { label: 'Takenlijst', icon: <ListChecks size={16} />, active: state.task, run: () => chain().toggleTaskList().run() },
     { label: 'Citaat', icon: <Quote size={16} />, active: state.quote, run: () => chain().toggleBlockquote().run() },
     { label: 'Code', icon: <Braces size={16} />, active: state.code, run: () => chain().toggleCodeBlock().run() },
-    { label: 'Scheidingslijn', icon: <Minus size={16} />, run: () => chain().setHorizontalRule().run() },
+    // Via runPageBlock: Tiptap zette na de lijn de selectie op het blok erna,
+    // en de volgende toets overschreef dat (zie cursorOnText in PageBlockMenu).
+    { label: 'Scheidingslijn', icon: <Minus size={16} />, run: () => { runPageBlock(editor, 'scheidingslijn'); } },
     'sep',
     { label: 'Ongedaan maken', icon: <Undo2 size={16} />, disabled: !state.canUndo, run: () => chain().undo().run() },
     { label: 'Opnieuw', icon: <Redo2 size={16} />, disabled: !state.canRedo, run: () => chain().redo().run() },
   ];
+
+  const place = state.table;
+  const tableTools: Tool[] = place ? [
+    { label: 'Rij erboven', icon: <BetweenHorizontalStart size={16} />, run: () => chain().addRowBefore().run() },
+    { label: 'Rij eronder', icon: <BetweenHorizontalEnd size={16} />, run: () => chain().addRowAfter().run() },
+    { label: 'Kolom links', icon: <BetweenVerticalStart size={16} />, run: () => chain().addColumnBefore().run() },
+    { label: 'Kolom rechts', icon: <BetweenVerticalEnd size={16} />, run: () => chain().addColumnAfter().run() },
+    'sep',
+    { label: 'Rij omhoog', icon: <ArrowUp size={16} />, disabled: place.top <= 0, run: () => moveRow(-1) },
+    { label: 'Rij omlaag', icon: <ArrowDown size={16} />, disabled: place.bottom >= place.rows, run: () => moveRow(1) },
+    { label: 'Kolom naar links', icon: <ArrowLeft size={16} />, disabled: place.left <= 0, run: () => moveColumn(-1) },
+    { label: 'Kolom naar rechts', icon: <ArrowRight size={16} />, disabled: place.right >= place.cols, run: () => moveColumn(1) },
+    'sep',
+    { label: 'Kopregel', icon: <PanelTop size={16} />, active: place.header, run: () => chain().toggleHeaderRow().run() },
+    { label: 'Cellen samenvoegen', icon: <TableCellsMerge size={16} />, disabled: !state.canMerge, run: () => chain().mergeCells().run() },
+    { label: 'Cel splitsen', icon: <TableCellsSplit size={16} />, disabled: !state.canSplit, run: () => chain().splitCell().run() },
+    'sep',
+    { label: 'Links uitlijnen', icon: <AlignLeft size={16} />, active: !state.cellAlign || state.cellAlign === 'left', run: () => chain().setCellAttribute('align', null).run() },
+    { label: 'Midden uitlijnen', icon: <AlignCenter size={16} />, active: state.cellAlign === 'center', run: () => chain().setCellAttribute('align', 'center').run() },
+    { label: 'Rechts uitlijnen', icon: <AlignRight size={16} />, active: state.cellAlign === 'right', run: () => chain().setCellAttribute('align', 'right').run() },
+    'sep',
+    { label: 'Rij verwijderen', icon: <Trash2 size={15} />, text: 'Rij', disabled: place.rows <= 1, run: () => chain().deleteRow().run() },
+    { label: 'Kolom verwijderen', icon: <Trash2 size={15} />, text: 'Kolom', disabled: place.cols <= 1, run: () => chain().deleteColumn().run() },
+    { label: 'Tabel verwijderen', icon: <Trash2 size={15} />, text: 'Tabel', run: () => chain().deleteTable().run() },
+  ] : [];
+
+  const calloutTools: Tool[] = state.callout ? [
+    ...CALLOUT_CHOICES.map(choice => ({
+      label: choice.label,
+      icon: choice.icon,
+      active: state.callout === choice.variant,
+      run: () => { chain().updateAttributes('callout', { variant: choice.variant }).run(); },
+    })),
+    'sep' as const,
+    { label: 'Kader weghalen', icon: <Trash2 size={15} />, text: 'Kader weg', run: () => chain().lift('callout').run() },
+  ] : [];
+
   return (
-    <div className="page-editor-toolbar" role="toolbar" aria-label="Opmaak">
-      {tools.map((tool, index) => tool === 'sep'
-        ? <span key={`sep-${index}`} className="page-editor-sep" aria-hidden="true" />
-        : <button
-            key={tool.label}
-            type="button"
-            className={`page-editor-tool${tool.active ? ' is-active' : ''}`}
-            title={tool.label}
-            aria-label={tool.label}
-            aria-pressed={tool.active ?? undefined}
-            disabled={tool.disabled}
-            // Muisklik houdt de cursor in de tekst.
-            onMouseDown={event => event.preventDefault()}
-            onClick={tool.run}
-          >{tool.icon}</button>)}
-    </div>
+    <>
+      <div className="page-editor-toolbar" role="toolbar" aria-label="Opmaak">
+        <button
+          type="button"
+          className="page-editor-tool page-editor-insert"
+          title="Blok invoegen (of typ / in de tekst)"
+          aria-label="Blok invoegen"
+          onMouseDown={event => event.preventDefault()}
+          onClick={event => onInsert(event.currentTarget.getBoundingClientRect())}
+        ><Plus size={18} /></button>
+        <span className="page-editor-sep" aria-hidden="true" />
+        <ToolButtons tools={tools} />
+      </div>
+      {place && <div className="page-editor-subbar" role="toolbar" aria-label="Tabel">
+        <span className="page-editor-subbar-label">Tabel</span>
+        <ToolButtons tools={tableTools} />
+      </div>}
+      {state.callout && <div className="page-editor-subbar" role="toolbar" aria-label="Callout">
+        <span className="page-editor-subbar-label">Callout</span>
+        <ToolButtons tools={calloutTools} />
+      </div>}
+      {state.details && !place && !state.callout && <div className="page-editor-subbar" role="toolbar" aria-label="Uitklapper">
+        <span className="page-editor-subbar-label">Uitklapper</span>
+        <ToolButtons tools={[{ label: 'Uitklapper weghalen', icon: <Trash2 size={15} />, text: 'Uitklapper weg', run: () => chain().unsetDetails().run() }]} />
+      </div>}
+    </>
   );
 }
 
 /** Het versiepaneel (stap 1A-3b): de lijst, een voorvertoning, en terugzetten. */
-function VersionsPanel({ documentId, organizationId, canRestore, nameOf, onRestore, onClose }: {
+function VersionsPanel({ connectPreview, documentId, organizationId, canRestore, nameOf, onRestore, onClose }: {
+  connectPreview: (preview: Editor) => void;
   documentId: string;
   organizationId: string;
   canRestore: boolean;
@@ -540,17 +1132,30 @@ function VersionsPanel({ documentId, organizationId, canRestore, nameOf, onResto
           <span>Zo zag versie {selected.version} eruit</span>
           {canRestore && <button type="button" className="btn btn-primary" onClick={() => onRestore(selected)}>Deze versie terugzetten</button>}
         </div>
-        {preview ? <VersionPreview title={preview.title} body={preview.body} /> : <p className="page-versions-empty">Laden…</p>}
+        {preview ? <VersionPreview title={preview.title} body={preview.body} connect={connectPreview} /> : <p className="page-versions-empty">Laden…</p>}
       </div>}
     </aside>
   );
 }
 
-/** Een versie alleen-lezen, met dezelfde blokken als de editor. */
-function VersionPreview({ title, body }: { title: string; body: unknown }) {
-  const editor = useEditor({ extensions: pageEditorExtensions({ placeholder: '' }), editable: false, content: body as JSONContent }, [body]);
+/** Een versie alleen-lezen, met dezelfde blokken als de editor. Past hij
+ *  niet in deze editor, dan zeggen we dat, in plaats van een lege pagina. */
+function VersionPreview({ title, body, connect }: { title: string; body: unknown; connect: (preview: Editor) => void }) {
+  // immediatelyRender: false om dezelfde reden als in PageEditor: anders kan de
+  // editor al weg zijn voordat het eerste effect draait.
+  const editor = useEditor({ extensions: pageEditorExtensions({ placeholder: '' }), editable: false, content: '', immediatelyRender: false }, []);
+  const [problem, setProblem] = useState<string | null>(null);
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return;
+    // Vóór de inhoud: de blokken halen bij het tekenen hun titel en afbeelding op.
+    connect(editor);
+    const fit = pageBodyFit(editor.schema, body);
+    setProblem(fit.ok ? null : fit.unknown.length > 0 ? TOO_NEW_MESSAGE : BROKEN_MESSAGE);
+    editor.commands.setContent(fit.ok ? body as JSONContent : '', { emitUpdate: false });
+  }, [editor, body, connect]);
   return <div className="page-versions-sheet">
     <h2 className="page-versions-title">{title || 'Naamloze pagina'}</h2>
+    {problem && <p className="page-versions-empty">{problem}</p>}
     <EditorContent editor={editor} className="page-prose" />
   </div>;
 }

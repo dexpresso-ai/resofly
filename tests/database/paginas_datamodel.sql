@@ -226,7 +226,8 @@ select pg_temp.gelijk(pg_temp.zoek(:'eigenaar', :'org_a', '<>&'), '', 'een vraag
 update public.documents set archived_at = now() where id = :'kleinkind';
 select pg_temp.gelijk(pg_temp.zoek(:'eigenaar', :'org_a', 'klacht'), '', 'wat in de prullenbak ligt, vind je niet');
 
--- ── 7. Een pagina delen kan pas vanaf stap 1C ──────────────────────────────
+-- ── 7. Een pagina delen: niet via een map, en niet zonder vrijgave ─────────
+-- De vrijgave zelf test paginas_delen.sql (20261128120000, stap 1C-2).
 insert into public.content_folders (organization_id, name) values (:'org_a', 'Intern') returning id as intern \gset
 select pg_temp.pagina(:'eigenaar', :'org_a', 'Concept', pg_temp.alinea('Nog niet klaar.'), null, null, :'intern') as concept \gset
 insert into public.documents (organization_id, created_by, title, content, folder_id)
@@ -235,7 +236,7 @@ insert into public.drive_shares (organization_id, created_by, item_type, item_id
 values (:'org_a', :'eigenaar', 'folder', :'intern', 'Intern', 'link', 'gast@paginas.test', 'hash-p') returning id as mapdeling \gset
 select pg_temp.gelijk((select string_agg(name, ',' order by name) from public.drive_share_items(:'mapdeling')), 'Huisregels', 'een gedeelde map neemt geen pagina mee');
 select pg_temp.weigert(format('insert into public.drive_shares (organization_id, created_by, item_type, item_id, item_name, recipient_kind, recipient_email, token_hash) values (%L, %L, %L, %L, %L, %L, %L, %L)',
-  :'org_a', :'eigenaar', 'document', :'concept', 'Concept', 'link', 'gast@paginas.test', 'hash-q'), 'Een pagina delen kan nog niet', 'een pagina zelf delen kan nog niet');
+  :'org_a', :'eigenaar', 'document', :'concept', 'Concept', 'link', 'gast@paginas.test', 'hash-q'), 'Een pagina deel je met een vrijgegeven versie', 'een pagina delen zonder vrijgegeven versie kan niet');
 -- Versturen (een zending) pakt een map uit met drive_folder_leaves: ook zonder pagina's.
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select pg_temp.gelijk((select string_agg(name, ',' order by name) from public.drive_folder_leaves(:'org_a', :'intern')), 'Huisregels', 'versturen neemt geen pagina mee');

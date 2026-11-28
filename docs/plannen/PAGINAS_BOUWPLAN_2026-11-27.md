@@ -1,8 +1,8 @@
 # Bouwplan: pagina's in de documentenomgeving (2026-11-27)
 
-> **Stand op 27 november 2026: ontwerp, nog niets gebouwd.** De keuzes in §1 zijn die dag
-> doorgesproken. Twee antwoorden lees ik op een bepaalde manier; die staan er apart bij, zodat
-> ze te corrigeren zijn.
+> **Ontworpen op 27 november 2026.** De keuzes in §1 zijn die dag doorgesproken. Twee antwoorden
+> lees ik op een bepaalde manier; die staan er apart bij, zodat ze te corrigeren zijn. Wat er
+> sindsdien gebouwd is, staat in §18: de tabel met stappen en de stand voor de overdracht.
 
 Vraag: *Ik wil eens met je gaan nadenken wat we kunnen doen om in onze documentenomgeving
 eigenlijk een Notion variant te gaan maken. Dus niet alleen documenten via een echte docx of een
@@ -498,16 +498,62 @@ akkoord is.
 
 | Stap | Wat | Status |
 | --- | --- | --- |
-| 0 | Gedeelde mappen vullen zich niet meer vanzelf (§7). | gebouwd op 27 november, op de branch; zie `docs/changelog/CHANGELOG_GEDEELDE_MAPPEN_2026-11-27.md` |
-| 1A-1 | Datamodel en migraties: de kolommen op `documents`, `document_versions`, de triggers (boom, overerving, organisatie, controle op `body`), `claim_page_edit`, de zoekindex met zoek-RPC, de logboekvelden. Met databasetests, nog zonder scherm. | gebouwd op 27 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_DATAMODEL_2026-11-27.md` |
-| 1A-2 | Laden en zoeken: de kolomlijst in `loadCoreData`, `excerpt` in de kaarten, GlobalSearch en `content.search` via de zoek-RPC. In één stap, anders breekt zoeken (§6). | gebouwd op 27 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_LADEN_ZOEKEN_2026-11-27.md`. Gerrie zoekt bewust nog zoals voorheen (zie daar) |
-| 1A-3a | De editor: Tiptap als eigen stuk bundel, het pagina-scherm, de basisblokken, opslaan met `edit_version`, één tegelijk bewerken. | gebouwd op 27 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_EDITOR_2026-11-27.md` |
-| 1A-3b | Het versiepaneel (bekijken en terugzetten) en een eigen adres per pagina. | gebouwd op 27 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_VERSIES_ADRES_2026-11-27.md` |
-| 1A-4 | De overige blokken: gewone tabel, afbeelding, bestand, callout, uitklapper, inhoudsopgave, subpagina. Het slash-menu en de +-knop op de telefoon. | gepland |
-| 1A-5 | De drive: de boom, het eigen dossier met logo, "Pagina" in het Nieuw-menu, slepen, de prullenbak. De tekstdocumenten omzetten. | gepland |
-| 1B-1 | Proef: huisstijlletters en emoji in een PDF via Collabora (§9). | gepland |
-| 1B-2 | Export: `page-export`, de DOCX-module, het interne PDF-pad, het exportvenster, vastleggen in het dossier, de Word-kopie. | gepland |
-| 1C | Pagina's delen: vrijgeven, "Bijwerken bij klant", subpagina's, de weergave in het portaal en bij een geheime link. | gepland |
+| 0 | Gedeelde mappen vullen zich niet meer vanzelf (§7). | gebouwd en op staging gezet op 27 november; zie `docs/changelog/CHANGELOG_GEDEELDE_MAPPEN_2026-11-27.md` |
+| 1A-1 | Datamodel en migraties: de kolommen op `documents`, `document_versions`, de triggers (boom, overerving, organisatie, controle op `body`), `claim_page_edit`, de zoekindex met zoek-RPC, de logboekvelden. Met databasetests, nog zonder scherm. | gebouwd en op staging gezet op 27 november; zie `docs/changelog/CHANGELOG_PAGINAS_DATAMODEL_2026-11-27.md` |
+| 1A-2 | Laden en zoeken: de kolomlijst in `loadCoreData`, `excerpt` in de kaarten, GlobalSearch en `content.search` via de zoek-RPC. In één stap, anders breekt zoeken (§6). | gebouwd en op staging gezet op 27 november; zie `docs/changelog/CHANGELOG_PAGINAS_LADEN_ZOEKEN_2026-11-27.md`. Gerrie zoekt bewust nog zoals voorheen (zie daar) |
+| 1A-3a | De editor: Tiptap als eigen stuk bundel, het pagina-scherm, de basisblokken, opslaan met `edit_version`, één tegelijk bewerken. | gebouwd en op staging gezet op 27 november; zie `docs/changelog/CHANGELOG_PAGINAS_EDITOR_2026-11-27.md` |
+| 1A-3b | Het versiepaneel (bekijken en terugzetten) en een eigen adres per pagina. | gebouwd en op staging gezet op 27 november; zie `docs/changelog/CHANGELOG_PAGINAS_VERSIES_ADRES_2026-11-27.md` |
+| 1A-4a | Eerst een grendel: een pagina met een blok dat de editor niet kent, gaat niet open om te bewerken. Dan de blokken zonder opslag: gewone tabel, callout, uitklapper, inhoudsopgave. Het blokmenu: `/` in de tekst en de +-knop, ook op de telefoon. Een migratie die de maten van tabelcellen en de soort callout nakijkt. | gebouwd op 27 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_BLOKKEN_2026-11-27.md` |
+| 1A-4b-1 | De subpagina (maken met `/pagina`, openen, omhoog, de terugknop langs de weg), en een migratie die afdwingt dat afbeeldingen, bestanden en subpagina's bij dezelfde organisatie en hetzelfde dossier horen (§8). | gebouwd op 27 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_SUBPAGINAS_2026-11-27.md` |
+| 1A-4b-2 | Afbeelding: uploaden, plakken, slepen (§8). | gebouwd op 27 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_AFBEELDINGEN_2026-11-27.md` |
+| 1A-4b-3 | Bestand uit het dossier (of van de computer), met naam, grootte en downloaden (§8). | gebouwd op 28 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_BESTANDEN_2026-11-28.md` |
+| 1A-5a | De boom in de lijst van de drive (uitklappen), een pagina op een pagina slepen, een subpagina terug naar een map, het kruimelpad in de editor. ("Pagina" in het Nieuw-menu kwam al in 1A-3a.) | gebouwd op 28 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_BOOM_2026-11-28.md` |
+| 1A-5b | De prullenbak: weggooien zet `archived_at` op de pagina en haar subpagina's, 30 dagen terugzetten, daarna definitief weg met de bijlagen via de opruimwachtrij. Een pagina in de prullenbak is nergens zichtbaar. | gebouwd op 28 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_PRULLENBAK_2026-11-28.md` |
+| 1A-5c | Het eigen dossier met logo en naam, bovenaan de drive, in plaats van "Geen klant". | gebouwd op 28 november, op de branch; zie `docs/changelog/CHANGELOG_EIGEN_DOSSIER_2026-11-28.md` |
+| 1A-5e | De boom van het dossier naast de pagina (§4, "het pagina-scherm"): een kolom op een breed scherm, een lade op de telefoon. | gebouwd op 28 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_DOSSIERBOOM_2026-11-28.md` |
+| 1A-5d | De tekstdocumenten omzetten naar pagina's (§10). | wacht op 1C en op een besluit van de gebruiker (zie de stand hieronder) |
+| 1B-1 | Proef: huisstijlletters en emoji in een PDF via Collabora (§9). | voorlopig gedaan op 28 november, met LibreOffice in de cloudsessie: .woff werkt niet, TTF wel, en een in de DOCX ingesloten letter ook. Nog te herhalen op de Collabora-container (de vervanger, emoji). Zie `docs/rapporten/PROEF_1B1_LETTERS_EMOJI_2026-11-28.md`. |
+| 1B-2 | Export: `page-export`, de DOCX-module, het interne PDF-pad, het exportvenster, vastleggen in het dossier, de Word-kopie. | gebouwd op 28 november, op de branch: de DOCX-module (`_shared/pageDocx.ts`, met de huisstijlletters ingesloten via `_shared/woff.ts`), en de knop "Word" in de editor, die de DOCX in de app bouwt (zie de afwijking hieronder). Zie `docs/changelog/CHANGELOG_PAGINAS_WORD_2026-11-28.md`. `page-export`, de PDF, het exportvenster, vastleggen en de Word-kopie wachten op Collabora. |
+| 1C-1 | De omzetting van een pagina naar HTML voor de klant (`_shared/pageHtml.ts`, `renderPageHtml`), zonder browser, en `pageReferences` in `_shared`. Verandert nog niets aan wat een klant ziet. | gebouwd op 28 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_HTML_2026-11-28.md` |
+| 1C-2 | De vrijgave in de database: `drive_shares.document_version_id`, alleen een vrijgegeven versie van die pagina en organisatie. In dezelfde stap lezen het portaal en de geheime link die versie, via `renderPageHtml`. | gebouwd op 28 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_DELEN_VRIJGAVE_2026-11-28.md`. Migratie `20261128120000_paginas_delen`. |
+| 1C-3 | Het deelvenster voor een pagina: vrijgeven, subpagina's aanvinken, "De klant ziet een oudere versie" met "Bijwerken bij klant", het logboek. | gebouwd op 28 november, op de branch: 1C-3a (database en server: `file-share` met de vrijgave, `page_share_status`, `release_page_to_shares`, migratie `20261128130000`) en 1C-3b (het venster, de knop en de melding in de editor, Gerrie); zie `docs/changelog/CHANGELOG_PAGINAS_BIJWERKEN_BIJ_KLANT_2026-11-28.md` |
+| 1C-4 | De weergave in het portaal en bij een geheime link: de opmaak, en afbeeldingen die de server alleen tekent als ze in de gedeelde versie staan. Een klantpagina gaat alleen naar het portaal. | gebouwd op 28 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_PORTAAL_WEERGAVE_2026-11-28.md`. Migratie `20261128140000`. Een klantpagina via een losse link weigerde de database al. |
+
+**1C wordt gebouwd volgens de lezing van §1 (28 november):**
+
+- Delen mag iedereen met schrijfrechten op Inhoud, zoals nu, en altijd als bewuste handeling.
+  "Alleen owner en admin" geldt voor openbaar publiceren (§17), niet voor delen met een klant.
+- De gebruiker zei "Ga verder" na de vraag om 1C eerst door te lopen. Alles staat op de
+  branch; vóór de merge loopt de gebruiker het door. Te bevestigen:
+  - wie mag delen (zie hierboven);
+  - dat een subpagina die niet gedeeld is, voor de klant helemaal niet bestaat, ook haar titel
+    niet;
+  - dat de klant de naam van een bestand in de pagina ziet, maar het bestand zelf alleen als
+    het ook gedeeld is.
+- **Merge 1C-2, 1C-3 en 1C-4 samen.** Vanaf 1C-3 kan de app een pagina delen; wat de klant
+  dan ziet (de opmaak van taken, kaders, afbeeldingen), kwam in 1C-4.
+- **De volgorde is een veiligheidskeuze.** Het portaal toont nu bij een tekstdocument de
+  levende tekst (`content`). Zou de database een pagina eerder laten delen dan het portaal de
+  vrijgegeven versie leest, dan zag de klant de pagina zoals ze op dat moment is. Daarom komen
+  de kolom, de controle en de leeswegen in één stap (1C-2). Een pagina zonder geldige versie
+  toont niets, nooit de levende tekst.
+- **Al nagelopen (28 november):** een pagina komt nu nergens bij een klant. Een gedeelde map
+  en een zending slaan pagina's over (`drive_folder_tree_items`, `drive_folder_leaves`), een
+  losse zending weigert ze (`file-transfer`), en een deling weigert de database
+  (`drive_shares_no_pages_yet`).
+
+**Afwijking van §9, vastgelegd bij de bouw van 1B-2 (28 november):**
+
+- **Word komt uit de app, niet uit `page-export`.** Voor alleen Word is de server niet nodig.
+  - Dezelfde module (`_shared/pageDocx.ts`) draait in de app, met de rechten van wie
+    exporteert.
+  - De letterkeuze staat in `_shared/pageExportFonts.ts`, dus de server kiest straks dezelfde
+    letters.
+- **`page-export` komt pas met de PDF.** Die zet de DOCX in R2, zodat de media-worker hem naar
+  Collabora kan sturen. De afbeeldingen vragen dan een nieuw pad in de media-worker. Dat kan in
+  een cloudsessie niet van begin tot eind getest worden.
+- **Voorwaarde voor het mergen van de knop:** één export opent goed in echte Word. Het schema
+  en LibreOffice zijn nagelopen; Word zelf, en vooral de ingesloten letter, nog niet.
 
 **Afwijkingen van §3 en §5, vastgelegd bij de bouw van 1A-1 (27 november):**
 
@@ -537,22 +583,141 @@ akkoord is.
 
 **Stand op 27 november 2026, einde van de eerste bouwsessie (overdracht):**
 
-- **Gebouwd, op de branch `claude/affectionate-meitner-arfqck`:** stap 0, 1A-1, 1A-2, 1A-3a
-  en 1A-3b. Niets staat op staging; mergen gebeurt pas als de gebruiker het zegt.
-- **Volgende stap: 1A-4**, de overige blokken: tabel, afbeelding, bestand, callout,
-  uitklapper, inhoudsopgave en subpagina, plus het slash-menu en de +-knop.
-- **Nog open:**
-  - **De browsercontrole van "ongedaan maken".** Laden telt niet meer mee in de
-    geschiedenis (`addToHistory: false`). Zonder die regel maakte Ctrl+Z direct na het
-    openen de pagina leeg. De controles staan in `tests/stromen/ui.mjs documenten`, maar
-    zijn nog niet gedraaid: de Docker-daemon was gestopt.
-  - **`deno check` van de gewijzigde edge functions** (`file-share`, `file-transfer`, de
-    acties, de mailsjablonen) is nog niet gedraaid, omdat deno.land in de cloudsessie
-    geblokkeerd is. Dat kan in CI: de workflow `frontend-checks` op de branch.
+- **Op staging sinds 27 november:** stap 0, 1A-1, 1A-2, 1A-3a en 1A-3b, gemerged op
+  verzoek van de gebruiker (merge `416b997`). Verder bouwen gebeurt op de branch
+  `claude/affectionate-meitner-arfqck`; mergen pas als de gebruiker het zegt.
+  - Frontend checks op de branch: groen, met typecheck, unit tests, de schermtests, `deno
+    check` en de migraties vanaf nul met de databasetests.
+  - Deploy Supabase (staging): groen. Beide migraties zijn toegepast, de edge functions
+    staan erop en de rooktest is geslaagd.
+  - De browsercontrole van "ongedaan maken" is daarna gedraaid: `tests/stromen/ui.mjs
+    documenten`, 16 stappen, 0 fout. Laden telt niet mee in de geschiedenis
+    (`addToHistory: false`); zonder die regel maakte Ctrl+Z direct na het openen de pagina
+    leeg.
+- **Daarna gebouwd, op de branch (nog niet op staging):** 1A-4a, de tabel, de callout, de
+  uitklapper, de inhoudsopgave en het blokmenu (`/` en de +-knop), met de grendel tegen
+  pagina's die de editor niet kent. Keuzes daarbij:
+  - Open of dicht van een uitklapper wordt niet opgeslagen (persist uit).
+  - De inhoudsopgave heeft geen eigen gegevens: hij tekent zich uit de koppen.
+  - Een callout bevat alleen tekst en lijsten.
+  - Kolommen schuiven naar fase 2, zoals §3 toeliet.
+- **Daarna gebouwd, op de branch:** 1A-4b-1, de subpagina en de controle op verwijzingen
+  (migratie 20261127150000).
+- **Daarna gebouwd, op de branch:** 1A-4b-2 (afbeeldingen) en 1A-4b-3 (bestanden). Stap 1A-4
+  is daarmee klaar.
+- **Daarna gebouwd, op de branch:** 1A-5a (de boom in de drive en het kruimelpad) en 1A-5b
+  (de prullenbak, migratie 20261128100000).
+- **UI-tests:** de stappen voor de drive staan in een eigen scenario, `ui.mjs paginadrive`
+  (een paar minuten). `ui.mjs documenten` duurt ongeveer 9 minuten.
+- **Daarna gebouwd, op de branch:** 1A-5c, het eigen dossier met mappen.
+- **Daarna gebouwd, op de branch:** van 1B-2 de omzetting van een pagina naar Word
+  (`supabase/functions/_shared/pageDocx.ts`), met tests in Node. Het bestand is tegen de
+  XSD's van ECMA-376 gecontroleerd en in LibreOffice naar PDF omgezet. De zip-schrijver van
+  "Alles exporteren" staat daarvoor nu in `_shared`. `page-export` zelf, het exportvenster en de
+  PDF wachten op Collabora.
+- **Daarna gebouwd, op de branch:** 1A-5e, de boom van het dossier naast de pagina (een
+  kolom die je kunt verbergen, op de telefoon een lade).
+- **Proef 1B-1, voorlopig:** met LibreOffice 24.2 in de cloudsessie
+  (`docs/rapporten/PROEF_1B1_LETTERS_EMOJI_2026-11-28.md`).
+  - LibreOffice gebruikt geen .woff, ook niet als het geïnstalleerd is. TTF werkt wel.
+  - Een TTF die in de DOCX is ingesloten, werkt zonder installatie. Word kan zo'n letter ook
+    gebruiken; met Word zelf is dat niet getest.
+  - Voorstel: `page-export` sluit de huisstijlletter in. Dat kan `pageDocx.ts` nu (`font` in de
+    context), met de .woff van de server omgezet door `_shared/woff.ts`.
+  - Nog te doen op de Collabora-container: welke letter hij neemt als de huisstijlletter
+    ontbreekt, of hij de ingesloten letter gebruikt, en of er een emoji-letter is.
+- **Daarna gebouwd, op de branch:** §12, Gerrie vult een pagina aan. Elke regel wordt een
+  alinea onderaan, na een akkoord in de wachtrij; vervangen weigert de server. Zie
+  `docs/changelog/CHANGELOG_PAGINAS_GERRIE_AANVULLEN_2026-11-28.md`.
+- **Daarna gebouwd, op de branch:** afdrukken met Ctrl+P (§9), alleen de pagina, zie
+  `docs/changelog/CHANGELOG_PAGINAS_AFDRUKKEN_2026-11-28.md`.
+- **Daarna gebouwd, op de branch:** 1C-1, de omzetting van een pagina naar HTML voor de klant
+  (`_shared/pageHtml.ts`). Zie `docs/changelog/CHANGELOG_PAGINAS_HTML_2026-11-28.md`.
+- **Daarna gebouwd, op de branch:** 1C-2, de vrijgave in de database, en het portaal en de
+  geheime link die de gedeelde versie lezen (`_shared/sharedPage.ts`). Zie
+  `docs/changelog/CHANGELOG_PAGINAS_DELEN_VRIJGAVE_2026-11-28.md`. In de app staat "Delen…" nog
+  niet bij een pagina: dat komt met het deelvenster (1C-3).
+- **Daarna gebouwd, op de branch:** 1C-3a, delen en bijwerken in de database en de server
+  (`file-share` neemt de vrijgave aan, `page_share_status`, `release_page_to_shares`). Zie
+  `docs/changelog/CHANGELOG_PAGINAS_BIJWERKEN_BIJ_KLANT_2026-11-28.md`.
+- **Daarna gebouwd, op de branch:** 1C-3b, delen in de app: "Delen" in de editor en de drive,
+  het deelvenster met subpagina's, "De klant ziet een oudere versie" met "Bijwerken bij
+  klant", en Gerrie die een pagina deelt met een vrijgave van wie goedkeurt. UI-scenario
+  `paginadelen` (6 stappen).
+- **Daarna gebouwd, op de branch:** 1C-4, wat de klant ziet: de opmaak in het leesvenster,
+  afbeeldingen (getekend, inline, een uur), en bijlagen alleen als ze nú nog in het dossier
+  horen (`shared_page_attachments`). Gevonden en gerepareerd: de sanitizer haalde `colspan`,
+  `start` en dergelijke weg, en een afgevinkte taak in een gedeelde notitie leek open. Zie
+  `docs/changelog/CHANGELOG_PAGINAS_PORTAAL_WEERGAVE_2026-11-28.md`.
+- **Daarna gerepareerd, op de branch:** een pagina die met alleen `parent_id` naar een andere
+  klant verhuisde, liet haar subpagina's bij de oude klant en haar delingen lopen (migratie
+  `20261128150000`). Zie `docs/changelog/CHANGELOG_PAGINAS_VERHUIZEN_2026-11-28.md`.
+- **De CI op de branch (Frontend checks, met de hand gestart):**
+  - run 304 (ba3ee84): helemaal groen;
+  - run 305 (bf471ad, met de boom naast de pagina): helemaal groen, ook de mobiele
+    lay-outtest (36 minuten), laden per module, de inrichting en de terugknop;
+  - run 306 (0bff935, de knop "Word" en alles ervoor): helemaal groen, ook de mobiele
+    lay-outtest, laden, de inrichting en de terugknop;
+  - run 307 (d7dfc69, met Gerrie die aanvult, het afdrukken en de reparatie van het zwarte
+    scherm): helemaal groen, ook `deno check` van het pad waarlangs Gerrie aanvult, de
+    mobiele lay-outtest, laden, de inrichting en de terugknop. Wat er daarna nog kwam (5f1b4e0
+    en later), is alleen tekst;
+  - run 308 (fe9a4d7, 1C-1 en 1C-2): helemaal groen, ook de nieuwe stap "Deno-typecheck
+    pagina's", `deno check` van `file-share-public` met `_shared/sharedPage.ts`, de
+    migraties vanaf nul met `paginas_delen.sql`, de mobiele lay-outtest, laden, de inrichting
+    en de terugknop;
+  - run 309 (a080604, 1C-3 en 1C-4): helemaal groen. Dat is ook de mobiele lay-outtest
+    met de knop "Delen" in de balk (41 minuten), `deno check` van `file-share`, `mcp` en
+    `gerrie-agent` met de handelingen, en de migraties vanaf nul met
+    `paginas_bijwerken.sql` en `paginas_portaal_bijlagen.sql`;
+  - run 310 (de verhuisreparatie, migratie `20261128150000`, en wat erna kwam): gestart op
+    28 november.
+- **`deno check` op de modules van pagina's:** sinds 1C-1 een eigen stap in
+  `.github/workflows/frontend-checks.yml` ("Deno-typecheck pagina's"): `pageDocx.ts`,
+  `woff.ts`, `zipWriter.ts`, `pageExportFonts.ts`, `pageHtml.ts` en `pageReferences.ts`. Geen
+  edge function importeert ze nog; `client-portal`, waar `pageHtml.ts` straks in komt, staat
+  zelf nog buiten de controle.
+- **1A-5d (omzetten) wacht.** Omzetten bij het openen gaat één kant op, en het neemt een
+  document dingen af tot 1C er is:
+  - een pagina kun je niet delen (`drive_shares_no_pages_yet`);
+  - een gedeelde map en versturen slaan pagina's over;
+  - Gerrie vult een pagina niet aan;
+  - de trigger overschrijft `content`, dus de oorspronkelijke HTML is weg.
+
+  Eerst een besluit van de gebruiker:
+  1. Bewaren we de oorspronkelijke HTML, en waar?
+  2. Wat gebeurt er met documenten die nu gedeeld zijn? §10 zegt: "wordt een vrijgave van de
+     omgezette versie". Dat kan pas na 1C.
+- **UI-tests in vier scenario's**, elk binnen de tien minuten van een begrensde Docker-run:
+  - `ui.mjs documenten` (10 stappen);
+  - `paginas`, de editor en zijn blokken (18);
+  - `paginadrive`, de boom in de drive, de prullenbak, het eigen dossier, de boom naast de
+    pagina, Word, een trage computer, Gerrie die aanvult, en afdrukken (10).
+  - `paginadelen`, delen vanuit de editor met een subpagina, bijwerken bij de klant, Gerrie die
+    deelt, en "Delen…" in de drive (6).
+- **De "Geen klant"-teksten in de documentenomgeving zijn weg** (de vensters van notities en
+  documenten, de kaart van een document). Waar het blijft, staat in
+  `docs/changelog/CHANGELOG_EIGEN_DOSSIER_2026-11-28.md`.
+
+  Het edge-deel en de PDF-weg wachten tot de office-server (Collabora) er is; die is niet in
+  een cloudsessie te draaien. 1C (delen) is begonnen na "Ga verder" van de gebruiker, op de branch; zie de stappen 1C-1 tot 1C-4 en de toelichting onder de tabel.
+
+  Van 1A-5 is alleen het omzetten van tekstdocumenten over (1A-5d, zie hierboven). De boom
+  in de drive, het eigen dossier, slepen en de prullenbak zijn gebouwd.
+
+  Nog open bij de bijlagen: een afbeelding of bestand dat je uit een pagina weghaalt, blijft
+  een bijlage van die pagina, en telt mee in het quotum. Pas als de pagina definitief weg is,
+  gaat het naar de opruimwachtrij (`storage_purge_queue`, reden `document`), net als de
+  bijlagen van haar subpagina's (`page_trash_purge_tree`, migratie 20261128100000).
 - **Tip voor de volgende sessie:**
   - Start `dockerd` pas vlak voor de database- en UI-tests: een achtergrondtaak stopt na
     twee uur.
   - Docker Hub kan downloads weigeren (429). Images die al lokaal staan, starten dan nog
     wel.
-  - Na een `npm install` de testpakketten opnieuw zetten:
-    `npm install --no-save xss@1.0.15 fast-xml-parser@4.5.0`.
+  - Na een `npm install` de testpakketten opnieuw zetten, alle drie tegelijk (los weghalen kan
+    de andere):
+    `npm install --no-save xss@1.0.15 fast-xml-parser@4.5.0 ical.js@2.1.0`.
+    Zonder `ical.js` laadt calendar-integrations niet in de UI-test. Dan faalt elke stap die
+    het venster van een notitie opent op een CORS-fout, en blijft een fout in de editor
+    verborgen die met `ical.js` wel optrad
+    (`docs/changelog/CHANGELOG_PAGINAS_EDITOR_ZWART_SCHERM_2026-11-28.md`).

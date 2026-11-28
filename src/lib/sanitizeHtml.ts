@@ -75,15 +75,25 @@ export function sanitizeInboundEmailHtml(html: string | null | undefined, loadRe
 }
 
 /**
+ * Attributen zonder adres, die de regel voor adressen hieronder toch
+ * wegstreepte. DOMPurify toetst elk attribuut dat het niet als "URI-veilig"
+ * kent aan ALLOWED_URI_REGEXP: colspan="2" begint niet met https:, en ging
+ * weg. Zo verloor een gedeelde pagina of notitie haar samengevoegde cellen
+ * en het startnummer van een lijst (gevonden met ui.mjs paginadelen, 28
+ * november 2026). Alleen voor eigen inhoud; mail van buiten blijft zoals hij was.
+ */
+export const RICH_CONTENT_URI_SAFE_ATTRS = ['colspan', 'rowspan', 'start', 'width', 'height', 'loading'] as const;
+
+/**
  * Zelfde sanitisatie, maar klassen blijven staan: voor inhoud uit de eigen
- * editor (gedeelde notities, tekstdocumenten), waar klassen o.a. de
+ * editor (gedeelde notities, tekstdocumenten, pagina's), waar klassen o.a. de
  * afvinklijstjes opmaken. Niet gebruiken voor HTML van buiten.
  */
 export function sanitizeRichContentHtml(html: string | null | undefined): string {
-  return sanitize(html, ['style', 'id']);
+  return sanitize(html, ['style', 'id'], [...RICH_CONTENT_URI_SAFE_ATTRS]);
 }
 
-function sanitize(html: string | null | undefined, forbidAttr: string[]): string {
+function sanitize(html: string | null | undefined, forbidAttr: string[], uriSafe: string[] = []): string {
   if (!html) return '';
   ensureHooks();
   return DOMPurify.sanitize(String(html), {
@@ -92,5 +102,6 @@ function sanitize(html: string | null | undefined, forbidAttr: string[]): string
     ALLOW_DATA_ATTR: false,
     // Alleen veilige URL-schema's in href/src; blokkeert o.a. javascript: en data:.
     ALLOWED_URI_REGEXP: /^(?:https?:|mailto:|tel:|cid:|#)/i,
+    ADD_URI_SAFE_ATTR: uriSafe,
   });
 }

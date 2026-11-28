@@ -17,6 +17,7 @@ import type { CoreData, DataGroup, GroupData } from './dataGroups';
 import { formatISODate } from './dates';
 import { vatPeriodKey, vatPeriodsToFile, type VatPeriodDue } from './vatPeriods';
 import { runMatchRounds } from './bankMatch';
+import { dossierClientOf, type TreeFolder, type TreePage } from './pageTree';
 import { letterheadMissing, withoutUnloadedLetterhead } from './letterhead';
 import type { IbCorrectionCode, IncomeTaxInputs, IncomeTaxProfile } from './inkomstenbelasting';
 import type { XafReferences } from './xaf';
@@ -1991,10 +1992,68 @@ export async function releasePageEdit(documentId: UUID): Promise<void> {
   if (error) throw error;
 }
 
+/**
+ * Alinea's onderaan een pagina zetten: het aanvullen door Gerrie, de MCP of de
+ * API, na een akkoord (§12 van het bouwplan voor pagina's). Met edit_version,
+ * zoals de editor opslaat: schreef iemand er net in, dan één keer opnieuw met
+ * de nieuwe stand, en anders een melding. Wie de pagina op dat moment open
+ * heeft, krijgt bij zijn volgende opslag de bekende melding "opnieuw laden".
+ * Daarna een versie, zodat de aanvulling in het versiepaneel staat.
+ */
+export async function appendParagraphsToPage(pageId: UUID, organizationId: UUID, paragraphs: string[], title?: string): Promise<void> {
+  const lines = paragraphs.map(line => line.trim()).filter(Boolean);
+  if (lines.length === 0) throw new Error('Er is niets om onderaan de pagina te zetten.');
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const page = await loadPage(pageId, organizationId);
+    if (page.format !== 'page') throw new Error('Dit is geen pagina.');
+    const body = page.body && typeof page.body === 'object' && !Array.isArray(page.body) ? page.body as { content?: unknown[] } : {};
+    const content = Array.isArray(body.content) ? [...body.content] : [];
+    // Een lege laatste alinea (de editor zet er altijd een) eerst weg: anders
+    // stond er een lege regel tussen de tekst en de aanvulling.
+    const last = content[content.length - 1] as { type?: string; content?: unknown[] } | undefined;
+    if (last?.type === 'paragraph' && (!Array.isArray(last.content) || last.content.length === 0)) content.pop();
+    const next = { ...body, type: 'doc', content: [...content, ...lines.map(text => ({ type: 'paragraph', content: [{ type: 'text', text }] }))] };
+    const saved = await savePage(pageId, organizationId, { title: title ?? page.title, body: next }, page.edit_version);
+    if (saved.ok) {
+      await savePageVersion(pageId).catch(() => {});
+      return;
+    }
+  }
+  throw new Error('De pagina werd net door iemand anders gewijzigd. Probeer het zo nog eens.');
+}
+
 /** Een versie vastleggen van wat er nu staat (save_page_version). */
 export async function savePageVersion(documentId: UUID, reason: 'sessie' | 'vastgelegd' = 'sessie'): Promise<void> {
   const { error } = await supabase.rpc('save_page_version', { p_document_id: documentId, p_reason: reason });
   if (error) throw error;
+}
+
+/**
+ * Een vrijgave van een pagina: de versie die een klant ziet als je deelt
+ * (stap 1C). Met de rechten van wie deelt; geeft het id van de versie.
+ */
+export async function createPageRelease(documentId: UUID): Promise<UUID> {
+  const { data, error } = await supabase.rpc('save_page_version', { p_document_id: documentId, p_reason: 'vrijgave' });
+  if (error) throw error;
+  const id = (Array.isArray(data) ? data[0] : data)?.id;
+  if (!id) throw new Error('De vrijgave van de pagina is niet gelukt.');
+  return id as UUID;
+}
+
+/** Per lopende deling van een pagina: welke versie de ontvanger ziet, en of dat de pagina van nu is. */
+export type PageShareStatus = { share_id: UUID; document_version_id: UUID | null; version: number | null; released_at: string | null; is_current: boolean };
+
+export async function loadPageShareStatus(documentId: UUID): Promise<PageShareStatus[]> {
+  const { data, error } = await supabase.rpc('page_share_status', { p_document_id: documentId });
+  if (error) throw error;
+  return (data ?? []) as PageShareStatus[];
+}
+
+/** "Bijwerken bij klant": een nieuwe vrijgave op elke lopende deling. Geeft het aantal bijgewerkte delingen. */
+export async function releasePageToShares(documentId: UUID): Promise<number> {
+  const { data, error } = await supabase.rpc('release_page_to_shares', { p_document_id: documentId });
+  if (error) throw error;
+  return Number(data ?? 0);
 }
 
 /** Eén versie van een pagina, zonder inhoud: voor de lijst in het versiepaneel (stap 1A-3b). */
@@ -2032,17 +2091,62 @@ export async function restorePageVersion(versionId: UUID): Promise<void> {
 
 /** Een nieuwe, lege pagina op deze plek. */
 export async function createPage(
-  organizationId: UUID, target: { client_id?: UUID | null; project_id?: UUID | null; folder_id?: UUID | null; title?: string },
+  organizationId: UUID,
+  target: { client_id?: UUID | null; project_id?: UUID | null; folder_id?: UUID | null; parent_id?: UUID | null; title?: string },
 ): Promise<InternalDocument> {
   return insertRow<InternalDocument>('documents', organizationId, {
     title: target.title?.trim() || 'Nieuwe pagina',
     format: 'page',
     body: { type: 'doc', content: [{ type: 'paragraph' }] },
     document_type: 'general',
-    client_id: target.client_id ?? null,
-    project_id: target.project_id ?? null,
-    folder_id: target.folder_id ?? null,
+    // Een subpagina (stap 1A-4b): de database zet klant en project gelijk aan
+    // die van de ouder, en haalt de map weg (alleen de bovenste pagina heeft er
+    // een). Wat hier staat, telt dan niet.
+    parent_id: target.parent_id ?? null,
+    client_id: target.parent_id ? null : target.client_id ?? null,
+    project_id: target.parent_id ? null : target.project_id ?? null,
+    folder_id: target.parent_id ? null : target.folder_id ?? null,
   });
+}
+
+/**
+ * De bovenliggende pagina's, van de bovenste tot de directe ouder: het
+ * kruimelpad in de editor (stap 1A-5). Hoogstens 20 stappen, zoals de boom in
+ * de database. Een ouder die je niet mag zien, sluit het pad af.
+ */
+export async function pageAncestors(pageId: UUID, organizationId: UUID): Promise<Array<{ id: UUID; title: string }>> {
+  const chain: Array<{ id: UUID; title: string }> = [];
+  const { data: start, error: startError } = await supabase
+    .from('documents').select('parent_id').eq('id', pageId).eq('organization_id', organizationId).maybeSingle();
+  if (startError) throw startError;
+  let next = (start as { parent_id: UUID | null } | null)?.parent_id ?? null;
+  for (let step = 0; next && step < 20; step += 1) {
+    const { data, error } = await supabase
+      .from('documents').select('id,title,parent_id').eq('id', next).eq('organization_id', organizationId).eq('format', 'page').maybeSingle();
+    if (error) throw error;
+    const row = data as { id: UUID; title: string; parent_id: UUID | null } | null;
+    if (!row) break;
+    chain.unshift({ id: row.id, title: row.title });
+    next = row.parent_id;
+  }
+  return chain;
+}
+
+/**
+ * De titel van een pagina, voor een subpagina-blok en de knop naar de
+ * bovenliggende pagina. null als hij niet (meer) bestaat of je hem niet mag
+ * zien (RLS en de module Inhoud).
+ */
+export async function pageTitle(pageId: UUID, organizationId: UUID): Promise<string | null> {
+  const { data, error } = await supabase
+    .from('documents')
+    .select('title')
+    .eq('id', pageId)
+    .eq('organization_id', organizationId)
+    .eq('format', 'page')
+    .maybeSingle();
+  if (error) throw error;
+  return (data as { title: string } | null)?.title ?? null;
 }
 
 /** Een gevonden document: wat search_documents teruggeeft. Nooit HTML, alleen de korte tekst. */
@@ -2792,6 +2896,8 @@ export async function shareDriveItem(input: {
   expiresAt?: string | null;
   message?: string | null;
   notify?: boolean;
+  /** Alleen bij een pagina: de vrijgave die de ontvanger ziet (createPageRelease). */
+  documentVersionId?: UUID | null;
 }): Promise<DriveShareResult[]> {
   const { data, error } = await supabase.functions.invoke('file-share', {
     body: {
@@ -2805,6 +2911,7 @@ export async function shareDriveItem(input: {
       expiresAt: input.expiresAt ?? null,
       message: input.message ?? null,
       notify: input.notify ?? true,
+      documentVersionId: input.documentVersionId ?? null,
     },
   });
   if (error) await throwFunctionError(error, 'Delen is niet gelukt.');
@@ -7274,7 +7381,63 @@ export async function moveDriveItem(item: DriveDragItem, target: DriveLocation, 
     await updateRow('content_folders', item.id, { client_id: target.clientId, project_id: target.projectId, parent_id: target.folderId }, organizationId);
     return;
   }
-  await updateRow(item.kind === 'note' ? 'notes' : 'documents', item.id, { client_id: target.clientId, project_id: target.projectId, folder_id: target.folderId }, organizationId);
+  if (item.kind === 'note') {
+    await updateRow('notes', item.id, { client_id: target.clientId, project_id: target.projectId, folder_id: target.folderId }, organizationId);
+    return;
+  }
+  // Een subpagina die je naar een map of dossier sleept, komt los van haar ouder
+  // (stap 1A-5). Zonder parent_id = null zette de database haar stil terug: een
+  // subpagina volgt de plek van haar ouder (20261127130000).
+  await updateRow('documents', item.id, { client_id: target.clientId, project_id: target.projectId, folder_id: target.folderId, parent_id: null }, organizationId);
+}
+
+/** Een regel in de prullenbak van pagina's (stap 1A-5b): wat je in één keer weggooide. */
+export type PageTrashItem = {
+  id: UUID; title: string; archived_at: string; archived_by: UUID | null;
+  client_id: UUID | null; project_id: UUID | null; subpages: number; purge_on: string;
+};
+
+/** De soort van een document (page, html, office), of null als het er niet (meer) is. */
+export async function documentFormat(id: UUID, organizationId: UUID): Promise<string | null> {
+  const { data, error } = await supabase.from('documents').select('format').eq('id', id).eq('organization_id', organizationId).maybeSingle();
+  if (error) throw error;
+  return (data as { format: string | null } | null)?.format ?? null;
+}
+
+/** Een pagina met haar subpagina's naar de prullenbak. Geeft het aantal pagina's. */
+export async function trashPage(pageId: UUID): Promise<number> {
+  const { data, error } = await supabase.rpc('trash_page', { p_page_id: pageId });
+  if (error) throw error;
+  return Number(data ?? 0);
+}
+
+/** Terugzetten, met de subpagina's die er tegelijk in gingen. */
+export async function restorePage(pageId: UUID): Promise<number> {
+  const { data, error } = await supabase.rpc('restore_page', { p_page_id: pageId });
+  if (error) throw error;
+  return Number(data ?? 0);
+}
+
+export async function listPageTrash(organizationId: UUID): Promise<PageTrashItem[]> {
+  const { data, error } = await supabase.rpc('list_page_trash', { p_organization_id: organizationId });
+  if (error) throw error;
+  return (data ?? []) as PageTrashItem[];
+}
+
+/** Definitief weg, met de subpagina's en hun bijlagen (via de opruimwachtrij). */
+export async function deletePageForever(pageId: UUID): Promise<number> {
+  const { data, error } = await supabase.rpc('delete_page_forever', { p_page_id: pageId });
+  if (error) throw error;
+  return Number(data ?? 0);
+}
+
+/**
+ * Een pagina onder een andere zetten (slepen in de drive, stap 1A-5). De
+ * database bewaakt de rest: dezelfde organisatie, geen kring, hoogstens 20 diep,
+ * en de subpagina neemt klant en project van haar ouder over, zonder eigen map.
+ */
+export async function nestPageUnder(pageId: UUID, parentId: UUID, organizationId: UUID): Promise<void> {
+  await updateRow('documents', pageId, { parent_id: parentId }, organizationId);
 }
 
 /**
@@ -7307,6 +7470,148 @@ export async function deleteAttachment(att: { id: UUID; storage_key: string; org
  * Voor het verwijderen vanuit Gerrie: de sleutel komt uit de database van nu,
  * niet uit een voorstel van eerder.
  */
+/**
+ * De opslagsleutel van een bijlage, of null als hij niet (meer) bestaat of je
+ * hem niet mag zien. Voor een afbeelding in een pagina (stap 1A-4b): een
+ * verdwenen bestand is daar gewoon "niet gevonden", geen fout.
+ */
+export async function attachmentStorageKey(id: UUID, organizationId: UUID): Promise<string | null> {
+  const { data, error } = await supabase
+    .from('attachments')
+    .select('storage_key')
+    .eq('id', id)
+    .eq('organization_id', organizationId)
+    .maybeSingle();
+  if (error) throw error;
+  return (data as { storage_key: string } | null)?.storage_key ?? null;
+}
+
+/** Wat een bestandsblok in een pagina toont (stap 1A-4b): naam en grootte, of null als hij weg is. */
+export type PageFileInfo = { id: UUID; name: string; size_bytes: number; mime_type: string; storage_key: string };
+
+export async function attachmentInfo(id: UUID, organizationId: UUID): Promise<PageFileInfo | null> {
+  const { data, error } = await supabase
+    .from('attachments')
+    .select('id,name,size_bytes,mime_type,storage_key')
+    .eq('id', id)
+    .eq('organization_id', organizationId)
+    .maybeSingle();
+  if (error) throw error;
+  return (data as PageFileInfo | null) ?? null;
+}
+
+/** Een bestand uit een dossier, voor de kiezer van het bestandsblok. */
+export type DossierFile = { id: UUID; name: string; size_bytes: number; mime_type: string; created_at: string; folder: string | null };
+
+/**
+ * De bestanden in het dossier van een pagina: in de mappen van dat dossier, en
+ * de bestanden die aan de klant zelf hangen. Het dossier volgt dezelfde regel
+ * als de database (page_attachment_dossier, migratie 20261127150000): hangt er
+ * een project aan, dan telt de klant van dat project. Zo biedt de kiezer
+ * alleen aan wat de database bij opslaan ook aanneemt.
+ */
+export async function listDossierFiles(
+  organizationId: UUID, page: { client_id: UUID | null; project_id: UUID | null },
+): Promise<DossierFile[]> {
+  const [projectsRes, foldersRes] = await Promise.all([
+    supabase.from('projects').select('id,client_id').eq('organization_id', organizationId),
+    supabase.from('content_folders').select('id,name,client_id,project_id').eq('organization_id', organizationId),
+  ]);
+  if (projectsRes.error) throw projectsRes.error;
+  if (foldersRes.error) throw foldersRes.error;
+  const projectClient = new Map((projectsRes.data as Array<{ id: UUID; client_id: UUID | null }>).map(p => [p.id, p.client_id]));
+  const pageClient = dossierClientOf(page.client_id, page.project_id, projectClient);
+  const folders = (foldersRes.data as Array<{ id: UUID; name: string; client_id: UUID | null; project_id: UUID | null }>)
+    .filter(f => dossierClientOf(f.client_id, f.project_id, projectClient) === pageClient);
+  const folderName = new Map(folders.map(f => [f.id, f.name]));
+  const rows: Array<DossierFile & { entity_id: UUID }> = [];
+  const columns = 'id,name,size_bytes,mime_type,created_at,entity_id';
+  // In stukken: een lange in-lijst past niet in één adres.
+  const ids = [...folderName.keys()];
+  for (let i = 0; i < ids.length; i += 100) {
+    const { data, error } = await supabase.from('attachments').select(columns)
+      .eq('organization_id', organizationId).eq('entity_type', 'folder').in('entity_id', ids.slice(i, i + 100));
+    if (error) throw error;
+    rows.push(...(data as Array<DossierFile & { entity_id: UUID }>).map(row => ({ ...row, folder: folderName.get(row.entity_id) ?? null })));
+  }
+  if (pageClient) {
+    const { data, error } = await supabase.from('attachments').select(columns)
+      .eq('organization_id', organizationId).eq('entity_type', 'client').eq('entity_id', pageClient);
+    if (error) throw error;
+    rows.push(...(data as Array<DossierFile & { entity_id: UUID }>).map(row => ({ ...row, folder: null })));
+  }
+  return rows
+    .map(({ entity_id: _entity, ...file }) => file)
+    .sort((a, b) => a.name.localeCompare(b.name, 'nl'));
+}
+
+/** De pagina's van één dossier, voor de boom naast de pagina (zie pageTree.ts). */
+export type DossierPages = {
+  pages: TreePage[];
+  folders: Map<UUID, TreeFolder>;
+  projects: Map<UUID, string>;
+  /** De klant van het dossier; null is het eigen dossier. */
+  client: UUID | null;
+  /** De naam van die klant. */
+  clientName: string | null;
+  /** false als de limiet bereikt is: dan staat niet elke pagina in de boom. */
+  complete: boolean;
+};
+
+const DOSSIER_PAGE_LIMIT = 1000;
+
+/**
+ * De pagina's in het dossier van een pagina: zonder inhoud, alleen wat de boom
+ * nodig heeft. Het dossier volgt dezelfde regel als listDossierFiles hierboven
+ * (de klant van het project telt). RLS bepaalt wat je ziet, en de prullenbak
+ * houdt de database al buiten beeld.
+ */
+export async function listDossierPages(
+  organizationId: UUID, page: { client_id: UUID | null; project_id: UUID | null },
+): Promise<DossierPages> {
+  const [projectsRes, foldersRes] = await Promise.all([
+    supabase.from('projects').select('id,name,client_id').eq('organization_id', organizationId),
+    supabase.from('content_folders').select('id,name,parent_id,client_id,project_id').eq('organization_id', organizationId),
+  ]);
+  if (projectsRes.error) throw projectsRes.error;
+  if (foldersRes.error) throw foldersRes.error;
+  const projects = projectsRes.data as Array<{ id: UUID; name: string; client_id: UUID | null }>;
+  const projectClient = new Map(projects.map(p => [p.id, p.client_id]));
+  const client = dossierClientOf(page.client_id, page.project_id, projectClient);
+  const columns = 'id,title,parent_id,folder_id,client_id,project_id,position';
+  const pagesOf = () => supabase.from('documents').select(columns)
+    .eq('organization_id', organizationId).eq('format', 'page').order('title').limit(DOSSIER_PAGE_LIMIT);
+  // De pagina's van de klant zelf, en die in zijn projecten: een pagina in een
+  // project kan zonder klant zijn opgeslagen.
+  const requests = [client ? pagesOf().eq('client_id', client) : pagesOf().is('client_id', null)];
+  const ownProjects = client ? projects.filter(p => p.client_id === client).map(p => p.id) : [];
+  // In stukken: een lange in-lijst past niet in één adres.
+  for (let i = 0; i < ownProjects.length; i += 100) requests.push(pagesOf().in('project_id', ownProjects.slice(i, i + 100)));
+  const [results, clientRes] = await Promise.all([
+    Promise.all(requests),
+    client ? supabase.from('clients').select('name').eq('id', client).eq('organization_id', organizationId).maybeSingle() : null,
+  ]);
+  const byId = new Map<UUID, TreePage>();
+  let complete = true;
+  for (const result of results) {
+    if (result.error) throw result.error;
+    const rows = result.data as TreePage[];
+    if (rows.length >= DOSSIER_PAGE_LIMIT) complete = false;
+    for (const row of rows) {
+      if (dossierClientOf(row.client_id, row.project_id, projectClient) === client) byId.set(row.id, row);
+    }
+  }
+  if (clientRes?.error) throw clientRes.error;
+  return {
+    pages: [...byId.values()],
+    folders: new Map((foldersRes.data as TreeFolder[]).map(f => [f.id, { id: f.id, name: f.name, parent_id: f.parent_id }])),
+    projects: new Map(projects.map(p => [p.id, p.name])),
+    client,
+    clientName: (clientRes?.data as { name: string } | null | undefined)?.name ?? null,
+    complete,
+  };
+}
+
 export async function loadAttachmentRef(id: UUID, organizationId: UUID): Promise<{ id: UUID; storage_key: string; organization_id: UUID; entity_type: string; entity_id: UUID }> {
   const { data, error } = await supabase
     .from('attachments')
