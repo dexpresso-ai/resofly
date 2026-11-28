@@ -67,3 +67,4 @@ nodig.
   bij: één kolom, die de database wel aanneemt, opent alleen om te lezen, met de melding dat de
   inhoud niet klopt. `ui.mjs paginas`: 19 stappen, 0 fout.
 - **`npm test`** (2442) en **`npm run typecheck`**.
+- **De CI** (run 318, c07b98f): helemaal groen, ook de mobiele lay-outtest (36 minuten).
