@@ -666,7 +666,12 @@ akkoord is.
     pagina's", `deno check` van `file-share-public` met `_shared/sharedPage.ts`, de
     migraties vanaf nul met `paginas_delen.sql`, de mobiele lay-outtest, laden, de inrichting
     en de terugknop;
-  - run 309 (a080604, 1C-3 en 1C-4): gestart op 28 november.
+  - run 309 (a080604, 1C-3 en 1C-4): helemaal groen. Dat is ook de mobiele lay-outtest
+    met de knop "Delen" in de balk (41 minuten), `deno check` van `file-share`, `mcp` en
+    `gerrie-agent` met de handelingen, en de migraties vanaf nul met
+    `paginas_bijwerken.sql` en `paginas_portaal_bijlagen.sql`;
+  - run 310 (de verhuisreparatie, migratie `20261128150000`, en wat erna kwam): gestart op
+    28 november.
 - **`deno check` op de modules van pagina's:** sinds 1C-1 een eigen stap in
   `.github/workflows/frontend-checks.yml` ("Deno-typecheck pagina's"): `pageDocx.ts`,
   `woff.ts`, `zipWriter.ts`, `pageExportFonts.ts`, `pageHtml.ts` en `pageReferences.ts`. Geen

@@ -150,8 +150,11 @@ Ze mogen opnieuw draaien, en de databasetests lopen ze na.
 
 ## Getest
 
-- **De CI op de branch:** runs 304 tot en met 308 zijn helemaal groen. 308 is fe9a4d7 (1C-1 en
-  1C-2). Run 309 (a080604, 1C-3 en 1C-4) is gestart. Groen betekent:
+- **De CI op de branch:** runs 304 tot en met 309 zijn helemaal groen:
+  - 308 is fe9a4d7 (1C-1 en 1C-2);
+  - 309 is a080604 (1C-3 en 1C-4).
+
+  Run 310, met de verhuisreparatie (migratie `20261128150000`), is gestart. Groen betekent:
   - de migraties vanaf nul met de databasetests;
   - `deno check`;
   - typecheck en de unit tests;
