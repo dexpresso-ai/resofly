@@ -30,8 +30,13 @@ stand voor de overdracht.
    - Het bestand voldoet aan het schema van Word (ECMA-376) en opent goed in LibreOffice.
    - Word zelf kan ik in een cloudsessie niet openen. Vooral de ingesloten letter is daar
      nog niet gezien.
-   - Ik stuur twee proefbestanden met elk blok mee: één zonder huisstijl, en één met
-     Playfair Display voor koppen en DM Sans voor tekst.
+   - Er zijn twee proefbestanden met elk blok: één zonder huisstijl, en één met Playfair
+     Display voor koppen en DM Sans voor tekst. Ze staan naast dit rapport:
+     - `docs/rapporten/PROEF_WORD_ZONDER_HUISSTIJL_2026-11-28.docx`;
+     - `docs/rapporten/PROEF_WORD_HUISSTIJL_PLAYFAIR_DMSANS_2026-11-28.docx`.
+   - Wat je ziet: een inhoudsopgave, koppen, lijsten, een takenlijst, een tabel met
+     samengevoegde cellen, een kader, een uitklapper, een citaat, code, een subpagina, een
+     bijlage en een afbeelding (een rood blok).
    - Let op cursief: de huisstijlletters hebben geen cursieve variant, en LibreOffice nam
      daarvoor een andere letter.
 5. **Akkoord met een afwijking van het plan?** §9 laat de server (`page-export`) de DOCX bouwen.
