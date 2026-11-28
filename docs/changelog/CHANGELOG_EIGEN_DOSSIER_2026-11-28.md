@@ -31,10 +31,27 @@ en §18).
   en de dossierregel van de pagina's (migratie 20261127150000) telt "geen klant" als één
   dossier.
 
-## Om rekening mee te houden
+## Later die nacht: de vensters van notities en documenten
 
-- **Elders in de app heet het nog "Geen klant"**, bijvoorbeeld bij versturen en in
-  zoekresultaten. Dat volgt later.
+- **In het venster van een notitie of document heet de lege klantkeuze nu "Eigen dossier"**,
+  in plaats van "Geen klant". Ook op de kaart van een document staat "Eigen dossier".
+- **Het veld "Map" verschijnt ook zonder klant**, zodra het eigen dossier mappen heeft, of
+  als er al een map gekozen is.
+  - Eerst stond het er alleen bij een gekozen klant.
+  - Een notitie die je in een map van het eigen dossier maakte, kreeg die map wel mee, maar
+    je zag hem in het venster niet en kon hem niet wijzigen.
+- **Waar "Geen klant" blijft, en waarom:**
+  - Bij tickets, projecten, offertes, facturen, de agenda, uren, gesprekken en
+    boekingslinks betekent het "aan geen klant gekoppeld", geen plek in de drive.
+  - Bij versturen gaat "Geen klant — naar een los e-mailadres" over de ontvanger.
+  - In de zoekresultaten stond het niet: inhoud zonder klant toont daar "Document" of het
+    project. Wat hier eerder stond ("en in zoekresultaten"), klopte niet.
+- **Getest:**
+  - `ui.mjs paginadrive`, 6 stappen, 0 fout. De stap van het eigen dossier maakt nu ook een
+    notitie in de eigen map: het venster toont "Eigen dossier" en de map, en in de database
+    staat de notitie in die map zonder klant.
+  - `ui.mjs documenten`: 10 stappen, 0 fout.
+  - `npm test` en typecheck.
 
 ## Getest
 

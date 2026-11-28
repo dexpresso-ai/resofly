@@ -5851,9 +5851,10 @@ function EditModal({ edit, data, dataStatus, organizationId, currentUserId, team
         disabled={disabled}
         onSaved={summary => { if (item) onNoteHandwritingChanged(item.id, summary); }}
       />
-      <Select value={form.client_id} onChange={e=>{set('client_id',e.target.value);set('folder_id','');}} disabled={disabled}><option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select>
+      {/* Zonder klant staat een notitie in het eigen dossier (stap 1A-5c), en dat heeft eigen mappen. */}
+      <Select value={form.client_id} onChange={e=>{set('client_id',e.target.value);set('folder_id','');}} disabled={disabled}><option value="">Eigen dossier</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select>
       <Select value={form.project_id} onChange={e=>{set('project_id',e.target.value);set('folder_id','');}} disabled={disabled}><option value="">Geen project</option>{data.projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</Select>
-      {form.client_id && <Field label="Map" hint={form.project_id ? 'Plaats deze notitie in een map van het gekozen project.' : 'Plaats deze notitie in een map van de gekozen klant.'}>
+      {(form.client_id || form.folder_id || clientFolderOptions(data.folders, null, form.project_id || null).length > 0) && <Field label="Map" hint={form.project_id ? 'Plaats deze notitie in een map van het gekozen project.' : form.client_id ? 'Plaats deze notitie in een map van de gekozen klant.' : 'Plaats deze notitie in een map van het eigen dossier.'}>
         <Select value={form.folder_id} onChange={e=>set('folder_id',e.target.value)} disabled={disabled}><option value="">Geen map</option>{clientFolderOptions(data.folders, form.client_id || null, form.project_id || null).map(o=><option key={o.id} value={o.id}>{o.label}</option>)}</Select>
       </Field>}
       {noteCalEventsLoading && <div className="note-cal-hint">Meetings laden…</div>}
@@ -5894,12 +5895,12 @@ function EditModal({ edit, data, dataStatus, organizationId, currentUserId, team
       </div>}
       <RichTextEditor value={form.content} onChange={value=>set('content', value)} placeholder="Schrijf de inhoud van het document…" disabled={disabled}/>
       <Field label="Klant">
-        <Select value={form.client_id} onChange={e=>{set('client_id',e.target.value);set('folder_id','');}} disabled={disabled}><option value="">Geen klant</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select>
+        <Select value={form.client_id} onChange={e=>{set('client_id',e.target.value);set('folder_id','');}} disabled={disabled}><option value="">Eigen dossier</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select>
       </Field>
       <Field label="Project">
         <Select value={form.project_id} onChange={e=>{set('project_id',e.target.value);set('folder_id','');}} disabled={disabled}><option value="">Geen project</option>{data.projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</Select>
       </Field>
-      {form.client_id && <Field label="Map" hint={form.project_id ? 'Plaats dit document in een map van het gekozen project.' : 'Plaats dit document in een map van de gekozen klant.'}>
+      {(form.client_id || form.folder_id || clientFolderOptions(data.folders, null, form.project_id || null).length > 0) && <Field label="Map" hint={form.project_id ? 'Plaats dit document in een map van het gekozen project.' : form.client_id ? 'Plaats dit document in een map van de gekozen klant.' : 'Plaats dit document in een map van het eigen dossier.'}>
         <Select value={form.folder_id} onChange={e=>set('folder_id',e.target.value)} disabled={disabled}><option value="">Geen map</option>{clientFolderOptions(data.folders, form.client_id || null, form.project_id || null).map(o=><option key={o.id} value={o.id}>{o.label}</option>)}</Select>
       </Field>}
       {item && <div className="document-export">

@@ -3330,7 +3330,7 @@ function CalendarEventDetailPanel({ event, organizationId, data, sources, videoS
   }
 
   // Zodra het transcript er is, zet de server de meeting vanzelf in Inhoud:
-  // bij de klant van de afspraak (of onder Geen klant) in de map Meetings, en
+  // bij de klant van de afspraak (of in het eigen dossier) in de map Meetings, en
   // onder Notities bij deze afspraak. Dit vervangt de knop "Opslaan als
   // notitie" (die zette de notulen los bij de klant, zonder map, datum of
   // transcript) en daarna de vraag op de opnamekaart (die kwam alleen als je

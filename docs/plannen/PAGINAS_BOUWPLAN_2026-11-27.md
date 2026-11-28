@@ -594,8 +594,9 @@ akkoord is.
   - `paginas`, de editor en zijn blokken (18);
   - `paginadrive`, de boom in de drive, de prullenbak, het eigen dossier en de boom naast de
     pagina (6).
-- **Volgende stap die geen bestaande gegevens raakt:** de laatste "Geen klant"-teksten
-  elders in de app.
+- **De "Geen klant"-teksten in de documentenomgeving zijn weg** (de vensters van notities en
+  documenten, de kaart van een document). Waar het blijft, staat in
+  `docs/changelog/CHANGELOG_EIGEN_DOSSIER_2026-11-28.md`.
 
   Het edge-deel en de PDF-weg wachten tot de office-server (Collabora) er is; die is niet in
   een cloudsessie te draaien. 1C (delen) pas als de gebruiker terug is.
@@ -612,5 +613,8 @@ akkoord is.
     twee uur.
   - Docker Hub kan downloads weigeren (429). Images die al lokaal staan, starten dan nog
     wel.
-  - Na een `npm install` de testpakketten opnieuw zetten:
-    `npm install --no-save xss@1.0.15 fast-xml-parser@4.5.0`.
+  - Na een `npm install` de testpakketten opnieuw zetten, alle drie tegelijk (los weghalen kan
+    de andere):
+    `npm install --no-save xss@1.0.15 fast-xml-parser@4.5.0 ical.js@2.1.0`.
+    Zonder `ical.js` laadt calendar-integrations niet in de UI-test, en faalt elke stap die het
+    venster van een notitie opent op een CORS-fout.

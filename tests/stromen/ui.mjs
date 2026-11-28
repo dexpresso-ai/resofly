@@ -2661,7 +2661,7 @@ async function scenarioPaginadrive() {
     await bak.locator('.modal-close').click();
   });
   // ── Het eigen dossier (stap 1A-5c) ─────────────────────────────────────────
-  await uiStap('het eigen dossier: bovenaan in plaats van "Geen klant", met een eigen map, en een pagina in die map', async () => {
+  await uiStap('het eigen dossier: bovenaan in plaats van "Geen klant", met een eigen map, en een pagina en een notitie in die map', async () => {
     const tag = Date.now().toString(36);
     const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
     const page = lid.page;
@@ -2701,6 +2701,21 @@ async function scenarioPaginadrive() {
     gelijk([pagina.folder_id, pagina.client_id], [map, null], 'de pagina staat in de map van het eigen dossier, zonder klant');
     await sluitPagina(page);
     await inhoud(page).locator('.odrv-row').filter({ hasText: `Werkwijze ${tag}` }).first().waitFor({ timeout: 15000 });
+    // Een notitie in die map: het venster noemt het eigen dossier (niet "Geen
+    // klant") en toont de map, en zo komt ze in de database.
+    await inhoud(page).locator('.drive-new').click();
+    await page.locator('.drive-pop').getByRole('menuitem', { name: 'Notitie', exact: true }).click();
+    const venster = page.locator('section.modal').filter({ has: page.getByPlaceholder('Titel') });
+    await venster.waitFor({ timeout: 10000 });
+    // De keuzelijsten van de app tonen hun keuze in .select-value.
+    gelijk(await venster.locator('.select-value').filter({ hasText: /^Eigen dossier$/ }).count(), 1, 'de klantkeuze in het venster van de notitie');
+    gelijk(tekst(await veld(venster, 'Map').locator('.select-value').innerText()), `Handboek ${tag}`, 'de map in het venster van de notitie');
+    await venster.getByPlaceholder('Titel').fill(`Notitie ${tag}`);
+    await venster.locator('.modal-foot').getByRole('button', { name: 'Opslaan', exact: true }).click();
+    await wachtTot(async () => {
+      const notitie = sqlRij(`select folder_id, client_id from public.notes where organization_id = ${q(w.orgId)} and title = ${q(`Notitie ${tag}`)}`);
+      return Boolean(notitie) && notitie.folder_id === map && notitie.client_id === null;
+    }, { melding: 'de notitie staat niet in de map van het eigen dossier' });
   });
   // ── De boom van het dossier naast de pagina (§4, het pagina-scherm) ────────
   await uiStap('de boom naast de pagina: het dossier met map en subpagina\'s, wisselen, de terugknop, verbergen, en op de telefoon een lade', async () => {

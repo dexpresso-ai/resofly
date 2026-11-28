@@ -27,7 +27,7 @@ export function DocumentCard({ doc, data, onEdit }: { doc: InternalDocument; dat
     {/* De korte tekst die de database bijhoudt: de volledige tekst laadt pas bij openen (stap 1A-2). */}
     <div className="note-content-preview">{doc.excerpt?.trim() ? <p>{doc.excerpt}</p> : <span className="rich-text-empty">Geen inhoud</span>}</div>
     <div className="note-relations">
-      <span>{client ? `Klant: ${client.name}` : 'Geen klant'}</span>
+      <span>{client ? `Klant: ${client.name}` : 'Eigen dossier'}</span>
       <span>{project ? `Project: ${project.name}` : 'Geen project'}</span>
     </div>
   </article>;
