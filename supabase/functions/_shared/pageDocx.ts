@@ -35,7 +35,8 @@
 //    andere, en een .woff neemt hij niet aan (docs/rapporten/
 //    PROEF_1B1_LETTERS_EMOJI_2026-11-28.md). Een .woff zet woff.ts eerst om.
 //  - De opties van het exportvenster (stap 1B-4, PageDocxOptions): een
-//    voorblad, een inhoudsopgave vooraan, en subpagina's als hoofdstukken.
+//    voorblad, een inhoudsopgave vooraan, subpagina's als hoofdstukken, en
+//    het briefpapier (een afbeelding achter elke bladzijde, in de kop).
 //    Zonder opties is het bestand precies dat van 1B-3; pageDocx.test.ts
 //    bewaakt dat. De aanroeper geeft namen, de datum en het logo mee: deze
 //    module kent geen klok en geen database.
@@ -88,8 +89,21 @@ export type PageDocxCover = {
   logo?: PageDocxImage | null;
 };
 
+/**
+ * Het briefpapier (stap 1B-4b): een afbeelding over de hele bladzijde, achter
+ * de tekst, op elke bladzijde. Een briefpapier als PDF kan niet in een .docx;
+ * de aanroeper zegt dat, en geeft dan niets mee.
+ */
+export type PageDocxLetterhead = {
+  image: PageDocxImage;
+  /** De ruimte die het briefpapier boven en onder voor zichzelf houdt, in twips. Nooit minder dan de gewone marge. */
+  top?: number;
+  bottom?: number;
+};
+
 /** De keuzes in het exportvenster (stap 1B-4). Alles uit: het bestand van 1B-3. */
 export type PageDocxOptions = {
+  letterhead?: PageDocxLetterhead | null;
   cover?: PageDocxCover | null;
   /**
    * Een inhoudsopgave vooraan, van het hele bestand. De inhoudsopgave-blokken
@@ -645,19 +659,53 @@ function logoXml(logo: PageDocxImage, b: DocxBuilder, company: string): string {
   return inlineDrawing(b, b.image(':logo', logo, ext), cx, cy, company ? `Logo van ${company}` : 'Logo');
 }
 
+type Margins = { top: number; bottom: number; footer: number };
+const PLAIN_MARGINS: Margins = { top: MARGIN, bottom: MARGIN, footer: 709 };
+
 /** Papier en marges; voor de laatste sectie en voor die van het voorblad. */
-function pageSetup(): string {
+function pageSetup(margins: Margins): string {
   return `<w:pgSz w:w="${PAGE_WIDTH}" w:h="${PAGE_HEIGHT}"/>`
-    + `<w:pgMar w:top="${MARGIN}" w:right="${MARGIN}" w:bottom="${MARGIN}" w:left="${MARGIN}" w:header="709" w:footer="709" w:gutter="0"/>`;
+    + `<w:pgMar w:top="${margins.top}" w:right="${MARGIN}" w:bottom="${margins.bottom}" w:left="${MARGIN}" w:header="709" w:footer="${margins.footer}" w:gutter="0"/>`;
 }
 
 /**
- * Het voorblad (stap 1B-4), in een eigen sectie zonder voet: er staat geen
- * paginanummer op. De nummering loopt daarna door (de eerste bladzijde van de
- * tekst is 2). Opnieuw bij 1 beginnen kan in Word, maar LibreOffice, en dus
- * Collabora en de PDF, telt dan het totaal verkeerd: in een proef "van 5" bij
- * vier bladen, en het aantal bladzijden van een sectie (SECTIONPAGES) kent het
- * niet.
+ * Het briefpapier als kop (stap 1B-4b): een afbeelding vanaf de hoek van de
+ * bladzijde, zo groot als A4, achter de tekst. In de kop staat ze op elke
+ * bladzijde, zoals het briefpapier onder elke bladzijde van een factuur.
+ */
+function letterheadHeaderXml(): string {
+  const cx = PAGE_WIDTH * EMU_PER_TWIP;
+  const cy = PAGE_HEIGHT * EMU_PER_TWIP;
+  // Een docPr-nummer ver van die van de afbeeldingen in de tekst (1, 2, …).
+  return `${XML_HEAD}<w:hdr ${NS}><w:p><w:r><w:drawing>`
+    + '<wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="0" behindDoc="1" locked="1" layoutInCell="1" allowOverlap="1">'
+    + '<wp:simplePos x="0" y="0"/>'
+    + '<wp:positionH relativeFrom="page"><wp:posOffset>0</wp:posOffset></wp:positionH>'
+    + '<wp:positionV relativeFrom="page"><wp:posOffset>0</wp:posOffset></wp:positionV>'
+    + `<wp:extent cx="${cx}" cy="${cy}"/><wp:effectExtent l="0" t="0" r="0" b="0"/><wp:wrapNone/>`
+    + '<wp:docPr id="9000" name="Briefpapier"/>'
+    + '<wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>'
+    + '<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic>'
+    + '<pic:nvPicPr><pic:cNvPr id="0" name="Briefpapier"/><pic:cNvPicPr/></pic:nvPicPr>'
+    + '<pic:blipFill><a:blip r:embed="rId1"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>'
+    + `<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>`
+    + '</pic:pic></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r></w:p></w:hdr>';
+}
+
+/**
+ * Het voorblad (stap 1B-4), met daarna een paginagrens. Er staat geen
+ * paginanummer op: de sectie heeft een eigen eerste bladzijde (titlePg, zie
+ * pageDocxFiles) zonder voet, zoals Word zelf een voorblad maakt.
+ *
+ * Eerst stond het voorblad in een eigen sectie. Ons bestand was geldig, maar
+ * na opnieuw opslaan in LibreOffice (en dus Collabora, bij de Word-kopie) niet
+ * meer: LibreOffice 24.2 zet de sectiegrens dan vóór de opmaak van de alinea,
+ * tegen het schema in. Met één sectie blijft het ook na opslaan geldig.
+ *
+ * De nummering loopt door: de eerste bladzijde van de tekst is 2. Opnieuw bij
+ * 1 beginnen kan in Word, maar LibreOffice telt het totaal dan verkeerd (in een
+ * proef "van 5" bij vier bladen), en het aantal bladzijden van een sectie
+ * (SECTIONPAGES) kent het niet.
  */
 function coverXml(name: string, cover: PageDocxCover, b: DocxBuilder): string {
   const company = cover.company?.trim() ?? '';
@@ -670,7 +718,7 @@ function coverXml(name: string, cover: PageDocxCover, b: DocxBuilder): string {
     if (line.trim()) out += para({ style: 'Subtitle' }, run(line.trim()));
   }
   if (cover.date?.trim()) out += para({ style: 'Subtitle', before: 360 }, run(cover.date.trim()));
-  return `${out}<w:p><w:pPr><w:sectPr>${pageSetup()}</w:sectPr></w:pPr></w:p>`;
+  return `${out}<w:p><w:r><w:br w:type="page"/></w:r></w:p>`;
 }
 
 function collectHeadings(node: PmNode, out: TocEntry[], shift = 0): void {
@@ -822,6 +870,26 @@ export function pageDocxFiles(title: string, body: unknown, context: PageDocxCon
           bytes: (style === 'Regular' ? font.regular : font.bold) as Uint8Array };
       }),
   })).filter(entry => entry.files.length > 0);
+  // Het briefpapier: alleen een afbeelding die Word kan tonen; de marges
+  // houden vrij wat het briefpapier boven en onder zelf gebruikt.
+  const paperImage = options.letterhead?.image;
+  const paperExt = paperImage ? IMAGE_EXT[paperImage.contentType] : undefined;
+  const paper = paperImage && paperExt ? { image: paperImage, ext: paperExt } : null;
+  const clampMargin = (value: number | undefined) => Math.min(Math.round(PAGE_HEIGHT / 3), Math.max(MARGIN, whole(value, MARGIN, PAGE_HEIGHT)));
+  const margins: Margins = paper
+    ? (() => {
+      const top = clampMargin(options.letterhead?.top);
+      const bottom = clampMargin(options.letterhead?.bottom);
+      // Het paginanummer net onder de tekst, boven de voet van het briefpapier
+      // (zoals "Voor briefpapier" in Documentopmaak het zet).
+      return { top, bottom, footer: bottom > MARGIN ? bottom - 320 : 709 };
+    })()
+    : PLAIN_MARGINS;
+  // Het briefpapier op elke bladzijde; met een voorblad ook op die eerste
+  // (titlePg geeft de eerste bladzijde een eigen kop en voet).
+  const header = paper
+    ? `<w:headerReference w:type="default" r:id="rId6"/>${options.cover ? '<w:headerReference w:type="first" r:id="rId6"/>' : ''}`
+    : '';
   // Met een voorblad staat de titel daar, en niet nog eens boven de tekst.
   let content = options.cover ? coverXml(name, options.cover, b) : para({ style: 'Title' }, run(name));
   if (options.toc) content += tocXml(ctx);
@@ -834,20 +902,22 @@ export function pageDocxFiles(title: string, body: unknown, context: PageDocxCon
     content += blocksXml(chapter.doc.content, b, { ...ctx, shift: chapter.depth, dropToc: true });
   }
   const documentXml = `${XML_HEAD}<w:document ${NS}><w:body>${content}`
-    + `<w:sectPr><w:footerReference w:type="default" r:id="rId4"/>${pageSetup()}`
-    + '</w:sectPr></w:body></w:document>';
+    + `<w:sectPr>${header}<w:footerReference w:type="default" r:id="rId4"/>${pageSetup(margins)}`
+    // Een voorblad: de eerste bladzijde zonder voet, dus zonder paginanummer.
+    + `${options.cover ? '<w:titlePg/>' : ''}</w:sectPr></w:body></w:document>`;
   const rels = [
     { id: 'rId1', type: `${REL}/styles`, target: 'styles.xml', external: false },
     { id: 'rId2', type: `${REL}/numbering`, target: 'numbering.xml', external: false },
     { id: 'rId3', type: `${REL}/settings`, target: 'settings.xml', external: false },
     { id: 'rId4', type: `${REL}/footer`, target: 'footer1.xml', external: false },
     ...(embedded.length ? [{ id: 'rId5', type: `${REL}/fontTable`, target: 'fontTable.xml', external: false }] : []),
+    ...(paper ? [{ id: 'rId6', type: `${REL}/header`, target: 'header1.xml', external: false }] : []),
     ...b.rels,
   ];
   const relsXml = `${XML_HEAD}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">`
     + rels.map(rel => `<Relationship Id="${rel.id}" Type="${rel.type}" Target="${escapeXml(rel.target)}"${rel.external ? ' TargetMode="External"' : ''}/>`).join('')
     + '</Relationships>';
-  const used = new Set(b.media.map(item => item.contentType));
+  const used = new Set([...b.media.map(item => item.contentType), ...(paper ? [paper.image.contentType] : [])]);
   const contentTypesXml = `${XML_HEAD}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">`
     + '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
     + '<Default Extension="xml" ContentType="application/xml"/>'
@@ -858,6 +928,7 @@ export function pageDocxFiles(title: string, body: unknown, context: PageDocxCon
     + '<Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>'
     + '<Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>'
     + '<Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>'
+    + (paper ? '<Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>' : '')
     + (embedded.length ? '<Override PartName="/word/fontTable.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.fontTable+xml"/>' : '')
     + '<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>'
     + '</Types>';
@@ -890,6 +961,12 @@ export function pageDocxFiles(title: string, body: unknown, context: PageDocxCon
     { path: 'word/numbering.xml', data: numberingXml(b.orderedLists) },
     { path: 'word/settings.xml', data: settingsXml(embedded.length > 0) },
     { path: 'word/footer1.xml', data: footerXml() },
+    ...(paper ? [
+      { path: 'word/header1.xml', data: letterheadHeaderXml() },
+      { path: 'word/_rels/header1.xml.rels', data: `${XML_HEAD}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">`
+        + `<Relationship Id="rId1" Type="${REL}/image" Target="media/briefpapier.${paper.ext}"/></Relationships>` },
+      { path: `word/media/briefpapier.${paper.ext}`, data: paper.image.bytes },
+    ] : []),
     ...fontFiles,
     ...b.media.map(item => ({ path: item.path, data: item.bytes })),
   ];

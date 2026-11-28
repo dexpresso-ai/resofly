@@ -107,7 +107,8 @@ stand voor de overdracht.
     bewaar het.** Dat is "Maak er een Word-document van" (1B-3). Open ook
     `docs/rapporten/PROEF_WORD_OPTIES_2026-11-28.docx` in echte Word: een voorblad met logo,
     een inhoudsopgave en drie hoofdstukken (1B-4a). Werk in Word de inhoudsopgave bij (F9);
-    dan komen de paginanummers erbij.
+    dan komen de paginanummers erbij. En `docs/rapporten/PROEF_WORD_BRIEFPAPIER_2026-11-28.docx`:
+    een briefpapier met een blauwe kopband en een voetband achter elke bladzijde (1B-4b).
     - De test hier bootst de worker en Collabora na. Een proef met LibreOffice, de motor van
       Collabora, ging goed: het bestand overleeft opnieuw opslaan.
     - Let op de grootte. Na de eerste keer bewaren in Collabora werd het bestand in de proef
@@ -148,6 +149,7 @@ stand voor de overdracht.
 | --- | --- | --- |
 | 1B-3 | "Exporteren" in de editor: Word downloaden, "Maak er een Word-document van" (een Word-document naast de pagina, dat meteen opent in Word) en afdrukken. | `CHANGELOG_PAGINAS_EXPORTEREN_2026-11-28.md` |
 | 1B-4a | De opties voor Word: een voorblad (logo, titel, klant, project, datum), een inhoudsopgave vooraan, en de subpagina's als hoofdstukken. | `CHANGELOG_PAGINAS_EXPORTEREN_2026-11-28.md` |
+| 1B-4b | Het briefpapier achter elke bladzijde, als het een afbeelding is (een PDF kan niet in Word), met de marges uit Documentopmaak. Gerepareerd: het voorblad overleefde opnieuw opslaan in Collabora niet goed. | `CHANGELOG_PAGINAS_EXPORTEREN_2026-11-28.md` |
 
 Geen migraties.
 

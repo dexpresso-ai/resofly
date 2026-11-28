@@ -44,8 +44,11 @@ import { pageEditorExtensions, type PageLinks, type PageMedia } from '../lib/pag
 import { fetchStoredFileBlob, uploadToR2 } from '../lib/r2';
 import { calloutVariant, isAllowedPageLink, type CalloutVariant } from '../lib/pageSchema';
 import { pageBodyFit } from '../lib/pageBodyCheck';
+import { LETTERHEAD_PDF_MESSAGE } from '../lib/pageExportParts';
 import { warmupOfficeEditor } from '../lib/office';
 import type { InternalDocument } from '../types';
+// Alleen het type: de export zelf laadt pas bij een klik (import()).
+import type { PageWordHouseStyle } from '../lib/pageWordExport';
 import {
   attachmentInfo, attachmentStorageKey, claimPageEdit, createPage, EXPORT_SUBPAGE_LIMIT, listDossierFiles, listPageVersions, listSubpages, loadPage, loadPageShareStatus, loadPageVersion, pageAncestors, pageTitle,
   releasePageEdit, releasePageToShares, restorePageVersion, savePage, type DossierFile,
@@ -67,7 +70,7 @@ const EXPORT_OPTIONS_KEY = 'resofly.paginaExport.opties';
 function readExportOptions(): PageExportOptions {
   try {
     const saved = JSON.parse(window.localStorage.getItem(EXPORT_OPTIONS_KEY) ?? 'null') as Partial<PageExportOptions> | null;
-    return { cover: saved?.cover === true, toc: saved?.toc === true, chapters: saved?.chapters === true };
+    return { cover: saved?.cover === true, toc: saved?.toc === true, chapters: saved?.chapters === true, letterhead: saved?.letterhead === true };
   } catch {
     return NO_EXPORT_OPTIONS;
   }
@@ -141,10 +144,8 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
   backTo?: string | null;
   /** De naam van het eigen dossier (het bedrijf), boven de boom. */
   ownDossierName?: string;
-  /** De huisstijl voor de Word-export: de letters, en voor het voorblad de naam en het logo. */
-  houseStyle?: {
-    brand_heading_font?: string | null; brand_body_font?: string | null; company_name?: string | null; brand_logo_data_url?: string | null;
-  } | null;
+  /** De bedrijfsinstellingen voor de Word-export: letters, naam en logo, briefpapier en Documentopmaak. */
+  houseStyle?: PageWordHouseStyle | null;
   /** Delen (stap 1C): het deelvenster openen; klaar als het open is. Zonder deze functie geen knop. */
   onShare?: (request: PageShareRequest) => Promise<void> | void;
   /**
@@ -178,6 +179,8 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
   const [exportOptions, setExportOptionsState] = useState<PageExportOptions>(readExportOptions);
   const setExportOptions = (options: PageExportOptions) => { setExportOptionsState(options); saveExportOptions(options); };
   const [exportSubpages, setExportSubpages] = useState<Awaited<ReturnType<typeof listSubpages>> | null>(null);
+  const letterheadKind = houseStyle?.invoice_template_kind === 'image' ? 'image' as const
+    : houseStyle?.invoice_template_kind === 'pdf' ? 'pdf' as const : null;
   const [refreshHelps, setRefreshHelps] = useState(true);
   /** Het kruimelpad: de bovenliggende pagina's, van boven naar de directe ouder. */
   const [ancestors, setAncestors] = useState<Array<{ id: string; title: string }>>([]);
@@ -819,6 +822,8 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
       const wordOptions = {
         cover: exportOptions.cover,
         toc: exportOptions.toc,
+        // Alleen een briefpapier dat een afbeelding is; bij een PDF staat de optie uit (het venster zegt waarom).
+        letterhead: exportOptions.letterhead && letterheadKind === 'image',
         chapters: exportOptions.chapters ? (subpages?.subpages ?? []).map(({ page, depth }) => ({ id: page.id, title: page.title, depth })) : [],
       };
       if (action === 'kopie') {
@@ -944,6 +949,8 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
         canCopy={canWrite && Boolean(onOpenDocument)}
         options={exportOptions}
         subpages={exportSubpages ? { count: exportSubpages.subpages.length, tooMany: exportSubpages.tooMany, limit: EXPORT_SUBPAGE_LIMIT } : null}
+        letterhead={letterheadKind}
+        letterheadPdfNote={LETTERHEAD_PDF_MESSAGE}
         onOptions={setExportOptions}
         onChoose={action => void runExport(action)}
         onClose={() => setExportOpen(false)}

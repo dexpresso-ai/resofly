@@ -22,14 +22,14 @@ import { useBackStep } from '../lib/useBackStep';
 export type PageExportAction = 'word' | 'kopie' | 'afdrukken';
 
 /** De opties voor Word (stap 1B-4). Standaard alles uit: dan is het bestand dat van 1B-3. */
-export type PageExportOptions = { cover: boolean; toc: boolean; chapters: boolean };
+export type PageExportOptions = { cover: boolean; toc: boolean; chapters: boolean; letterhead: boolean };
 
-export const NO_EXPORT_OPTIONS: PageExportOptions = { cover: false, toc: false, chapters: false };
+export const NO_EXPORT_OPTIONS: PageExportOptions = { cover: false, toc: false, chapters: false, letterhead: false };
 
 /** De subpagina's onder de pagina: hoeveel, of te veel. null zolang ze laden of als dat niet lukte. */
 export type PageExportSubpages = { count: number; tooMany: boolean; limit: number } | null;
 
-export function PageExportDialog({ busy, error, canCopy, options, subpages, onOptions, onChoose, onClose }: {
+export function PageExportDialog({ busy, error, canCopy, options, subpages, letterhead, letterheadPdfNote, onOptions, onChoose, onClose }: {
   /** Wat er nu loopt; zolang kun je niets anders kiezen. */
   busy: PageExportAction | null;
   error: string | null;
@@ -37,6 +37,9 @@ export function PageExportDialog({ busy, error, canCopy, options, subpages, onOp
   canCopy: boolean;
   options: PageExportOptions;
   subpages: PageExportSubpages;
+  /** Het briefpapier van Documentopmaak: een afbeelding kan in Word, een PDF niet. null: er is er geen. */
+  letterhead: 'image' | 'pdf' | null;
+  letterheadPdfNote: string;
   onOptions: (options: PageExportOptions) => void;
   onChoose: (action: PageExportAction) => void;
   onClose: () => void;
@@ -88,6 +91,11 @@ export function PageExportDialog({ busy, error, canCopy, options, subpages, onOp
           <div className="page-export-checks">
             {check('cover', 'Voorblad: titel, klant, project, datum en logo')}
             {check('toc', 'Inhoudsopgave vooraan')}
+            {letterhead === 'image' && check('letterhead', 'Briefpapier, achter elke bladzijde')}
+            {letterhead === 'pdf' && <>
+              {check('letterhead', 'Briefpapier', true)}
+              <p className="page-export-note">{letterheadPdfNote}</p>
+            </>}
             {subpages && subpages.count > 0 && check('chapters', `Subpagina's als hoofdstukken (${subpages.count})`)}
             {subpages?.tooMany && <>
               {check('chapters', 'Subpagina\'s als hoofdstukken', true)}

@@ -164,7 +164,8 @@ pas naar staging als de gebruiker het zegt.
   Elke stijl die het bestand gebruikt, bestaat in `styles.xml`; dat ziet de XSD niet.
 - **Een proefbestand met alles aan:** de proefpagina van 1B-2 met drie hoofdstukken, een
   voorblad met logo, en de huisstijlletters.
-  - Het voldoet aan het schema (ECMA-376), ook na opnieuw opslaan in LibreOffice.
+  - Het voldoet aan het schema (ECMA-376). Na opnieuw opslaan in LibreOffice eerst niet; dat
+    las ik bij deze stap verkeerd. Zie "Gevonden en gerepareerd" bij 1B-4b hieronder.
   - Als PDF, vóór en na opnieuw opslaan, nagekeken:
     - het voorblad zonder paginanummer;
     - de inhoudsopgave met de hoofdstukken op hun niveau;
@@ -187,3 +188,83 @@ pas naar staging als de gebruiker het zegt.
 - **`ui.mjs paginas` (16 stappen) en `paginadrive` (8), elk plus de voorbereiding:** 0 fout, ook
   de Word-stappen met afbeeldingen, de huisstijlletter en de subpagina.
 - **`npm test`** (2415) en **`npm run typecheck`**.
+
+## Later die dag: het briefpapier (1B-4b), en een reparatie aan het voorblad
+
+### Wat er nu kan
+
+- **"Briefpapier, achter elke bladzijde"** in het exportvenster, als je bij Instellingen →
+  Documentopmaak een briefpapier hebt ingesteld dat een afbeelding is (PNG of JPG).
+  - De afbeelding staat over de hele bladzijde, achter de tekst, op elke bladzijde, ook op
+    het voorblad. Ze staat in de kop van het bestand, zoals het briefpapier onder elke
+    bladzijde van een factuur.
+  - De marges komen uit Documentopmaak, zoals op de vervolgbladzijden van een factuur:
+    - boven: waar de inhoud begint;
+    - onder: waar de voet begint.
+    - Met het sjabloon "Voor briefpapier" blijven de kop en voet van het briefpapier zo vrij.
+    - Nooit minder dan de gewone marge.
+  - Het paginanummer staat net onder de tekst, boven de voet van het briefpapier.
+- **Een briefpapier als PDF kan niet in een Word-bestand.**
+  - De optie staat er dan wel, maar uit. Het venster zegt waarom, en wat wel kan: een
+    afbeelding als briefpapier.
+  - Een bewaarde keuze telt dan niet. Een PDF-briefpapier hoort bij de PDF van een pagina
+    (1B-5): met pdf-lib, zoals bij facturen.
+- **Nooit stil zonder briefpapier.** De app laadt het briefpapier niet bij het opstarten
+  (`letterhead.ts`); de export haalt het op. Lukt dat niet, of is het niet te lezen, dan komt
+  er geen bestand, met een melding. `letterhead.test.ts` bewaakt dat nu ook voor de Word-export.
+
+### Gevonden en gerepareerd
+
+- **Het voorblad van 1B-4a overleefde opnieuw opslaan in LibreOffice niet goed.**
+  - Het voorblad stond in een eigen sectie. Ons bestand was geldig.
+  - Na opnieuw opslaan in LibreOffice 24.2 voldeed het niet meer aan het schema.
+    LibreOffice zet de sectiegrens dan vóór de opmaak van de alinea (`w:sectPr` vóór
+    `w:pStyle`). Dat doet het bij elk bestand met meer dan één sectie, ook met een alinea
+    zonder stijl.
+  - Collabora is LibreOffice. Een Word-kopie met voorblad zou na de eerste keer bewaren dus
+    zo'n bestand worden. Of echte Word dat opent, kon ik niet nagaan.
+  - Bij 1B-4a las ik de uitvoer van de controle verkeerd: er stond geen "PASSED", en ik
+    schreef dat het klopte.
+  - Nu: één sectie, met een eigen eerste bladzijde zonder voet (`w:titlePg`), en daarna een
+    paginagrens. Zo maakt Word zelf een voorblad.
+  - Het briefpapier staat ook op die eerste bladzijde (de kop "first").
+  - Vóór en na opnieuw opslaan geldig, en de nummering klopt nog: "Pagina 2 van 4".
+
+### Getest (1B-4b)
+
+- **`pageDocx.test.ts`, twee nieuwe tests:**
+  - het briefpapier:
+    - in de kop, achter de tekst, zo groot als A4;
+    - de onderdelen en relaties;
+    - de marges en de plek van het paginanummer;
+    - met een voorblad ook daar, zonder voet;
+    - een marge kleiner dan de gewone, of geen getal, wordt de gewone;
+  - een briefpapier dat Word niet kan tonen (pdf, svg, webp): geen kop, en het bestand zoals
+    zonder briefpapier.
+
+  De voorbladtest kijkt nu naar één sectie met `w:titlePg`.
+- **Zonder opties nog steeds byte voor byte het bestand van 1B-3.**
+- **Twee proefbestanden, vóór en na opnieuw opslaan in LibreOffice:**
+  - `docs/rapporten/PROEF_WORD_OPTIES_2026-11-28.docx`, opnieuw gemaakt: voorblad,
+    inhoudsopgave en hoofdstukken;
+  - `docs/rapporten/PROEF_WORD_BRIEFPAPIER_2026-11-28.docx`: een briefpapier met een kop- en
+    voetband, de marges van "Voor briefpapier", een voorblad, en 40 alinea's tekst.
+
+  Beide voldoen aan het schema (ECMA-376), ook na opnieuw opslaan. Als PDF nagekeken:
+  - het briefpapier staat op elke bladzijde;
+  - de tekst blijft tussen de banden;
+  - het paginanummer staat boven de voetband;
+  - de nummering klopt.
+- **`ui.mjs paginaexport`, een nieuwe stap:**
+  - een briefpapier als afbeelding in de instellingen, door de export opgehaald;
+  - in het bestand:
+    - de kop met de afbeelding achter de tekst;
+    - de afbeelding is precies die van de instellingen;
+    - de marges van de standaardopmaak;
+  - een briefpapier als PDF: de optie staat uit, het venster legt het uit, en een bewaarde
+    keuze geeft geen kop.
+
+  Het scenario: 6 stappen plus de voorbereiding, 0 fout.
+- **`letterhead.test.ts`:** de Word-export staat in de lijst van plekken die het briefpapier
+  gebruiken. De test eist dat ze het eerst ophaalt, en mislukt als dat niet lukt.
+- **`npm test`** (2417) en **`npm run typecheck`**.

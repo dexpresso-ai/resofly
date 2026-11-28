@@ -15,16 +15,16 @@
 // ============================================================
 
 import {
-  buildPageDocx, type PageDocxChapter, type PageDocxContext, type PageDocxCover, type PageDocxFont, type PageDocxImage,
+  buildPageDocx, type PageDocxChapter, type PageDocxContext, type PageDocxCover, type PageDocxFont, type PageDocxImage, type PageDocxLetterhead,
 } from '../../supabase/functions/_shared/pageDocx.ts';
 import { pageExportFonts, type PageExportFont } from '../../supabase/functions/_shared/pageExportFonts.ts';
 import { sfntFamilyName, woffToSfnt } from '../../supabase/functions/_shared/woff.ts';
-import { pageReferences, wordFileName } from './pageExportParts';
-import { dataUrlBytes } from './documentLayout';
+import { LETTERHEAD_PDF_MESSAGE, pageReferences, wordFileName } from './pageExportParts';
+import { dataUrlBytes, documentAssetsFromSettings, PAGE_HEIGHT, parseDocumentLayouts, resolveDocumentLayout } from './documentLayout';
 import { uploadDocumentDocx } from './office';
 import { fetchStoredFileBlob } from './r2';
 import { deleteR2Object } from './r2-api';
-import { attachmentInfo, dossierNames, insertRow, loadPage, pageTitle, pageTreePlace, type PageRow } from './repository';
+import { attachmentInfo, dossierNames, insertRow, loadInvoiceLetterhead, loadPage, pageTitle, pageTreePlace, type PageRow } from './repository';
 import type { InternalDocument } from '../types';
 
 /**
@@ -48,18 +48,31 @@ async function loadFont(font: PageExportFont): Promise<PageDocxFont> {
   return { family, regular, bold };
 }
 
-/** Wat de export van de huisstijl gebruikt: de letters, en voor het voorblad de naam en het logo. */
+/**
+ * Wat de export van de bedrijfsinstellingen gebruikt: de letters; voor het
+ * voorblad de naam en het logo; voor het briefpapier het bestand en de
+ * marges uit Documentopmaak.
+ */
 export type PageWordHouseStyle = {
+  organization_id?: string;
   brand_heading_font?: string | null;
   brand_body_font?: string | null;
   company_name?: string | null;
   brand_logo_data_url?: string | null;
+  invoice_template_kind?: string | null;
+  /** Ontbreekt (undefined) in de kern van de app: dan halen we het op (letterhead.ts). */
+  invoice_template_data_url?: string | null;
+  invoice_template_mime_type?: string | null;
+  invoice_template_updated_at?: string | null;
+  document_layouts?: unknown;
 };
 
 /** De keuzes in het exportvenster (stap 1B-4). */
 export type PageWordOptions = {
   cover?: boolean;
   toc?: boolean;
+  /** Het briefpapier van Documentopmaak, achter elke bladzijde (stap 1B-4b). */
+  letterhead?: boolean;
   /** De subpagina's als hoofdstukken, in de volgorde van de boom (listSubpages). */
   chapters?: Array<{ id: string; title: string; depth: number }>;
 };
@@ -83,6 +96,40 @@ async function coverOf(row: PageRow, organizationId: string, houseStyle: PageWor
     date: new Date().toLocaleDateString('nl-NL', { day: 'numeric', month: 'long', year: 'numeric' }),
     company: houseStyle?.company_name?.trim() || null,
     logo: coverLogo(houseStyle?.brand_logo_data_url),
+  };
+}
+
+/**
+ * Het briefpapier voor Word (stap 1B-4b), zoals bij de PDF van een factuur
+ * (letterhead.ts): gevraagd maar niet te laden, dan geen bestand. Nooit stil
+ * zonder briefpapier: dat zie je pas als het bij de klant ligt.
+ *
+ * De marges komen uit Documentopmaak, zoals de vervolgbladzijden van een
+ * factuur: boven de plek waar de inhoud begint (continueTop), onder de voet
+ * (footerTop). Met het sjabloon "Voor briefpapier" laat dat zijn kop en voet vrij.
+ */
+async function letterheadOf(style: PageWordHouseStyle | null): Promise<PageDocxLetterhead> {
+  const kind = style?.invoice_template_kind;
+  if (!style || !kind || kind === 'none') throw new Error('Er is geen briefpapier ingesteld. Dat doe je bij Instellingen → Documentopmaak.');
+  if (kind === 'pdf') throw new Error(LETTERHEAD_PDF_MESSAGE);
+  let dataUrl = style.invoice_template_data_url;
+  if (dataUrl === undefined) {
+    try {
+      if (!style.organization_id) throw new Error('geen organisatie');
+      dataUrl = await loadInvoiceLetterhead(style.organization_id, style.invoice_template_updated_at ?? null);
+    } catch {
+      throw new Error('Het briefpapier kon niet worden geladen, dus er is geen Word-bestand gemaakt. Controleer je verbinding en probeer het opnieuw.');
+    }
+  }
+  const paper = documentAssetsFromSettings({ ...style, invoice_template_data_url: dataUrl }).letterhead;
+  if (!paper) throw new Error('Het briefpapier is leeg of niet te lezen. Kies het opnieuw bij Instellingen → Documentopmaak.');
+  if (paper.kind === 'pdf') throw new Error(LETTERHEAD_PDF_MESSAGE);
+  const layout = resolveDocumentLayout(parseDocumentLayouts(style.document_layouts), 'invoice', { letterhead: true });
+  return {
+    image: { bytes: paper.bytes, contentType: paper.type === 'png' ? 'image/png' : 'image/jpeg' },
+    // Punten (1/72 inch) naar twips (1/20 punt). pageDocx houdt minstens de gewone marge aan.
+    top: Math.round(layout.continueTop * 20),
+    bottom: Math.round((PAGE_HEIGHT - layout.footerTop) * 20),
   };
 }
 
@@ -135,7 +182,7 @@ export async function buildPageWord(
   };
   const fonts = pageExportFonts(houseStyle);
   type Entry<T> = [string, T | null];
-  const [titles, fileNames, images, body, heading, cover] = await Promise.all([
+  const [titles, fileNames, images, body, heading, cover, letterhead] = await Promise.all([
     Promise.all(refs.pages.map(async (id): Promise<Entry<string>> => [id, await pageTitle(id, organizationId).catch(() => null)])),
     Promise.all(refs.files.map(async (id): Promise<Entry<string>> => [id, (await attachmentInfo(id, organizationId).catch(() => null))?.name ?? null])),
     Promise.all(refs.images.map(async (id): Promise<Entry<PageDocxImage>> => {
@@ -152,6 +199,7 @@ export async function buildPageWord(
     loadFont(fonts.body),
     fonts.heading.key === fonts.body.key ? null : loadFont(fonts.heading),
     options.cover ? coverOf(row, organizationId, houseStyle) : null,
+    options.letterhead ? letterheadOf(houseStyle) : null,
   ]);
   const known = <T,>(entries: Entry<T>[]): Record<string, T> =>
     Object.fromEntries(entries.filter((entry): entry is [string, T] => entry[1] !== null));
@@ -163,7 +211,7 @@ export async function buildPageWord(
     font: body,
     headingFont: heading ?? body,
   };
-  const blob = await buildPageDocx(row.title, row.body, context, { cover, toc: Boolean(options.toc), chapters });
+  const blob = await buildPageDocx(row.title, row.body, context, { cover, toc: Boolean(options.toc), chapters, letterhead });
   return { blob, fileName: wordFileName(row.title) };
 }
 

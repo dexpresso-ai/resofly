@@ -3540,8 +3540,9 @@ async function scenarioPaginaexport() {
     const download = await exporteerWord(page);
     const delen = docxDelen(readFileSync(await download.path()));
     const xml = delen.get('word/document.xml')?.toString('utf8') ?? '';
-    const [voorblad, rest] = xml.split('</w:sectPr></w:pPr></w:p>');
-    verwacht(rest, 'geen voorblad in een eigen sectie');
+    // Het voorblad: de eerste bladzijde zonder voet (titlePg), dan een paginagrens.
+    const [voorblad, rest] = xml.split('<w:p><w:r><w:br w:type="page"/></w:r></w:p>');
+    verwacht(rest && xml.includes('<w:titlePg/></w:sectPr>'), 'geen voorblad op een eigen eerste bladzijde');
     for (const zin of [`Export ouder ${tag}`, `Klant: ${w.klantA.name}`, new Date().getFullYear().toString()]) {
       verwacht(voorblad.includes(zin), `"${zin}" staat niet op het voorblad`);
     }
@@ -3687,6 +3688,55 @@ async function scenarioPaginaexport() {
     const xml = docxDelen(readFileSync(await download.path())).get('word/document.xml')?.toString('utf8') ?? '';
     verwacht(xml.includes(`Net getypt ${tag}`), 'de kijker kreeg niet de opgeslagen pagina');
     await sluitPagina(page);
+  });
+
+  await uiStap('briefpapier: een afbeelding achter elke bladzijde, met de marges van Documentopmaak; een briefpapier als PDF kan niet, en het venster zegt waarom', async () => {
+    const papier = pngVlak(210, 297, [250, 246, 235]);
+    const zet = (soort, dataUrl, mime) => sql(`update public.company_settings set invoice_template_kind = ${q(soort)},
+      invoice_template_mime_type = ${mime ? q(mime) : 'null'}, invoice_template_file_name = ${soort === 'none' ? 'null' : q('briefpapier')},
+      invoice_template_file_size = ${dataUrl ? dataUrl.length : 0}, invoice_template_data_url = ${dataUrl ? q(dataUrl) : 'null'},
+      invoice_template_updated_at = now() where organization_id = ${q(w.orgId)}`);
+    try {
+      zet('image', `data:image/png;base64,${papier.toString('base64')}`, 'image/png');
+      const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+      const page = lid.page;
+      await openPagina(lid, ouder);
+      const venster = page.locator('.page-export');
+      await page.locator('.page-editor-export').click();
+      await venster.waitFor({ timeout: 10000 });
+      // De app laadt het briefpapier niet bij het opstarten (letterhead.ts): de export haalt het op.
+      await venster.locator('.page-export-check').filter({ hasText: 'Briefpapier, achter elke bladzijde' }).locator('input').check();
+      await page.keyboard.press('Escape');
+      await venster.waitFor({ state: 'detached', timeout: 5000 });
+      const delen = docxDelen(readFileSync(await (await exporteerWord(page)).path()));
+      verwacht(/<wp:anchor [^>]*behindDoc="1"/.test(delen.get('word/header1.xml')?.toString('utf8') ?? ''), 'geen briefpapier achter de tekst');
+      verwacht(delen.get('word/media/briefpapier.png')?.equals(papier), 'het briefpapier in het bestand is niet dat van de instellingen');
+      const xml = delen.get('word/document.xml')?.toString('utf8') ?? '';
+      verwacht(xml.includes('<w:headerReference w:type="default" r:id="rId6"/>'), 'de kop met het briefpapier staat niet in de sectie');
+      // Zonder eigen opmaak: de standaard van een factuur (voet vanaf 768 pt), en boven nooit minder dan de gewone marge.
+      verwacht(xml.includes('<w:pgMar w:top="1418" w:right="1418" w:bottom="1478" w:left="1418" w:header="709" w:footer="1158" w:gutter="0"/>'), `de marges: ${xml.match(/<w:pgMar [^>]*>/)?.[0]}`);
+      await sluitPagina(page);
+      // Een briefpapier als PDF: de optie staat uit, met de uitleg.
+      zet('pdf', 'data:application/pdf;base64,JVBERi0xLjQK', 'application/pdf');
+      const ander = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+      // Bewaard van eerder: het briefpapier aan.
+      await ander.page.evaluate(() => window.localStorage.setItem('resofly.paginaExport.opties', JSON.stringify({ letterhead: true })));
+      await openPagina(ander, ouder);
+      await ander.page.locator('.page-editor-export').click();
+      const venster2 = ander.page.locator('.page-export');
+      await venster2.waitFor({ timeout: 10000 });
+      const optie = venster2.locator('.page-export-check').filter({ hasText: 'Briefpapier' });
+      verwacht(await optie.locator('input').isDisabled(), 'een briefpapier als PDF kan toch aan');
+      verwacht(tekst(await venster2.locator('.page-export-note').innerText()).includes('Je briefpapier is een PDF'), 'het venster zegt niet waarom');
+      // De bewaarde keuze telt dan niet: Word downloaden geeft een bestand zonder briefpapier.
+      await venster2.locator('.page-editor-close').click();
+      await venster2.waitFor({ state: 'detached', timeout: 5000 });
+      const zonder = docxDelen(readFileSync(await (await exporteerWord(ander.page)).path()));
+      verwacht(!zonder.has('word/header1.xml'), 'met een PDF-briefpapier toch een kop');
+      await sluitPagina(ander.page);
+    } finally {
+      zet('none', null, null);
+    }
   });
 }
 
