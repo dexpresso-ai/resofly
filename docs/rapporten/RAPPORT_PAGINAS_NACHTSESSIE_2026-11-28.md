@@ -13,15 +13,21 @@ van 27 november 17:07 (`416b997`), en wat ik je wil vragen.
 Het bouwplan is `docs/plannen/PAGINAS_BOUWPLAN_2026-11-27.md`. In §18 staan de stappen en de
 stand voor de overdracht.
 
-**Na de merge, op de branch: de export (1B-3 tot en met 1B-4c).** Het exportvenster, de
-Word-kopie, het voorblad, de inhoudsopgave, de hoofdstukken, het briefpapier, en de kop en voet
-in de huisstijl. Wat nu nog in fase 1 zit, wacht op jou. Daarom bouw ik niet verder.
+**Om 11:46 UTC ook de export naar staging gezet, op jouw verzoek** (`3be4452`): 1B-3 tot en
+met 1B-4c.
+- Wat erin zit: het exportvenster, de Word-kopie, het voorblad, de inhoudsopgave, de
+  hoofdstukken, het briefpapier, en de kop en voet in de huisstijl.
+- De uitrol is geslaagd, met de rooktest. Er zijn geen migraties.
+- Daarna ga ik verder met de PDF (1B-5), zoals §9 het zegt: de server bouwt de Word-file, en
+  Collabora maakt er via de media-worker een PDF van. Die worker rol jij uit. Dat staat op de
+  branch tot je weer zegt dat het naar staging mag.
 
 ## Wat ik van je nodig heb, op volgorde
 
-1. **De PDF (1B-5): twee antwoorden** (vraag 10).
-   - Rol jij de media-worker uit?
-   - Moet de server de Word-file bouwen, of mag dat in de app blijven? Dat is ook vraag 5.
+1. **De PDF (1B-5)** (vraag 10).
+   - Na je "ga door met het plan" bouw ik hem zoals §9 zegt: de server maakt de Word-file.
+   - Wat ik nog van je nodig heb: rol jij de media-worker uit als het nieuwe pad klaar is? Tot
+     dan zegt het exportvenster dat de PDF er nog niet is.
 2. **Open de vier proefbestanden in echte Word** (vragen 4 en 11):
    - zonder huisstijl;
    - met huisstijl;
@@ -30,7 +36,7 @@ in de huisstijl. Wat nu nog in fase 1 zit, wacht op jou. Daarom bouw ik niet ver
 
    Zeg wat er niet klopt.
 3. **Bevestig de keuzes van 1C** (vraag 8).
-4. **Zeg of ik de export naar staging mag mergen.** Daarna op staging:
+4. **De export staat op staging** (`3be4452`). Loop daar na:
    - één Word-kopie bewerken en bewaren in Collabora (vraag 11);
    - één gedeelde pagina met een afbeelding in het portaal bekijken (vraag 9);
    - open tabbladen verversen (vraag 6).
@@ -139,6 +145,10 @@ in de huisstijl. Wat nu nog in fase 1 zit, wacht op jou. Daarom bouw ik niet ver
       - In de app (zoals nu) is het eenvoudiger; dan bouwt de server alleen de PDF.
 
     Tot dan kun je afdrukken via Exporteren, en in het afdrukvenster "Opslaan als PDF" kiezen.
+
+    Na de merge van 11:46 zei je "ga door met het plan". Ik lees dat als de weg van §9: de
+    server bouwt de Word-file (`page-export`). De eerste vraag, wie de worker uitrolt, blijft
+    staan.
 11. **Na de volgende merge: maak één Word-document van een pagina op staging, bewerk het en
     bewaar het.** Dat is "Maak er een Word-document van" (1B-3). Open ook
     `docs/rapporten/PROEF_WORD_OPTIES_2026-11-28.docx` in echte Word: een voorblad met logo,
