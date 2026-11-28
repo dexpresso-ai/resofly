@@ -91,8 +91,15 @@ Ze mogen opnieuw draaien, en de databasetests lopen ze na.
 
 ## Getest
 
-- **De CI op de branch:** run 304 (commit ba3ee84) is helemaal groen. Latere runs staan in
-  §18 van het bouwplan.
+- **De CI op de branch:** runs 304, 305, 306 en 307 zijn helemaal groen. 307 is de laatste
+  code-commit, d7dfc69; daarna kwam alleen tekst. Groen betekent:
+  - de migraties vanaf nul met de databasetests;
+  - `deno check`;
+  - typecheck en de unit tests;
+  - de mobiele lay-outtest (donker en licht);
+  - laden per module, de inrichting en de terugknop.
+
+  Meer per run in §18 van het bouwplan.
 - **Lokaal:**
   - `npm test` en typecheck;
   - de databasetests;

@@ -611,9 +611,10 @@ akkoord is.
     lay-outtest (36 minuten), laden per module, de inrichting en de terugknop;
   - run 306 (0bff935, de knop "Word" en alles ervoor): helemaal groen, ook de mobiele
     lay-outtest, laden, de inrichting en de terugknop;
-  - de run voor de laatste commit (met Gerrie die aanvult, het afdrukken en de reparatie van
-    het zwarte scherm, d7dfc69) is gestart rond 03:39. Zie GitHub Actions, "Frontend checks" op deze
-    branch.
+  - run 307 (d7dfc69, met Gerrie die aanvult, het afdrukken en de reparatie van het zwarte
+    scherm): helemaal groen, ook `deno check` van het pad waarlangs Gerrie aanvult, de
+    mobiele lay-outtest, laden, de inrichting en de terugknop. Wat er daarna nog kwam (5f1b4e0
+    en later), is alleen tekst.
 - **Nog niet door `deno check`:** `_shared/pageDocx.ts`, `_shared/woff.ts` en `_shared/zipWriter.ts`. Dat gebeurt
   vanzelf zodra `page-export` ze importeert en in de lijst van
   `.github/workflows/frontend-checks.yml` staat.
