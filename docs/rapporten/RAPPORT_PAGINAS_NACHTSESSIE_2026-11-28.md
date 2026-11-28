@@ -27,6 +27,17 @@ met 1B-4c.
   Collabora maakt er via de media-worker een PDF van. Die worker rol jij uit. Dat staat op de
   branch tot je weer zegt dat het naar staging mag.
 
+**Na de merge van 14:39: fase 2 begonnen, op de branch** (na je "houw verder"). Fase 1 is af,
+op 1A-5d na. Fase 2 staat nu in stappen in §18 van het bouwplan.
+- **2-0, kolommen**: twee of drie naast elkaar, op de telefoon onder elkaar. Geen migratie.
+- **2-1a, @-vermeldingen, de basis**: een klant, project, taak, factuur of collega in de tekst,
+  als chip.
+  - In de pagina staan alleen de soort en het id, geen naam. De naam komt met de rechten van
+    wie kijkt, en anders staat de soort er.
+  - Een migratie: `20261128160000_paginas_vermeldingen.sql`.
+  - Kiezen met @ en "Genoemd in" volgen (2-1b en 2-1c).
+- Dit staat op de branch tot je zegt dat het naar staging mag.
+
 ## Wat ik van je nodig heb, op volgorde
 
 1. **De PDF (1B-5) staat op staging** (vraag 10). Na je "ga door met het plan" heb ik hem
@@ -48,7 +59,9 @@ met 1B-4c.
    - één gedeelde pagina met een afbeelding in het portaal bekijken (vraag 9);
    - open tabbladen verversen (vraag 6).
 5. **Tekstdocumenten omzetten (1A-5d): twee besluiten** (vraag 1). Omzetten kan niet terug.
-6. **Staging nakijken:**
+6. **Mag de klant de naam zien bij een @-vermelding in een gedeelde pagina?** (vraag 12). Nu
+   ziet hij alleen de soort.
+7. **Staging nakijken:**
    - staat pg_cron aan (vraag 2)?
    - wordt de opruimwachtrij geleegd (vraag 3)?
    - de letterproef op de Collabora-container (vraag 7).
@@ -167,6 +180,14 @@ met 1B-4c.
     - Let op de grootte. Na de eerste keer bewaren in Collabora werd het bestand in de proef
       veel groter (107 kB werd 2 MB): LibreOffice sluit dan alle letters in hun geheel in.
 
+12. **@-vermeldingen in een gedeelde pagina (2-1a): mag de klant de naam zien?** Een pagina kan
+    een klant, project, taak, factuur of collega noemen. Deel je die pagina, dan ziet de klant
+    nu alleen de soort ("project", "factuur"), geen naam. Dat is de strenge standaard, zoals bij
+    een subpagina die niet gedeeld is.
+    - Wel de naam: de klant ziet bijvoorbeeld "Verbouwing 2026" of "F-2026-014". Dat lekt
+      niets als het over hemzelf gaat, maar wel als de pagina een andere klant noemt.
+    - Een middenweg: alleen namen van de klant zelf en zijn eigen projecten.
+
 ## Gevonden en gerepareerd
 
 - **Een pagina die naar een andere klant verhuisde, liet haar subpagina's en delingen
@@ -211,6 +232,13 @@ met 1B-4c.
 
 Geen migraties. 1B-5 brengt een nieuwe edge function mee (`page-export`), en een nieuw pad in
 de media-worker, die je zelf uitrolt.
+
+Na de merge van 14:39, op de branch (fase 2):
+
+| Stap | Wat | Changelog |
+| --- | --- | --- |
+| 2-0 | Kolommen: twee of drie naast elkaar, op de telefoon onder elkaar. | `CHANGELOG_PAGINAS_KOLOMMEN_2026-11-28.md` |
+| 2-1a | @-vermeldingen, de basis: de database, de chip in de editor, Word, de PDF en de klant. Alleen de soort en het id in de pagina. Migratie `20261128160000`. | `CHANGELOG_PAGINAS_VERMELDINGEN_2026-11-28.md` |
 
 ## Wat er op 28 november om 09:34 naar staging ging
 

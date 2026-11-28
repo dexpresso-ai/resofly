@@ -8,7 +8,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  collectSubpages, EXPORT_SUBPAGE_LIMIT, exportBrand, exportContext, exportCover, exportLogo, exportReferences, known, letterheadMargins,
+  collectSubpages, EXPORT_SUBPAGE_LIMIT, exportBrand, exportContext, exportCover, exportLogo, exportMentionNames, exportReferences, known, letterheadMargins,
+  memberLabel,
 } from './pageExport.ts';
 
 const doc = (...content: unknown[]) => ({ type: 'doc', content });
@@ -16,13 +17,44 @@ const sub = (pageId: string) => ({ type: 'subpage', attrs: { pageId } });
 const file = (attachmentId: string) => ({ type: 'fileBlock', attrs: { attachmentId } });
 const image = (attachmentId: string) => ({ type: 'image', attrs: { attachmentId } });
 
+const KLANT = '11111111-2222-4333-8444-555555555555';
+const COLLEGA = '66666666-7777-4888-9999-000000000000';
+const mention = (kind: string, id: string) => ({ type: 'paragraph', content: [{ type: 'mention', attrs: { kind, id } }] });
+
 test('de verwijzingen van de pagina en haar hoofdstukken samen, elk één keer', () => {
   assert.deepEqual(exportReferences([
-    doc(sub('a'), file('f1'), image('i1')),
-    doc(sub('a'), sub('b'), image('i1'), image('i2')),
+    doc(sub('a'), file('f1'), image('i1'), mention('client', KLANT)),
+    doc(sub('a'), sub('b'), image('i1'), image('i2'), mention('client', KLANT.toUpperCase()), mention('member', COLLEGA)),
     null,
     '{kapot',
-  ]), { pages: ['a', 'b'], files: ['f1'], images: ['i1', 'i2'] });
+  ]), {
+    pages: ['a', 'b'], files: ['f1'], images: ['i1', 'i2'],
+    mentions: [{ kind: 'client', id: KLANT }, { kind: 'member', id: COLLEGA }],
+  });
+});
+
+// Stap 2-1a: de namen komen van wie exporteert. Wat de database niet geeft,
+// blijft leeg (de soort in het bestand); een collega heet naar zijn adres, zonder domein.
+test('de namen bij @-vermeldingen: per tabel opgevraagd, met wat terugkomt', async () => {
+  const asked: string[] = [];
+  const names = await exportMentionNames(
+    [{ kind: 'client', id: KLANT }, { kind: 'member', id: COLLEGA }, { kind: 'invoice', id: KLANT }],
+    async (source, ids) => {
+      asked.push(`${source.table}:${source.idColumn},${source.nameColumn}:${ids.join('|')}`);
+      if (source.table === 'clients') return [{ id: KLANT.toUpperCase(), name: ' Bakkerij Jansen ' }];
+      if (source.table === 'organization_members') return [{ user_id: COLLEGA, email: 'sanne@studio.test' }];
+      return [];
+    },
+  );
+  assert.deepEqual(asked.sort(), [
+    `clients:id,name:${KLANT}`, `invoices:id,number:${KLANT}`, `organization_members:user_id,email:${COLLEGA}`,
+  ]);
+  assert.deepEqual(new Map(names), new Map([[`client:${KLANT}`, 'Bakkerij Jansen'], [`member:${COLLEGA}`, 'sanne'], [`invoice:${KLANT}`, null]]));
+  assert.deepEqual(exportContext({ titles: [], fileNames: [], images: [], font: { family: 'X' } as never, headingFont: null, brand: {}, mentionNames: names }).mentionNames,
+    { [`client:${KLANT}`]: 'Bakkerij Jansen', [`member:${COLLEGA}`]: 'sanne' });
+  assert.deepEqual(await exportMentionNames([], async () => { throw new Error('niet vragen'); }), []);
+  assert.equal(memberLabel('  '), null);
+  assert.equal(memberLabel(null), null);
 });
 
 type P = { id: string; title: string; parent_id: string | null; position: number | null };

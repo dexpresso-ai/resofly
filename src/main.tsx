@@ -5081,6 +5081,20 @@ function App() {
       organizationId={pageEditDoc.organization_id}
       canWrite={orgCanWrite && permissions.canWrite('content')}
       nameOf={(userId: string) => memberName(userId, organizationContext.teamMembers ?? [], currentUserId)}
+      // @-vermeldingen (stap 2-1a): de naam uit wat geladen is. De database geeft
+      // alleen wat je mag lezen (regel 3), dus wat je niet mag zien, vindt dit niet.
+      mentionName={(kind, id) => {
+        switch (kind) {
+          case 'client': return data.clients.find(row => row.id === id)?.name ?? null;
+          case 'project': return data.projects.find(row => row.id === id)?.name ?? null;
+          case 'task': return data.tasks.find(row => row.id === id)?.title ?? null;
+          case 'invoice': return data.invoices.find(row => row.id === id)?.number ?? null;
+          case 'member': {
+            const members = organizationContext.teamMembers ?? [];
+            return members.some(member => member.user_id === id) ? memberShortName(id, members) : null;
+          }
+        }
+      }}
       backTo={pageTrail[pageTrail.length - 1] ?? null}
       ownDossierName={data.companySettings?.company_name?.trim() || 'Eigen dossier'}
       houseStyle={data.companySettings}

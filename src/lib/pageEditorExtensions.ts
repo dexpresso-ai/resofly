@@ -15,7 +15,7 @@
 
 import { Extension, Node, mergeAttributes } from '@tiptap/core';
 import type { Editor, NodeViewRenderer } from '@tiptap/core';
-import type { Node as PmNode } from '@tiptap/pm/model';
+import { Fragment, Slice, type Node as PmNode } from '@tiptap/pm/model';
 import { NodeSelection, Plugin, Selection, TextSelection } from '@tiptap/pm/state';
 import type { Transaction } from '@tiptap/pm/state';
 import { columnResizing } from '@tiptap/pm/tables';
@@ -26,6 +26,7 @@ import { UniqueID } from '@tiptap/extension-unique-id';
 import { TableKit } from '@tiptap/extension-table';
 import { Details, DetailsContent, DetailsSummary } from '@tiptap/extension-details';
 import { calloutVariant, isAllowedPageLink } from './pageSchema.ts';
+import { MENTION_KIND_WORDS, mentionKind, mentionOf, type MentionKind } from '../../supabase/functions/_shared/pageMentions.ts';
 
 /** Blokken met een vast id (attrs.id): waar Gerrie straks per blok iets voorstelt. */
 export const PAGE_BLOCKS_WITH_ID = [
@@ -175,6 +176,131 @@ function backspaceInColumns(editor: Editor): boolean {
   editor.view.dispatch(tr.scrollIntoView());
   return true;
 }
+
+/**
+ * De naam bij een @-vermelding, met de rechten van wie kijkt; null als die
+ * persoon hem niet mag zien, of als het niet meer bestaat. PageEditor zet dit
+ * in editor.storage.mention.names, uit wat de app geladen heeft.
+ */
+export type PageMentionNames = (kind: MentionKind, id: string) => string | null;
+
+export function mentionNamesOf(editor: Editor): PageMentionNames | null {
+  return (editor.storage as unknown as Record<string, { names?: PageMentionNames | null } | undefined>).mention?.names ?? null;
+}
+
+const capitalized = (word: string) => word.charAt(0).toUpperCase() + word.slice(1);
+
+/**
+ * Een @-vermelding (stap 2-1a): een klant, project, taak, factuur of collega,
+ * midden in de tekst. In de pagina staan alleen de soort en het id (migratie
+ * 20261128160000): een naam in de body kwam bij wie Inhoud mag lezen maar de
+ * klant of de factuur niet. De naam komt hier uit wat de app geladen heeft,
+ * dus met de rechten van wie kijkt; anders staat de soort er. Kiezen met @
+ * komt in stap 2-1b.
+ */
+export const Mention = Node.create({
+  name: 'mention',
+  group: 'inline',
+  inline: true,
+  atom: true,
+  selectable: true,
+  addStorage() {
+    return { names: null as PageMentionNames | null };
+  },
+  addAttributes() {
+    return {
+      kind: {
+        default: null,
+        parseHTML: (element: HTMLElement) => mentionKind(element.getAttribute('data-kind')),
+        renderHTML: (attributes: Record<string, unknown>) => ({ 'data-kind': attributes.kind }),
+      },
+      id: {
+        default: null,
+        parseHTML: (element: HTMLElement) => element.getAttribute('data-id'),
+        renderHTML: (attributes: Record<string, unknown>) => ({ 'data-id': attributes.id }),
+      },
+    };
+  },
+  parseHTML() {
+    return [{ tag: 'span[data-type="mention"]' }];
+  },
+  // Ook bij kopiëren alleen de soort: dat is wat de pagina weet.
+  renderHTML({ node, HTMLAttributes }) {
+    const kind = mentionKind(node.attrs.kind);
+    return ['span', mergeAttributes(HTMLAttributes, { 'data-type': 'mention', class: 'page-mention' }), `@${kind ? MENTION_KIND_WORDS[kind] : 'vermelding'}`];
+  },
+  renderText({ node }) {
+    const kind = mentionKind(node.attrs.kind);
+    return `@${kind ? MENTION_KIND_WORDS[kind] : 'vermelding'}`;
+  },
+  addNodeView() {
+    return mentionView;
+  },
+  addProseMirrorPlugins() {
+    const editor = this.editor;
+    return [new Plugin({
+      props: {
+        // Geplakt uit een andere organisatie (twee tabbladen) weigert de
+        // database, en dan mislukte elke opslag van deze pagina. Een
+        // vermelding die deze editor niet kent, valt bij plakken dus weg,
+        // zoals een afbeelding uit een ander dossier.
+        transformPasted: (slice: Slice) => {
+          const names = mentionNamesOf(editor);
+          const keep = (node: PmNode) => {
+            const ref = mentionOf({ type: 'mention', attrs: node.attrs });
+            return Boolean(ref && names && names(ref.kind, ref.id) !== null);
+          };
+          const content = withoutUnknownMentions(slice.content, keep);
+          return content === slice.content ? slice : new Slice(content, slice.openStart, slice.openEnd);
+        },
+      },
+    })];
+  },
+});
+
+/** Een fragment zonder de vermeldingen die `keep` niet houdt; hetzelfde fragment als er niets weg hoeft. */
+export function withoutUnknownMentions(fragment: Fragment, keep: (node: PmNode) => boolean): Fragment {
+  let changed = false;
+  const nodes: PmNode[] = [];
+  fragment.forEach(child => {
+    if (child.type.name === 'mention') {
+      if (keep(child)) nodes.push(child);
+      else changed = true;
+      return;
+    }
+    if (child.isLeaf) { nodes.push(child); return; }
+    const inner = withoutUnknownMentions(child.content, keep);
+    if (inner !== child.content) changed = true;
+    nodes.push(inner === child.content ? child : child.copy(inner));
+  });
+  return changed ? Fragment.from(nodes) : fragment;
+}
+
+const mentionView: NodeViewRenderer = ({ editor, node }) => {
+  const dom = document.createElement('span');
+  dom.className = 'page-mention';
+  dom.setAttribute('data-type', 'mention');
+  dom.contentEditable = 'false';
+  const show = (current: PmNode) => {
+    const ref = mentionOf({ type: 'mention', attrs: current.attrs });
+    const names = mentionNamesOf(editor);
+    const name = ref && names ? names(ref.kind, ref.id) : null;
+    dom.setAttribute('data-kind', ref?.kind ?? '');
+    dom.classList.toggle('is-unknown', !name);
+    dom.textContent = `@${name ?? (ref ? MENTION_KIND_WORDS[ref.kind] : 'vermelding')}`;
+    dom.title = name && ref ? `${capitalized(MENTION_KIND_WORDS[ref.kind])}: ${name}`
+      : 'Je ziet niet wat hier genoemd wordt, of het bestaat niet meer.';
+  };
+  show(node);
+  return {
+    dom,
+    update: updated => {
+      if (updated.type.name !== 'mention') return false;
+      show(updated);
+      return true;
+    },
+  };
+};
 
 /**
  * Een knop in een blok (inhoudsopgave, subpagina, bestand) pakt bij een klik
@@ -829,6 +955,7 @@ export function pageEditorExtensions(options: { placeholder?: string } = {}) {
     Callout,
     Columns,
     Column,
+    Mention,
     TableOfContents,
     Subpage,
     PageImage,

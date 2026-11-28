@@ -646,6 +646,41 @@ export default async function documentenScenario() {
       }
     });
 
+    await stap('@-vermeldingen (stap 2-1a): in de PDF de naam als je die mag zien, anders de soort; een klant van de buren weigert de database', async () => {
+      const id = pdfPagina.pagina.id;
+      const voor = sqlRij(`select body from public.documents where id = ${q(id)}`).body;
+      const metAlinea = (...inhoud) => ({ ...voor, content: [...voor.content, { type: 'paragraph', content: inhoud }] });
+      try {
+        gelukt(await wijzig('documents', w.medewerker.token, id, { body: metAlinea(
+          { type: 'text', text: 'Contact: ' }, { type: 'mention', attrs: { kind: 'client', id: w.klantA.id } },
+          { type: 'text', text: ' en ' }, { type: 'mention', attrs: { kind: 'task', id: randomUUID() } },
+        ) }), 'een pagina met vermeldingen opslaan');
+        gelijk(sqlRij(`select count(*)::int as n from public.page_mentions where document_id = ${q(id)}`).n, 2, 'de vermeldingen in page_mentions');
+        // De pagina bewaart geen naam: niet in de body, niet in de platte tekst.
+        const rij = sqlRij(`select body::text as body, content from public.documents where id = ${q(id)}`);
+        verwacht(!rij.body.includes(w.klantA.name) && !rij.content.includes(w.klantA.name), 'de naam van de klant staat in de pagina zelf');
+        const docxVan = async (token, wie) => {
+          const res = await exporteer(token, {});
+          gelijk(res.status, 200, `${wie}: ${res.tekst.slice(0, 200)}`);
+          return leesZip(post.paginaPdf.verzoeken.at(-1).bytes).get('word/document.xml')?.toString('utf8') ?? '';
+        };
+        // De medewerker mag de klant zien: zijn naam. De taak bestaat niet: de soort.
+        const met = await docxVan(w.medewerker.token, 'de medewerker');
+        verwacht(met.includes(`>${w.klantA.name}<`) && met.includes('>taak<'), 'de medewerker ziet de naam van de klant niet, of de taak niet als soort');
+        // Inhoud lezen, Klanten niet: de soort, geen naam.
+        const zonderKlanten = await lidMet(w.orgId, 'pdf-zonder-klanten', { content: 'read', clients: 'none' });
+        const zonder = await docxVan(zonderKlanten.token, 'zonder Klanten');
+        verwacht(!zonder.includes(w.klantA.name) && zonder.includes('>klant<'), 'wie Klanten niet mag zien, ziet toch de naam, of de soort niet');
+        // Een klant van de buren: de database weigert het, via elke weg.
+        if (ander) {
+          geweigerd(await wijzig('documents', w.medewerker.token, id, { body: metAlinea({ type: 'mention', attrs: { kind: 'client', id: ander.klantA.id } }) }),
+            'een klant van de buren', [400]);
+        }
+      } finally {
+        gelukt(await wijzig('documents', w.medewerker.token, id, { body: voor }), 'terug zoals het was');
+      }
+    });
+
     await stap('briefpapier: zonder of kapot een duidelijke melding en geen PDF; een PDF als briefpapier komt onder elke bladzijde', async () => {
       const zet = (soort, dataUrl) => sql(`update public.company_settings set invoice_template_kind = ${q(soort)},
         invoice_template_data_url = ${dataUrl ? q(dataUrl) : 'null'},

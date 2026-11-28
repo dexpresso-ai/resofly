@@ -165,8 +165,11 @@ const vite = await createServer({
   // Vindt Vite een pakket pas tijdens het draaien, dan bundelt hij opnieuw en
   // herlaadt hij de pagina; dat mag niet midden in een stap gebeuren. Om
   // dezelfde reden geen HMR: wijzigt iemand tijdens de run iets in src/, dan
-  // blijft de pagina staan.
-  optimizeDeps: { include: ['@pdf-lib/fontkit'] },
+  // blijft de pagina staan. @tiptap/pm/model: de pagina-editor (een eigen stuk
+  // bundel) haalt er sinds de @-vermeldingen (stap 2-1a) Fragment en Slice uit;
+  // met een lege cache herlaadde Vite toen bij de eerste pagina, en faalde
+  // "Nieuw → Pagina".
+  optimizeDeps: { include: ['@pdf-lib/fontkit', '@tiptap/pm/model'] },
   server: { port: 5310, strictPort: false, host: '127.0.0.1', hmr: false },
 });
 await vite.listen();
@@ -2247,6 +2250,53 @@ async function scenarioPaginas() {
       if (breed) await page.setViewportSize(breed);
     }
     await sluitPagina(page);
+  });
+
+  await uiStap('@-vermeldingen (stap 2-1a): een chip met de naam die je mag zien, anders de soort, en de pagina blijft gewoon bewerkbaar', async () => {
+    // Kiezen met @ komt in stap 2-1b; hier staan de vermeldingen er al, zoals
+    // de API, de MCP of Gerrie ze kunnen zetten.
+    const titel = `Vermeldingen ${Date.now().toString(36)}`;
+    const body = { type: 'doc', content: [{ type: 'paragraph', content: [
+      { type: 'text', text: 'Bel ' }, { type: 'mention', attrs: { kind: 'client', id: w.klantA.id } },
+      { type: 'text', text: ' over ' }, { type: 'mention', attrs: { kind: 'task', id: randomUUID() } }, { type: 'text', text: '.' },
+    ] }] };
+    sql(`insert into public.documents (organization_id, created_by, title, format, body, client_id)
+      values (${q(w.orgId)}, ${q(w.medewerker.id)}, ${q(titel)}, 'page', ${q(JSON.stringify(body))}::jsonb, ${q(w.klantA.id)})`);
+    const pagina = sqlRij(`select id from public.documents where organization_id = ${q(w.orgId)} and title = ${q(titel)}`);
+    const openAls = async (gebruiker, naam) => {
+      const lid = await openWerkruimte(gebruiker, naam, w.orgId, { tijdelijk: true });
+      const adres = new URL(lid.page.url());
+      adres.searchParams.set('pagina', pagina.id);
+      await lid.page.goto(adres.toString());
+      await lid.page.locator('.page-editor').waitFor({ timeout: 30000 });
+      return lid.page;
+    };
+    const page = await openAls(w.medewerker, 'medewerker');
+    await wachtOpgeslagen(page, 'een pagina met vermeldingen ging niet open om te bewerken');
+    const chips = editorVak(page).locator('.page-mention');
+    await wachtTot(async () => (await chips.count()) === 2, { melding: 'geen twee chips' });
+    gelijk(tekst(await chips.nth(0).innerText()), `@${w.klantA.name}`, 'de klant met zijn naam');
+    gelijk(tekst(await chips.nth(1).innerText()), '@taak', 'een taak die er niet is: de soort');
+    gelijk(await chips.nth(1).evaluate(el => el.classList.contains('is-unknown')), true, 'gedempt');
+    // Typen achter de vermeldingen: die blijven staan, en opslaan lukt.
+    await editorVak(page).locator('p').first().click();
+    await page.keyboard.press('End');
+    await page.keyboard.type(' Snel graag.');
+    await wachtOpgeslagen(page);
+    gelijk(sqlRij(`select count(*)::int as n from public.documents d, jsonb_path_query(d.body, 'strict $.** ? (@.type == "mention")') m where d.id = ${q(pagina.id)}`).n, 2, 'de vermeldingen na opslaan');
+    gelijk(sqlRij(`select count(*)::int as n from public.page_mentions where document_id = ${q(pagina.id)}`).n, 2, 'page_mentions');
+    verwacht(!sqlRij(`select body::text as body from public.documents where id = ${q(pagina.id)}`).body.includes(w.klantA.name), 'de naam staat in de pagina zelf');
+    await sluitPagina(page);
+    // Inhoud lezen, Klanten niet: de soort, geen naam.
+    const zonderKlanten = await maakGebruiker('ui-zonder-klanten');
+    sql(`insert into public.organization_members (organization_id, user_id, email, role, status, module_access)
+      values (${q(w.orgId)}, ${q(zonderKlanten.id)}, ${q(zonderKlanten.email)}, 'member', 'active', '{"content":"read","clients":"none"}'::jsonb)`);
+    const andere = await openAls(zonderKlanten, 'zonder-klanten');
+    const zijnChips = editorVak(andere).locator('.page-mention');
+    await wachtTot(async () => (await zijnChips.count()) === 2, { melding: 'zonder Klanten: geen twee chips' });
+    gelijk(tekst(await zijnChips.nth(0).innerText()), '@klant', 'zonder Klanten: de soort');
+    verwacht(!tekst(await editorVak(andere).innerText()).includes(w.klantA.name), 'zonder Klanten staat de naam toch op het scherm');
+    await sluitPagina(andere);
   });
 
   await uiStap('plakken uit Excel of Word wordt een tabel, zonder de stijl van buiten', async () => {

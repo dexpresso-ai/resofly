@@ -13774,6 +13774,12 @@ button.alog-feed-row:hover{background:var(--bg3)}
 .page-prose .tiptap .page-callout[data-variant="let-op"]::before{background:var(--accent-o)}
 .page-prose .tiptap .page-callout[data-variant="waarschuwing"]{--callout-icon:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 16h.01'/%3E%3Cpath d='M12 8v4'/%3E%3Cpath d='M15.312 2a2 2 0 0 1 1.414.586l4.688 4.688A2 2 0 0 1 22 8.688v6.624a2 2 0 0 1-.586 1.414l-4.688 4.688a2 2 0 0 1-1.414.586H8.688a2 2 0 0 1-1.414-.586l-4.688-4.688A2 2 0 0 1 2 15.312V8.688a2 2 0 0 1 .586-1.414l4.688-4.688A2 2 0 0 1 8.688 2z'/%3E%3C/svg%3E");border-color:rgba(var(--danger-rgb),.34);background:rgba(var(--danger-rgb),.08)}
 .page-prose .tiptap .page-callout[data-variant="waarschuwing"]::before{background:var(--accent-r)}
+/* Stap 2-1a: een @-vermelding als chip in de tekst. Zonder naam (niet te zien,
+   of niet meer) gedempt, met de soort. */
+.page-prose .tiptap .page-mention{display:inline-block;padding:0 6px;margin:0 1px;border-radius:6px;background:rgba(var(--accent-rgb),.12);color:var(--accent-ink);font-weight:500;line-height:1.45;white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis;vertical-align:baseline}
+.page-prose .tiptap .page-mention.is-unknown{background:var(--bg3);color:var(--muted2);font-weight:400}
+.page-prose .tiptap .page-mention.ProseMirror-selectednode{outline:2px solid rgba(var(--accent-rgb),.5);outline-offset:1px}
+.rich-text-viewer .rf-mention{padding:0 5px;border-radius:6px;background:var(--bg3);color:var(--muted2)}
 /* Stap 2-0: kolommen. Even breed naast elkaar; op een smal scherm onder elkaar.
    Tijdens het bewerken een stippellijn om elke kolom: anders zag je niet waar
    de ene ophoudt en de andere begint. */

@@ -23,13 +23,14 @@ import {
   buildPageDocx, type PageDocxChapter, type PageDocxCover, type PageDocxFont, type PageDocxImage, type PageDocxLetterhead,
 } from '../../supabase/functions/_shared/pageDocx.ts';
 import {
-  exportBrand, exportContext, exportCover, exportLogo, exportOptions, exportReferences, letterheadMargins,
+  exportBrand, exportContext, exportCover, exportLogo, exportMentionNames, exportOptions, exportReferences, letterheadMargins,
 } from '../../supabase/functions/_shared/pageExport.ts';
 import { pageExportFonts, type PageExportFont } from '../../supabase/functions/_shared/pageExportFonts.ts';
 import { sfntFamilyName, woffToSfnt } from '../../supabase/functions/_shared/woff.ts';
 import { LETTERHEAD_PDF_MESSAGE, wordFileName } from './pageExportParts';
 import { documentAssetsFromSettings, PAGE_HEIGHT, parseDocumentLayouts, resolveDocumentLayout } from './documentLayout';
 import { uploadDocumentDocx } from './office';
+import { supabase } from './supabase';
 import { fetchStoredFileBlob } from './r2';
 import { deleteR2Object } from './r2-api';
 import { attachmentInfo, dossierNames, insertRow, loadInvoiceLetterhead, loadPage, pageTitle, pageTreePlace, type PageRow } from './repository';
@@ -180,7 +181,7 @@ export async function buildPageWord(
   const fonts = pageExportFonts(houseStyle);
   const logo = exportLogo(houseStyle?.brand_logo_data_url);
   type Entry<T> = [string, T | null];
-  const [titles, fileNames, images, body, heading, cover, letterhead] = await Promise.all([
+  const [titles, fileNames, images, body, heading, cover, letterhead, mentionNames] = await Promise.all([
     Promise.all(refs.pages.map(async (id): Promise<Entry<string>> => [id, await pageTitle(id, organizationId).catch(() => null)])),
     Promise.all(refs.files.map(async (id): Promise<Entry<string>> => [id, (await attachmentInfo(id, organizationId).catch(() => null))?.name ?? null])),
     Promise.all(refs.images.map(async (id): Promise<Entry<PageDocxImage>> => {
@@ -198,8 +199,15 @@ export async function buildPageWord(
     fonts.heading.key === fonts.body.key ? null : loadFont(fonts.heading),
     options.cover ? coverOf(row, organizationId, houseStyle, logo) : null,
     options.letterhead ? letterheadOf(houseStyle) : null,
+    // De namen bij @-vermeldingen (stap 2-1a), met jouw rechten: wat de
+    // database je niet geeft, wordt in het bestand de soort.
+    exportMentionNames(refs.mentions, async (source, ids) => {
+      const { data, error } = await supabase.from(source.table).select(`${source.idColumn},${source.nameColumn}`)
+        .eq('organization_id', organizationId).in(source.idColumn, ids);
+      return error ? [] : (data ?? []) as unknown as Array<Record<string, unknown>>;
+    }),
   ]);
-  const context = exportContext({ titles, fileNames, images, font: body, headingFont: heading, brand: exportBrand(houseStyle, logo) });
+  const context = exportContext({ titles, fileNames, images, font: body, headingFont: heading, brand: exportBrand(houseStyle, logo), mentionNames });
   const blob = await buildPageDocx(row.title, row.body, context, exportOptions({ cover, toc: Boolean(options.toc), chapters, letterhead }));
   return { blob, fileName: wordFileName(row.title) };
 }

@@ -40,7 +40,7 @@ import {
   TableCellsSplit, Trash2, TriangleAlert, Underline as UnderlineIcon, Undo2, X,
 } from 'lucide-react';
 import { isInTable, moveTableColumn, moveTableRow, selectedRect } from '@tiptap/pm/tables';
-import { pageEditorExtensions, type PageLinks, type PageMedia } from '../lib/pageEditorExtensions';
+import { pageEditorExtensions, type PageLinks, type PageMedia, type PageMentionNames } from '../lib/pageEditorExtensions';
 import { fetchStoredFileBlob, uploadToR2 } from '../lib/r2';
 import { calloutVariant, isAllowedPageLink, type CalloutVariant } from '../lib/pageSchema';
 import { pageBodyFit } from '../lib/pageBodyCheck';
@@ -130,7 +130,7 @@ export type PageShareRequest = {
   done: () => void;
 };
 
-export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClose, onOpenPage, backTo = null, ownDossierName = 'Eigen dossier', houseStyle = null, onShare, onOpenDocument }: {
+export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClose, onOpenPage, backTo = null, ownDossierName = 'Eigen dossier', houseStyle = null, onShare, onOpenDocument, mentionName }: {
   documentId: string;
   organizationId: string;
   /** Schrijfrechten op Inhoud. Zonder: alleen lezen, en geen claim. */
@@ -153,6 +153,11 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
    * Zonder deze functie geen "Maak er een Word-document van".
    */
   onOpenDocument?: (doc: InternalDocument) => void;
+  /**
+   * De naam bij een @-vermelding (stap 2-1a), uit wat de app geladen heeft: met
+   * de rechten van wie kijkt. null: niet te zien, of niet meer.
+   */
+  mentionName?: PageMentionNames;
 }) {
   const [mode, setModeState] = useState<Mode>('laden');
   const [saveState, setSaveState] = useState<SaveState>('opgeslagen');
@@ -583,12 +588,22 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
   closeRef.current = close;
   const linksRef = useRef<PageLinks | null>(null);
   const mediaRef = useRef<PageMedia | null>(null);
-  /** De voorvertoning van een versie: titels en afbeeldingen wel, openen en uploaden niet. */
+  // De namen bij @-vermeldingen: altijd de laatste, ook voor een chip die later
+  // getekend wordt. De chips lezen ze bij het tekenen (editor.storage).
+  const mentionNameRef = useRef<PageMentionNames | null>(mentionName ?? null);
+  mentionNameRef.current = mentionName ?? null;
+  const mentionNames = useCallback<PageMentionNames>((kind, id) => mentionNameRef.current?.(kind, id) ?? null, []);
+  /** De voorvertoning van een versie: titels, afbeeldingen en namen wel, openen en uploaden niet. */
   const connectPreview = useCallback((preview: Editor) => {
     const store = preview.storage as unknown as Record<string, Record<string, unknown>>;
     if (linksRef.current) store.subpage.links = { ...linksRef.current, open: () => {}, create: async () => null };
     if (mediaRef.current) store.image.media = { ...mediaRef.current, upload: async () => null, refuse: () => {}, chooseFile: async () => null };
-  }, []);
+    store.mention.names = mentionNames;
+  }, [mentionNames]);
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return;
+    (editor.storage as unknown as Record<string, { names: PageMentionNames | null }>).mention.names = mentionNames;
+  }, [editor, mentionNames]);
   useEffect(() => {
     if (!editor || editor.isDestroyed) return;
     const titles = new Map<string, Promise<string | null>>();

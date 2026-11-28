@@ -48,6 +48,7 @@
 // ============================================================
 
 import { ZipBuilder } from './zipWriter.ts';
+import { mentionOf, mentionText } from './pageMentions.ts';
 
 export const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
@@ -80,6 +81,12 @@ export type PageDocxContext = {
   images?: Record<string, PageDocxImage>;
   /** Kop en voet in de huisstijl (stap 1B-4c). Zonder: alleen het paginanummer, zoals in 1B-3. */
   brand?: PageDocxBrand | null;
+  /**
+   * Namen bij @-vermeldingen (stap 2-1a), "soort:id" → naam, opgezocht met de
+   * rechten van wie exporteert. Ontbreekt er een, dan staat de soort er
+   * ("klant", "factuur"): de pagina zelf bewaart geen namen.
+   */
+  mentionNames?: Record<string, string>;
 };
 
 /** De huisstijl in kop en voet (stap 1B-4c). */
@@ -379,7 +386,7 @@ function textOf(node: PmNode): string {
 }
 
 const headingLevel = (node: PmNode) => whole(node.attrs?.level, 1, 3);
-const isInline = (node: PmNode) => node.type === 'text' || node.type === 'hardBreak';
+const isInline = (node: PmNode) => node.type === 'text' || node.type === 'hardBreak' || node.type === 'mention';
 const attrText = (node: PmNode, name: string) => (typeof node.attrs?.[name] === 'string' ? (node.attrs[name] as string).trim() : '');
 
 function linkOf(node: PmNode): string | null {
@@ -392,6 +399,10 @@ function inlineXml(nodes: PmNode[] | undefined, b: DocxBuilder, ctx: Ctx, look: 
   let out = '';
   for (const node of nodes ?? []) {
     if (node.type === 'hardBreak') { out += '<w:r><w:br/></w:r>'; continue; }
+    if (node.type === 'mention') {
+      out += run(mentionText(mentionOf(node), b.context.mentionNames), node.marks, base);
+      continue;
+    }
     const text = node.type === 'text' ? node.text ?? '' : textOf(node);
     if (!text) continue;
     const href = node.type === 'text' ? linkOf(node) : null;

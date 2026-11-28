@@ -16,6 +16,7 @@
 import type {
   PageDocxBrand, PageDocxChapter, PageDocxContext, PageDocxCover, PageDocxFont, PageDocxImage, PageDocxLetterhead, PageDocxOptions,
 } from './pageDocx.ts';
+import { mentionKey, mentionsIn, type MentionKind, type MentionRef } from './pageMentions.ts';
 import { pageReferences } from './pageReferences.ts';
 import { subpagesOf, type OrderedPage } from './pageTreeOrder.ts';
 
@@ -34,14 +35,61 @@ export type PageExportStyle = {
 };
 
 /** Wat een pagina en haar hoofdstukken noemen, samen: één bestand, één context. */
-export function exportReferences(bodies: unknown[]): { pages: string[]; files: string[]; images: string[] } {
+export function exportReferences(bodies: unknown[]): { pages: string[]; files: string[]; images: string[]; mentions: MentionRef[] } {
   const found = bodies.map(pageReferences);
   const unique = (ids: string[]) => [...new Set(ids)];
   return {
     pages: unique(found.flatMap(refs => refs.pages)),
     files: unique(found.flatMap(refs => refs.files)),
     images: unique(found.flatMap(refs => refs.images)),
+    mentions: mentionsIn(bodies),
   };
+}
+
+/**
+ * Waar de naam bij een @-vermelding staat (stap 2-1a). Een collega heet in de
+ * app naar zijn e-mailadres; in een bestand komt alleen het deel vóór de @.
+ */
+export const MENTION_SOURCES: Readonly<Record<MentionKind, { table: string; idColumn: string; nameColumn: string }>> = {
+  client: { table: 'clients', idColumn: 'id', nameColumn: 'name' },
+  project: { table: 'projects', idColumn: 'id', nameColumn: 'name' },
+  task: { table: 'tasks', idColumn: 'id', nameColumn: 'title' },
+  invoice: { table: 'invoices', idColumn: 'id', nameColumn: 'number' },
+  member: { table: 'organization_members', idColumn: 'user_id', nameColumn: 'email' },
+};
+
+/** De naam die een collega in een bestand krijgt: zijn e-mailadres zonder domein. */
+export function memberLabel(email: unknown): string | null {
+  if (typeof email !== 'string' || !email.trim()) return null;
+  const local = email.trim().split('@')[0];
+  return local || null;
+}
+
+/**
+ * De namen bij de vermeldingen, met de rechten van wie exporteert. `rows`
+ * vraagt per tabel de rijen op die hij mag lezen (de database, RLS met de
+ * modulerechten): wat niet terugkomt, wordt in het bestand de soort. Zo ziet
+ * een export nooit meer dan wie hem maakt.
+ */
+export async function exportMentionNames(
+  mentions: MentionRef[],
+  rows: (source: { table: string; idColumn: string; nameColumn: string }, ids: string[]) => Promise<Array<Record<string, unknown>>>,
+): Promise<Array<[string, string | null]>> {
+  const out: Array<[string, string | null]> = [];
+  const kinds = [...new Set(mentions.map(ref => ref.kind))];
+  await Promise.all(kinds.map(async (kind) => {
+    const source = MENTION_SOURCES[kind];
+    const ids = mentions.filter(ref => ref.kind === kind).map(ref => ref.id);
+    const found = new Map<string, string>();
+    for (const row of await rows(source, ids)) {
+      const id = typeof row[source.idColumn] === 'string' ? (row[source.idColumn] as string).toLowerCase() : '';
+      const raw = row[source.nameColumn];
+      const name = kind === 'member' ? memberLabel(raw) : typeof raw === 'string' ? raw.trim() : null;
+      if (id && name) found.set(id, name);
+    }
+    for (const id of ids) out.push([mentionKey({ kind, id }), found.get(id) ?? null]);
+  }));
+  return out;
 }
 
 /**
@@ -139,8 +187,11 @@ export function exportContext(input: {
   font: PageDocxFont;
   headingFont: PageDocxFont | null;
   brand: PageDocxBrand;
+  /** Uit exportMentionNames; zonder staat bij elke vermelding de soort. */
+  mentionNames?: Array<[string, string | null]>;
 }): PageDocxContext {
   return {
+    mentionNames: known(input.mentionNames ?? []),
     // Een titel die we niet mogen of kunnen zien, laat pageDocx als "Pagina niet gevonden" staan.
     pageTitles: known(input.titles),
     fileNames: known(input.fileNames),

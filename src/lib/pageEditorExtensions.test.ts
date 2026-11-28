@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { getSchema } from '@tiptap/core';
 import { EditorState, TextSelection } from '@tiptap/pm/state';
-import { insertColumns, pageEditorExtensions } from './pageEditorExtensions.ts';
+import { Fragment } from '@tiptap/pm/model';
+import { insertColumns, pageEditorExtensions, withoutUnknownMentions } from './pageEditorExtensions.ts';
 import { PAGE_MARK_TYPES, PAGE_NODE_TYPES } from './pageSchema.ts';
 
 // De database weigert een pagina met een blok of opmaak die niet in
@@ -28,7 +29,7 @@ test('een lege pagina uit de editor past in het schema', () => {
 // pagina leeg (pageBodyCheck.ts) of weigerde de database het opslaan.
 test('een pagina met elk nieuw blok past in het schema', () => {
   const schema = getSchema(pageEditorExtensions());
-  for (const name of ['table', 'tableRow', 'tableHeader', 'tableCell', 'callout', 'details', 'detailsSummary', 'detailsContent', 'tableOfContents', 'subpage', 'image', 'fileBlock', 'columns', 'column']) {
+  for (const name of ['table', 'tableRow', 'tableHeader', 'tableCell', 'callout', 'details', 'detailsSummary', 'detailsContent', 'tableOfContents', 'subpage', 'image', 'fileBlock', 'columns', 'column', 'mention']) {
     assert.ok(schema.nodes[name], `blok ${name} ontbreekt in de editor`);
   }
   assert.equal(schema.marks.textStyle, undefined, 'textStyle hoort niet in de editor: de database kent die opmaak niet');
@@ -108,4 +109,25 @@ test('kolommen invoegen: een lege regel wordt de kolommen, met de cursor in de e
   const list = schema.nodeFromJSON({ type: 'doc', content: [{ type: 'bulletList', content: [{ type: 'listItem', content: [p('punt')] }] }] });
   const listState = EditorState.create({ schema, doc: list, selection: TextSelection.create(list, 4) });
   assert.equal(insertColumns(2)({ tr: listState.tr, dispatch: undefined }), false);
+});
+
+// Stap 2-1a: een @-vermelding is een knoop in de tekst, met alleen de soort en
+// het id. Bij plakken valt een vermelding weg die de editor niet kent: uit
+// een andere organisatie weigert de database hem, en dan mislukte elke opslag.
+test('een @-vermelding past in de tekst; plakken houdt alleen wat de editor kent', () => {
+  const schema = getSchema(pageEditorExtensions());
+  const id = '11111111-2222-4333-8444-555555555555';
+  const vreemd = '99999999-2222-4333-8444-555555555555';
+  const mention = (kind: string, ref: string) => ({ type: 'mention', attrs: { kind, id: ref } });
+  const doc = schema.nodeFromJSON({ type: 'doc', content: [
+    { type: 'paragraph', content: [{ type: 'text', text: 'Bel ' }, mention('client', id), { type: 'text', text: ' en ' }, mention('member', vreemd)] },
+    { type: 'bulletList', content: [{ type: 'listItem', content: [{ type: 'paragraph', content: [mention('client', vreemd)] }] }] },
+  ] });
+  doc.check();
+  assert.deepEqual({ ...doc.firstChild?.child(1).attrs }, { kind: 'client', id });
+  const kept = withoutUnknownMentions(doc.content, node => node.attrs.id === id);
+  const json = JSON.stringify(Fragment.from(kept).toJSON());
+  assert.ok(json.includes(id) && !json.includes(vreemd), json);
+  // Niets weg te halen: hetzelfde fragment, zodat plakken verder niets verandert.
+  assert.equal(withoutUnknownMentions(doc.content, () => true), doc.content);
 });

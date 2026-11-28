@@ -177,7 +177,9 @@ export const EXPORT_FORMAT_VERSION = 1;
 // geen tabellen of kolommen.
 // 20261128150000 (een gedeelde pagina die verhuist) vervangt triggers en
 // functies; geen tabellen of kolommen.
-export const EXPORT_SCHEMA_VERSION = '20261128150000';
+// 20261128160000 (@-vermeldingen, stap 2-1a): de tabel page_mentions, afgeleid
+// uit de pagina's, dus intern.
+export const EXPORT_SCHEMA_VERSION = '20261128160000';
 
 export type TableKind =
   | 'export'
@@ -295,6 +297,7 @@ export const EXPORT_MANIFEST: Readonly<Record<string, TableRule>> = {
   documents: { kind: 'export', files: ['storage_key'] },
   document_versions: { kind: 'export' },
   document_edit_claims: { kind: 'intern', reason: 'Wie een pagina nu bewerkt: een hartslag van hooguit een paar minuten, alleen voor de weergave in ResoFly.' },
+  page_mentions: { kind: 'intern', reason: 'Welke pagina welke klant, welk project of welke collega noemt, voor "Genoemd in". De database leidt dit af uit de pagina\'s zelf (body), en die gaan mee.' },
   content_folders: { kind: 'export' },
   notes: { kind: 'export' },
   note_handwriting: { kind: 'export' },
