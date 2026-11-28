@@ -43,6 +43,22 @@ export function createAdminClient(): SupabaseClient {
   });
 }
 
+/**
+ * Een client met de sessie van de gebruiker zelf: de database (RLS) bepaalt
+ * wat hij mag lezen, met de modulerechten en de prullenbak erbij. Voor wie
+ * leest "met de rechten van wie het vraagt", zoals page-export (stap 1B-5,
+ * §9 van het bouwplan). Alleen om te lezen: schrijven loopt in de edge
+ * functions via de service role, met eigen controles.
+ */
+export function createUserClient(req: Request): SupabaseClient {
+  const token = (req.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '');
+  if (!token) throw new HttpError('Niet ingelogd: Authorization header ontbreekt.', 401);
+  return createClient(requiredEnv('SUPABASE_URL'), requiredEnv('SUPABASE_ANON_KEY'), {
+    global: { headers: { Authorization: `Bearer ${token}` } },
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+}
+
 export function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 }
