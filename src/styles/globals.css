@@ -13817,3 +13817,5 @@ button.alog-feed-row:hover{background:var(--bg3)}
 .page-trash-text strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .page-trash-text span{font-size:12px;color:var(--muted2)}
 .page-trash-actions{display:flex;flex-wrap:wrap;gap:6px}
+/* Stap 1A-5c: het logo van het bedrijf bij het eigen dossier. */
+.odrv-logo{display:block;object-fit:contain;border-radius:5px;background:var(--bg3)}

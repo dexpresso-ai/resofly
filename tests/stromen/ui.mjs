@@ -2650,6 +2650,48 @@ async function scenarioPaginadrive() {
     await wachtTot(async () => tekst(await bak.innerText().catch(() => '')).includes('De prullenbak is leeg') || (await regel.count()) === 0, { melding: 'de regel blijft staan' });
     await bak.locator('.modal-close').click();
   });
+  // ── Het eigen dossier (stap 1A-5c) ─────────────────────────────────────────
+  await uiStap('het eigen dossier: bovenaan in plaats van "Geen klant", met een eigen map, en een pagina in die map', async () => {
+    const tag = Date.now().toString(36);
+    const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+    const page = lid.page;
+    await sluitAlles(lid);
+    await page.locator('.sidebar-nav .nav-item').filter({ hasText: /^Alle inhoud/ }).first().click();
+    await rustig(lid);
+    const wortel = inhoud(page).locator('.odrv-crumbs button').first();
+    if (await wortel.isVisible().catch(() => false)) { await wortel.click(); await rustig(lid); }
+    const eerste = inhoud(page).locator('.odrv-row').first();
+    await eerste.waitFor({ timeout: 15000 });
+    verwacht(tekst(await eerste.innerText()).includes('Eigen dossier'), `de eerste rij is niet het eigen dossier: ${tekst(await eerste.innerText())}`);
+    gelijk(await inhoud(page).locator('.odrv-row').filter({ hasText: 'Geen klant' }).count(), 0, '"Geen klant" in de lijst');
+    await eerste.click();
+    await rustig(lid);
+    // Een eigen map, via het menu: zonder klant in de database.
+    lid.plan.push({ antwoord: `Handboek ${tag}` });
+    await inhoud(page).locator('.drive-new').click();
+    await page.locator('.drive-pop').getByRole('menuitem', { name: 'Nieuwe map', exact: true }).click();
+    await wachtTot(async () => sqlRij(`select count(*)::int as n from public.content_folders where organization_id = ${q(w.orgId)} and name = ${q(`Handboek ${tag}`)} and client_id is null and project_id is null`).n === 1,
+      { melding: 'geen map zonder klant gemaakt' });
+    const mapRij = inhoud(page).locator('.odrv-row').filter({ hasText: `Handboek ${tag}` }).first();
+    await mapRij.waitFor({ timeout: 15000 });
+    await mapRij.click();
+    await rustig(lid);
+    // Een pagina in die map.
+    await inhoud(page).locator('.drive-new').click();
+    await page.locator('.drive-pop').getByRole('menuitem', { name: 'Pagina', exact: true }).click();
+    await page.locator('.page-editor').waitFor({ timeout: 20000 });
+    const status = page.locator('.page-editor .page-editor-status');
+    await wachtTot(async () => tekst(await status.innerText().catch(() => '')) === 'Opgeslagen', { melding: 'de editor kwam niet in bewerken' });
+    await page.locator('.page-editor-title').fill(`Werkwijze ${tag}`);
+    await page.locator('.page-editor .tiptap').click();
+    await page.keyboard.type('Zo werken wij.');
+    await wachtTot(async () => tekst(await status.innerText().catch(() => '')) === 'Opgeslagen', { melding: 'niet opgeslagen' });
+    const map = sqlRij(`select id from public.content_folders where organization_id = ${q(w.orgId)} and name = ${q(`Handboek ${tag}`)}`).id;
+    const pagina = sqlRij(`select folder_id, client_id from public.documents where organization_id = ${q(w.orgId)} and title = ${q(`Werkwijze ${tag}`)}`);
+    gelijk([pagina.folder_id, pagina.client_id], [map, null], 'de pagina staat in de map van het eigen dossier, zonder klant');
+    await sluitPagina(page);
+    await inhoud(page).locator('.odrv-row').filter({ hasText: `Werkwijze ${tag}` }).first().waitFor({ timeout: 15000 });
+  });
 }
 
 // ── Bank: mutaties met de hand boeken ──────────────────────────────────────

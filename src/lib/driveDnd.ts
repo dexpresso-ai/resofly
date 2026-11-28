@@ -177,11 +177,8 @@ export function planDriveMove(
       continue;
     }
     if (item.kind === 'folder') {
-      if (!target.clientId) {
-        // Mappen leven onder een klant; "Geen klant" kent geen mappenniveau.
-        plan.blocked.push({ item, reason: `“${item.name}” moet bij een klant blijven.` });
-        continue;
-      }
+      // Een map mag ook in het eigen dossier (stap 1A-5c): zonder klant en
+      // zonder project. Vroeger was dat "Geen klant", zonder mappenniveau.
       if (item.id === target.folderId) {
         plan.blocked.push({ item, reason: `“${item.name}” kan niet in zichzelf.` });
         continue;

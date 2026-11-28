@@ -36,7 +36,7 @@ const KIND_LABEL: Record<PickRow['kind'], string> = {
   project: 'Projectmap',
   folder: 'Map',
 };
-/** Dezelfde grijstint als de "Geen klant"-map in de verkenner. */
+/** De kleur van het eigen dossier (vroeger de grijze "Geen klant"-map). */
 const NO_CLIENT_COLOR = '#94A3B8';
 
 export function MoveDialog({
@@ -79,16 +79,16 @@ export function MoveDialog({
     return ids;
   }, [items, data.folders]);
 
-  // "Geen klant" is alleen een doel voor notities en documenten; mappen en
-  // bestanden hebben een klant nodig, dus voor die selecties laten we het weg.
-  const canLeaveClient = items.some(i => i.kind === 'note' || i.kind === 'document');
 
   const rows = useMemo<PickRow[]>(() => {
     if (cursor.root) {
       const list: PickRow[] = [...data.clients]
         .sort((a, b) => a.name.localeCompare(b.name, 'nl'))
         .map(c => ({ key: `c-${c.id}`, kind: 'client', name: c.name, color: c.color || 'var(--accent)', loc: { clientId: c.id, projectId: null, folderId: null } }));
-      if (canLeaveClient) list.push({ key: 'noclient', kind: 'noclient', name: 'Geen klant', color: NO_CLIENT_COLOR, loc: { clientId: null, projectId: null, folderId: null } });
+      // Het eigen dossier bovenaan, zoals in de verkenner (stap 1A-5c). Het heeft
+      // nu ook mappen, dus het is een doel voor alles; een bestand moet daar,
+      // net als bij een klant, in een map.
+      list.unshift({ key: 'noclient', kind: 'noclient', name: 'Eigen dossier', color: NO_CLIENT_COLOR, loc: { clientId: null, projectId: null, folderId: null } });
       return list;
     }
     const { clientId, projectId, folderId } = cursor.loc;
@@ -99,13 +99,12 @@ export function MoveDialog({
         .sort((a, b) => a.name.localeCompare(b.name, 'nl'));
       for (const p of projects) out.push({ key: `p-${p.id}`, kind: 'project', name: p.name, color: p.color || 'var(--accent)', loc: { clientId, projectId: p.id, folderId: null } });
     }
-    if (clientId) {
-      for (const f of childFolders(data.folders, clientId, projectId, folderId)) {
-        out.push({ key: `f-${f.id}`, kind: 'folder', name: f.name, color: 'var(--accent)', loc: { clientId, projectId, folderId: f.id }, disabled: movingFolderIds.has(f.id) });
-      }
+    // Ook zonder klant: dat zijn de mappen van het eigen dossier.
+    for (const f of childFolders(data.folders, clientId, projectId, folderId)) {
+      out.push({ key: `f-${f.id}`, kind: 'folder', name: f.name, color: 'var(--accent)', loc: { clientId, projectId, folderId: f.id }, disabled: movingFolderIds.has(f.id) });
     }
     return out;
-  }, [cursor, data.clients, data.projects, data.folders, movingFolderIds, canLeaveClient]);
+  }, [cursor, data.clients, data.projects, data.folders, movingFolderIds]);
 
   const q = query.trim().toLowerCase();
   const shown = q ? rows.filter(r => r.name.toLowerCase().includes(q)) : rows;
@@ -116,7 +115,7 @@ export function MoveDialog({
     const { clientId, projectId, folderId } = cursor.loc;
     list.push({
       key: 'client',
-      label: clientId ? clientsById.get(clientId)?.name ?? 'Klant' : 'Geen klant',
+      label: clientId ? clientsById.get(clientId)?.name ?? 'Klant' : 'Eigen dossier',
       cursor: { root: false, loc: { clientId, projectId: null, folderId: null } },
     });
     if (projectId) list.push({

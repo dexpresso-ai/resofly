@@ -36,7 +36,7 @@ export type ContentView = 'all' | 'notes' | 'documents';
 /** Waar een nieuw item terechtkomt: klant, project en/of map worden vooringevuld in de editor. */
 export type ContentCreateTarget = { client_id?: string | null; project_id?: string | null; folder_id?: string | null };
 
-/** Sentinel voor de "Geen klant"-map (inhoud zonder gekoppelde klant). */
+/** Sentinel voor het eigen dossier (vroeger "Geen klant"): inhoud zonder gekoppelde klant. */
 const NO_CLIENT = '__no_client__';
 
 /** Gedeelde grid/lijst-voorkeur met de klantdossier-drive; hier is lijst (OneDrive-details) de standaard. */
@@ -98,6 +98,8 @@ type Row = {
   dropTarget?: DriveLocation;
   /** Een pagina als doel: wat erop valt, wordt een subpagina (stap 1A-5). */
   dropPage?: string;
+  /** Het eigen dossier (stap 1A-5c): het logo van het bedrijf in plaats van een map. */
+  logo?: string | null;
   /** De boom van pagina's (stap 1A-5): hoe diep, hoeveel subpagina's, open of dicht. */
   depth?: number;
   childCount?: number;
@@ -107,6 +109,7 @@ type Row = {
 const isFolderRow = (r: Row) => r.kind === 'client' || r.kind === 'project' || r.kind === 'folder';
 
 function RowGlyph({ row, size }: { row: Row; size: number }) {
+  if (row.logo) return <img className="odrv-logo" src={row.logo} alt="" width={size} height={size} />;
   if (row.kind === 'file' && row.att) return <AttachmentGlyph att={row.att} size={size} />;
   if (row.kind === 'document') return <DocumentGlyph doc={row.doc} size={size} />;
   if (isFolderRow(row)) return <Folder size={size} fill="currentColor" strokeWidth={1.4} />;
@@ -349,8 +352,9 @@ export function ContentLibrary({
   const attCountByClient = useMemo(() => {
     const m = new Map<string, number>();
     for (const a of folderAttachments) {
-      const cid = foldersById.get(a.entity_id)?.client_id;
-      if (cid) m.set(cid, (m.get(cid) ?? 0) + 1);
+      // Een map zonder klant hoort bij het eigen dossier (stap 1A-5c).
+      const cid = foldersById.get(a.entity_id)?.client_id ?? NO_CLIENT;
+      m.set(cid, (m.get(cid) ?? 0) + 1);
     }
     return m;
   }, [folderAttachments, foldersById]);
@@ -389,19 +393,27 @@ export function ContentLibrary({
   const atRoot = clientId === null;
   const currentClient = clientId && clientId !== NO_CLIENT ? clientsById.get(clientId) ?? null : null;
   const realClient = currentClient !== null;
-  const currentClientName = clientId === NO_CLIENT ? 'Geen klant' : currentClient?.name ?? '';
+  /**
+   * Het eigen dossier (stap 1A-5c): wat bij geen klant hoort, zoals het
+   * bedrijfshandboek. Het was "Geen klant", zonder mappen; nu heeft het een
+   * eigen mappenboom (content_folders zonder klant en zonder project).
+   */
+  const ownDossier = clientId === NO_CLIENT;
+  const hasFolders = realClient || ownDossier;
+  const ownDossierName = data.companySettings?.company_name?.trim() || 'Eigen dossier';
+  const currentClientName = clientId === NO_CLIENT ? 'Eigen dossier' : currentClient?.name ?? '';
   const currentProject = projectId ? projectsById.get(projectId) ?? null : null;
 
   // Dossiermappen (content_folders) van de open plek. Op klantniveau zijn dat dezelfde
   // mappen als in het klantdossier-tabblad "Bestanden"; binnen een projectmap krijgt dat
   // project zijn eigen boom (content_folders.project_id). Beide nesten onbeperkt diep.
   const folderScope = useMemo(
-    () => realClient ? scopedFolders(data.folders, clientId, projectId) : [],
-    [data.folders, clientId, projectId, realClient],
+    () => hasFolders ? scopedFolders(data.folders, realClient ? clientId : null, projectId) : [],
+    [data.folders, clientId, projectId, realClient, hasFolders],
   );
   const currentFolderPath = folderId ? folderPath(folderScope, folderId) : [];
   const currentFolder = currentFolderPath.length ? currentFolderPath[currentFolderPath.length - 1] : null;
-  const subfolderList = realClient ? childFolders(folderScope, clientId, projectId, folderId) : [];
+  const subfolderList = hasFolders ? childFolders(folderScope, realClient ? clientId : null, projectId, folderId) : [];
   /** De klant van de open scope als échte id; "Geen klant" telt als geen klant. */
   const scopeClientId = realClient ? clientId : null;
   /** Waar je nu staat — startpunt van "Verplaatsen naar…". `null` = de wortel. */
@@ -450,11 +462,11 @@ export function ContentLibrary({
   }, [clientId, clientItems, data.projects, projectsById]);
 
   // Losse items op klantniveau: geen project én niet opgeborgen in een dossiermap
-  // (die verschijnen ín hun map). Voor "Geen klant" bestaat er geen mappenniveau,
-  // dus daar blijft alles zichtbaar.
+  // (die verschijnen ín hun map). Ook in het eigen dossier, sinds dat mappen
+  // heeft (stap 1A-5c).
   const generalItems = useMemo(
-    () => clientItems.filter(it => !it.projectId && (clientId === NO_CLIENT || !it.folderId)),
-    [clientItems, clientId],
+    () => clientItems.filter(it => !it.projectId && !it.folderId),
+    [clientItems],
   );
   // Idem binnen een projectmap: wat in een map van dit project is opgeborgen staat ín die map.
   const projectItems = useMemo(
@@ -475,7 +487,8 @@ export function ContentLibrary({
   const folderDocs = folderId && showDocuments ? data.documents.filter(d => d.folder_id === folderId) : [];
   const folderAtts = folderId && showFiles ? data.attachments.filter(a => a.entity_type === 'folder' && a.entity_id === folderId) : [];
 
-  // Klantmappen op de wortel: elke klant (zodat je overal direct kunt aanmaken) + "Geen klant" als die inhoud heeft.
+  // Klantmappen op de wortel: elke klant, zodat je overal direct kunt aanmaken. Het
+  // eigen dossier staat daar los van, altijd bovenaan (topRows).
   const clientFolders = useMemo(() => {
     const list = data.clients.map(c => ({
       id: c.id,
@@ -485,8 +498,6 @@ export function ContentLibrary({
       projects: data.projects.filter(p => p.client_id === c.id && !p.archived).length,
     }));
     list.sort((a, b) => a.name.localeCompare(b.name, 'nl'));
-    const none = countByClient.get(NO_CLIENT) ?? 0;
-    if (none > 0) list.push({ id: NO_CLIENT, name: 'Geen klant', color: '#94A3B8', count: none, projects: 0 });
     return list;
   }, [data.clients, data.projects, countByClient, attCountByClient, showFiles]);
 
@@ -508,6 +519,8 @@ export function ContentLibrary({
   // Create-context: nieuwe items belanden in de open map (klant/project/dossiermap).
   const createTarget: ContentCreateTarget | undefined =
     folderId && realClient ? { client_id: clientId, project_id: projectId, folder_id: folderId } :
+    // Een map in het eigen dossier (stap 1A-5c): zonder klant, wel die map.
+    folderId && ownDossier ? { client_id: null, project_id: null, folder_id: folderId } :
     projectId ? { client_id: currentClient?.id ?? null, project_id: projectId } :
     realClient ? { client_id: clientId } :
     undefined;
@@ -524,12 +537,13 @@ export function ContentLibrary({
 
   function createFolder() {
     setNewOpen(false);
-    if (!realClient || !clientId) return;
+    if (!hasFolders || !clientId) return;
     const name = window.prompt(folderId ? 'Naam van de nieuwe submap:' : 'Naam van de nieuwe map:');
     if (!name || !name.trim()) return;
     const position = subfolderList.length;
     const parent = folderId;
-    const cid = clientId;
+    // In het eigen dossier: een map zonder klant.
+    const cid = realClient ? clientId : null;
     const pid = projectId;
     run(async () => {
       await insertRow<ContentFolder>('content_folders', organizationId, { client_id: cid, project_id: pid, parent_id: parent, name: name.trim(), position });
@@ -758,7 +772,18 @@ export function ContentLibrary({
 
   const folderRows: Row[] = [];
   const fileRows: Row[] = [];
+  /** Altijd bovenaan, los van het sorteren: het eigen dossier. */
+  const topRows: Row[] = [];
   if (atRoot) {
+    topRows.push({
+      key: `c-${NO_CLIENT}`, kind: 'client', name: ownDossierName, color: 'var(--accent)',
+      logo: data.companySettings?.brand_logo_data_url ?? null,
+      modified: [lastByClient.get(NO_CLIENT) ?? ''].sort().pop() || null,
+      size: plural((countByClient.get(NO_CLIENT) ?? 0) + (showFiles ? attCountByClient.get(NO_CLIENT) ?? 0 : 0)),
+      typeLabel: 'Eigen dossier',
+      onOpen: () => openClient(NO_CLIENT),
+      dropTarget: { clientId: null, projectId: null, folderId: null },
+    });
     for (const f of clientFolders) folderRows.push({
       key: `c-${f.id}`, kind: 'client', name: f.name, color: f.color || 'var(--accent)',
       modified: [lastByClient.get(f.id) ?? '', showFiles ? attLastByClient.get(f.id) ?? '' : ''].sort().pop() || null,
@@ -827,7 +852,7 @@ export function ContentLibrary({
     for (const row of list) add(row, 0, new Set());
     return out;
   };
-  const rows: Row[] = withSubpages([...shown(folderRows), ...shown(fileRows)]);
+  const rows: Row[] = withSubpages([...topRows.filter(r => hit(r.name)), ...shown(folderRows), ...shown(fileRows)]);
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
@@ -1323,7 +1348,7 @@ export function ContentLibrary({
           </button>
           {newOpen && <div className="drive-pop" role="menu" style={{ maxHeight: 'min(70vh, 460px)', overflowY: 'auto' }}>
             {!atRoot && <div className="drive-pop-head">In {currentFolder ? currentFolder.name : currentProject ? currentProject.name : currentClientName}</div>}
-            {realClient && <>
+            {hasFolders && <>
               <button type="button" className="drive-pop-item" role="menuitem" onClick={createFolder}><FolderPlus size={16} style={{ color: 'var(--accent)' }} /> {folderId ? 'Nieuwe submap' : 'Nieuwe map'}</button>
               <div className="drive-pop-sep" />
             </>}

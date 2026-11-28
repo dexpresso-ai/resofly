@@ -509,7 +509,7 @@ akkoord is.
 | 1A-4b-3 | Bestand uit het dossier (of van de computer), met naam, grootte en downloaden (§8). | gebouwd op 28 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_BESTANDEN_2026-11-28.md` |
 | 1A-5a | De boom in de lijst van de drive (uitklappen), een pagina op een pagina slepen, een subpagina terug naar een map, het kruimelpad in de editor. ("Pagina" in het Nieuw-menu kwam al in 1A-3a.) | gebouwd op 28 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_BOOM_2026-11-28.md` |
 | 1A-5b | De prullenbak: weggooien zet `archived_at` op de pagina en haar subpagina's, 30 dagen terugzetten, daarna definitief weg met de bijlagen via de opruimwachtrij. Een pagina in de prullenbak is nergens zichtbaar. | gebouwd op 28 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_PRULLENBAK_2026-11-28.md` |
-| 1A-5c | Het eigen dossier met logo en naam, bovenaan de drive, in plaats van "Geen klant". | gepland |
+| 1A-5c | Het eigen dossier met logo en naam, bovenaan de drive, in plaats van "Geen klant". | gebouwd op 28 november, op de branch; zie `docs/changelog/CHANGELOG_EIGEN_DOSSIER_2026-11-28.md` |
 | 1A-5d | De tekstdocumenten omzetten naar pagina's (§10). | gepland |
 | 1B-1 | Proef: huisstijlletters en emoji in een PDF via Collabora (§9). | gepland |
 | 1B-2 | Export: `page-export`, de DOCX-module, het interne PDF-pad, het exportvenster, vastleggen in het dossier, de Word-kopie. | gepland |
@@ -569,7 +569,10 @@ akkoord is.
   (de prullenbak, migratie 20261128100000).
 - **UI-tests:** de stappen voor de drive staan in een eigen scenario, `ui.mjs paginadrive`
   (een paar minuten). `ui.mjs documenten` duurt ongeveer 9 minuten.
-- **Volgende stap: 1A-5c**, het eigen dossier. Wat er van 1A-5 nog over is:
+- **Daarna gebouwd, op de branch:** 1A-5c, het eigen dossier met mappen.
+- **Volgende stap: 1A-5d**, de tekstdocumenten omzetten naar pagina's (§10). Daarna 1B-1
+  (de PDF-proef). Die heeft de office-server (Collabora) nodig; die is niet in een
+  cloudsessie te draaien. Wat er van 1A-5 nog over is:
   - de boom van pagina's en subpagina's in de lijst;
   - het eigen dossier met logo;
   - slepen;
