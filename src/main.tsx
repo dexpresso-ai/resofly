@@ -5089,13 +5089,24 @@ function App() {
         setPageTrail(trail => (step.how === 'terug' ? trail.slice(0, -1) : [...trail, from]));
         setPageEditDoc(previous => (previous ? { ...previous, id: step.id } : previous));
       }}
-      onShare={(request) => setPageShare({ id: pageEditDoc.id, organizationId: pageEditDoc.organization_id, name: request.title || 'Pagina', flush: request.flush, done: request.done })}
+      onShare={async (request) => {
+        const id = pageEditDoc.id;
+        const organizationId = pageEditDoc.organization_id;
+        // Eerst verversen. Een pagina die je in deze sessie maakte (een
+        // subpagina met /pagina), of een nieuwe subpagina eronder, staat nog niet
+        // in data. Het venster leest daaruit bij welke klant de pagina hoort en
+        // welke subpagina's er zijn; zonder verversen bood het een deellink aan
+        // bij een klantpagina, en lag het achter de editor.
+        await refresh().catch(() => undefined);
+        setPageShare({ id, organizationId, name: request.title || 'Pagina', flush: request.flush, done: request.done });
+      }}
       onClose={() => { setPageTrail([]); setPageEditDoc(null); refresh(); }}
     /></DialogDeferred>}
     {pageShare && pageEditDoc?.id === pageShare.id && <DialogDeferred><ShareDialog
       data={data}
       organizationId={pageShare.organizationId}
       target={{ type: 'document', id: pageShare.id, name: pageShare.name }}
+      isPage
       beforeShare={async () => {
         if (!(await pageShare.flush())) throw new Error('De pagina kon niet worden opgeslagen, dus ook niet gedeeld. Probeer het zo nog eens.');
       }}

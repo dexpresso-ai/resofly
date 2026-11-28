@@ -530,6 +530,8 @@ akkoord is.
     niet;
   - dat de klant de naam van een bestand in de pagina ziet, maar het bestand zelf alleen als
     het ook gedeeld is.
+- **Merge 1C-2 en 1C-3 pas samen met 1C-4.** Vanaf 1C-3 kan de app een pagina delen. Wat de
+  klant in het portaal ziet (de opmaak van taken, kaders, afbeeldingen), komt pas in 1C-4.
 - **De volgorde is een veiligheidskeuze.** Het portaal toont nu bij een tekstdocument de
   levende tekst (`content`). Zou de database een pagina eerder laten delen dan het portaal de
   vrijgegeven versie leest, dan zag de klant de pagina zoals ze op dat moment is. Daarom komen

@@ -3147,6 +3147,44 @@ async function scenarioPaginadelen() {
     }
   });
 
+  await uiStap('een subpagina die je net in de editor maakte, deel je meteen: het venster weet dat het een pagina van de klant is', async () => {
+    const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+    const page = lid.page;
+    await openPagina(lid, `Delen ouder ${tag}`);
+    await page.locator('.page-editor .tiptap').click();
+    await page.keyboard.press('Control+End');
+    // Het blokmenu opent met / aan het begin van een regel.
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('/pagina');
+    const menu = page.locator('.page-block-menu');
+    await menu.waitFor({ timeout: 10000 });
+    await wachtTot(async () => tekst(await menu.locator('.page-block-item.is-active .page-block-label').innerText().catch(() => '')) === 'Subpagina', { melding: 'het blokmenu biedt geen subpagina' });
+    await page.keyboard.press('Enter');
+    await menu.waitFor({ state: 'detached', timeout: 10000 });
+    const blok = page.locator('.page-editor .tiptap .page-subpage').last();
+    await wachtTot(async () => tekst(await blok.innerText().catch(() => '')) === 'Naamloze pagina', { melding: 'geen nieuw subpagina-blok' });
+    await blok.locator('button').click();
+    await wachtTot(async () => (await page.locator('.page-editor-title').inputValue().catch(() => '')) === 'Naamloze pagina', { melding: 'de nieuwe subpagina ging niet open' });
+    const status = page.locator('.page-editor .page-editor-status');
+    await wachtTot(async () => tekst(await status.innerText().catch(() => '')) === 'Opgeslagen', { melding: 'de subpagina kwam niet in bewerken' });
+    await page.locator('.page-editor-title').fill(`Vers ${tag}`);
+    await page.locator('.page-editor .tiptap').click();
+    await page.keyboard.type(`Verse tekst ${tag}`);
+    await page.locator('.page-editor-share').click();
+    const venster = page.locator('.modal.share-modal-page');
+    await venster.waitFor({ timeout: 15000 });
+    gelijk(tekst(await venster.locator('.modal-head h3').innerText()), 'Pagina delen', 'de titel van het venster');
+    verwacht(tekst(await venster.innerText()).includes('klantdossier'), `het venster weet niet dat dit een klantpagina is: ${tekst(await venster.innerText()).slice(0, 300)}`);
+    gelijk(await venster.getByText('Deellink per e-mail').count(), 0, 'een deellink bij een klantpagina');
+    await venster.locator('.share-people li').filter({ hasText: w.klantA.email }).locator('input[type="checkbox"]').check();
+    await venster.getByRole('button', { name: /Deel met 1 persoon/ }).click();
+    await venster.locator('.share-results').waitFor({ timeout: 30000 });
+    verwacht(!tekst(await venster.innerText()).includes('Niet gelukt'), `delen mislukte: ${tekst(await venster.locator('.share-results').innerText())}`);
+    const vers = sqlRij(`select id from public.documents where organization_id = ${q(w.orgId)} and title = ${q(`Vers ${tag}`)}`);
+    verwacht(vers, 'de titel is niet opgeslagen');
+    verwacht((await lezenInPortaal(vers.id)).includes(`Verse tekst ${tag}`), 'het portaal toont de verse tekst niet');
+  });
+
   await uiStap('na een wijziging: "De klant ziet een oudere versie", en "Bijwerken bij klant" geeft de klant de nieuwe tekst', async () => {
     // Iemand anders wijzigde de pagina intussen: bij openen staat de melding er meteen.
     sql(`update public.documents set body = jsonb_set(body, '{content,2}', ${q(JSON.stringify({ type: 'paragraph', content: [woord(`Elders gewijzigd ${tag}`)] }))}::jsonb) where id = ${q(ouder)}`);

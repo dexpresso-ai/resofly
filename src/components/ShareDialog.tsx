@@ -34,7 +34,7 @@ import {
  * apart aan; elke wordt een eigen deling, met een eigen vrijgave.
  */
 export function ShareDialog({
-  data, organizationId, target, onClose, onChanged, beforeShare,
+  data, organizationId, target, onClose, onChanged, beforeShare, isPage: isPageHint = false,
 }: {
   data: AppData;
   organizationId: string;
@@ -43,6 +43,8 @@ export function ShareDialog({
   onChanged: () => void;
   /** Vanuit de editor: eerst opslaan wat er nog staat, want de vrijgave neemt de opgeslagen pagina. */
   beforeShare?: () => Promise<void>;
+  /** De editor weet zeker dat het een pagina is, ook als data haar (nog) niet kent. */
+  isPage?: boolean;
 }) {
   const context = useMemo(() => resolveShareContext(data, target.type, target.id), [data, target.type, target.id]);
   const isClientRelated = Boolean(context.clientId);
@@ -57,7 +59,7 @@ export function ShareDialog({
 
   const existing = useMemo(() => activeSharesFor(data, target.type, target.id), [data, target.type, target.id]);
 
-  const isPage = target.type === 'document' && data.documents.some(d => d.id === target.id && d.format === 'page');
+  const isPage = target.type === 'document' && (isPageHint || data.documents.some(d => d.id === target.id && d.format === 'page'));
   const subpages = useMemo(() => (isPage
     ? subpagesOf(data.documents.filter(d => d.format === 'page').map(d => ({
       id: d.id, title: d.title, parent_id: d.parent_id ?? null, folder_id: d.folder_id,

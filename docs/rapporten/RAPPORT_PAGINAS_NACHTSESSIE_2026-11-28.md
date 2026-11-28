@@ -61,10 +61,23 @@ stand voor de overdracht.
    - **Een bestand in de pagina:** de klant ziet de naam ("Bijlage: offerte.pdf"), maar het
      bestand zelf alleen als je het ook deelt.
 
+   - **Keuzes in het deelvenster (1C-3), graag ook bevestigen:**
+     - subpagina's staan standaard uit; je vinkt ze aan, los of allemaal;
+     - de ontvanger krijgt één mail, voor de pagina zelf, niet voor elke subpagina;
+     - via een deellink gaat alleen de pagina zelf mee, nooit haar subpagina's;
+     - "Bijwerken bij klant" stuurt geen mail;
+     - deelt Gerrie een pagina, dan ziet de klant haar zoals ze was bij jouw akkoord, niet
+       bij het voorstel;
+     - gooi je een pagina definitief weg (na de prullenbak), dan verdwijnt ook de deling.
+
    Vóór 1C kon een pagina nergens bij een klant terechtkomen: gedeelde mappen en zendingen
    slaan pagina's over, en de database weigerde een deling. Sinds 1C-2 neemt de database een
    deling aan, maar alleen met een vrijgegeven versie, en het portaal en de geheime link tonen
    alleen die versie. Sinds 1C-3 kun je in de app een pagina delen en bijwerken.
+
+   **Merge 1C-2 en 1C-3 niet zonder 1C-4.** Wat de klant in het portaal ziet, is nog niet in
+   een browser bekeken. Afgevinkte taken lijken daar waarschijnlijk open, kaders hebben geen
+   kleur, en afbeeldingen zijn nog "[Afbeelding]". Daar werk ik nu aan.
 
 ## Gevonden en gerepareerd
 

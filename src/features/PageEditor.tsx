@@ -120,8 +120,8 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
   ownDossierName?: string;
   /** De letters van de huisstijl, voor de Word-export. */
   houseStyle?: { brand_heading_font?: string | null; brand_body_font?: string | null } | null;
-  /** Delen (stap 1C): het deelvenster openen. Zonder deze functie geen knop. */
-  onShare?: (request: PageShareRequest) => void;
+  /** Delen (stap 1C): het deelvenster openen; klaar als het open is. Zonder deze functie geen knop. */
+  onShare?: (request: PageShareRequest) => Promise<void> | void;
 }) {
   const [mode, setModeState] = useState<Mode>('laden');
   const [saveState, setSaveState] = useState<SaveState>('opgeslagen');
@@ -155,6 +155,9 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
   const [changedSinceShareStatus, setChangedSinceShareStatus] = useState(false);
   const [releasing, setReleasing] = useState(false);
   const [shareNote, setShareNote] = useState<string | null>(null);
+  const [openingShare, setOpeningShare] = useState(false);
+  /** Telt elke wijziging: een antwoord over de status mag een wijziging van daarna niet wissen. */
+  const editCountRef = useRef(0);
 
   const modeRef = useRef<Mode>('laden');
   const titleRef = useRef('');
@@ -417,6 +420,7 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
       return;
     }
     setSaveState('wijzigingen');
+    editCountRef.current += 1;
     setChangedSinceShareStatus(true);
     if (timerRef.current) window.clearTimeout(timerRef.current);
     timerRef.current = window.setTimeout(() => { timerRef.current = null; void queueSave(); }, SAVE_DELAY_MS);
@@ -685,10 +689,12 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
   // ziet. Alleen voor wie mag delen; zonder antwoord gewoon geen melding.
   const reloadShareStatus = useCallback(async () => {
     if (!canWrite) return;
+    const editsBefore = editCountRef.current;
     try {
       const rows = await loadPageShareStatus(documentId);
       setShareStatus(rows);
-      setChangedSinceShareStatus(false);
+      // Typte je terwijl de vraag liep, dan ziet de klant dat nog niet: de melding blijft.
+      if (editCountRef.current === editsBefore) setChangedSinceShareStatus(false);
     } catch {
       setShareStatus([]);
     }
@@ -696,8 +702,16 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
   useEffect(() => { void reloadShareStatus(); }, [reloadShareStatus]);
   const shareOutdated = shareStatus.length > 0 && (changedSinceShareStatus || shareStatus.some(row => !row.is_current));
 
-  /** Eerst opslaan wat er nog staat: delen en bijwerken nemen de opgeslagen pagina. */
-  const flushForShare = useCallback(async () => modeRef.current !== 'bewerken' || queueSave(), [queueSave]);
+  /**
+   * Eerst opslaan wat er nog staat: delen en bijwerken nemen de opgeslagen
+   * pagina. Bij een conflict of een mislukte opslag staat er op het scherm iets
+   * anders dan wat er is opgeslagen; dan niet, anders kreeg de klant iets
+   * anders dan je ziet.
+   */
+  const flushForShare = useCallback(async () => {
+    if (modeRef.current === 'bewerken') return queueSave();
+    return modeRef.current !== 'conflict' && modeRef.current !== 'fout';
+  }, [queueSave]);
 
   const releaseToShares = async () => {
     if (releasing) return;
@@ -716,8 +730,14 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
     }
   };
 
-  const openShare = () => {
-    onShare?.({ title, flush: flushForShare, done: () => { void reloadShareStatus(); } });
+  const openShare = async () => {
+    if (openingShare || !onShare) return;
+    setOpeningShare(true);
+    try {
+      await onShare({ title, flush: flushForShare, done: () => { void reloadShareStatus(); } });
+    } finally {
+      setOpeningShare(false);
+    }
   };
 
   // Word (stap 1B-2): de opgeslagen pagina, in de huisstijl. Eerst opslaan wat
@@ -776,8 +796,8 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
         </nav>}
         <span className="page-editor-crumb" title={title}>{title || 'Pagina'}</span>
         <span className={`page-editor-status is-${mode === 'bewerken' ? saveState : mode}`} role="status">{statusText}</span>
-        {canWrite && onShare && <button type="button" className="page-editor-action page-editor-share" onClick={openShare} title="Deel deze pagina met een klant of via een deellink">
-          <Share2 size={15} /><span>Delen</span>
+        {canWrite && onShare && <button type="button" className="page-editor-action page-editor-share" onClick={() => void openShare()} disabled={openingShare} title="Deel deze pagina met een klant of via een deellink">
+          <Share2 size={15} /><span>{openingShare ? 'Bezig…' : 'Delen'}</span>
         </button>}
         <button type="button" className="page-editor-action" onClick={() => void copyLink()} title="Een link naar deze pagina, voor collega's">
           <Copy size={15} /><span>{copied ? 'Gekopieerd' : 'Link'}</span>

@@ -101,9 +101,27 @@ delen en bijwerken mogelijk: eerst in de database en de server (1C-3a), daarna i
 - **`subpagesOf`** in `src/lib/pageTree.ts`: de subpagina's onder een pagina, in de volgorde
   van de boom, bestand tegen kringen.
 
+### Gevonden en gerepareerd (1C-3b)
+
+- **Een subpagina die je net in de editor maakte, deelde je als "document".**
+  - Het venster leest uit de gegevens van de app (`data.documents`) of iets een pagina is,
+    bij welke klant het hoort, en welke subpagina's eronder staan.
+  - Een pagina die je in dezelfde sessie maakte (met `/pagina`, en dan geopend), stond daar
+    nog niet in. Het venster lag dan achter de editor, bood een deellink aan bij een
+    klantpagina, en `file-share` weigerde.
+  - Nu ververst de app eerst, en zegt de editor zelf dat het een pagina is. De knop toont
+    zolang "Bezig…". Een UI-stap maakt zo'n subpagina en deelt haar meteen: vóór de
+    reparatie faalde die, nu slaagt hij.
+- **Delen of bijwerken bij een conflict of een mislukte opslag kan niet meer.** Dan staat er
+  op het scherm iets anders dan wat er is opgeslagen, en zou de klant iets anders krijgen dan
+  je ziet.
+- **De melding "De klant ziet een oudere versie" bleef soms weg.** Typte je terwijl de app
+  nog vroeg wat de klant ziet, dan wiste het antwoord je wijziging. Nu telt de app de
+  wijzigingen, en wist een antwoord alleen als er sindsdien niets veranderde.
+
 ### Getest (1C-3b)
 
-- **Een nieuw UI-scenario `paginadelen` (`tests/stromen/ui.mjs`), 6 stappen, 0 fout:**
+- **Een nieuw UI-scenario `paginadelen` (`tests/stromen/ui.mjs`), 7 stappen, 0 fout:**
   - delen vanuit de editor, met de klant en de subpagina. Wat je net typte zit in de
     vrijgave, en het portaal toont het, met "→ subpagina". Het venster ligt vóór de editor
     (gemeten met `elementFromPoint`). Op 390px past de balk met "Delen", en staat het
@@ -112,7 +130,9 @@ delen en bijwerken mogelijk: eerst in de database en de server (1C-3a), daarna i
     portaal de nieuwe tekst, ook wat je net typte, en dat staat in het logboek;
   - Gerrie deelt een pagina via een gekoppelde AI. Na "Uitvoeren" is er een vrijgave van de
     beheerder die goedkeurde, en de klant ziet de tekst van dat moment;
-  - "Delen…" in de drive opent het venster voor een pagina; "Versturen…" staat er niet.
+  - "Delen…" in de drive opent het venster voor een pagina; "Versturen…" staat er niet;
+  - een subpagina die je net met `/pagina` maakte, openen en meteen delen: het venster kent
+    haar als pagina van de klant, en het portaal toont de verse tekst.
 - **Schermafdrukken nagekeken**: het venster en de melding, licht en donker, breed en op de
   telefoon.
 - **`ui.mjs paginas` (18), `paginadrive` (10) en `documenten`**: geslaagd. Eén oude stap
@@ -122,3 +142,11 @@ delen en bijwerken mogelijk: eerst in de database en de server (1C-3a), daarna i
   het was.
 - **`pageTree.test.ts`**: `subpagesOf`, met een kring.
 - **`npm test`** (2408) en **`npm run typecheck`**.
+
+## Nog niet mergen zonder 1C-4
+
+Met deze stap kan de app een pagina delen. Wat de klant dan in het portaal ziet, is nog niet
+in een browser bekeken. Afgevinkte taken lijken waarschijnlijk open: de opmaak leest
+`data-checked`, en dat haalt de sanitizer weg. Kaders hebben nog geen kleur, en afbeeldingen
+zijn nog "[Afbeelding]". Dat komt in 1C-4 (de weergave). 1C-2 en 1C-3 gaan pas samen met
+1C-4 naar staging.
