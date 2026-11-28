@@ -703,6 +703,10 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
     const chain = (previous?.chain ?? Promise.resolve()).catch(() => undefined).then(() => setStatus(taskId, want));
     const entry = { want, chain };
     taskQueueRef.current.set(taskId, entry);
+    // Weg zodra het antwoord er is. Tot React de nieuwe taak tekent, gaat er
+    // nog een paar milliseconden overheen; een klik precies daartussen
+    // vergelijkt met de oude stand. Dat is te kort om te raken, en de balk
+    // "loopt achter" (2-2c) zou het dan zeggen.
     void chain.finally(() => { if (taskQueueRef.current.get(taskId) === entry) taskQueueRef.current.delete(taskId); }).catch(() => undefined);
     return chain;
   };
@@ -718,15 +722,20 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
   const taskDrift = useEditorState({
     editor,
     selector: ({ editor: ed }) => {
-      if (!ed || ed.isDestroyed || !ed.isEditable) return { on: 0, off: 0 };
+      if (!ed || ed.isDestroyed || !ed.isEditable) return { on: 0, off: 0, key: '' };
       const links = pageTaskLinksOf(ed)?.links;
-      if (!links || links.size === 0) return { on: 0, off: 0 };
+      if (!links || links.size === 0) return { on: 0, off: 0, key: '' };
       const drift = taskCheckDrift(ed.state.doc, links, pendingStatuses(), ownChecksRef.current);
-      return { on: drift.filter(entry => entry.checked).length, off: drift.filter(entry => !entry.checked).length };
+      return {
+        on: drift.filter(entry => entry.checked).length,
+        off: drift.filter(entry => !entry.checked).length,
+        // Welke regels, en welke kant op: "Laat zo" geldt voor precies deze.
+        key: drift.map(entry => `${entry.blockId}:${entry.checked ? 1 : 0}`).sort().join(','),
+      };
     },
-  }) ?? { on: 0, off: 0 };
+  }) ?? { on: 0, off: 0, key: '' };
   const [driftDismissed, setDriftDismissed] = useState<string | null>(null);
-  const driftKey = `${taskDrift.on}:${taskDrift.off}`;
+  const driftKey = taskDrift.key;
   const driftShown = taskDrift.on + taskDrift.off > 0 && driftDismissed !== driftKey;
   const syncDrift = () => {
     if (!editor) return;
@@ -771,10 +780,13 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
         .then(() => setTaskNotice({
           text: checked ? `De taak "${link.title}" staat op Klaar.` : `De taak "${link.title}" staat weer op Te doen.`,
           // Terug: de taak naar wat ze was, en het vinkje in de pagina ook.
+          // Eerst de taak in de rij, dan het vinkje: anders zag de balk
+          // "loopt achter" (2-2c) even een vinkje zonder zijn nieuwe stand.
           undo: () => {
             setTaskNotice(null);
+            const back = queueTaskStatusRef.current(link.id, before);
             setTaskItemChecked(editor, blockId, !checked);
-            void queueTaskStatusRef.current(link.id, before).catch(error => {
+            void back.catch(error => {
               setMessage((error as { message?: string } | null)?.message || 'De taak kon niet worden teruggezet.');
             });
           },

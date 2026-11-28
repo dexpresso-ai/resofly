@@ -14004,6 +14004,9 @@ button.alog-feed-row:hover{background:var(--bg3)}
   .page-prose .tiptap{min-height:0;color:#1C1B18}
   .page-prose .tiptap .is-editor-empty:first-child::before{content:none}
   .page-prose .tiptap .page-details>button,.page-prose .tiptap .column-resize-handle{display:none}
+  /* Het label van een taak (stap 2-2a) is van Projecten, niet van de pagina: niet op papier. De
+     vinkjes wel, zoals op het scherm. */
+  .page-prose .tiptap .page-task-badge{display:none}
   .page-prose .tiptap .page-details [data-type="detailsContent"][hidden]{display:block}
   .page-prose .tiptap h1,.page-prose .tiptap h2,.page-prose .tiptap h3{break-after:avoid}
   .page-prose .tiptap tr,.page-prose .tiptap img,.page-prose .tiptap .page-callout,.page-prose .tiptap pre{break-inside:avoid}

@@ -2800,6 +2800,8 @@ async function scenarioPaginas() {
     await vinkje(metLezen.page, gekoppeld).click();
     await wachtTot(async () => tekst(await melding(metLezen.page).innerText().catch(() => '')).includes('Alleen de regel is afgevinkt'), { melding: 'projecten lezen: geen uitleg' });
     gelijk(await melding(metLezen.page).getByRole('button', { name: 'Ongedaan maken' }).count(), 0, 'projecten lezen: ongedaan maken');
+    // Bewust alleen de regel: die loopt niet "achter op zijn taak" (stap 2-2c).
+    gelijk(await metLezen.page.locator('.page-task-drift').count(), 0, 'projecten lezen: de balk "loopt achter" na een bewuste klik');
     await metLezen.page.waitForTimeout(600);
     gelijk(taakStand(), 'todo', 'projecten lezen: de taak veranderde');
     await wachtOpgeslagen(metLezen.page);
@@ -2851,6 +2853,14 @@ async function scenarioPaginas() {
     };
     gelijk([vakje('Klaar elders'), vakje('Weer open')], ['☒', '☐'], 'Word downloaden volgt de taken');
     gelijk([gecheckt(klaar), gecheckt(open)], [false, true], 'Word downloaden veranderde de pagina');
+    // Afdrukken (alleen CSS): de labels van de taken niet op papier, de vinkjes wel.
+    await page.emulateMedia({ media: 'print' });
+    try {
+      gelijk(await editorVak(page).locator('.page-task-badge').first().isVisible(), false, 'het label van een taak op papier');
+      gelijk(await vinkje(page, open).isVisible(), true, 'het vinkje op papier');
+    } finally {
+      await page.emulateMedia({ media: 'screen' });
+    }
     await balk(page).getByRole('button', { name: 'Bijwerken' }).click();
     await balk(page).waitFor({ state: 'detached', timeout: 5000 });
     gelijk([await vinkje(page, klaar).isChecked(), await vinkje(page, open).isChecked()], [true, false], 'Bijwerken: de vinkjes in de editor');

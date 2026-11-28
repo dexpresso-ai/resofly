@@ -202,14 +202,18 @@ mislukt "Maak er een taak van" met een fout. Op 28 november om 16:48 samen met 2
   taak: 1 gaat aan, 1 gaat uit", met "Bijwerken" en "Laat zo".
   - "Bijwerken" zet ze gelijk, als transactie. Geen taak gaat om (2-2b), en de pagina slaat
     gewoon op.
-  - "Laat zo" verbergt de balk, tot er iets anders achterloopt.
+  - "Laat zo" verbergt de balk voor precies die regels. Loopt er een andere regel achter, of
+    een regel de andere kant op, dan komt hij terug.
   - Openen verandert niets: de balk vraagt het, de pagina doet niets vanzelf.
   - Delen schrijft ook niets vanzelf. De klant leest de opgeslagen pagina; met "Bijwerken"
     voor het delen ziet hij de vinkjes van de taken.
   - Vinkt iemand met alleen Projecten lezen een regel bewust af, dan telt die regel niet als
     achter: anders stelde de balk meteen voor om het terug te zetten.
 - **Geen flits na een klik.** De luisteraar op het vinkje loopt nu in de capture-fase, vóór
-  TaskItem. Daardoor staat de gevraagde stand al klaar als de pagina verandert.
+  TaskItem. Daardoor staat de gevraagde stand al klaar als de pagina verandert. "Ongedaan maken"
+  zet om dezelfde reden eerst de taak in de rij, en dan pas het vinkje.
+- **Afdrukken** (alleen CSS): het label van een taak komt niet op papier, de vinkjes wel, zoals
+  op het scherm. Dat gold al sinds 2-2a op staging: daar staat het label nog wel op papier.
 
 ### Hoe het werkt
 
@@ -238,7 +242,10 @@ mislukt "Maak er een taak van" met een fout. Op 28 november om 16:48 samen met 2
   - de balk "2 vinkjes lopen achter op hun taak: 1 gaat aan, 1 gaat uit";
   - Word downloaden met de vinkjes van de taken, en de pagina onveranderd;
   - "Bijwerken": de vinkjes gelijk in de editor en in de opgeslagen pagina, en geen taak om;
-  - een taak die weer open is: "1 gaat uit", en "Laat zo" laat het vinkje staan.
+  - een taak die weer open is: "1 gaat uit", en "Laat zo" laat het vinkje staan;
+  - afdrukken (`emulateMedia print`): geen label, wel het vinkje.
+- In de stap van 2-2b: na een bewuste klik met alleen Projecten lezen geen balk "loopt
+  achter".
 - De stap van 2-2b opnieuw, met de luisteraar in de capture-fase.
 - `npm test` (2463), `npm run typecheck`, en `tsc` op `page-export` en de gedeelde modules.
 

@@ -433,15 +433,15 @@ export function taskCheckDrift(
   links: ReadonlyMap<string, PageTaskLink>,
   pending?: ReadonlyMap<string, TaskStatus>,
   skip?: ReadonlySet<string>,
-): Array<{ pos: number; checked: boolean }> {
-  const out: Array<{ pos: number; checked: boolean }> = [];
+): Array<{ pos: number; checked: boolean; blockId: string }> {
+  const out: Array<{ pos: number; checked: boolean; blockId: string }> = [];
   if (links.size === 0) return out;
   doc.descendants((node, pos) => {
     if (node.type.name !== 'taskItem') return true;
     const link = typeof node.attrs.id === 'string' && !skip?.has(node.attrs.id) ? links.get(node.attrs.id) : undefined;
     if (link) {
       const want = (pending?.get(link.id) ?? link.status) === 'done';
-      if ((node.attrs.checked === true) !== want) out.push({ pos, checked: want });
+      if ((node.attrs.checked === true) !== want) out.push({ pos, checked: want, blockId: node.attrs.id as string });
     }
     return true;
   });
