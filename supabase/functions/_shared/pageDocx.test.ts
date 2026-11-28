@@ -5,10 +5,11 @@
  * bestand terecht. Zonder die test verdwijnt een nieuw blok stil uit de export,
  * omdat de module een onbekend blok alleen als tekst meeneemt.
  *
- * Dat Word en LibreOffice het bestand ook echt openen, is met de hand
- * gecontroleerd (XSD's van ECMA-376 en een PDF via LibreOffice, zie
- * docs/changelog/CHANGELOG_PAGINAS_WORD_2026-11-28.md). Hier staat wat daarna
- * stuk kan gaan: welgevormde XML, de volgorde in rPr, de zip zelf.
+ * Met de hand gecontroleerd: het bestand klopt met de XSD's van ECMA-376, en
+ * LibreOffice maakt er een goede PDF van (zie
+ * docs/changelog/CHANGELOG_PAGINAS_WORD_2026-11-28.md). In Word zelf is het nog
+ * niet geopend. Hier staat wat daarna stuk kan gaan: welgevormde XML, de
+ * volgorde in rPr, de zip zelf.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

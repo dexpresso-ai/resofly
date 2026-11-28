@@ -85,3 +85,5 @@ Verder:
     afgekeurd.
   - **In LibreOffice 24.2 omgezet naar PDF** (`soffice --headless --convert-to pdf`): twee
     pagina's, en alles staat erin zoals in de tabel hierboven.
+- **Niet gedaan:** het bestand openen in Microsoft Word zelf. Dat kan niet in een
+  cloudsessie; het staat bij de vragen voor de gebruiker.

@@ -1,8 +1,8 @@
 # Bouwplan: pagina's in de documentenomgeving (2026-11-27)
 
-> **Stand op 27 november 2026: ontwerp, nog niets gebouwd.** De keuzes in §1 zijn die dag
-> doorgesproken. Twee antwoorden lees ik op een bepaalde manier; die staan er apart bij, zodat
-> ze te corrigeren zijn.
+> **Ontworpen op 27 november 2026.** De keuzes in §1 zijn die dag doorgesproken. Twee antwoorden
+> lees ik op een bepaalde manier; die staan er apart bij, zodat ze te corrigeren zijn. Wat er
+> sindsdien gebouwd is, staat in §18: de tabel met stappen en de stand voor de overdracht.
 
 Vraag: *Ik wil eens met je gaan nadenken wat we kunnen doen om in onze documentenomgeving
 eigenlijk een Notion variant te gaan maken. Dus niet alleen documenten via een echte docx of een
@@ -597,19 +597,13 @@ akkoord is.
   Het edge-deel en de PDF-weg wachten tot de office-server (Collabora) er is; die is niet in
   een cloudsessie te draaien. 1C (delen) pas als de gebruiker terug is.
 
-  Wat er van 1A-5 nog over is:
-  - de boom van pagina's en subpagina's in de lijst;
-  - het eigen dossier met logo;
-  - slepen;
-  - de prullenbak (archived_at, 30 dagen);
-  - de tekstdocumenten omzetten (§10).
+  Van 1A-5 is alleen het omzetten van tekstdocumenten over (1A-5d, zie hierboven). De boom
+  in de drive, het eigen dossier, slepen en de prullenbak zijn gebouwd.
 
-  Bij de prullenbak horen ook de bijlagen die nu blijven liggen:
-  - van subpagina's die met hun ouder verdwijnen (`parent_id … on delete cascade`);
-  - van weggehaalde afbeeldings- en bestandsblokken.
-
-  De opruimwachtrij `storage_purge_queue` neemt reden `document` al aan, maar niets zet er
-  nu iets in (uitgezocht op 27 november).
+  Nog open bij de bijlagen: een afbeelding of bestand dat je uit een pagina weghaalt, blijft
+  een bijlage van die pagina, en telt mee in het quotum. Pas als de pagina definitief weg is,
+  gaat het naar de opruimwachtrij (`storage_purge_queue`, reden `document`), net als de
+  bijlagen van haar subpagina's (`page_trash_purge_tree`, migratie 20261128100000).
 - **Tip voor de volgende sessie:**
   - Start `dockerd` pas vlak voor de database- en UI-tests: een achtergrondtaak stopt na
     twee uur.
