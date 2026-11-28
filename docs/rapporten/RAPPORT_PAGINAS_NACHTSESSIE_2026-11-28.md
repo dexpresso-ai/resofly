@@ -25,7 +25,9 @@ stand voor de overdracht.
     en `20261128170000_paginas_taken.sql`.
   - De edge functions staan er.
   - De rooktest is geslaagd, ook "elke organisatietabel is afgeschermd" (met `page_mentions`).
-- De CI op staging (run 321) loopt nog.
+- De CI op staging (run 321): de migraties vanaf nul, de databasetests, deno check, de
+  typecheck en de unit tests zijn groen; om 17:22 liep de mobiele lay-outtest nog. Op de branch
+  is run 320 (0c042f1, met 2-1c en 2-2a) helemaal groen.
 - Ververs open tabbladen. Een oude versie van de app kent kolommen en vermeldingen niet, en
   opent zo'n pagina alleen om te lezen.
 

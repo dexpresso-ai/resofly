@@ -127,6 +127,10 @@ met een link terug naar de pagina. Het vinkje en de taak samen volgen in 2-2b.
   Daarna: 23 stappen, 0 fout. Met de stap voor het bewerken van een regel, en Enter aan het
   begin: 24 stappen, 0 fout.
 - `npm run test:terugknop` (18 gelukt, 0 mislukt): het taakvenster kan nu naar een pagina.
+- **De CI** (run 320, 0c042f1): helemaal groen. Dat zijn de migraties vanaf een lege database met
+  `20261128170000`, de databasetests (ook `paginas_taken.sql`), deno check, de typecheck, de
+  unit tests, de mobiele lay-outtest, laden, de inrichting en de terugknop. Het label en de
+  knop toetst alleen `ui.mjs`; dat draait niet in de CI.
 - `npm run test:mobile -- --pages=project,weekplanner --theme=both`: 12 metingen, 0 problemen.
   De nagebootste backend heeft geen taken uit een pagina; het label en "Uit pagina" toetst de
   schermtest hierboven.
