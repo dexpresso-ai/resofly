@@ -692,6 +692,11 @@ nieuwe blokken niet, en opent zo'n pagina alleen om te lezen.
   - Bij een lege bovenste pagina begint het eerste hoofdstuk niet meer na een lege bladzijde.
   - De controle met LibreOffice is nu een script: `scripts/proef-word-rondgang.sh`, met de
     proefbestanden uit `scripts/proef-word-export.mjs`.
+- **Wat de CI niet bewaakt.** §14 vraagt `test:terugknop` en `test:mobile` voor de editor en het
+  exportvenster. Die staan in `ui.mjs` (scenario's `paginas`, `paginadrive` en `paginaexport`:
+  terug sluit het venster, en de telefoonmaat). `ui.mjs` draait niet in de CI; `test:terugknop`
+  en `test:mobile` openen geen pagina. Draai `ui.mjs` dus zelf bij een wijziging aan de editor
+  of de export.
 - **De CI op de branch (Frontend checks, met de hand gestart):**
   - run 304 (ba3ee84): helemaal groen;
   - run 305 (bf471ad, met de boom naast de pagina): helemaal groen, ook de mobiele

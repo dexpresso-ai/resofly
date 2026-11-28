@@ -72,6 +72,15 @@ in de huisstijl. Wat nu nog in fase 1 zit, wacht op jou. Daarom bouw ik niet ver
      bijlage en een afbeelding (een rood blok).
    - Let op cursief: de huisstijlletters hebben geen cursieve variant, en LibreOffice nam
      daarvoor een andere letter.
+   - Sinds 1B-4c staan er nog twee naast: met alle opties, en met briefpapier. In de
+     proefbestanden is de huisstijl verzonnen; dat is geen fout:
+     - het logo ("Studio Noord", een blauw vlak met een lichte balk);
+     - de lijn in de kop;
+     - de voettekst "Studio Noord · Havenstraat 1, Noorddorp";
+     - het briefpapier met de blauwe en lichte band.
+
+     In de app komen het logo, de merkkleur en de voettekst uit jouw Huisstijl, en het
+     briefpapier uit Documentopmaak.
 5. **Akkoord met een afwijking van het plan?** §9 laat de server (`page-export`) de DOCX bouwen.
    Voor alleen Word doet de app het nu zelf, met dezelfde module en dezelfde letterkeuze. De
    server komt er pas bij met de PDF. Zie §18, "Afwijking van §9".
@@ -230,8 +239,14 @@ Ze mogen opnieuw draaien, en de databasetests lopen ze na.
   - `npm test` en typecheck;
   - de databasetests;
   - de terugknop, en laden per module;
-  - de drie UI-scenario's voor pagina's, alle stappen goed:
+  - de UI-scenario's voor pagina's, alle stappen goed:
     - `documenten` (10 stappen);
     - `paginas` (18);
-    - `paginadrive` (10).
+    - `paginadrive` (10);
+    - `paginaexport` (8, na de merge: het exportvenster, de Word-kopie, de opties en het
+      briefpapier);
+  - na de merge: `scripts/proef-word-rondgang.sh`. De vier proefbestanden zijn geldig vóór en
+    na opnieuw opslaan in LibreOffice;
+  - de productiebuild (`npm run build`, met nep-waarden voor Supabase). De Word-export blijft
+    een eigen stuk bundel, dat pas bij een klik laadt.
 - **De mobiele lay-outtest** duurt lokaal te lang voor een sessie; die draait in de CI.
