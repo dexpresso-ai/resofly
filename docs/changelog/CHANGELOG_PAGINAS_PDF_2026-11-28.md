@@ -152,8 +152,19 @@ gebruiker met de hand uit; zie `docs/setup/PAGINA_PDF_SETUP.md`.
   hier niet; de CI doet `deno check` (de stap "Deno-typecheck pagina's" neemt `page-export` nu
   mee).
 - **`npm test`** (2438 met deel 4) en **`npm run typecheck`**.
+- **De productiebuild** (met nep-waarden voor Supabase), op deel 4: geslaagd. `repository.ts`
+  haalt nu iets uit `_shared/pageExport.ts`; daarom nagekeken wat er in de hoofdbundel kwam.
+  - De hoofdbundel is 3 kB groter dan op staging (`3be4452`): 1.177.093 → 1.180.073 bytes.
+  - De Word-opbouw (`pageDocx`) staat alleen in de stukken van de export, en pdf-lib in een
+    eigen stuk. Beide laden pas bij een klik.
+  - De CI bouwt de app niet; Cloudflare Pages doet dat pas bij een merge.
 
 ## Wat hier niet te testen is
+
+- **`deno check` en de mobiele lay-outtest op deel 4.** Lokaal is `page-export` nagekeken met
+  `tsc` en de typen van pdf-lib uit `node_modules`; de CI-run voor deel 4 volgt. Die doet
+  `deno check` met de typen van esm.sh, waar `page-export` pdf-lib aan `pdfLetterhead.ts`
+  doorgeeft.
 
 - **Collabora zelf, en de uitgerolde worker.** In de proef met LibreOffice 24.2 werd de Word-file
   van de server een goede PDF.
