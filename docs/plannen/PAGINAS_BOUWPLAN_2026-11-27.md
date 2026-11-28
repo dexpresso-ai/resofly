@@ -516,7 +516,7 @@ akkoord is.
 | 1B-2 | Export: `page-export`, de DOCX-module, het interne PDF-pad, het exportvenster, vastleggen in het dossier, de Word-kopie. | gebouwd op 28 november, op de branch: de DOCX-module (`_shared/pageDocx.ts`, met de huisstijlletters ingesloten via `_shared/woff.ts`), en de knop "Word" in de editor, die de DOCX in de app bouwt (zie de afwijking hieronder). Zie `docs/changelog/CHANGELOG_PAGINAS_WORD_2026-11-28.md`. `page-export`, de PDF, het exportvenster, vastleggen en de Word-kopie wachten op Collabora. |
 | 1C-1 | De omzetting van een pagina naar HTML voor de klant (`_shared/pageHtml.ts`, `renderPageHtml`), zonder browser, en `pageReferences` in `_shared`. Verandert nog niets aan wat een klant ziet. | gebouwd op 28 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_HTML_2026-11-28.md` |
 | 1C-2 | De vrijgave in de database: `drive_shares.document_version_id`, alleen een vrijgegeven versie van die pagina en organisatie. In dezelfde stap lezen het portaal en de geheime link die versie, via `renderPageHtml`. | gebouwd op 28 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_DELEN_VRIJGAVE_2026-11-28.md`. Migratie `20261128120000_paginas_delen`. |
-| 1C-3 | Het deelvenster voor een pagina: vrijgeven, subpagina's aanvinken, "De klant ziet een oudere versie" met "Bijwerken bij klant", het logboek. | 1C-3a (database en server) gebouwd op 28 november, op de branch: `file-share` met de vrijgave, `page_share_status`, `release_page_to_shares` (migratie `20261128130000`); zie `docs/changelog/CHANGELOG_PAGINAS_BIJWERKEN_BIJ_KLANT_2026-11-28.md`. 1C-3b, het venster in de app, gepland. |
+| 1C-3 | Het deelvenster voor een pagina: vrijgeven, subpagina's aanvinken, "De klant ziet een oudere versie" met "Bijwerken bij klant", het logboek. | gebouwd op 28 november, op de branch: 1C-3a (database en server: `file-share` met de vrijgave, `page_share_status`, `release_page_to_shares`, migratie `20261128130000`) en 1C-3b (het venster, de knop en de melding in de editor, Gerrie); zie `docs/changelog/CHANGELOG_PAGINAS_BIJWERKEN_BIJ_KLANT_2026-11-28.md` |
 | 1C-4 | De weergave in het portaal en bij een geheime link: de opmaak, en afbeeldingen die de server alleen tekent als ze in de gedeelde versie staan. Een klantpagina gaat alleen naar het portaal. | gepland |
 
 **1C wordt gebouwd volgens de lezing van §1 (28 november):**
@@ -638,6 +638,10 @@ akkoord is.
 - **Daarna gebouwd, op de branch:** 1C-3a, delen en bijwerken in de database en de server
   (`file-share` neemt de vrijgave aan, `page_share_status`, `release_page_to_shares`). Zie
   `docs/changelog/CHANGELOG_PAGINAS_BIJWERKEN_BIJ_KLANT_2026-11-28.md`.
+- **Daarna gebouwd, op de branch:** 1C-3b, delen in de app: "Delen" in de editor en de drive,
+  het deelvenster met subpagina's, "De klant ziet een oudere versie" met "Bijwerken bij
+  klant", en Gerrie die een pagina deelt met een vrijgave van wie goedkeurt. UI-scenario
+  `paginadelen` (6 stappen).
 - **De CI op de branch (Frontend checks, met de hand gestart):**
   - run 304 (ba3ee84): helemaal groen;
   - run 305 (bf471ad, met de boom naast de pagina): helemaal groen, ook de mobiele
@@ -664,11 +668,13 @@ akkoord is.
   1. Bewaren we de oorspronkelijke HTML, en waar?
   2. Wat gebeurt er met documenten die nu gedeeld zijn? §10 zegt: "wordt een vrijgave van de
      omgezette versie". Dat kan pas na 1C.
-- **UI-tests in drie scenario's**, elk binnen de tien minuten van een begrensde Docker-run:
+- **UI-tests in vier scenario's**, elk binnen de tien minuten van een begrensde Docker-run:
   - `ui.mjs documenten` (10 stappen);
   - `paginas`, de editor en zijn blokken (18);
   - `paginadrive`, de boom in de drive, de prullenbak, het eigen dossier, de boom naast de
     pagina, Word, een trage computer, Gerrie die aanvult, en afdrukken (10).
+  - `paginadelen`, delen vanuit de editor met een subpagina, bijwerken bij de klant, Gerrie die
+    deelt, en "Delen…" in de drive (6).
 - **De "Geen klant"-teksten in de documentenomgeving zijn weg** (de vensters van notities en
   documenten, de kaart van een document). Waar het blijft, staat in
   `docs/changelog/CHANGELOG_EIGEN_DOSSIER_2026-11-28.md`.

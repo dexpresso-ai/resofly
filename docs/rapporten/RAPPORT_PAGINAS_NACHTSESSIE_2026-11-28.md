@@ -64,7 +64,7 @@ stand voor de overdracht.
    Vóór 1C kon een pagina nergens bij een klant terechtkomen: gedeelde mappen en zendingen
    slaan pagina's over, en de database weigerde een deling. Sinds 1C-2 neemt de database een
    deling aan, maar alleen met een vrijgegeven versie, en het portaal en de geheime link tonen
-   alleen die versie. In de app staat "Delen…" bij een pagina nog niet; dat komt in 1C-3.
+   alleen die versie. Sinds 1C-3 kun je in de app een pagina delen en bijwerken.
 
 ## Gevonden en gerepareerd
 
@@ -95,7 +95,7 @@ stand voor de overdracht.
 | 1B-2 (deel) | De knop "Word" in de editor: de pagina als .docx, in de letters van de huisstijl. PDF en het exportvenster wachten op Collabora. | `CHANGELOG_PAGINAS_WORD_2026-11-28.md` |
 | 1C-1 | De omzetting van een pagina naar HTML voor de klant, op de server. Een klant ziet nog niets: delen blijft voor een pagina geweigerd tot de vrijgave er is (1C-2). | `CHANGELOG_PAGINAS_HTML_2026-11-28.md` |
 | 1C-2 | Delen is vrijgeven, in de database: een deling van een pagina draagt de vrijgegeven versie, en het portaal en de geheime link tonen alleen die. In de app kun je een pagina nog niet delen (dat is 1C-3). | `CHANGELOG_PAGINAS_DELEN_VRIJGAVE_2026-11-28.md` |
-| 1C-3a | Delen en "Bijwerken bij klant" in de database en de server: `file-share` deelt een pagina met haar vrijgave, en de app kan zien of de klant een oudere versie ziet. Het venster in de app volgt. | `CHANGELOG_PAGINAS_BIJWERKEN_BIJ_KLANT_2026-11-28.md` |
+| 1C-3 | Een pagina delen in de app: "Delen" in de editor en de drive, subpagina's aanvinken, en de melding "De klant ziet een oudere versie" met "Bijwerken bij klant". Gerrie deelt een pagina ook, met een vrijgave van wie goedkeurt. | `CHANGELOG_PAGINAS_BIJWERKEN_BIJ_KLANT_2026-11-28.md` |
 
 Er komen vijf migraties mee die nog niet op staging staan:
 - `20261127140000_paginas_blokken`;

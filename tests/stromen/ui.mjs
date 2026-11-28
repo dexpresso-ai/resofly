@@ -3,7 +3,7 @@
  * UI-test — de knoppen en formulieren van offertes, facturen, herinneringen en
  * contracten in Chromium, tegen de echte backend.
  *
- *   node --enable-source-maps --import ./tests/stromen/register.mjs tests/stromen/ui.mjs [offerte] [factuur] [intrekken] [contract] [rollen] [agenda] [mollie] [documenten] [paginas] [paginadrive] [bank] [inrichten] [opname] [klantdomein] [rapportage] [tickets] [vooruitbetaald] [galerij] [prognose]
+ *   node --enable-source-maps --import ./tests/stromen/register.mjs tests/stromen/ui.mjs [offerte] [factuur] [intrekken] [contract] [rollen] [agenda] [mollie] [documenten] [paginas] [paginadrive] [paginadelen] [bank] [inrichten] [opname] [klantdomein] [rapportage] [tickets] [vooruitbetaald] [galerij] [prognose]
  *
  *   --schermafdrukken=<map>   waar schermafdrukken van mislukte stappen heen gaan
  *                             (standaard <tmp>/stromen-ui; ook STROMEN_UI_SCHERMAFDRUKKEN)
@@ -50,7 +50,7 @@ const opties = Object.fromEntries(argumenten.filter((a) => a.startsWith('--')).m
   const m = /^--([^=]+)(?:=(.*))?$/.exec(a);
   return [m[1], m[2] ?? 'true'];
 }));
-const ALLE = ['offerte', 'factuur', 'intrekken', 'contract', 'rollen', 'agenda', 'mollie', 'documenten', 'paginas', 'paginadrive', 'bank', 'inrichten', 'opname', 'klantdomein', 'rapportage', 'tickets', 'vooruitbetaald', 'galerij', 'prognose'];
+const ALLE = ['offerte', 'factuur', 'intrekken', 'contract', 'rollen', 'agenda', 'mollie', 'documenten', 'paginas', 'paginadrive', 'paginadelen', 'bank', 'inrichten', 'opname', 'klantdomein', 'rapportage', 'tickets', 'vooruitbetaald', 'galerij', 'prognose'];
 const gekozen = argumenten.filter((a) => !a.startsWith('-'));
 for (const naam of gekozen) {
   if (!ALLE.includes(naam)) throw new Error(`Onbekend scenario "${naam}". Kies uit: ${ALLE.join(', ')}`);
@@ -1943,7 +1943,7 @@ async function scenarioPaginas() {
     await lidA.page.locator('.page-editor').waitFor({ state: 'detached', timeout: 15000 });
   });
 
-  await uiStap('een pagina heeft geen Delen of Versturen, en op een telefoon past de werkbalk', async () => {
+  await uiStap('een pagina deel je (stap 1C), maar versturen kan nog niet; op een telefoon past de werkbalk', async () => {
     if (!pagina) throw new Error('geen pagina');
     const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
     const page = lid.page;
@@ -1951,7 +1951,8 @@ async function scenarioPaginas() {
     await paginaRij(page).locator('.odrv-td-act button').first().click();
     const menu = page.locator('.drive-pop');
     await menu.getByRole('menuitem', { name: 'Openen', exact: true }).waitFor({ timeout: 10000 });
-    gelijk(await menu.getByRole('menuitem', { name: 'Delen…', exact: true }).count(), 0, 'Delen bij een pagina');
+    // Delen is vrijgeven (scenario paginadelen); versturen wacht op de export naar PDF.
+    gelijk(await menu.getByRole('menuitem', { name: 'Delen…', exact: true }).count(), 1, 'Delen bij een pagina');
     gelijk(await menu.getByRole('menuitem', { name: 'Versturen…', exact: true }).count(), 0, 'Versturen bij een pagina');
     await page.keyboard.press('Escape');
     await page.setViewportSize({ width: 390, height: 844 });
@@ -3036,6 +3037,191 @@ async function scenarioPaginadrive() {
 
 /** Een transactie in de lijst "Af te letteren", op een stuk tekst. */
 const bankRij = (page, patroon) => inhoud(page).locator('.bank-tx').filter({ hasText: patroon });
+
+/**
+ * Pagina's delen (stap 1C): delen is vrijgeven. De klant ziet de versie van het
+ * moment van delen, en pas na "Bijwerken bij klant" wat je daarna wijzigde.
+ * De database en de functies toetst run.mjs (scenario documenten); hier gaat
+ * het om wat de gebruiker doet: delen vanuit de editor, subpagina's aanvinken,
+ * de melding na een wijziging, bijwerken, en "Delen…" in de drive.
+ */
+async function scenarioPaginadelen() {
+  groep('UI: pagina\'s delen');
+  const { w } = t;
+  const tag = Date.now().toString(36);
+  const woord = (text) => ({ type: 'text', text });
+  const nieuwePagina = (titel, body, ouder = null) => {
+    sql(`insert into public.documents (organization_id, created_by, title, format, body, client_id, parent_id)
+      values (${q(w.orgId)}, ${q(w.medewerker.id)}, ${q(titel)}, 'page', ${q(JSON.stringify(body))}::jsonb, ${q(w.klantA.id)}, ${ouder ? q(ouder) : 'null'})`);
+    return sqlRij(`select id from public.documents where organization_id = ${q(w.orgId)} and title = ${q(titel)}`).id;
+  };
+  const ouder = nieuwePagina(`Delen ouder ${tag}`, { type: 'doc', content: [{ type: 'paragraph' }] });
+  const kind = nieuwePagina(`Delen kind ${tag}`, { type: 'doc', content: [{ type: 'paragraph', content: [woord('Tekst van de subpagina')] }] }, ouder);
+  sql(`update public.documents set body = ${q(JSON.stringify({ type: 'doc', content: [
+    { type: 'heading', attrs: { level: 1 }, content: [woord('Werkwijze')] },
+    { type: 'subpage', attrs: { pageId: kind } },
+    { type: 'paragraph' },
+  ] }))}::jsonb where id = ${q(ouder)}`);
+  const lezenInPortaal = async (paginaId) => {
+    const deling = sqlRij(`select id from public.drive_shares where item_id = ${q(paginaId)} and revoked_at is null and recipient_kind = 'client'`);
+    const res = await roep('client-portal', { token: w.portaalA.token, body: { action: 'downloadSharedFile', shareId: deling.id, itemType: 'document', itemId: paginaId } });
+    verwacht(res.status === 200, `lezen in het portaal: ${res.status} ${res.tekst?.slice(0, 200)}`);
+    return res.json?.text?.html ?? '';
+  };
+  // Licht en donker vastleggen, om te zien of het venster en de melding in beide thema's leesbaar zijn.
+  const beideThemas = async (lid, naam) => {
+    const voor = await lid.page.evaluate(() => document.documentElement.getAttribute('data-theme'));
+    try {
+      for (const thema of ['light', 'dark']) {
+        await lid.page.evaluate((waarde) => document.documentElement.setAttribute('data-theme', waarde), thema);
+        await schermafdruk(`${naam}-${thema}`, lid);
+      }
+    } finally {
+      await lid.page.evaluate((waarde) => {
+        if (waarde) document.documentElement.setAttribute('data-theme', waarde); else document.documentElement.removeAttribute('data-theme');
+      }, voor);
+    }
+  };
+  const openPagina = async (lid, titel) => {
+    await naarKlantdossier(lid, w.klantA.name);
+    await inhoud(lid.page).locator('.odrv-row').filter({ hasText: titel }).first().click();
+    await lid.page.locator('.page-editor').waitFor({ timeout: 20000 });
+    const status = lid.page.locator('.page-editor .page-editor-status');
+    await wachtTot(async () => tekst(await status.innerText().catch(() => '')) === 'Opgeslagen', { melding: 'de editor kwam niet in bewerken' });
+  };
+
+  await uiStap('delen vanuit de editor: met de klant, met de subpagina, en wat je net typte gaat mee; het venster ligt boven de editor', async () => {
+    const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+    const page = lid.page;
+    await openPagina(lid, `Delen ouder ${tag}`);
+    await page.locator('.page-editor .tiptap p').last().click();
+    await page.keyboard.type(`Net getypt ${tag}`);
+    await page.locator('.page-editor-share').click();
+    const venster = page.locator('.modal.share-modal-page');
+    await venster.waitFor({ timeout: 15000 });
+    gelijk(tekst(await venster.locator('.modal-head h3').innerText()), 'Pagina delen', 'de titel van het venster');
+    const vooraan = await page.evaluate(() => {
+      const modal = document.querySelector('.modal.share-modal-page');
+      if (!modal) return false;
+      const r = modal.getBoundingClientRect();
+      const punt = document.elementFromPoint(r.left + r.width / 2, r.top + 24);
+      return Boolean(punt && modal.contains(punt));
+    });
+    verwacht(vooraan, 'het deelvenster ligt achter de editor');
+    gelijk(await venster.getByText('Downloaden toestaan').count(), 0, 'bij een pagina valt niets te downloaden');
+    await venster.locator('.share-people li').filter({ hasText: w.klantA.email }).locator('input[type="checkbox"]').check();
+    await venster.locator('.share-subpages').getByText('Alle subpagina\'s').click();
+    verwacht(await venster.locator('.share-subpage-list input[type="checkbox"]').first().isChecked(), 'de subpagina is niet aangevinkt');
+    await venster.getByRole('button', { name: /Deel met 1 persoon/ }).click();
+    await venster.locator('.share-results').waitFor({ timeout: 30000 });
+    await wachtTot(async () => tekst(await venster.locator('.share-page-note').innerText().catch(() => '')).includes('Ook 1 subpagina gedeeld'), { melding: 'de subpagina is niet gedeeld' });
+    const delingen = sqlRijen(`select s.item_id, v.reason, v.body::text as body from public.drive_shares s join public.document_versions v on v.id = s.document_version_id
+      where s.item_id in (${q(ouder)}, ${q(kind)}) and s.revoked_at is null`);
+    gelijk(delingen.length, 2, 'twee delingen: de pagina en haar subpagina');
+    verwacht(delingen.every(rij => rij.reason === 'vrijgave'), 'elke deling heeft een vrijgave');
+    verwacht(delingen.find(rij => rij.item_id === ouder)?.body.includes(`Net getypt ${tag}`), 'wat je net typte, zit niet in de vrijgave');
+    await wachtTot(async () => tekst(await venster.locator('.share-current').innerText().catch(() => '')).includes('Ziet versie'), { melding: 'de versie per ontvanger staat er niet' });
+    await beideThemas(lid, 'paginadelen-venster');
+    const html = await lezenInPortaal(ouder);
+    verwacht(html.includes(`Net getypt ${tag}`) && html.includes(`→ Delen kind ${tag}`), `het portaal: ${html.slice(0, 300)}`);
+    await venster.getByRole('button', { name: 'Sluiten', exact: true }).click();
+    await venster.waitFor({ state: 'detached', timeout: 5000 });
+    // Op de telefoon: de knop staat in de balk, en het venster ligt vooraan.
+    const breed = page.viewportSize();
+    await page.setViewportSize({ width: 390, height: 844 });
+    try {
+      await wachtTot(async () => page.locator('.page-editor-share').isVisible(), { melding: 'de knop Delen staat niet in beeld op de telefoon' });
+      const maten = await page.evaluate(() => {
+        const balk = document.querySelector('.page-editor-bar');
+        return { pagina: document.documentElement.scrollWidth, scherm: window.innerWidth, balk: balk ? balk.scrollWidth - balk.clientWidth : -1 };
+      });
+      verwacht(maten.pagina <= maten.scherm && maten.balk <= 0, `de balk loopt over op 390px: ${JSON.stringify(maten)}`);
+      await page.locator('.page-editor-share').click();
+      await venster.waitFor({ timeout: 15000 });
+      verwacht(await venster.isVisible(), 'het venster staat niet in beeld op de telefoon');
+      await beideThemas(lid, 'paginadelen-telefoon');
+      await venster.locator('.modal-close').click();
+      await venster.waitFor({ state: 'detached', timeout: 5000 });
+    } finally {
+      if (breed) await page.setViewportSize(breed);
+    }
+  });
+
+  await uiStap('na een wijziging: "De klant ziet een oudere versie", en "Bijwerken bij klant" geeft de klant de nieuwe tekst', async () => {
+    // Iemand anders wijzigde de pagina intussen: bij openen staat de melding er meteen.
+    sql(`update public.documents set body = jsonb_set(body, '{content,2}', ${q(JSON.stringify({ type: 'paragraph', content: [woord(`Elders gewijzigd ${tag}`)] }))}::jsonb) where id = ${q(ouder)}`);
+    const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+    const page = lid.page;
+    await openPagina(lid, `Delen ouder ${tag}`);
+    const melding = page.locator('.page-share-banner');
+    await wachtTot(async () => tekst(await melding.innerText().catch(() => '')).includes('De klant ziet een oudere versie'), { melding: 'geen melding dat de klant een oudere versie ziet' });
+    verwacht(!(await lezenInPortaal(ouder)).includes(`Elders gewijzigd ${tag}`), 'de klant ziet de wijziging al vóór het bijwerken');
+    await beideThemas(lid, 'paginadelen-oudere-versie');
+    // En wat je zelf typt, gaat mee met het bijwerken.
+    await page.locator('.page-editor .tiptap p').last().click();
+    await page.keyboard.press('End');
+    await page.keyboard.type(` en hier getypt ${tag}`);
+    await melding.getByRole('button', { name: 'Bijwerken bij klant' }).click();
+    await wachtTot(async () => tekst(await melding.innerText().catch(() => '')).includes('Bijgewerkt'), { melding: 'geen bevestiging na bijwerken' });
+    const html = await lezenInPortaal(ouder);
+    verwacht(html.includes(`Elders gewijzigd ${tag}`) && html.includes(`en hier getypt ${tag}`), `het portaal na bijwerken: ${html.slice(0, 300)}`);
+    gelijk(sqlRij(`select count(*)::int as n from public.audit_logs where entity_type = 'drive_share' and action = 'updated'
+      and metadata->'changes' ? 'document_version_id' and entity_id in (select id from public.drive_shares where item_id = ${q(ouder)})`).n >= 1, true, 'het bijwerken staat in het logboek');
+    await wachtTot(async () => (await melding.count()) === 0, { timeout: 10000, melding: 'de melding blijft staan na bijwerken' });
+  });
+
+  await uiStap('Gerrie deelt een pagina: een voorstel via een gekoppelde AI, en na "Uitvoeren" ziet de klant de versie van dat moment', async () => {
+    const titel = `Gerrie deelt ${tag}`;
+    const pagina = nieuwePagina(titel, { type: 'doc', content: [{ type: 'paragraph', content: [woord(`Versie van het akkoord ${tag}`)] }] });
+    // Een echte MCP-koppeling van de beheerder, zoals mcp-oauth hem uitgeeft (zie paginadrive).
+    const clientId = `stromen-${randomUUID()}`;
+    sql(`insert into public.mcp_clients (client_id, client_name, redirect_uris) values (${q(clientId)}, 'Stromen-AI', array['https://stromen.test/cb'])`);
+    const grantId = sql(`insert into public.mcp_grants (organization_id, user_id, client_id, scope, label)
+                         values (${q(w.orgId)}, ${q(w.beheerder.id)}, ${q(clientId)}, 'read propose', 'stromen') returning id`);
+    const selector = randomBytes(16).toString('base64url');
+    const verifier = randomBytes(32).toString('base64url');
+    const salt = randomBytes(16).toString('hex');
+    sql(`insert into public.mcp_tokens (grant_id, kind, selector, verifier_hash, salt, expires_at)
+         values (${q(grantId)}, 'access', ${q(selector)}, ${q(createHash('sha256').update(`${salt}:${verifier}`).digest('hex'))}, ${q(salt)}, now() + interval '1 hour')`);
+    const res = await roep('mcp', { token: `rsfmcp.${selector}.${verifier}`, body: { jsonrpc: '2.0', id: 1, method: 'tools/call', params: {
+      name: 'propose_action', arguments: { action_id: 'drive.share', input: { item_type: 'document', item_id: pagina, client_portal: true, can_download: true } },
+    } } });
+    verwacht(res.json?.result?.isError !== true, `delen klaarzetten: ${res.json?.result?.content?.[0]?.text ?? res.tekst}`);
+    gelijk(sqlRij(`select count(*)::int as n from public.drive_shares where item_id = ${q(pagina)}`).n, 0, 'er is al gedeeld vóór het akkoord');
+    const beheer = await openWerkruimte(w.beheerder, 'beheerder', w.orgId, { tijdelijk: true });
+    const page = beheer.page;
+    await page.locator('.sidebar-nav .nav-item').filter({ hasText: /^Dashboard/ }).first().click();
+    const rij = page.locator('.ag-queue-row').filter({ hasText: titel }).first();
+    await rij.waitFor({ timeout: 20000 });
+    verwacht(/Pagina/.test(tekst(await rij.innerText())), `de regel in de wachtrij noemt het geen pagina: ${tekst(await rij.innerText())}`);
+    // Na het voorstel, vóór het akkoord, verandert de pagina nog: de klant ziet wat er bij het akkoord staat.
+    sql(`update public.documents set body = ${q(JSON.stringify({ type: 'doc', content: [{ type: 'paragraph', content: [woord(`Na het voorstel gewijzigd ${tag}`)] }] }))}::jsonb where id = ${q(pagina)}`);
+    await rij.locator('.ag-btn-go').click();
+    await wachtTot(async () => sqlRij(`select count(*)::int as n from public.drive_shares where item_id = ${q(pagina)} and document_version_id is not null`).n === 1, { melding: 'na het akkoord is de pagina niet gedeeld met een vrijgave' });
+    const deling = sqlRij(`select s.can_download, v.reason, v.created_by from public.drive_shares s join public.document_versions v on v.id = s.document_version_id where s.item_id = ${q(pagina)}`);
+    gelijk([deling.can_download, deling.reason, deling.created_by], [false, 'vrijgave', w.beheerder.id], 'een vrijgave van wie goedkeurde, en niets te downloaden');
+    const html = await lezenInPortaal(pagina);
+    verwacht(html.includes(`Na het voorstel gewijzigd ${tag}`) && !html.includes('Versie van het akkoord'), `het portaal: ${html.slice(0, 300)}`);
+  }, { toegestaan: [{ soort: 'functie', functie: 'mcp' }] });
+
+  await uiStap('de drive: "Delen…" bij een pagina opent het venster voor een pagina, met wie de klant ziet', async () => {
+    const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+    const page = lid.page;
+    await naarKlantdossier(lid, w.klantA.name);
+    const rij = inhoud(page).locator('.odrv-row').filter({ hasText: `Delen ouder ${tag}` }).first();
+    await rij.waitFor({ timeout: 15000 });
+    await rij.locator('.odrv-td-act button').first().click();
+    gelijk(await page.locator('.drive-pop').getByRole('menuitem', { name: 'Versturen…' }).count(), 0, 'een pagina versturen kan nog niet');
+    await page.locator('.drive-pop').getByRole('menuitem', { name: 'Delen…' }).click();
+    const venster = page.locator('.modal.share-modal-page');
+    await venster.waitFor({ timeout: 15000 });
+    await venster.locator('.share-subpages').waitFor({ timeout: 5000 });
+    await wachtTot(async () => tekst(await venster.locator('.share-current').innerText().catch(() => '')).includes('Ziet versie'), { melding: 'de versie per ontvanger staat er niet' });
+    gelijk(await venster.locator('.share-outdated').count(), 0, 'na bijwerken geen melding van een oudere versie');
+    await venster.locator('.modal-close').click();
+    await venster.waitFor({ state: 'detached', timeout: 5000 });
+  });
+}
 
 async function bankTab(scherm, naam) {
   await inhoud(scherm.page).locator('.bank-toolbar .bk-seg button').filter({ hasText: new RegExp(`^${naam}`) }).click();
@@ -4987,7 +5173,7 @@ try {
       // De app praat met deze testserver, niet met een ander Supabase-adres.
       verwacht(server.verkeer.some((r) => r.soort === 'rpc' && r.status < 400), 'de app deed geen enkele aanroep via de testserver');
     });
-    const scenarios = { offerte: scenarioOfferte, factuur: scenarioFactuur, intrekken: scenarioIntrekken, contract: scenarioContract, rollen: scenarioRollen, agenda: scenarioAgenda, mollie: scenarioMollie, documenten: scenarioDocumenten, paginas: scenarioPaginas, paginadrive: scenarioPaginadrive, bank: scenarioBank, inrichten: scenarioInrichten, opname: scenarioOpname, klantdomein: scenarioKlantdomein, rapportage: scenarioRapportage, tickets: scenarioTickets, vooruitbetaald: scenarioVooruitbetaald, galerij: scenarioGalerij, prognose: scenarioPrognose };
+    const scenarios = { offerte: scenarioOfferte, factuur: scenarioFactuur, intrekken: scenarioIntrekken, contract: scenarioContract, rollen: scenarioRollen, agenda: scenarioAgenda, mollie: scenarioMollie, documenten: scenarioDocumenten, paginas: scenarioPaginas, paginadrive: scenarioPaginadrive, paginadelen: scenarioPaginadelen, bank: scenarioBank, inrichten: scenarioInrichten, opname: scenarioOpname, klantdomein: scenarioKlantdomein, rapportage: scenarioRapportage, tickets: scenarioTickets, vooruitbetaald: scenarioVooruitbetaald, galerij: scenarioGalerij, prognose: scenarioPrognose };
     for (const naam of SCENARIOS) await scenarios[naam]();
   }
   fouten = samenvatting();

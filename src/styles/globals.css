@@ -10582,6 +10582,15 @@ body.pgal-shielded .pgal-shield{position:fixed;inset:0;z-index:300;display:flex;
 .share-person strong{font-size:13px;font-weight:600;color:var(--text)}
 .share-person-meta{font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .share-tag{flex-shrink:0;padding:2px 7px;border-radius:999px;background:var(--bg3);border:1px solid var(--border);font-size:10px;font-weight:600;color:var(--muted2)}
+/* Een pagina delen (stap 1C). Het venster opent ook vanuit de editor, die
+   zelf op z-index 2000 ligt: zonder deze regel viel het erachter. */
+.modal-bg:has(> .share-modal-page){z-index:2005}
+.share-tag.is-outdated{margin-left:6px;border-color:rgba(var(--accent-o-rgb,245,158,11),.45);background:rgba(var(--accent-o-rgb,245,158,11),.12);color:var(--text)}
+.share-rule.share-outdated{align-items:center;flex-wrap:wrap;border-color:rgba(var(--accent-o-rgb,245,158,11),.45);background:rgba(var(--accent-o-rgb,245,158,11),.08)}
+.share-rule.share-outdated svg{color:var(--accent-o,#f59e0b)}
+.share-rule.share-outdated>span{flex:1 1 220px;min-width:0}
+.share-subpage-list li{border-bottom:0}
+.share-page-note{margin:0 0 12px}
 .share-warn{display:inline-flex;align-items:center;gap:5px;font-size:10.5px;color:var(--warn,var(--accent-o))}
 .share-warn button{border:1px solid var(--border2);background:var(--bg3);color:var(--text);border-radius:6px;padding:3px 7px;font-size:10.5px;font-weight:600;cursor:pointer}
 .share-warn button:hover:not(:disabled){border-color:var(--accent)}
@@ -13630,6 +13639,7 @@ button.alog-feed-row:hover{background:var(--bg3)}
 .page-editor-banner{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding:10px 16px;border-bottom:1px solid var(--border);background:var(--bg2);font-size:13px}
 .page-editor-banner>span{flex:1 1 240px;min-width:0}
 .page-editor-banner.is-warning{border-left:3px solid var(--accent-r,#e5484d)}
+.page-share-banner{border-left:3px solid var(--accent-o,#f59e0b)}
 .page-editor-scroll{flex:1 1 auto;min-height:0;overflow-y:auto}
 .page-editor-sheet{max-width:760px;margin:0 auto;padding:40px 24px 160px}
 .page-editor-title{display:block;width:100%;border:none;background:transparent;color:var(--text);font:inherit;font-size:34px;font-weight:700;line-height:1.2;letter-spacing:-.01em;padding:0;margin:0 0 18px;outline:none}

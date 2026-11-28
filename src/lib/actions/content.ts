@@ -1,5 +1,5 @@
 import {
-  appendParagraphsToPage, attachmentLockReason, documentFormat, loadAttachmentRef, loadContentHtml, moveAttachmentToFolder,
+  appendParagraphsToPage, attachmentLockReason, createPageRelease, documentFormat, loadAttachmentRef, loadContentHtml, moveAttachmentToFolder,
   renameAttachment, revokeDriveShare, shareDriveItem, updateRow, type DriveShareRecipientInput,
 } from '../repository';
 import { sanitizeRichText } from '../../components/RichTextEditor';
@@ -75,13 +75,19 @@ export const CONTENT_EXECUTORS: Record<string, ActionExecutor> = {
   'drive.share': async (payload, ctx) => {
     const recipients = Array.isArray(payload.recipients) ? payload.recipients as DriveShareRecipientInput[] : [];
     if (recipients.length === 0) throw new Error('Deze deling heeft geen ontvangers.');
+    const itemType = text(payload, 'item_type') as DriveShareItemType;
+    const itemId = text(payload, 'item_id');
+    // Een pagina deelt de versie van nu (stap 1C): eerst een vrijgave, met de
+    // rechten van wie dit goedkeurt. Zonder vrijgave weigert de database.
+    const isPage = itemType === 'document' && await documentFormat(itemId, ctx.organizationId) === 'page';
     const results = await shareDriveItem({
       organizationId: ctx.organizationId,
-      itemType: text(payload, 'item_type') as DriveShareItemType,
-      itemId: text(payload, 'item_id'),
+      itemType,
+      itemId,
       itemName: optText(payload, 'item_name'),
       recipients,
-      canDownload: payload.can_download !== false,
+      canDownload: !isPage && payload.can_download !== false,
+      documentVersionId: isPage ? await createPageRelease(itemId) : null,
       // Het eind van de gekozen dag, zoals het deelvenster een vervaldatum ook als tijdstip opslaat.
       expiresAt: optText(payload, 'expires_date') ? new Date(`${optText(payload, 'expires_date')}T23:59:59`).toISOString() : null,
       message: optText(payload, 'message'),

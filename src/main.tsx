@@ -261,6 +261,8 @@ const PublicGalleryPage = lazyPage(() => import('./features/PublicGalleryPage'),
 const PublicSharePage = lazyPage(() => import('./features/PublicSharePage'), 'PublicSharePage');
 // De pagina-editor (stap 1A-3a): Tiptap en ProseMirror laden pas als je een pagina opent.
 const PageEditor = lazyPage(() => import('./features/PageEditor'), 'PageEditor');
+// Delen vanuit de editor (stap 1C): het deelvenster laadt pas bij een klik.
+const ShareDialog = lazyPage(() => import('./components/ShareDialog'), 'ShareDialog');
 const PublicUnsubscribePage = lazyPage(() => import('./features/PublicUnsubscribePage'), 'PublicUnsubscribePage');
 const PublicTransferPage = lazyPage(() => import('./features/PublicTransferPage'), 'PublicTransferPage');
 const ClientPortal = lazyPage(() => import('./features/portal/ClientPortal'), 'ClientPortal');
@@ -1316,6 +1318,8 @@ function App() {
   const [pageEditDoc, setPageEditDoc] = useState<InternalDocument | null>(null);
   // De weg langs subpagina's (stap 1A-4b): de terugknop gaat een pagina terug.
   const [pageTrail, setPageTrail] = useState<string[]>([]);
+  /** Het deelvenster van de open pagina (stap 1C), met hoe de editor eerst opslaat. */
+  const [pageShare, setPageShare] = useState<{ id: string; organizationId: string; name: string; flush: () => Promise<boolean>; done: () => void } | null>(null);
   // Terug uit een telefoongesprek. `returnedCall` is de vraag ("gesprek
   // loggen?"), `callDraft` het venster dat daarop volgt. Twee aparte waarden,
   // zodat wegklikken van de vraag niet hetzelfde is als het venster sluiten.
@@ -5085,7 +5089,18 @@ function App() {
         setPageTrail(trail => (step.how === 'terug' ? trail.slice(0, -1) : [...trail, from]));
         setPageEditDoc(previous => (previous ? { ...previous, id: step.id } : previous));
       }}
+      onShare={(request) => setPageShare({ id: pageEditDoc.id, organizationId: pageEditDoc.organization_id, name: request.title || 'Pagina', flush: request.flush, done: request.done })}
       onClose={() => { setPageTrail([]); setPageEditDoc(null); refresh(); }}
+    /></DialogDeferred>}
+    {pageShare && pageEditDoc?.id === pageShare.id && <DialogDeferred><ShareDialog
+      data={data}
+      organizationId={pageShare.organizationId}
+      target={{ type: 'document', id: pageShare.id, name: pageShare.name }}
+      beforeShare={async () => {
+        if (!(await pageShare.flush())) throw new Error('De pagina kon niet worden opgeslagen, dus ook niet gedeeld. Probeer het zo nog eens.');
+      }}
+      onChanged={refresh}
+      onClose={() => { pageShare.done(); setPageShare(null); }}
     /></DialogDeferred>}
     {officeSession && <DialogDeferred><OfficeEditor session={officeSession} onClose={() => { setOfficeSession(null); setOfficeDoc(null); refresh(); }} onDownload={officeDoc ? downloadOfficeDoc : undefined} /></DialogDeferred>}
     {officeOpening && !officeSession && <div style={{ position: 'fixed', bottom: 16, right: 16, zIndex: 2100, background: 'var(--panel-strong)', border: '1px solid var(--border2)', borderRadius: 10, padding: '8px 14px', fontWeight: 600 }}>Editor openen…</div>}

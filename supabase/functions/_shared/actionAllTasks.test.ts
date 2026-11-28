@@ -212,6 +212,21 @@ test('delen blijft binnen het eigen klantdossier', async () => {
   assert.ok(ok.warning);
 });
 
+test('een pagina delen: de kaart noemt het een pagina, zegt wat de klant ziet, en downloaden kan niet', async () => {
+  const share = action('drive.share');
+  const page = { documents: [{ title: 'Werkwijze', client_id: OTHER, format: 'page' }] };
+  const plan = await share.plan!(ctx({ ...page, client_contacts: [{ id: ME, name: 'Piet', email: 'piet@x.nl', client_id: OTHER, is_active: true }] }),
+    { item_type: 'document', item_id: ID, contact_ids: [ME], can_download: true });
+  assert.match(plan.title, /^Pagina "Werkwijze" delen/);
+  assert.match(plan.warning ?? '', /Bijwerken bij klant/);
+  assert.equal((plan.payload as { can_download: boolean }).can_download, false);
+  // Een gewoon document blijft zoals het was.
+  const doc = await share.plan!(ctx({ documents: [{ title: 'Offerte', client_id: OTHER, format: 'html' }], client_contacts: [{ id: ME, name: 'Piet', email: 'piet@x.nl', client_id: OTHER, is_active: true }] }),
+    { item_type: 'document', item_id: ID, contact_ids: [ME] });
+  assert.match(doc.title, /^Document "Offerte" delen/);
+  assert.equal((doc.payload as { can_download: boolean }).can_download, true);
+});
+
 test('een teamchatbericht draagt de afzender van het voorstel mee', async () => {
   const dm = action('teamchat.send_dm');
   await refuses(dm.plan!(ctx({ organization_members: [{ email: 'ik@org.nl', status: 'active' }] }), { user_id: ME, body: 'Hoi' }), /zelf/);

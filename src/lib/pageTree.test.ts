@@ -7,7 +7,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ancestorIds, buildPageTree, comparePages, dossierClientOf, folderPath, type TreeFolder, type TreeNode, type TreePage } from './pageTree.ts';
+import { ancestorIds, buildPageTree, comparePages, dossierClientOf, folderPath, subpagesOf, type TreeFolder, type TreeNode, type TreePage } from './pageTree.ts';
 
 const page = (id: string, over: Partial<TreePage> = {}): TreePage => ({
   id, title: id, parent_id: null, folder_id: null, client_id: 'X', project_id: null, position: 0, ...over,
@@ -99,4 +99,26 @@ test('een mappad stopt bij een kring of een map die je niet ziet', () => {
   assert.equal(folderPath(folders, 'a'), 'Naamloze map / A');
   assert.equal(folderPath(folders, 'c'), 'C');
   assert.equal(folderPath(folders, 'weg'), 'Map');
+});
+
+test('subpagesOf: de subpagina\'s in de volgorde van de boom, met hun diepte, ook bij een kring', () => {
+  const page = (id: string, parent: string | null, title: string, position: number | null = null): TreePage =>
+    ({ id, title, parent_id: parent, folder_id: null, client_id: null, project_id: null, position });
+  const pages = [
+    page('root', null, 'Handboek'),
+    page('b', 'root', 'Beleid', 2),
+    page('a', 'root', 'Afspraken', 1),
+    page('a1', 'a', 'Bellen'),
+    page('a2', 'a', 'Mailen'),
+    page('x', null, 'Ander'),
+    page('x1', 'x', 'Niet hieronder'),
+    // Een kring buiten de root, en een die naar de root terugwijst: geen oneindige lus.
+    page('k1', 'k2', 'Kring 1'),
+    page('k2', 'k1', 'Kring 2'),
+    page('terug', 'b', 'Terug'),
+  ];
+  const lijst = subpagesOf(pages, 'root').map(({ page: p, depth }) => `${'-'.repeat(depth)}${p.title}`);
+  assert.deepEqual(lijst, ['-Afspraken', '--Bellen', '--Mailen', '-Beleid', '--Terug']);
+  assert.deepEqual(subpagesOf(pages, 'a2'), []);
+  assert.deepEqual(subpagesOf([], 'root'), []);
 });

@@ -526,7 +526,8 @@ export const CONTENT_ACTIONS: ActionDef[] = [
     description:
       'Deelt een map, notitie, document of bestand. Met wie: `contact_ids` (contactpersonen van de klant; zij zien het in het klantportaal), `client_portal: true` (iedereen met portaaltoegang bij de klant), ' +
       '`member_user_ids` (collega\'s; zij krijgen een melding met een link) of `emails` (een los e-mailadres met een geheime deellink — dat kan alleen voor iets dat NIET bij een klantdossier hoort). ' +
-      'Optioneel een bericht, een vervaldatum en of downloaden mag. De ontvanger krijgt een melding per e-mail. Zoek het item met `content.search` en de contactpersonen met `list_client_contacts`.',
+      'Optioneel een bericht, een vervaldatum en of downloaden mag. De ontvanger krijgt een melding per e-mail. Zoek het item met `content.search` en de contactpersonen met `list_client_contacts`. ' +
+      'Een pagina deel je zoals ze is op het moment van uitvoeren (een vrijgave); wat er daarna verandert, ziet de ontvanger pas na "Bijwerken bij klant". Subpagina\'s deel je elk apart.',
     keywords: ['delen', 'deel', 'portaal', 'klantportaal', 'deellink', 'toegang', 'sturen', 'beschikbaar', 'collega', 'map delen', 'document delen'],
     input: {
       item_type: { type: 'string', enum: ['folder', 'attachment', 'note', 'document'], description: 'Wat je deelt.' },
@@ -594,15 +595,20 @@ export const CONTENT_ACTIONS: ActionDef[] = [
       if (recipients.length === 0) throw new ActionError('Met wie deel je het? Geef contact_ids, client_portal, member_user_ids of emails.');
       const expires = optIsoDate(input, 'expires_at');
       if (expires && expires < ctx.today) throw new ActionError('De vervaldatum ligt in het verleden.');
-      const canDownload = bool(input, 'can_download', true);
+      // Bij een pagina valt niets te downloaden: de ontvanger leest haar als webpagina.
+      const canDownload = item.isPage ? false : bool(input, 'can_download', true);
       const message = optStr(input, 'message', 1000);
+      const who = labels.length === 1 ? 'De ontvanger ziet' : 'De ontvangers zien';
+      const gets = labels.length === 1 ? 'krijgt' : 'krijgen';
       return {
         title: `${item.label} "${item.name}" delen`,
         sub: joinShort([`met ${labels.join(', ')}`, expires ? `tot ${expires}` : 'zonder einddatum', canDownload ? 'downloaden mag' : 'alleen bekijken'], 160),
         kind: 'mail',
         // Een map is sinds 20261127120000 niet meer live: de ontvanger ziet wat
         // er bij het delen in staat. Wat er later bij komt, deel je apart.
-        warning: item.label.toLowerCase() === 'map'
+        warning: item.isPage
+          ? `${who} de pagina zoals ze is als je dit uitvoert, en ${gets} een melding per e-mail. Wat je daarna wijzigt, zien ze pas na "Bijwerken bij klant" in de editor.`
+          : item.label.toLowerCase() === 'map'
           ? `${labels.length === 1 ? 'De ontvanger ziet' : 'De ontvangers zien'} vanaf nu wat er nu in deze map staat en ${labels.length === 1 ? 'krijgt' : 'krijgen'} een melding per e-mail. Wat er later in de map komt, deel je apart.`
           : `${labels.length === 1 ? 'De ontvanger ziet' : 'De ontvangers zien'} dit vanaf nu en ${labels.length === 1 ? 'krijgt' : 'krijgen'} een melding per e-mail.`,
         payload: {
@@ -702,15 +708,21 @@ function idList(input: Record<string, unknown>, key: string): string[] {
 }
 
 /** Wat er gedeeld wordt: naam, soort en (via de map, notitie of het bestand) bij welke klant het hoort. */
-async function shareableItem(ctx: ActionCtx, itemType: 'folder' | 'attachment' | 'note' | 'document', itemId: string): Promise<{ name: string; label: string; clientId: string | null }> {
+async function shareableItem(ctx: ActionCtx, itemType: 'folder' | 'attachment' | 'note' | 'document', itemId: string): Promise<{ name: string; label: string; clientId: string | null; isPage?: boolean }> {
   if (itemType === 'folder') {
     const folder = await row<{ name: string; client_id: string | null }>(ctx, 'content_folders', itemId, 'name, client_id', 'Map');
     return { name: folder.name, label: 'Map', clientId: folder.client_id };
   }
-  if (itemType === 'note' || itemType === 'document') {
-    const table = itemType === 'note' ? 'notes' : 'documents';
-    const item = await row<{ title: string | null; client_id: string | null }>(ctx, table, itemId, 'title, client_id', itemType === 'note' ? 'Notitie' : 'Document');
-    return { name: item.title || (itemType === 'note' ? 'Notitie' : 'Document'), label: itemType === 'note' ? 'Notitie' : 'Document', clientId: item.client_id };
+  if (itemType === 'note') {
+    const note = await row<{ title: string | null; client_id: string | null }>(ctx, 'notes', itemId, 'title, client_id', 'Notitie');
+    return { name: note.title || 'Notitie', label: 'Notitie', clientId: note.client_id };
+  }
+  if (itemType === 'document') {
+    const doc = await row<{ title: string | null; client_id: string | null; format?: string | null }>(ctx, 'documents', itemId, 'title, client_id, format', 'Document');
+    // Een pagina deelt de versie van het moment van uitvoeren (stap 1C): de app
+    // maakt dan eerst een vrijgave, met de rechten van wie goedkeurt.
+    const isPage = doc.format === 'page';
+    return { name: doc.title || (isPage ? 'Pagina' : 'Document'), label: isPage ? 'Pagina' : 'Document', clientId: doc.client_id, isPage };
   }
   const file = await row<{ name: string; entity_type: string; entity_id: string }>(ctx, 'attachments', itemId, 'name, entity_type, entity_id', 'Bestand');
   if (file.entity_type !== 'folder') throw new ActionError('Alleen bestanden die in een map van de bibliotheek staan, kun je delen. Verplaats het bestand eerst naar een map (attachment.move).');

@@ -1170,10 +1170,11 @@ export function ContentLibrary({
       <button type="button" className="drive-pop-item" role="menuitem" onClick={() => { setMenu(null); open(); }}><FilePen size={16} /> Openen</button>
       <button type="button" className="drive-pop-item" role="menuitem" onClick={() => beginRename(rowKey)}><Pencil size={16} /> Naam wijzigen</button>
       <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openMove([{ kind, id, name }])}><Folder size={16} /> Verplaatsen naar…</button>
-      {/* Een pagina delen of versturen kan pas met de vrijgave (1C) en de export (1B);
-          de database weigert het tot dan. Daarom staan de knoppen er niet. */}
+      {/* Een pagina versturen kan pas met de export naar PDF (1B); file-transfer
+          weigert het tot dan. Delen kan wel (1C): het deelvenster geeft de
+          ontvanger een vrijgegeven versie. */}
       {!isPage && <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openSend([{ type: kind, id }])}><Send size={16} /> Versturen…</button>}
-      {!isPage && <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openShare({ type: kind, id, name })}><Share2 size={16} /> Delen…</button>}
+      <button type="button" className="drive-pop-item" role="menuitem" onClick={() => openShare({ type: kind, id, name })}><Share2 size={16} /> Delen…</button>
       <div className="drive-pop-sep" />
       <button type="button" className="drive-pop-item danger" role="menuitem" onClick={() => { setMenu(null); deleteContent(kind, id, name); }}><Trash2 size={16} /> Verwijderen</button>
     </>;

@@ -36,7 +36,7 @@ import type { Editor, JSONContent } from '@tiptap/react';
 import {
   AlignCenter, AlignLeft, AlignRight, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, BetweenHorizontalEnd, BetweenHorizontalStart,
   BetweenVerticalEnd, BetweenVerticalStart, Bold, Braces, ChevronLeft, Copy, FileDown, Heading1, Heading2, Heading3, History, Info, Italic, Lightbulb, Link2,
-  List, ListChecks, ListOrdered, Minus, OctagonAlert, PanelLeft, PanelTop, Pilcrow, Plus, Quote, Redo2, Strikethrough, TableCellsMerge,
+  List, ListChecks, ListOrdered, Minus, OctagonAlert, PanelLeft, PanelTop, Pilcrow, Plus, Quote, Redo2, Share2, Strikethrough, TableCellsMerge,
   TableCellsSplit, Trash2, TriangleAlert, Underline as UnderlineIcon, Undo2, X,
 } from 'lucide-react';
 import { isInTable, moveTableColumn, moveTableRow, selectedRect } from '@tiptap/pm/tables';
@@ -45,9 +45,9 @@ import { fetchStoredFileBlob, uploadToR2 } from '../lib/r2';
 import { calloutVariant, isAllowedPageLink, type CalloutVariant } from '../lib/pageSchema';
 import { pageBodyFit } from '../lib/pageBodyCheck';
 import {
-  attachmentInfo, attachmentStorageKey, claimPageEdit, createPage, listDossierFiles, listPageVersions, loadPage, loadPageVersion, pageAncestors, pageTitle,
-  releasePageEdit, restorePageVersion, savePage, type DossierFile,
-  savePageVersion, type PageVersionSummary,
+  attachmentInfo, attachmentStorageKey, claimPageEdit, createPage, listDossierFiles, listPageVersions, loadPage, loadPageShareStatus, loadPageVersion, pageAncestors, pageTitle,
+  releasePageEdit, releasePageToShares, restorePageVersion, savePage, type DossierFile,
+  savePageVersion, type PageShareStatus, type PageVersionSummary,
 } from '../lib/repository';
 import { useBackStep } from '../lib/useBackStep';
 import { PageFilePicker, type FileChoice } from './PageFilePicker';
@@ -95,7 +95,16 @@ function whenLabel(value: string): string {
 /** Naar een andere pagina: verder (een subpagina, of omhoog) of terug langs de weg die je kwam. */
 export type PageStep = { id: string; how: 'vooruit' | 'terug' };
 
-export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClose, onOpenPage, backTo = null, ownDossierName = 'Eigen dossier', houseStyle = null }: {
+/** Wat de editor meegeeft aan het deelvenster (main.tsx toont het, met de gegevens van de app). */
+export type PageShareRequest = {
+  title: string;
+  /** Eerst opslaan wat er nog staat; false als dat niet lukte. */
+  flush: () => Promise<boolean>;
+  /** Het venster is dicht: kijk opnieuw wat de klant ziet. */
+  done: () => void;
+};
+
+export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClose, onOpenPage, backTo = null, ownDossierName = 'Eigen dossier', houseStyle = null, onShare }: {
   documentId: string;
   organizationId: string;
   /** Schrijfrechten op Inhoud. Zonder: alleen lezen, en geen claim. */
@@ -111,6 +120,8 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
   ownDossierName?: string;
   /** De letters van de huisstijl, voor de Word-export. */
   houseStyle?: { brand_heading_font?: string | null; brand_body_font?: string | null } | null;
+  /** Delen (stap 1C): het deelvenster openen. Zonder deze functie geen knop. */
+  onShare?: (request: PageShareRequest) => void;
 }) {
   const [mode, setModeState] = useState<Mode>('laden');
   const [saveState, setSaveState] = useState<SaveState>('opgeslagen');
@@ -135,6 +146,15 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
   const [treeOpen, setTreeOpen] = useState(() => !treeDrawer && treePreference());
   /** Telt op als hier een subpagina bij komt: dan haalt de boom opnieuw op. */
   const [treeVersion, setTreeVersion] = useState(0);
+  /**
+   * Met wie deze pagina gedeeld is, en of die de pagina van nu ziet (stap 1C).
+   * Na een wijziging hier ziet de ontvanger een oudere versie, ook zonder
+   * opnieuw te vragen: daarvoor telt changedSinceShareStatus.
+   */
+  const [shareStatus, setShareStatus] = useState<PageShareStatus[]>([]);
+  const [changedSinceShareStatus, setChangedSinceShareStatus] = useState(false);
+  const [releasing, setReleasing] = useState(false);
+  const [shareNote, setShareNote] = useState<string | null>(null);
 
   const modeRef = useRef<Mode>('laden');
   const titleRef = useRef('');
@@ -397,6 +417,7 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
       return;
     }
     setSaveState('wijzigingen');
+    setChangedSinceShareStatus(true);
     if (timerRef.current) window.clearTimeout(timerRef.current);
     timerRef.current = window.setTimeout(() => { timerRef.current = null; void queueSave(); }, SAVE_DELAY_MS);
   };
@@ -660,6 +681,45 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
     }
   };
 
+  // Delen (stap 1C): met wie de pagina gedeeld is, en of die de pagina van nu
+  // ziet. Alleen voor wie mag delen; zonder antwoord gewoon geen melding.
+  const reloadShareStatus = useCallback(async () => {
+    if (!canWrite) return;
+    try {
+      const rows = await loadPageShareStatus(documentId);
+      setShareStatus(rows);
+      setChangedSinceShareStatus(false);
+    } catch {
+      setShareStatus([]);
+    }
+  }, [canWrite, documentId]);
+  useEffect(() => { void reloadShareStatus(); }, [reloadShareStatus]);
+  const shareOutdated = shareStatus.length > 0 && (changedSinceShareStatus || shareStatus.some(row => !row.is_current));
+
+  /** Eerst opslaan wat er nog staat: delen en bijwerken nemen de opgeslagen pagina. */
+  const flushForShare = useCallback(async () => modeRef.current !== 'bewerken' || queueSave(), [queueSave]);
+
+  const releaseToShares = async () => {
+    if (releasing) return;
+    setReleasing(true);
+    setShareNote(null);
+    try {
+      if (!(await flushForShare())) throw new Error('De pagina kon niet worden opgeslagen, dus ook niet bijgewerkt bij de klant. Probeer het zo nog eens.');
+      const count = await releasePageToShares(documentId);
+      await reloadShareStatus();
+      setShareNote(count === 1 ? 'Bijgewerkt: de ontvanger ziet nu deze versie.' : count > 1 ? `Bijgewerkt: ${count} ontvangers zien nu deze versie.` : 'Iedereen ziet deze versie al.');
+      window.setTimeout(() => setShareNote(null), 5000);
+    } catch (error) {
+      setMessage(error instanceof Error && error.message ? error.message : 'Bijwerken bij de klant is niet gelukt.');
+    } finally {
+      setReleasing(false);
+    }
+  };
+
+  const openShare = () => {
+    onShare?.({ title, flush: flushForShare, done: () => { void reloadShareStatus(); } });
+  };
+
   // Word (stap 1B-2): de opgeslagen pagina, in de huisstijl. Eerst opslaan wat
   // er nog staat: de export leest uit de database, net als de server straks.
   // Het bouwen laadt pas bij een klik, zodat de editor er niet zwaarder van wordt.
@@ -716,6 +776,9 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
         </nav>}
         <span className="page-editor-crumb" title={title}>{title || 'Pagina'}</span>
         <span className={`page-editor-status is-${mode === 'bewerken' ? saveState : mode}`} role="status">{statusText}</span>
+        {canWrite && onShare && <button type="button" className="page-editor-action page-editor-share" onClick={openShare} title="Deel deze pagina met een klant of via een deellink">
+          <Share2 size={15} /><span>Delen</span>
+        </button>}
         <button type="button" className="page-editor-action" onClick={() => void copyLink()} title="Een link naar deze pagina, voor collega's">
           <Copy size={15} /><span>{copied ? 'Gekopieerd' : 'Link'}</span>
         </button>
@@ -740,6 +803,13 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
         {mode === 'conflict' && <button type="button" className="btn" onClick={() => void reloadAfterConflict()}>Opnieuw laden</button>}
         {mode === 'onbekend' && refreshHelps && <button type="button" className="btn" onClick={() => window.location.reload()}>App verversen</button>}
         {closeAnyway && <button type="button" className="btn" onClick={() => void close(true)}>Toch sluiten</button>}
+      </div>}
+
+      {(shareOutdated || shareNote) && <div className="page-editor-banner page-share-banner" role="status">
+        <span>{shareNote ?? 'De klant ziet een oudere versie van deze pagina.'}</span>
+        {!shareNote && <button type="button" className="btn" onClick={() => void releaseToShares()} disabled={releasing}>
+          {releasing ? 'Bezig…' : 'Bijwerken bij klant'}
+        </button>}
       </div>}
 
       {versionsOpen && <VersionsPanel

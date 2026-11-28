@@ -2,9 +2,9 @@
 
 28 november 2026. Zie `docs/plannen/PAGINAS_BOUWPLAN_2026-11-27.md`, §7 en §18.
 
-Sinds stap 1C-2 ziet een klant van een pagina de versie die gedeeld is. Deze stap geeft de
-app wat ze nodig heeft om te delen en bij te werken. Eerst de database en de server (1C-3a);
-het venster in de app volgt (1C-3b).
+Sinds stap 1C-2 ziet een klant van een pagina de versie die gedeeld is. Deze stap maakt
+delen en bijwerken mogelijk: eerst in de database en de server (1C-3a), daarna in de app
+(1C-3b, verderop).
 
 ## Wat er nu is (1C-3a: database en server)
 
@@ -68,3 +68,57 @@ het venster in de app volgt (1C-3b).
   - een geheime link bij het eigen dossier.
 - **Typecheck van `file-share`, `client-portal` en `file-share-public`** met tsc, tegen de
   typen van supabase-js. Ook `npm run typecheck`.
+
+## Later die dag: het venster in de app (1C-3b)
+
+- **"Delen" bij een pagina**: in de balk van de editor en in het menu van de drive.
+  "Versturen…" blijft weg tot de export naar PDF er is.
+- **Het deelvenster voor een pagina** (`src/components/ShareDialog.tsx`):
+  - eerst slaat de editor op wat er nog stond, dan maakt de app een vrijgave, dan deelt ze
+    met die versie;
+  - een uitleg bovenaan: de ontvanger ziet de pagina zoals ze nu is, en wat je daarna
+    wijzigt pas na "Bijwerken bij klant";
+  - **subpagina's vink je aan**, los of allemaal. Elke wordt een eigen deling met een eigen
+    vrijgave, zonder eigen mail. Een subpagina die je niet aanvinkt, ziet de ontvanger niet.
+    Via een deellink gaat alleen de pagina zelf mee: een link naar een subpagina zou
+    niemand krijgen;
+  - geen "Downloaden toestaan": bij een pagina valt niets te downloaden;
+  - bij "Wie heeft nu toegang" per ontvanger welke versie hij ziet ("Ziet versie 3 van
+    28-11-2026"), het label "Oudere versie", en bovenaan de melding met de knop
+    "Bijwerken bij klant".
+- **In de editor de melding "De klant ziet een oudere versie van deze pagina."**, met de knop
+  "Bijwerken bij klant".
+  - De melding staat er bij het openen als iemand de pagina intussen wijzigde.
+  - Ze verschijnt meteen als je zelf iets wijzigt in een gedeelde pagina.
+  - De knop slaat eerst op, en zegt daarna hoeveel ontvangers de nieuwe versie zien.
+- **Het venster ligt boven de editor.** De editor staat op z-index 2000 en een venster op 100;
+  vanuit de editor viel het deelvenster er anders achter. Het laadt pas bij een klik.
+- **Gerrie, de agents, de MCP en de API delen een pagina zoals de knop.**
+  - De kaart in de wachtrij noemt het een pagina, en zegt wat de klant ziet.
+  - Bij "Uitvoeren" maakt de app eerst de vrijgave, met de rechten van wie goedkeurt. De
+    klant ziet de pagina zoals ze was bij het akkoord, niet bij het voorstel.
+  - Downloaden staat bij een pagina altijd uit.
+- **`subpagesOf`** in `src/lib/pageTree.ts`: de subpagina's onder een pagina, in de volgorde
+  van de boom, bestand tegen kringen.
+
+### Getest (1C-3b)
+
+- **Een nieuw UI-scenario `paginadelen` (`tests/stromen/ui.mjs`), 6 stappen, 0 fout:**
+  - delen vanuit de editor, met de klant en de subpagina. Wat je net typte zit in de
+    vrijgave, en het portaal toont het, met "→ subpagina". Het venster ligt vóór de editor
+    (gemeten met `elementFromPoint`). Op 390px past de balk met "Delen", en staat het
+    venster in beeld;
+  - na een wijziging elders staat de melding er bij openen. "Bijwerken bij klant" geeft het
+    portaal de nieuwe tekst, ook wat je net typte, en dat staat in het logboek;
+  - Gerrie deelt een pagina via een gekoppelde AI. Na "Uitvoeren" is er een vrijgave van de
+    beheerder die goedkeurde, en de klant ziet de tekst van dat moment;
+  - "Delen…" in de drive opent het venster voor een pagina; "Versturen…" staat er niet.
+- **Schermafdrukken nagekeken**: het venster en de melding, licht en donker, breed en op de
+  telefoon.
+- **`ui.mjs paginas` (18), `paginadrive` (10) en `documenten`**: geslaagd. Eén oude stap
+  verwachtte geen "Delen" bij een pagina, en zegt nu dat delen kan en versturen nog niet.
+- **`npm run test:terugknop`** (18 gelukt) en **`npm run test:loading`** (alles geslaagd).
+- **`actionAllTasks.test.ts`**: de kaart voor een pagina, en een gewoon document blijft zoals
+  het was.
+- **`pageTree.test.ts`**: `subpagesOf`, met een kring.
+- **`npm test`** (2408) en **`npm run typecheck`**.
