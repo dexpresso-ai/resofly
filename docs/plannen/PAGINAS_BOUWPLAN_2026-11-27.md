@@ -514,7 +514,31 @@ akkoord is.
 | 1A-5d | De tekstdocumenten omzetten naar pagina's (§10). | wacht op 1C en op een besluit van de gebruiker (zie de stand hieronder) |
 | 1B-1 | Proef: huisstijlletters en emoji in een PDF via Collabora (§9). | voorlopig gedaan op 28 november, met LibreOffice in de cloudsessie: .woff werkt niet, TTF wel, en een in de DOCX ingesloten letter ook. Nog te herhalen op de Collabora-container (de vervanger, emoji). Zie `docs/rapporten/PROEF_1B1_LETTERS_EMOJI_2026-11-28.md`. |
 | 1B-2 | Export: `page-export`, de DOCX-module, het interne PDF-pad, het exportvenster, vastleggen in het dossier, de Word-kopie. | gebouwd op 28 november, op de branch: de DOCX-module (`_shared/pageDocx.ts`, met de huisstijlletters ingesloten via `_shared/woff.ts`), en de knop "Word" in de editor, die de DOCX in de app bouwt (zie de afwijking hieronder). Zie `docs/changelog/CHANGELOG_PAGINAS_WORD_2026-11-28.md`. `page-export`, de PDF, het exportvenster, vastleggen en de Word-kopie wachten op Collabora. |
-| 1C | Pagina's delen: vrijgeven, "Bijwerken bij klant", subpagina's, de weergave in het portaal en bij een geheime link. | gepland |
+| 1C-1 | De omzetting van een pagina naar HTML voor de klant (`_shared/pageHtml.ts`, `renderPageHtml`), zonder browser, en `pageReferences` in `_shared`. Verandert nog niets aan wat een klant ziet. | gebouwd op 28 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_HTML_2026-11-28.md` |
+| 1C-2 | De vrijgave in de database: `drive_shares.document_version_id`, alleen een vrijgegeven versie van die pagina en organisatie. In dezelfde stap lezen het portaal en de geheime link die versie, via `renderPageHtml`. | gepland |
+| 1C-3 | Het deelvenster voor een pagina: vrijgeven, subpagina's aanvinken, "De klant ziet een oudere versie" met "Bijwerken bij klant", het logboek. | gepland |
+| 1C-4 | De weergave in het portaal en bij een geheime link: de opmaak, en afbeeldingen die de server alleen tekent als ze in de gedeelde versie staan. Een klantpagina gaat alleen naar het portaal. | gepland |
+
+**1C wordt gebouwd volgens de lezing van §1 (28 november):**
+
+- Delen mag iedereen met schrijfrechten op Inhoud, zoals nu, en altijd als bewuste handeling.
+  "Alleen owner en admin" geldt voor openbaar publiceren (§17), niet voor delen met een klant.
+- De gebruiker zei "Ga verder" na de vraag om 1C eerst door te lopen. Alles staat op de
+  branch; vóór de merge loopt de gebruiker het door. Te bevestigen:
+  - wie mag delen (zie hierboven);
+  - dat een subpagina die niet gedeeld is, voor de klant helemaal niet bestaat, ook haar titel
+    niet;
+  - dat de klant de naam van een bestand in de pagina ziet, maar het bestand zelf alleen als
+    het ook gedeeld is.
+- **De volgorde is een veiligheidskeuze.** Het portaal toont nu bij een tekstdocument de
+  levende tekst (`content`). Zou de database een pagina eerder laten delen dan het portaal de
+  vrijgegeven versie leest, dan zag de klant de pagina zoals ze op dat moment is. Daarom komen
+  de kolom, de controle en de leeswegen in één stap (1C-2). Een pagina zonder geldige versie
+  toont niets, nooit de levende tekst.
+- **Al nagelopen (28 november):** een pagina komt nu nergens bij een klant. Een gedeelde map
+  en een zending slaan pagina's over (`drive_folder_tree_items`, `drive_folder_leaves`), een
+  losse zending weigert ze (`file-transfer`), en een deling weigert de database
+  (`drive_shares_no_pages_yet`).
 
 **Afwijking van §9, vastgelegd bij de bouw van 1B-2 (28 november):**
 
@@ -605,6 +629,8 @@ akkoord is.
   `docs/changelog/CHANGELOG_PAGINAS_GERRIE_AANVULLEN_2026-11-28.md`.
 - **Daarna gebouwd, op de branch:** afdrukken met Ctrl+P (§9), alleen de pagina, zie
   `docs/changelog/CHANGELOG_PAGINAS_AFDRUKKEN_2026-11-28.md`.
+- **Daarna gebouwd, op de branch:** 1C-1, de omzetting van een pagina naar HTML voor de klant
+  (`_shared/pageHtml.ts`). Zie `docs/changelog/CHANGELOG_PAGINAS_HTML_2026-11-28.md`.
 - **De CI op de branch (Frontend checks, met de hand gestart):**
   - run 304 (ba3ee84): helemaal groen;
   - run 305 (bf471ad, met de boom naast de pagina): helemaal groen, ook de mobiele
@@ -615,9 +641,11 @@ akkoord is.
     scherm): helemaal groen, ook `deno check` van het pad waarlangs Gerrie aanvult, de
     mobiele lay-outtest, laden, de inrichting en de terugknop. Wat er daarna nog kwam (5f1b4e0
     en later), is alleen tekst.
-- **Nog niet door `deno check`:** `_shared/pageDocx.ts`, `_shared/woff.ts` en `_shared/zipWriter.ts`. Dat gebeurt
-  vanzelf zodra `page-export` ze importeert en in de lijst van
-  `.github/workflows/frontend-checks.yml` staat.
+- **`deno check` op de modules van pagina's:** sinds 1C-1 een eigen stap in
+  `.github/workflows/frontend-checks.yml` ("Deno-typecheck pagina's"): `pageDocx.ts`,
+  `woff.ts`, `zipWriter.ts`, `pageExportFonts.ts`, `pageHtml.ts` en `pageReferences.ts`. Geen
+  edge function importeert ze nog; `client-portal`, waar `pageHtml.ts` straks in komt, staat
+  zelf nog buiten de controle.
 - **1A-5d (omzetten) wacht.** Omzetten bij het openen gaat één kant op, en het neemt een
   document dingen af tot 1C er is:
   - een pagina kun je niet delen (`drive_shares_no_pages_yet`);
@@ -639,7 +667,7 @@ akkoord is.
   `docs/changelog/CHANGELOG_EIGEN_DOSSIER_2026-11-28.md`.
 
   Het edge-deel en de PDF-weg wachten tot de office-server (Collabora) er is; die is niet in
-  een cloudsessie te draaien. 1C (delen) pas als de gebruiker terug is.
+  een cloudsessie te draaien. 1C (delen) is begonnen na "Ga verder" van de gebruiker, op de branch; zie de stappen 1C-1 tot 1C-4 en de toelichting onder de tabel.
 
   Van 1A-5 is alleen het omzetten van tekstdocumenten over (1A-5d, zie hierboven). De boom
   in de drive, het eigen dossier, slepen en de prullenbak zijn gebouwd.

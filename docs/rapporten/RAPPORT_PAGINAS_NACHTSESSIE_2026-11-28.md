@@ -50,9 +50,20 @@ stand voor de overdracht.
    ook. Op de container moet blijken welke letter hij neemt als de huisstijlletter ontbreekt,
    en of er een emoji-letter is. Zie `docs/rapporten/PROEF_1B1_LETTERS_EMOJI_2026-11-28.md`;
    het script is `scripts/proef-letters-docx.py`.
-8. **1C (pagina's delen) heb ik laten liggen.** Dat raakt wat klanten zien, en jij zei: klanten
-   lezen pas mee als de eigenaar deelt, en alleen een owner of admin publiceert. Dat wil ik met
-   je doorlopen voor ik het bouw.
+8. **1C (pagina's delen) bouw ik nu, na je "Ga verder".** Het staat op de branch, en gaat pas
+   naar staging als jij het zegt. Ik bouw het zoals ik §1 van het plan lees. Bevestig graag
+   vóór de merge:
+   - **Wie mag delen?** Iedereen met schrijfrechten op Inhoud, zoals nu, altijd als bewuste
+     handeling. "Alleen owner en admin" lees ik als de regel voor openbaar publiceren (§17),
+     niet voor delen met een klant.
+   - **Een subpagina die je niet deelt, bestaat voor de klant niet.** Ook haar titel ziet hij
+     niet.
+   - **Een bestand in de pagina:** de klant ziet de naam ("Bijlage: offerte.pdf"), maar het
+     bestand zelf alleen als je het ook deelt.
+
+   Een pagina kan nu nergens bij een klant terechtkomen. Gedeelde mappen en zendingen slaan
+   pagina's over, en de database weigert een deling. Dat blijft zo tot het portaal de
+   vrijgegeven versie leest (stap 1C-2).
 
 ## Gevonden en gerepareerd
 
@@ -81,6 +92,7 @@ stand voor de overdracht.
 | §9 | Afdrukken met Ctrl+P: alleen de pagina, over de hele lengte, zwart op wit. | `CHANGELOG_PAGINAS_AFDRUKKEN_2026-11-28.md` |
 | §12 | Gerrie (of een gekoppelde AI, een agent, de API) vult een pagina aan: elke regel een alinea onderaan, na een akkoord. Vervangen kan niet. | `CHANGELOG_PAGINAS_GERRIE_AANVULLEN_2026-11-28.md` |
 | 1B-2 (deel) | De knop "Word" in de editor: de pagina als .docx, in de letters van de huisstijl. PDF en het exportvenster wachten op Collabora. | `CHANGELOG_PAGINAS_WORD_2026-11-28.md` |
+| 1C-1 | De omzetting van een pagina naar HTML voor de klant, op de server. Een klant ziet nog niets: delen blijft voor een pagina geweigerd tot de vrijgave er is (1C-2). | `CHANGELOG_PAGINAS_HTML_2026-11-28.md` |
 
 Er komen drie migraties mee die nog niet op staging staan:
 - `20261127140000_paginas_blokken`;
