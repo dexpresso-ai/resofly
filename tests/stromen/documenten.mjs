@@ -598,7 +598,8 @@ export default async function documentenScenario() {
     const exporteer = (token, body) => roep('page-export', { token, body: { pageId: pdfPagina.pagina.id, ...body } });
     await stap('de PDF: met de sessie van wie exporteert; de worker krijgt een .docx met de pagina, het hoofdstuk en de afbeelding, zonder de prullenbak', async () => {
       const voor = post.paginaPdf.verzoeken.length;
-      const res = await exporteer(w.medewerker.token, { cover: true, toc: true, chapters: true });
+      // Een download (names): de klant op het voorblad, met de rechten van wie exporteert.
+      const res = await exporteer(w.medewerker.token, { cover: true, toc: true, chapters: true, names: true });
       gelijk(res.status, 200, `status ${res.tekst.slice(0, 200)}`);
       gelijk(res.headers.get('content-type'), 'application/pdf', 'soort');
       gelijk(Buffer.from(res.bytes.slice(0, 5)).toString(), '%PDF-', 'een PDF');
@@ -612,6 +613,12 @@ export default async function documentenScenario() {
       }
       verwacht(!xml.includes('Weggegooid hoofdstuk') && !xml.includes('Mag niet in de PDF.'), 'een subpagina uit de prullenbak staat in de PDF');
       verwacht(xml.includes('<w:titlePg/>') && xml.includes('TOC \\o'), 'geen voorblad of inhoudsopgave');
+      // Voor het dossier (zonder names): geen klant op het voorblad. Die PDF kan iedereen
+      // met Inhoud openen, ook wie Klanten niet mag zien (regel 3, stap 2-1a).
+      const vast = await exporteer(w.medewerker.token, { cover: true });
+      gelijk(vast.status, 200, `voor het dossier: ${vast.tekst.slice(0, 200)}`);
+      const vastXml = leesZip(post.paginaPdf.verzoeken.at(-1).bytes).get('word/document.xml')?.toString('utf8') ?? '';
+      verwacht(vastXml.includes('<w:titlePg/>') && !vastXml.includes(w.klantA.name), 'een PDF voor het dossier heeft de klant op het voorblad');
       const media = [...delen.keys()].filter((naam) => naam.startsWith('word/media/afbeelding'));
       verwacht(media.length === 1 && delen.get(media[0]).equals(pdfPagina.png), `de afbeelding uit R2: ${media.join(', ')}`);
       // Met LibreOffice in deze omgeving is het een echte PDF: dan staat de tekst erin.
@@ -643,6 +650,44 @@ export default async function documentenScenario() {
         verwacht(/media-worker/.test(res.json?.error ?? ''), `de melding: ${res.json?.error}`);
       } finally {
         post.paginaPdf.ontbreekt = false;
+      }
+    });
+
+    await stap('@-vermeldingen (stap 2-1a): in de PDF de naam als je die mag zien, anders de soort; een klant van de buren weigert de database', async () => {
+      const id = pdfPagina.pagina.id;
+      const voor = sqlRij(`select body from public.documents where id = ${q(id)}`).body;
+      const metAlinea = (...inhoud) => ({ ...voor, content: [...voor.content, { type: 'paragraph', content: inhoud }] });
+      try {
+        gelukt(await wijzig('documents', w.medewerker.token, id, { body: metAlinea(
+          { type: 'text', text: 'Contact: ' }, { type: 'mention', attrs: { kind: 'client', id: w.klantA.id } },
+          { type: 'text', text: ' en ' }, { type: 'mention', attrs: { kind: 'task', id: randomUUID() } },
+        ) }), 'een pagina met vermeldingen opslaan');
+        gelijk(sqlRij(`select count(*)::int as n from public.page_mentions where document_id = ${q(id)}`).n, 2, 'de vermeldingen in page_mentions');
+        // De pagina bewaart geen naam: niet in de body, niet in de platte tekst.
+        const rij = sqlRij(`select body::text as body, content from public.documents where id = ${q(id)}`);
+        verwacht(!rij.body.includes(w.klantA.name) && !rij.content.includes(w.klantA.name), 'de naam van de klant staat in de pagina zelf');
+        const docxVan = async (token, wie, keuze = { names: true }) => {
+          const res = await exporteer(token, keuze);
+          gelijk(res.status, 200, `${wie}: ${res.tekst.slice(0, 200)}`);
+          return leesZip(post.paginaPdf.verzoeken.at(-1).bytes).get('word/document.xml')?.toString('utf8') ?? '';
+        };
+        // Een download (names): de medewerker mag de klant zien, dus zijn naam. De taak bestaat niet: de soort.
+        const met = await docxVan(w.medewerker.token, 'de medewerker');
+        verwacht(met.includes(`>${w.klantA.name}<`) && met.includes('>taak<'), 'de medewerker ziet de naam van de klant niet, of de taak niet als soort');
+        // Zonder die vraag (een PDF voor het dossier, die iedereen met Inhoud kan openen): alleen de soort.
+        const vast = await docxVan(w.medewerker.token, 'voor het dossier', {});
+        verwacht(!vast.includes(w.klantA.name) && vast.includes('>klant<'), 'een PDF voor het dossier heeft de naam van de klant');
+        // Inhoud lezen, Klanten niet: de soort, geen naam.
+        const zonderKlanten = await lidMet(w.orgId, 'pdf-zonder-klanten', { content: 'read', clients: 'none' });
+        const zonder = await docxVan(zonderKlanten.token, 'zonder Klanten');
+        verwacht(!zonder.includes(w.klantA.name) && zonder.includes('>klant<'), 'wie Klanten niet mag zien, ziet toch de naam, of de soort niet');
+        // Een klant van de buren: de database weigert het, via elke weg.
+        if (ander) {
+          geweigerd(await wijzig('documents', w.medewerker.token, id, { body: metAlinea({ type: 'mention', attrs: { kind: 'client', id: ander.klantA.id } }) }),
+            'een klant van de buren', [400]);
+        }
+      } finally {
+        gelukt(await wijzig('documents', w.medewerker.token, id, { body: voor }), 'terug zoals het was');
       }
     });
 

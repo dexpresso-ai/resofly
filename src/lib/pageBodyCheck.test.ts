@@ -14,10 +14,20 @@ test('een gewone pagina past', () => {
 
 // Tiptap maakte hier een lege pagina van; de editor mag zo'n pagina nooit
 // bewerkbaar openen.
+// Eerst stonden hier kolommen; die kent de editor sinds stap 2-0. Een blok uit
+// de toekomst (een nieuwere database, een oud tabblad) is nu het voorbeeld.
 test('een blok dat deze editor niet kent, past niet, met de naam erbij', () => {
-  const fit = pageBodyFit(schema, doc(p('voor'), { type: 'columns', content: [{ type: 'column', content: [p('a')] }] }));
+  const fit = pageBodyFit(schema, doc(p('voor'), { type: 'tijdlijn', content: [p('a')] }));
   assert.equal(fit.ok, false);
-  assert.ok(!fit.ok && fit.unknown.includes('columns'), JSON.stringify(fit));
+  assert.ok(!fit.ok && fit.unknown.includes('tijdlijn'), JSON.stringify(fit));
+});
+
+test('kolommen passen; één kolom niet, want de editor maakt er twee of drie (stap 2-0)', () => {
+  const kolom = (text: string) => ({ type: 'column', content: [p(text)] });
+  assert.equal(pageBodyFit(schema, doc({ type: 'columns', content: [kolom('a'), kolom('b')] })).ok, true);
+  const een = pageBodyFit(schema, doc({ type: 'columns', content: [kolom('a')] }));
+  assert.equal(een.ok, false);
+  assert.ok(!een.ok && een.unknown.length === 0, JSON.stringify(een));
 });
 
 test('opmaak die deze editor niet kent, past niet', () => {

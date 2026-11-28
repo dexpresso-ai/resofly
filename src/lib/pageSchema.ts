@@ -19,8 +19,16 @@ export const PAGE_NODE_TYPES = [
   'blockquote', 'codeBlock', 'horizontalRule',
   'table', 'tableRow', 'tableHeader', 'tableCell',
   'image', 'fileBlock', 'callout', 'details', 'detailsSummary', 'detailsContent',
-  'columns', 'column', 'tableOfContents', 'subpage',
+  'columns', 'column', 'tableOfContents', 'subpage', 'mention',
 ] as const;
+
+/**
+ * De soorten @-vermelding (stap 2-1a): klant, project, taak, factuur,
+ * collega. Een vermelding bewaart alleen de soort en het id, nooit een naam.
+ * De lijst staat in _shared, want de klantweergave en de PDF op de server
+ * gebruiken hem ook.
+ */
+export { MENTION_KINDS, MENTION_KIND_WORDS, mentionKind, type MentionKind } from '../../supabase/functions/_shared/pageMentions.ts';
 
 export const PAGE_MARK_TYPES = ['bold', 'italic', 'underline', 'strike', 'code', 'link', 'highlight'] as const;
 

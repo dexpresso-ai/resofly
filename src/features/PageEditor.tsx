@@ -35,12 +35,19 @@ import { EditorContent, useEditor, useEditorState } from '@tiptap/react';
 import type { Editor, JSONContent } from '@tiptap/react';
 import {
   AlignCenter, AlignLeft, AlignRight, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, BetweenHorizontalEnd, BetweenHorizontalStart,
-  BetweenVerticalEnd, BetweenVerticalStart, Bold, Braces, ChevronLeft, Copy, FileOutput, Heading1, Heading2, Heading3, History, Info, Italic, Lightbulb, Link2,
-  List, ListChecks, ListOrdered, Minus, OctagonAlert, PanelLeft, PanelTop, Pilcrow, Plus, Quote, Redo2, Share2, Strikethrough, TableCellsMerge,
+  BetweenVerticalEnd, BetweenVerticalStart, Bold, Braces, ChevronLeft, Copy, ExternalLink, FileOutput, Heading1, Heading2, Heading3, History, Info, Italic, Lightbulb, Link2,
+  List, ListChecks, ListOrdered, ListTodo, Minus, OctagonAlert, PanelLeft, PanelTop, Pilcrow, Plus, Quote, Redo2, Share2, Strikethrough, TableCellsMerge,
   TableCellsSplit, Trash2, TriangleAlert, Underline as UnderlineIcon, Undo2, X,
 } from 'lucide-react';
 import { isInTable, moveTableColumn, moveTableRow, selectedRect } from '@tiptap/pm/tables';
-import { pageEditorExtensions, type PageLinks, type PageMedia } from '../lib/pageEditorExtensions';
+import { NodeSelection } from '@tiptap/pm/state';
+import {
+  MENTION_OPENS, mentionNamesOf, mentionOpenOf, PAGE_TASK_LINKS_KEY, pageEditorExtensions, pageTaskLinksOf, type PageLinks, type PageMedia, type PageMentionNames,
+} from '../lib/pageEditorExtensions';
+import { TASK_STATUS_WORDS, taskTitleFromItem, type PageTaskLink } from '../lib/pageTasks';
+import { closeMentionMenu, MentionMenu, mentionMenuExtension, type MentionBridge, type MentionMenuState } from './PageMentionMenu';
+import type { MentionCandidate } from '../lib/pageMentionSearch';
+import { MENTION_KIND_WORDS, mentionOf, type MentionKind } from '../../supabase/functions/_shared/pageMentions.ts';
 import { fetchStoredFileBlob, uploadToR2 } from '../lib/r2';
 import { calloutVariant, isAllowedPageLink, type CalloutVariant } from '../lib/pageSchema';
 import { pageBodyFit } from '../lib/pageBodyCheck';
@@ -130,7 +137,7 @@ export type PageShareRequest = {
   done: () => void;
 };
 
-export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClose, onOpenPage, backTo = null, ownDossierName = 'Eigen dossier', houseStyle = null, onShare, onOpenDocument }: {
+export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClose, onOpenPage, backTo = null, ownDossierName = 'Eigen dossier', houseStyle = null, onShare, onOpenDocument, mentionName, mentionSearch, onOpenMention, taskLinks, onMakeTask }: {
   documentId: string;
   organizationId: string;
   /** Schrijfrechten op Inhoud. Zonder: alleen lezen, en geen claim. */
@@ -153,6 +160,22 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
    * Zonder deze functie geen "Maak er een Word-document van".
    */
   onOpenDocument?: (doc: InternalDocument) => void;
+  /**
+   * De naam bij een @-vermelding (stap 2-1a), uit wat de app geladen heeft: met
+   * de rechten van wie kijkt. null: niet te zien, of niet meer.
+   */
+  mentionName?: PageMentionNames;
+  /** De @-kiezer (stap 2-1b): wat je kunt noemen bij wat je typte, uit wat de app geladen heeft. */
+  mentionSearch?: (query: string) => MentionCandidate[];
+  /** Openen wat een chip noemt; de pagina is dan al netjes dicht (opgeslagen, een versie, de claim vrij). */
+  onOpenMention?: (kind: MentionKind, id: string) => void;
+  /**
+   * Actiepunten die een taak werden (stap 2-2a): per regel de taak, uit wat de
+   * app geladen heeft. Wie Projecten niet mag lezen, krijgt hier niets.
+   */
+  taskLinks?: ReadonlyMap<string, PageTaskLink>;
+  /** Van een regel een taak maken, met de rechten van wie klikt. Zonder: geen knop. */
+  onMakeTask?: (input: { blockId: string; title: string; projectId: string | null; clientId: string | null }) => Promise<void>;
 }) {
   const [mode, setModeState] = useState<Mode>('laden');
   const [saveState, setSaveState] = useState<SaveState>('opgeslagen');
@@ -236,7 +259,13 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
   const menuRef = useRef<BlockMenuState | null>(null);
   const showMenu = (next: BlockMenuState | null) => { menuRef.current = next; setBlockMenu(next); };
   const slashBridge = useRef<SlashBridge | null>(null);
-  const extensions = useMemo(() => [...pageEditorExtensions(), slashMenuExtension(slashBridge)], []);
+  // De @-kiezer (stap 2-1b), net als het blokmenu: een plugin buiten React, en
+  // de lijst hier.
+  const [mentionMenu, setMentionMenu] = useState<MentionMenuState | null>(null);
+  const mentionMenuRef = useRef<MentionMenuState | null>(null);
+  const showMentionMenu = (next: MentionMenuState | null) => { mentionMenuRef.current = next; setMentionMenu(next); };
+  const mentionBridge = useRef<MentionBridge | null>(null);
+  const extensions = useMemo(() => [...pageEditorExtensions(), slashMenuExtension(slashBridge), mentionMenuExtension(mentionBridge)], []);
 
   // immediatelyRender: false. Met de standaard (true) maakt Tiptap de editor al
   // tijdens de eerste render, en plant hij meteen een destroy() over 1 ms, die
@@ -280,6 +309,36 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
       return false;
     },
     close: () => { if (menuRef.current?.source === 'slash') showMenu(null); },
+  };
+
+  mentionBridge.current = {
+    open: props => showMentionMenu({ items: props.items, active: 0, anchor: props.clientRect?.() ?? null, pick: candidate => props.command(candidate) }),
+    update: props => {
+      const previous = mentionMenuRef.current;
+      const active = previous ? Math.min(previous.active, Math.max(0, props.items.length - 1)) : 0;
+      showMentionMenu({ items: props.items, active, anchor: props.clientRect?.() ?? null, pick: candidate => props.command(candidate) });
+    },
+    keyDown: event => {
+      const menu = mentionMenuRef.current;
+      if (!menu) return false;
+      const count = menu.items.length;
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        if (count) showMentionMenu({ ...menu, active: (menu.active + (event.key === 'ArrowDown' ? 1 : count - 1)) % count });
+        return true;
+      }
+      if (event.key === 'Enter' || event.key === 'Tab') {
+        const candidate = menu.items[menu.active];
+        if (!candidate) return false;
+        menu.pick(candidate);
+        return true;
+      }
+      return false;
+    },
+    close: () => showMentionMenu(null),
+  };
+  const closeMentionPicker = () => {
+    if (mentionMenuRef.current && editorRef.current) closeMentionMenu(editorRef.current);
+    showMentionMenu(null);
   };
 
   const closeBlockMenu = () => {
@@ -583,12 +642,63 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
   closeRef.current = close;
   const linksRef = useRef<PageLinks | null>(null);
   const mediaRef = useRef<PageMedia | null>(null);
-  /** De voorvertoning van een versie: titels en afbeeldingen wel, openen en uploaden niet. */
+  // De namen bij @-vermeldingen: altijd de laatste, ook voor een chip die later
+  // getekend wordt. De chips lezen ze bij het tekenen (editor.storage).
+  const mentionNameRef = useRef<PageMentionNames | null>(mentionName ?? null);
+  mentionNameRef.current = mentionName ?? null;
+  const mentionNames = useCallback<PageMentionNames>((kind, id) => mentionNameRef.current?.(kind, id) ?? null, []);
+  /** De voorvertoning van een versie: titels, afbeeldingen en namen wel, openen en uploaden niet. */
   const connectPreview = useCallback((preview: Editor) => {
     const store = preview.storage as unknown as Record<string, Record<string, unknown>>;
     if (linksRef.current) store.subpage.links = { ...linksRef.current, open: () => {}, create: async () => null };
     if (mediaRef.current) store.image.media = { ...mediaRef.current, upload: async () => null, refuse: () => {}, chooseFile: async () => null };
-  }, []);
+    store.mention.names = mentionNames;
+  }, [mentionNames]);
+  // De @-kiezer en het openen van een chip (stap 2-1b), ook altijd de laatste.
+  const mentionSearchRef = useRef(mentionSearch);
+  mentionSearchRef.current = mentionSearch;
+  const onOpenMentionRef = useRef(onOpenMention);
+  onOpenMentionRef.current = onOpenMention;
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return;
+    const store = (editor.storage as unknown as Record<string, Record<string, unknown>>).mention;
+    store.names = mentionNames;
+    store.search = (query: string) => mentionSearchRef.current?.(query) ?? [];
+    // Eerst netjes dicht (opslaan, een versie, de claim vrij), dan pas openen.
+    // Lukt opslaan niet, dan blijft de pagina open en opent er niets.
+    store.open = (kind: MentionKind, id: string) => {
+      if (!onOpenMentionRef.current) return;
+      void closeRef.current().then(ok => { if (ok) onOpenMentionRef.current?.(kind, id); });
+    };
+  }, [editor, mentionNames]);
+  // Actiepunten en hun taken (stap 2-2a). Een taak openen gaat net als een
+  // chip: eerst netjes dicht. De labels zijn decoraties; een lege transactie
+  // tekent ze opnieuw, zonder dat de pagina verandert of opslaat.
+  const onMakeTaskRef = useRef(onMakeTask);
+  onMakeTaskRef.current = onMakeTask;
+  const canMakeTasks = Boolean(onMakeTask);
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return;
+    const store = pageTaskLinksOf(editor);
+    if (!store) return;
+    store.links = taskLinks ?? new Map();
+    store.open = (taskId: string) => {
+      if (!onOpenMentionRef.current) return;
+      void closeRef.current().then(ok => { if (ok) onOpenMentionRef.current?.('task', taskId); });
+    };
+    store.make = canMakeTasks ? async (blockId: string, title: string) => {
+      try {
+        await onMakeTaskRef.current?.({ blockId, title, projectId: placeRef.current.project_id, clientId: placeRef.current.client_id });
+      } catch (error) {
+        setMessage((error as { message?: string } | null)?.message || 'De taak kon niet worden gemaakt.');
+      }
+    } : null;
+    try {
+      editor.view.dispatch(editor.state.tr.setMeta(PAGE_TASK_LINKS_KEY, true).setMeta('addToHistory', false));
+    } catch {
+      // Nog niet in beeld: de labels komen dan bij het tekenen.
+    }
+  }, [editor, taskLinks, canMakeTasks]);
   useEffect(() => {
     if (!editor || editor.isDestroyed) return;
     const titles = new Map<string, Promise<string | null>>();
@@ -835,9 +945,13 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
           throw new Error('De pagina kon niet worden opgeslagen, dus er is ook geen PDF van gemaakt. Probeer het zo nog eens.');
         }
         // Het briefpapier ook als het een PDF is: de server legt het eronder.
+        // Namen (vermeldingen, de klant op het voorblad) alleen in een download:
+        // een vastgelegde PDF kan iedereen met Inhoud openen, ook wie de klant
+        // niet mag zien.
         const pdf = await exportPagePdf(documentId, {
           cover: wordOptions.cover, toc: wordOptions.toc, chapters: wordOptions.chapters.length > 0,
           letterhead: exportOptions.letterhead && letterheadKind !== null,
+          names: action === 'pdf',
         });
         const base = wordFileName(title).replace(/\.docx$/, '');
         if (action === 'pdf') {
@@ -869,7 +983,8 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
             throw new Error('De pagina kon niet worden opgeslagen, dus er is ook geen Word-document van gemaakt. Probeer het zo nog eens.');
           }
           const { buildPageWord, createPageWordCopy } = await import('../lib/pageWordExport');
-          const { blob } = await buildPageWord(documentId, organizationId, houseStyle, wordOptions);
+          // Zonder namen van klanten en de rest: de kopie staat in het dossier (zie PageWordOptions.names).
+          const { blob } = await buildPageWord(documentId, organizationId, houseStyle, { ...wordOptions, names: false });
           copy = await createPageWordCopy(documentId, organizationId, title, blob);
           wordCopyRef.current = { doc: copy, edits, options: optionsKey };
         }
@@ -884,7 +999,7 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
         throw new Error('De pagina kon niet worden opgeslagen, dus ook niet als Word-bestand. Probeer het zo nog eens.');
       }
       const { buildPageWord, saveFile } = await import('../lib/pageWordExport');
-      const { blob, fileName } = await buildPageWord(documentId, organizationId, houseStyle, wordOptions);
+      const { blob, fileName } = await buildPageWord(documentId, organizationId, houseStyle, { ...wordOptions, names: true });
       saveFile(blob, fileName);
       setExportOpen(false);
     } catch (error) {
@@ -994,6 +1109,7 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
         onClose={() => setExportOpen(false)}
       />}
       {editable && blockMenu &&<BlockMenu menu={blockMenu} onHover={index => { if (menuRef.current) showMenu({ ...menuRef.current, active: index }); }} onClose={closeBlockMenu} />}
+      {editable && mentionMenu && <MentionMenu menu={mentionMenu} onHover={index => { if (mentionMenuRef.current) showMentionMenu({ ...mentionMenuRef.current, active: index }); }} onClose={closeMentionPicker} />}
 
       {(message || (mode === 'lezen' && holder)) && <div className={`page-editor-banner${mode === 'conflict' || mode === 'geen_recht' || mode === 'fout' || mode === 'onbekend' ? ' is-warning' : ''}`}>
         <span>{message ?? `${nameOf(holder as string)} bewerkt deze pagina. Je kunt meelezen; zodra die klaar is, kun je verder.`}</span>
@@ -1127,10 +1243,21 @@ function Toolbar({ editor, onInsert }: { editor: Editor; onInsert: (anchor: DOMR
         cellAlign,
         callout: ed.isActive('callout') ? calloutVariant(ed.getAttributes('callout').variant) : null,
         details: ed.isActive('details'),
+        mention: selectedMention(ed),
+        actionItem: currentActionItem(ed),
       };
     },
   });
   const chain = () => editor.chain().focus();
+  // Een taak maken (stap 2-2a): één keer per klik, ook als je dubbelklikt.
+  const [making, setMaking] = useState(false);
+  const makeTask = () => {
+    const item = state.actionItem;
+    const make = pageTaskLinksOf(editor)?.make;
+    if (!item || item.link || !item.title || !make || making) return;
+    setMaking(true);
+    void make(item.blockId, item.title).finally(() => setMaking(false));
+  };
   const setLink = () => {
     const previous = (editor.getAttributes('link').href as string | undefined) ?? '';
     const href = window.prompt('Waar moet de link heen? Leeg laten haalt de link weg.', previous);
@@ -1247,12 +1374,71 @@ function Toolbar({ editor, onInsert }: { editor: Editor; onInsert: (anchor: DOMR
         <span className="page-editor-subbar-label">Callout</span>
         <ToolButtons tools={calloutTools} />
       </div>}
+      {state.mention && <div className="page-editor-subbar" role="toolbar" aria-label="Vermelding">
+        <span className="page-editor-subbar-label">{state.mention.word}</span>
+        <span className="page-editor-subbar-name">{state.mention.name ?? 'Je ziet niet wat hier genoemd wordt, of het bestaat niet meer.'}</span>
+        {state.mention.opens && <ToolButtons tools={[{
+          label: `${state.mention.word} openen`, icon: <ExternalLink size={15} />, text: 'Openen',
+          run: () => { const open = mentionOpenOf(editor); if (open && state.mention) open(state.mention.kind, state.mention.id); },
+        }]} />}
+      </div>}
+      {state.actionItem && !state.mention && <div className="page-editor-subbar" role="toolbar" aria-label="Actiepunt">
+        {state.actionItem.link ? <>
+          <span className="page-editor-subbar-label">Taak</span>
+          <span className="page-editor-subbar-name">{state.actionItem.link.title} · {TASK_STATUS_WORDS[state.actionItem.link.status]}</span>
+          <ToolButtons tools={[{
+            label: 'Taak openen', icon: <ExternalLink size={15} />, text: 'Openen',
+            run: () => { const link = state.actionItem?.link; if (link) pageTaskLinksOf(editor)?.open?.(link.id); },
+          }]} />
+        </> : <>
+          <span className="page-editor-subbar-label">Actiepunt</span>
+          {state.actionItem.title
+            ? <ToolButtons tools={[{ label: 'Maak er een taak van', icon: <ListTodo size={15} />, text: making ? 'Bezig…' : 'Maak er een taak van', disabled: making, run: makeTask }]} />
+            : <span className="page-editor-subbar-name">Typ eerst wat er moet gebeuren; dan maak je er een taak van.</span>}
+        </>}
+      </div>}
       {state.details && !place && !state.callout && <div className="page-editor-subbar" role="toolbar" aria-label="Uitklapper">
         <span className="page-editor-subbar-label">Uitklapper</span>
         <ToolButtons tools={[{ label: 'Uitklapper weghalen', icon: <Trash2 size={15} />, text: 'Uitklapper weg', run: () => chain().unsetDetails().run() }]} />
       </div>}
     </>
   );
+}
+
+/**
+ * De chip die geselecteerd is (stap 2-1b): een klik op een chip selecteert hem.
+ * Bij bewerken opent een klik niets, want daar zet je ook de cursor; de balk
+ * toont dan "Openen", en openen sluit de pagina netjes.
+ */
+function selectedMention(ed: Editor): { kind: MentionKind; id: string; word: string; name: string | null; opens: boolean } | null {
+  const { selection } = ed.state;
+  if (!(selection instanceof NodeSelection) || selection.node.type.name !== 'mention') return null;
+  const ref = mentionOf({ type: 'mention', attrs: selection.node.attrs });
+  if (!ref) return null;
+  const name = mentionNamesOf(ed)?.(ref.kind, ref.id) ?? null;
+  const word = MENTION_KIND_WORDS[ref.kind].charAt(0).toUpperCase() + MENTION_KIND_WORDS[ref.kind].slice(1);
+  return { kind: ref.kind, id: ref.id, word, name, opens: Boolean(name && MENTION_OPENS[ref.kind] && mentionOpenOf(ed)) };
+}
+
+/**
+ * De regel van een takenlijst waar de cursor staat (stap 2-2a), met zijn taak
+ * als die er is. Zonder taak alleen als je er een mag maken. De binnenste
+ * regel telt: in een geneste lijst die waar je typt.
+ */
+function currentActionItem(ed: Editor): { blockId: string; link: PageTaskLink | null; title: string } | null {
+  const store = pageTaskLinksOf(ed);
+  if (!store) return null;
+  const { $from } = ed.state.selection;
+  for (let depth = $from.depth; depth > 0; depth -= 1) {
+    const node = $from.node(depth);
+    if (node.type.name !== 'taskItem') continue;
+    const blockId = typeof node.attrs.id === 'string' ? node.attrs.id : null;
+    if (!blockId) return null;
+    const link = store.links.get(blockId) ?? null;
+    if (!link && !store.make) return null;
+    return { blockId, link, title: link ? link.title : taskTitleFromItem(node.toJSON(), mentionNamesOf(ed) ?? (() => null)) };
+  }
+  return null;
 }
 
 /** Het versiepaneel (stap 1A-3b): de lijst, een voorvertoning, en terugzetten. */

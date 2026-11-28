@@ -123,6 +123,7 @@ const INSIDE: Record<string, string> = {
   listItem: 'bulletList', taskItem: 'taskList',
   tableRow: 'table', tableHeader: 'table', tableCell: 'table',
   detailsSummary: 'details', detailsContent: 'details', column: 'columns',
+  mention: 'een eigen test hieronder',
 };
 
 test('elk bloktype dat de database toelaat, komt met zijn tekst in het bestand', () => {
@@ -136,6 +137,21 @@ test('elk bloktype dat de database toelaat, komt met zijn tekst in het bestand',
     assert.match(xml, sample.expect, type);
     assertWellFormed(xml, type);
   }
+});
+
+// Stap 2-1a: de pagina bewaart geen namen. De naam komt van de aanroeper, met
+// de rechten van wie exporteert; zonder naam staat de soort er.
+test('een @-vermelding wordt de naam die de exporteur mag zien, anders de soort', () => {
+  const id = '11111111-2222-4333-8444-555555555555';
+  const mention = (kind: string, ref = id) => ({ type: 'mention', attrs: { kind, id: ref }, marks: [{ type: 'bold' }] });
+  const body = doc(p(t('Bel '), mention('client'), t(' en '), mention('invoice')));
+  const named = documentXml(body, { mentionNames: { [`client:${id}`]: 'Bakkerij Jansen' } });
+  assert.match(named, /<w:rPr><w:b\/><\/w:rPr><w:t xml:space="preserve">Bakkerij Jansen<\/w:t>/);
+  assert.match(named, /<w:t xml:space="preserve">factuur<\/w:t>/);
+  assertWellFormed(named, 'vermelding');
+  assert.match(documentXml(body), /<w:t xml:space="preserve">klant<\/w:t>.*<w:t xml:space="preserve">factuur<\/w:t>/);
+  // Een kapotte vermelding (de database neemt die niet aan): een woord, geen fout.
+  assert.match(documentXml(doc(p(mention('leverancier', 'x')))), /<w:t xml:space="preserve">vermelding<\/w:t>/);
 });
 
 test('een onbekend blok verliest zijn vorm, niet zijn tekst', () => {

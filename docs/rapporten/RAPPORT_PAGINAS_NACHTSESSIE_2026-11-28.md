@@ -13,6 +13,12 @@ van 27 november 17:07 (`416b997`), en wat ik je wil vragen.
 Het bouwplan is `docs/plannen/PAGINAS_BOUWPLAN_2026-11-27.md`. In §18 staan de stappen en de
 stand voor de overdracht.
 
+**Om 14:39 UTC ook de PDF (1B-5) naar staging gezet, op jouw verzoek** (`abe8b06`).
+- De uitrol is geslaagd. `page-export` staat er; de rooktest heeft dat nagekeken.
+- De CI op staging (run 317) is helemaal groen.
+- Rol nu de media-worker uit: `docs/setup/PAGINA_PDF_SETUP.md`. Tot dan zegt het exportvenster
+  dat de PDF er nog niet is; Word downloaden kan wel.
+
 **Om 11:46 UTC ook de export naar staging gezet, op jouw verzoek** (`3be4452`): 1B-3 tot en
 met 1B-4c.
 - Wat erin zit: het exportvenster, de Word-kopie, het voorblad, de inhoudsopgave, de
@@ -22,14 +28,44 @@ met 1B-4c.
   Collabora maakt er via de media-worker een PDF van. Die worker rol jij uit. Dat staat op de
   branch tot je weer zegt dat het naar staging mag.
 
+**Na de merge van 14:39: fase 2 begonnen, op de branch** (na je "houw verder"). Fase 1 is af,
+op 1A-5d na. Fase 2 staat nu in stappen in §18 van het bouwplan.
+- **2-0, kolommen**: twee of drie naast elkaar, op de telefoon onder elkaar. Geen migratie.
+- **2-1a, @-vermeldingen, de basis**: een klant, project, taak, factuur of collega in de tekst,
+  als chip.
+  - In de pagina staan alleen de soort en het id, geen naam. De naam komt met de rechten van
+    wie kijkt, en anders staat de soort er.
+  - Een migratie: `20261128160000_paginas_vermeldingen.sql`.
+  - "Genoemd in" kwam in 2-1c, zie hieronder.
+- **2-1b, de @-kiezer**: typ @ en een stuk van een naam, en kies. Een chip opent wat hij noemt;
+  bij bewerken via "Openen" in de balk, zodat een klik om de cursor te zetten niets opent.
+  - Een kopie voor het dossier (de Word-kopie, de vastgelegde PDF) krijgt geen namen meer,
+    ook niet op het voorblad (vraag 12).
+  - De CI (run 319) is helemaal groen, ook de migratie vanaf een lege database en `deno
+    check` op de nieuwe code.
+- **2-1c, "Genoemd in"**: bij een klant en een project een paneel met de pagina's die hen
+  noemen, en waar die staan. Een tik opent de pagina.
+  - Alleen wat je mag lezen. Zonder Inhoud geen paneel. Een plek die je niet mag zien heet
+    "Ander dossier".
+  - Geen migratie; het leest de tabel van 2-1a.
+- **2-2a, actiepunten worden taken**: zet de cursor in een regel van een takenlijst en kies "Maak
+  er een taak van". De taak komt in het project van de pagina; achter de regel staat dan "Taak ·
+  Te doen", en het taakvenster zegt uit welke pagina ze komt.
+  - De link staat bij de taak, niet in de pagina. Wie Projecten niet mag lezen, de klant en de
+    export zien een gewone takenlijst.
+  - Een migratie: `20261128170000_paginas_taken.sql`.
+  - Het vinkje en de taak samen komen in 2-2b.
+- Dit staat op de branch tot je zegt dat het naar staging mag. De migratie moet uiterlijk
+  samen met de @-kiezer naar staging. Komt de app eerder live dan de migratie, dan weigert de
+  database de vermeldingen die de kiezer maakt.
+
 ## Wat ik van je nodig heb, op volgorde
 
-1. **De PDF (1B-5) is gebouwd, op de branch** (vraag 10). Na je "ga door met het plan" heb
-   ik hem gebouwd zoals §9 zegt: de server maakt de Word-file.
+1. **De PDF (1B-5) staat op staging** (vraag 10). Na je "ga door met het plan" heb ik hem
+   gebouwd zoals §9 zegt: de server maakt de Word-file.
    - Een briefpapier dat een PDF is, komt onder elke bladzijde van de PDF. In Word komt het
      niet; dat zegt het venster.
-   - Zeg of hij naar staging mag. Rol daarna de media-worker uit; hoe dat gaat, staat in
-     `docs/setup/PAGINA_PDF_SETUP.md`.
+   - Rol de media-worker uit; hoe dat gaat, staat in `docs/setup/PAGINA_PDF_SETUP.md`.
    - Tot de worker is uitgerold, zegt het exportvenster dat de PDF er nog niet is.
 2. **Open de vier proefbestanden in echte Word** (vragen 4 en 11):
    - zonder huisstijl;
@@ -44,7 +80,9 @@ met 1B-4c.
    - één gedeelde pagina met een afbeelding in het portaal bekijken (vraag 9);
    - open tabbladen verversen (vraag 6).
 5. **Tekstdocumenten omzetten (1A-5d): twee besluiten** (vraag 1). Omzetten kan niet terug.
-6. **Staging nakijken:**
+6. **Mag de klant de naam zien bij een @-vermelding in een gedeelde pagina?** (vraag 12). Nu
+   ziet hij alleen de soort.
+7. **Staging nakijken:**
    - staat pg_cron aan (vraag 2)?
    - wordt de opruimwachtrij geleegd (vraag 3)?
    - de letterproef op de Collabora-container (vraag 7).
@@ -163,6 +201,32 @@ met 1B-4c.
     - Let op de grootte. Na de eerste keer bewaren in Collabora werd het bestand in de proef
       veel groter (107 kB werd 2 MB): LibreOffice sluit dan alle letters in hun geheel in.
 
+12. **@-vermeldingen in een gedeelde pagina (2-1a): mag de klant de naam zien?** Een pagina kan
+    een klant, project, taak, factuur of collega noemen. Deel je die pagina, dan ziet de klant
+    nu alleen de soort ("project", "factuur"), geen naam. Dat is de strenge standaard, zoals bij
+    een subpagina die niet gedeeld is.
+    - Wel de naam: de klant ziet bijvoorbeeld "Verbouwing 2026" of "F-2026-014". Dat lekt
+      niets als het over hemzelf gaat, maar wel als de pagina een andere klant noemt.
+    - Een middenweg: alleen namen van de klant zelf en zijn eigen projecten.
+    - Hetzelfde geldt voor een kopie in het dossier: de Word-kopie en de vastgelegde PDF. Die
+      kan iedereen met Inhoud openen, ook wie de klant niet mag zien. Daar staat nu ook de
+      soort, en op het voorblad geen klant of project meer. Dat laatste deden ze sinds 1B-4a,
+      en het staat op staging. Een download houdt de namen. Wil je de namen ook in een kopie,
+      zeg het dan.
+13. **Een ticket wissen waar een taak aan hangt, mislukt voor wie Projecten niet mag
+    schrijven** (gevonden bij 2-2a, nog niet gerepareerd). `tasks.ticket_id` wijst met een
+    foreign key naar het ticket (`on delete set null`, migratie `20260822020000`). Wissen
+    verandert dan ook de taak, en de schrijfpoort van Projecten houdt dat tegen: "Geen toegang
+    tot de module projects in deze organisatie". Lokaal nagespeeld in een teruggedraaide
+    transactie, met iemand die Tickets mag schrijven en Projecten niet. Voor pagina's heb ik dat in 2-2a vermeden: daar
+    is de link zonder foreign key. Wil je dat ik het voor tickets ook zo oplos, zeg het dan.
+    Dat raakt de tickets, niet de pagina's.
+14. **De titel van een taak uit een pagina noemt de klant bij naam** (2-2a). Staat er in de
+    regel een vermelding, dan komt de naam die jij ziet in de titel, zoals wanneer je de taak
+    zelf typt. Wie Projecten mag lezen maar Klanten niet, ziet die naam dan in de taak, en in
+    het logboek. Dat is het omgekeerde van de kopieën in het dossier (vraag 12), waar ik de
+    namen juist weglaat. Liever de soort ("klant") in de titel? Zeg het dan.
+
 ## Gevonden en gerepareerd
 
 - **Een pagina die naar een andere klant verhuisde, liet haar subpagina's en delingen
@@ -194,8 +258,8 @@ met 1B-4c.
 
 ## Na de merge van 09:34 gebouwd
 
-1B-3 tot en met 1B-4c staan sinds 11:46 UTC op staging (`3be4452`). 1B-5 staat op de branch,
-en gaat pas naar staging als je het zegt.
+1B-3 tot en met 1B-4c staan sinds 11:46 UTC op staging (`3be4452`), en 1B-5 sinds 14:39 UTC
+(`abe8b06`).
 
 | Stap | Wat | Changelog |
 | --- | --- | --- |
@@ -203,10 +267,20 @@ en gaat pas naar staging als je het zegt.
 | 1B-4a | De opties voor Word: een voorblad (logo, titel, klant, project, datum), een inhoudsopgave vooraan, en de subpagina's als hoofdstukken. | `CHANGELOG_PAGINAS_EXPORTEREN_2026-11-28.md` |
 | 1B-4b | Het briefpapier achter elke bladzijde, als het een afbeelding is (een PDF kan niet in Word), met de marges uit Documentopmaak. Gerepareerd: het voorblad overleefde opnieuw opslaan in Collabora niet goed. | `CHANGELOG_PAGINAS_EXPORTEREN_2026-11-28.md` |
 | 1B-4c | De kop en voet in de huisstijl: het logo en een lijn in de merkkleur, de voettekst en het paginanummer. De controle met LibreOffice is nu een script (`scripts/proef-word-rondgang.sh`). | `CHANGELOG_PAGINAS_EXPORTEREN_2026-11-28.md` |
-| 1B-5 | Na de merge van 11:46, op de branch: "PDF downloaden" en "Vastleggen in het dossier". De server maakt de Word-file (`page-export`) en de media-worker de PDF (`/internal/office/convert-page`). Een briefpapier dat een PDF is, komt onder elke bladzijde van de PDF (niet in Word). De worker rol jij uit. | `CHANGELOG_PAGINAS_PDF_2026-11-28.md` |
+| 1B-5 | Na de merge van 11:46 gebouwd, op staging sinds 14:39 (`abe8b06`): "PDF downloaden" en "Vastleggen in het dossier". De server maakt de Word-file (`page-export`) en de media-worker de PDF (`/internal/office/convert-page`). Een briefpapier dat een PDF is, komt onder elke bladzijde van de PDF (niet in Word). De worker rol jij uit. | `CHANGELOG_PAGINAS_PDF_2026-11-28.md` |
 
 Geen migraties. 1B-5 brengt een nieuwe edge function mee (`page-export`), en een nieuw pad in
 de media-worker, die je zelf uitrolt.
+
+Na de merge van 14:39, op de branch (fase 2):
+
+| Stap | Wat | Changelog |
+| --- | --- | --- |
+| 2-0 | Kolommen: twee of drie naast elkaar, op de telefoon onder elkaar. | `CHANGELOG_PAGINAS_KOLOMMEN_2026-11-28.md` |
+| 2-1a | @-vermeldingen, de basis: de database, de chip in de editor, Word, de PDF en de klant. Alleen de soort en het id in de pagina. Migratie `20261128160000`. | `CHANGELOG_PAGINAS_VERMELDINGEN_2026-11-28.md` |
+| 2-1b | De @-kiezer, en een chip openen. Moet samen met de migratie van 2-1a naar staging. | `CHANGELOG_PAGINAS_VERMELDINGEN_2026-11-28.md` |
+| 2-1c | "Genoemd in" bij een klant en een project. Leest de tabel van 2-1a; ook samen met of na die migratie. | `CHANGELOG_PAGINAS_VERMELDINGEN_2026-11-28.md` |
+| 2-2a | Een regel in een takenlijst wordt een taak, met een label in de pagina en "Uit pagina" in het taakvenster. Migratie `20261128170000`. | `CHANGELOG_PAGINAS_TAKEN_2026-11-28.md` |
 
 ## Wat er op 28 november om 09:34 naar staging ging
 

@@ -15,8 +15,9 @@
 
 import { Extension, Node, mergeAttributes } from '@tiptap/core';
 import type { Editor, NodeViewRenderer } from '@tiptap/core';
-import type { Node as PmNode } from '@tiptap/pm/model';
-import { NodeSelection, Plugin, TextSelection } from '@tiptap/pm/state';
+import { Fragment, Slice, type Node as PmNode } from '@tiptap/pm/model';
+import { NodeSelection, Plugin, PluginKey, Selection, TextSelection } from '@tiptap/pm/state';
+import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import type { Transaction } from '@tiptap/pm/state';
 import { columnResizing } from '@tiptap/pm/tables';
 import { StarterKit } from '@tiptap/starter-kit';
@@ -26,12 +27,15 @@ import { UniqueID } from '@tiptap/extension-unique-id';
 import { TableKit } from '@tiptap/extension-table';
 import { Details, DetailsContent, DetailsSummary } from '@tiptap/extension-details';
 import { calloutVariant, isAllowedPageLink } from './pageSchema.ts';
+import { MENTION_KIND_WORDS, mentionKind, mentionOf, type MentionKind } from '../../supabase/functions/_shared/pageMentions.ts';
+import type { MentionCandidate } from './pageMentionSearch.ts';
+import { TASK_STATUS_WORDS, type PageTaskLink } from './pageTasks.ts';
 
 /** Blokken met een vast id (attrs.id): waar Gerrie straks per blok iets voorstelt. */
 export const PAGE_BLOCKS_WITH_ID = [
   'paragraph', 'heading', 'bulletList', 'orderedList', 'listItem', 'taskList', 'taskItem',
   'blockquote', 'codeBlock', 'horizontalRule',
-  'table', 'callout', 'details', 'tableOfContents', 'subpage', 'image', 'fileBlock',
+  'table', 'callout', 'details', 'tableOfContents', 'subpage', 'image', 'fileBlock', 'columns',
 ] as const;
 
 /** De smalste kolom van een tabel, ook bij slepen. */
@@ -64,6 +68,391 @@ export const Callout = Node.create({
     return ['div', mergeAttributes(HTMLAttributes, { 'data-type': 'callout', class: 'page-callout' }), 0];
   },
 });
+
+/**
+ * Wat in een kolom mag: gewone blokken. Geen tabel, kolommen, uitklapper,
+ * inhoudsopgave of subpagina: die passen niet in een smalle kolom, en Word
+ * en PDF zetten kolommen al in een tabel (pageDocx.ts).
+ */
+export const COLUMN_CONTENT = '(paragraph | heading | bulletList | orderedList | taskList | blockquote | codeBlock | horizontalRule | callout | image | fileBlock)+';
+
+/**
+ * Kolommen (stap 2-0): twee of drie naast elkaar, even breed, en op een smal
+ * scherm onder elkaar (globals.css). De database, de klantweergave
+ * (pageHtml.ts) en de export (pageDocx.ts) kenden ze al sinds 1A-1; alleen de
+ * editor kon ze nog niet maken. Isolating: Backspace of Enter aan de rand van
+ * een kolom haalt geen tekst over de grens heen.
+ */
+export const Columns = Node.create({
+  name: 'columns',
+  group: 'block',
+  content: 'column{2,3}',
+  defining: true,
+  isolating: true,
+  parseHTML() {
+    return [{ tag: 'div[data-type="columns"]' }];
+  },
+  renderHTML({ HTMLAttributes }) {
+    return ['div', mergeAttributes(HTMLAttributes, { 'data-type': 'columns', class: 'page-columns' }), 0];
+  },
+  addKeyboardShortcuts() {
+    return { Backspace: ({ editor }) => backspaceInColumns(editor) };
+  },
+});
+
+export const Column = Node.create({
+  name: 'column',
+  content: COLUMN_CONTENT,
+  isolating: true,
+  parseHTML() {
+    return [{ tag: 'div[data-type="column"]' }];
+  },
+  renderHTML({ HTMLAttributes }) {
+    return ['div', mergeAttributes(HTMLAttributes, { 'data-type': 'column', class: 'page-column' }), 0];
+  },
+});
+
+/**
+ * Kolommen invoegen, met de cursor in de eerste. Staan de kolommen onderaan,
+ * dan komt er een lege regel onder: anders kon je niet meer onder de kolommen
+ * verder typen (een kolom houdt Enter binnen zichzelf).
+ */
+export function insertColumns(count: 2 | 3) {
+  return ({ tr, dispatch }: { tr: Transaction; dispatch?: unknown }): boolean => {
+    const { schema } = tr.doc.type;
+    const columns = schema.nodes.columns.create(null,
+      Array.from({ length: count }, () => schema.nodes.column.create(null, schema.nodes.paragraph.create())));
+    const { $from } = tr.selection;
+    // Alleen op het hoogste niveau: niet in een lijst, citaat of uitklapper.
+    if ($from.depth !== 1 || !$from.parent.isTextblock) return false;
+    if (!dispatch) return true;
+    // Een lege regel wordt de kolommen; anders komen ze eronder.
+    const empty = $from.parent.content.size === 0;
+    const at = empty ? $from.before(1) : $from.after(1);
+    if (empty) tr.replaceWith(at, $from.after(1), columns);
+    else tr.insert(at, columns);
+    const after = at + columns.nodeSize;
+    if (!tr.doc.resolve(after).nodeAfter) tr.insert(after, schema.nodes.paragraph.create());
+    tr.setSelection(Selection.near(tr.doc.resolve(at + 2), 1));
+    return true;
+  };
+}
+
+/**
+ * Backspace aan het begin van een kolom. In een volgende kolom: naar het eind
+ * van de kolom ervoor. In de eerste, terwijl alle kolommen leeg zijn: de
+ * kolommen weg, met een lege regel ervoor in de plaats. Anders kwam je er
+ * niet meer uit: een kolom laat Backspace niet over zijn rand.
+ */
+function backspaceInColumns(editor: Editor): boolean {
+  const { state } = editor;
+  const { selection } = state;
+  if (!selection.empty) return false;
+  const { $from } = selection;
+  if ($from.parentOffset !== 0) return false;
+  let columnDepth = -1;
+  for (let depth = $from.depth; depth > 0; depth -= 1) {
+    if ($from.node(depth).type.name === 'column') {
+      columnDepth = depth;
+      break;
+    }
+  }
+  if (columnDepth < 1) return false;
+  // Alleen aan het begin van het eerste blok van de kolom.
+  if ($from.index(columnDepth) !== 0 || $from.depth !== columnDepth + 1) return false;
+  const columns = $from.node(columnDepth - 1);
+  const columnIndex = $from.index(columnDepth - 1);
+  const columnsPos = $from.before(columnDepth - 1);
+  if (columnIndex > 0) {
+    // Naar het eind van de kolom ervoor.
+    const previousEnd = $from.before(columnDepth) - 1;
+    editor.view.dispatch(state.tr.setSelection(Selection.near(state.doc.resolve(previousEnd), -1)));
+    return true;
+  }
+  let allEmpty = true;
+  columns.forEach(column => {
+    if (column.childCount !== 1 || column.firstChild?.type.name !== 'paragraph' || column.firstChild.content.size > 0) allEmpty = false;
+  });
+  if (!allEmpty) return false;
+  const tr = state.tr.replaceWith(columnsPos, columnsPos + columns.nodeSize, state.schema.nodes.paragraph.create());
+  tr.setSelection(TextSelection.create(tr.doc, columnsPos + 1));
+  editor.view.dispatch(tr.scrollIntoView());
+  return true;
+}
+
+/**
+ * De naam bij een @-vermelding, met de rechten van wie kijkt; null als die
+ * persoon hem niet mag zien, of als het niet meer bestaat. PageEditor zet dit
+ * in editor.storage.mention.names, uit wat de app geladen heeft.
+ */
+export type PageMentionNames = (kind: MentionKind, id: string) => string | null;
+
+type MentionStorage = {
+  names?: PageMentionNames | null;
+  /** De @-kiezer (stap 2-1b): wat je kunt noemen bij wat je typte. Zonder: geen kiezer. */
+  search?: ((query: string) => MentionCandidate[]) | null;
+  /** Openen wat een chip noemt: een klant, project, taak of factuur. Zonder: een chip opent niets. */
+  open?: ((kind: MentionKind, id: string) => void) | null;
+};
+
+const mentionStorageOf = (editor: Editor): MentionStorage | undefined =>
+  (editor.storage as unknown as Record<string, MentionStorage | undefined>).mention;
+
+export function mentionNamesOf(editor: Editor): PageMentionNames | null {
+  return mentionStorageOf(editor)?.names ?? null;
+}
+
+export function mentionSearchOf(editor: Editor): ((query: string) => MentionCandidate[]) | null {
+  return mentionStorageOf(editor)?.search ?? null;
+}
+
+export function mentionOpenOf(editor: Editor): ((kind: MentionKind, id: string) => void) | null {
+  return mentionStorageOf(editor)?.open ?? null;
+}
+
+/** Een collega heeft geen eigen scherm; de rest wel. */
+export const MENTION_OPENS: Readonly<Record<MentionKind, boolean>> = { client: true, project: true, task: true, invoice: true, member: false };
+
+const capitalized = (word: string) => word.charAt(0).toUpperCase() + word.slice(1);
+
+/**
+ * Een @-vermelding (stap 2-1a): een klant, project, taak, factuur of collega,
+ * midden in de tekst. In de pagina staan alleen de soort en het id (migratie
+ * 20261128160000): een naam in de body kwam bij wie Inhoud mag lezen maar de
+ * klant of de factuur niet. De naam komt hier uit wat de app geladen heeft,
+ * dus met de rechten van wie kijkt; anders staat de soort er. Kiezen met @
+ * komt in stap 2-1b.
+ */
+export const Mention = Node.create({
+  name: 'mention',
+  group: 'inline',
+  inline: true,
+  atom: true,
+  selectable: true,
+  addStorage(): MentionStorage {
+    return { names: null, search: null, open: null };
+  },
+  addAttributes() {
+    return {
+      kind: {
+        default: null,
+        parseHTML: (element: HTMLElement) => mentionKind(element.getAttribute('data-kind')),
+        renderHTML: (attributes: Record<string, unknown>) => ({ 'data-kind': attributes.kind }),
+      },
+      id: {
+        default: null,
+        parseHTML: (element: HTMLElement) => element.getAttribute('data-id'),
+        renderHTML: (attributes: Record<string, unknown>) => ({ 'data-id': attributes.id }),
+      },
+    };
+  },
+  parseHTML() {
+    return [{ tag: 'span[data-type="mention"]' }];
+  },
+  // Ook bij kopiëren alleen de soort: dat is wat de pagina weet.
+  renderHTML({ node, HTMLAttributes }) {
+    const kind = mentionKind(node.attrs.kind);
+    return ['span', mergeAttributes(HTMLAttributes, { 'data-type': 'mention', class: 'page-mention' }), `@${kind ? MENTION_KIND_WORDS[kind] : 'vermelding'}`];
+  },
+  renderText({ node }) {
+    const kind = mentionKind(node.attrs.kind);
+    return `@${kind ? MENTION_KIND_WORDS[kind] : 'vermelding'}`;
+  },
+  addNodeView() {
+    return mentionView;
+  },
+  addProseMirrorPlugins() {
+    const editor = this.editor;
+    return [new Plugin({
+      props: {
+        // Geplakt uit een andere organisatie (twee tabbladen) weigert de
+        // database, en dan mislukte elke opslag van deze pagina. Een
+        // vermelding die deze editor niet kent, valt bij plakken dus weg,
+        // zoals een afbeelding uit een ander dossier.
+        transformPasted: (slice: Slice) => {
+          const names = mentionNamesOf(editor);
+          const keep = (node: PmNode) => {
+            const ref = mentionOf({ type: 'mention', attrs: node.attrs });
+            return Boolean(ref && names && names(ref.kind, ref.id) !== null);
+          };
+          const content = withoutUnknownMentions(slice.content, keep);
+          return content === slice.content ? slice : new Slice(content, slice.openStart, slice.openEnd);
+        },
+      },
+    })];
+  },
+});
+
+/**
+ * Actiepunten die een taak werden (stap 2-2a): wat PageEditor in
+ * editor.storage.pageTaskLinks zet. De link staat bij de taak (tasks.page_id
+ * en page_block_id), niet in de pagina. De taken komen uit wat de app geladen
+ * heeft: wie Projecten niet mag lezen, heeft ze niet, en ziet een gewone
+ * takenlijst (regel 3).
+ */
+export type PageTaskLinksStorage = {
+  /** Per regel (het id van het blok) de taak. */
+  links: ReadonlyMap<string, PageTaskLink>;
+  /** De taak openen; de pagina gaat eerst netjes dicht. Zonder: het label opent niets. */
+  open: ((taskId: string) => void) | null;
+  /** Van een regel een taak maken. Zonder (geen rechten op Projecten): geen knop. */
+  make: ((blockId: string, title: string) => Promise<void>) | null;
+};
+
+export const PAGE_TASK_LINKS_KEY = new PluginKey('pageTaskLinks');
+
+export function pageTaskLinksOf(editor: Editor): PageTaskLinksStorage | null {
+  return (editor.storage as unknown as Record<string, PageTaskLinksStorage | undefined>).pageTaskLinks ?? null;
+}
+
+/**
+ * Het label achter een regel met een taak: "Taak · Te doen". Alleen lezen: een
+ * klik opent de taak. Bij bewerken zet een klik de cursor aan het eind van de
+ * regel, en opent "Openen" in de balk; daar klik je ook om de cursor te
+ * zetten, net als bij een chip.
+ */
+function taskBadge(editor: Editor, link: PageTaskLink, getPos: () => number | undefined): HTMLElement {
+  const badge = document.createElement('span');
+  badge.className = `page-task-badge is-${link.status}`;
+  badge.contentEditable = 'false';
+  badge.setAttribute('role', 'button');
+  badge.setAttribute('aria-label', `Taak: ${link.title}, ${TASK_STATUS_WORDS[link.status].toLowerCase()}`);
+  badge.title = `Taak: ${link.title}`;
+  badge.textContent = `Taak · ${TASK_STATUS_WORDS[link.status]}`;
+  badge.addEventListener('mousedown', event => event.preventDefault());
+  badge.addEventListener('click', event => {
+    event.preventDefault();
+    if (!editor.isEditable) {
+      pageTaskLinksOf(editor)?.open?.(link.id);
+      return;
+    }
+    const at = getPos();
+    if (typeof at === 'number') editor.chain().focus().setTextSelection(at).run();
+  });
+  return badge;
+}
+
+/**
+ * De labels zelf. Een decoratie, geen inhoud: de pagina verandert er niet
+ * door, en de klant, de export en de versies zien ze niet. PageEditor stuurt
+ * een lege transactie met PAGE_TASK_LINKS_KEY als de taken veranderen.
+ */
+export const PageTaskLinks = Extension.create({
+  name: 'pageTaskLinks',
+  // Vóór TaskItem, voor Enter hieronder.
+  priority: 1000,
+  addStorage(): PageTaskLinksStorage {
+    return { links: new Map(), open: null, make: null };
+  },
+  addKeyboardShortcuts() {
+    return {
+      // Enter aan het begin van een gevulde takenregel: een lege regel erboven,
+      // en deze regel blijft dezelfde knoop, met hetzelfde id. Splitsen gaf
+      // beide helften hetzelfde id, en dan gaf UniqueID ze allebei een nieuw:
+      // de taak van die regel raakte haar label kwijt, en de knop "Maak er een
+      // taak van" kwam terug (gezien in ui.mjs, stap 2-2a). UniqueID verhuist
+      // een id alleen naar de volgende regel als de eerste helemaal leeg is, en
+      // een takenregel heeft altijd een alinea.
+      Enter: ({ editor }) => {
+        const { state } = editor;
+        const { selection } = state;
+        if (!selection.empty) return false;
+        const { $from } = selection;
+        if ($from.parentOffset !== 0 || $from.parent.type.name !== 'paragraph' || $from.parent.content.size === 0) return false;
+        const depth = $from.depth - 1;
+        if (depth < 1) return false;
+        const item = $from.node(depth);
+        if (item.type.name !== 'taskItem' || item.firstChild !== $from.parent) return false;
+        const empty = item.type.create({ checked: false }, state.schema.nodes.paragraph.create());
+        editor.view.dispatch(state.tr.insert($from.before(depth), empty).scrollIntoView());
+        return true;
+      },
+    };
+  },
+  addProseMirrorPlugins() {
+    const editor = this.editor;
+    return [new Plugin({
+      key: PAGE_TASK_LINKS_KEY,
+      props: {
+        decorations: state => {
+          const links = pageTaskLinksOf(editor)?.links;
+          if (!links || links.size === 0) return DecorationSet.empty;
+          const found: Decoration[] = [];
+          state.doc.descendants((node, pos) => {
+            if (node.type.name !== 'taskItem') return true;
+            const link = typeof node.attrs.id === 'string' ? links.get(node.attrs.id) : undefined;
+            const first = node.firstChild;
+            if (link && first?.type.name === 'paragraph') {
+              // Aan het eind van de eerste alinea van de regel, niet achter een lijst eronder.
+              found.push(Decoration.widget(pos + first.nodeSize, (_view, getPos) => taskBadge(editor, link, getPos), {
+                side: 1, ignoreSelection: true, key: `taak:${link.id}:${link.status}:${link.title}`,
+              }));
+            }
+            return true;
+          });
+          return DecorationSet.create(state.doc, found);
+        },
+      },
+    })];
+  },
+});
+
+/** Een fragment zonder de vermeldingen die `keep` niet houdt; hetzelfde fragment als er niets weg hoeft. */
+export function withoutUnknownMentions(fragment: Fragment, keep: (node: PmNode) => boolean): Fragment {
+  let changed = false;
+  const nodes: PmNode[] = [];
+  fragment.forEach(child => {
+    if (child.type.name === 'mention') {
+      if (keep(child)) nodes.push(child);
+      else changed = true;
+      return;
+    }
+    if (child.isLeaf) { nodes.push(child); return; }
+    const inner = withoutUnknownMentions(child.content, keep);
+    if (inner !== child.content) changed = true;
+    nodes.push(inner === child.content ? child : child.copy(inner));
+  });
+  return changed ? Fragment.from(nodes) : fragment;
+}
+
+const mentionView: NodeViewRenderer = ({ editor, node }) => {
+  const dom = document.createElement('span');
+  dom.className = 'page-mention';
+  dom.setAttribute('data-type', 'mention');
+  dom.contentEditable = 'false';
+  let ref: ReturnType<typeof mentionOf> = null;
+  let named = false;
+  // Alleen lezen: een klik opent wat de chip noemt. Bij bewerken selecteert een
+  // klik de chip, en opent de knop "Openen" in de balk (PageEditor): daar klik je
+  // ook om de cursor te zetten, en openen sluit de pagina.
+  dom.addEventListener('click', event => {
+    if (editor.isEditable || !ref || !named || !MENTION_OPENS[ref.kind]) return;
+    const open = mentionOpenOf(editor);
+    if (!open) return;
+    event.preventDefault();
+    open(ref.kind, ref.id);
+  });
+  const show = (current: PmNode) => {
+    ref = mentionOf({ type: 'mention', attrs: current.attrs });
+    const names = mentionNamesOf(editor);
+    const name = ref && names ? names(ref.kind, ref.id) : null;
+    named = Boolean(name);
+    dom.setAttribute('data-kind', ref?.kind ?? '');
+    dom.classList.toggle('is-unknown', !name);
+    dom.textContent = `@${name ?? (ref ? MENTION_KIND_WORDS[ref.kind] : 'vermelding')}`;
+    dom.title = name && ref ? `${capitalized(MENTION_KIND_WORDS[ref.kind])}: ${name}`
+      : 'Je ziet niet wat hier genoemd wordt, of het bestaat niet meer.';
+  };
+  show(node);
+  return {
+    dom,
+    update: updated => {
+      if (updated.type.name !== 'mention') return false;
+      show(updated);
+      return true;
+    },
+  };
+};
 
 /**
  * Een knop in een blok (inhoudsopgave, subpagina, bestand) pakt bij een klik
@@ -716,6 +1105,10 @@ export function pageEditorExtensions(options: { placeholder?: string } = {}) {
     DetailsSummary,
     DetailsContent,
     Callout,
+    Columns,
+    Column,
+    Mention,
+    PageTaskLinks,
     TableOfContents,
     Subpage,
     PageImage,

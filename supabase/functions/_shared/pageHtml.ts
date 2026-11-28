@@ -37,6 +37,8 @@
 //    tekst. pageHtml.test.ts zet elk bloktype uit de database erin.
 // ============================================================
 
+import { mentionOf, mentionText } from './pageMentions.ts';
+
 /** Wat de pagina zelf niet weet, of niet mag bepalen. De aanroeper zoekt het op. */
 export type PageHtmlContext = {
   /**
@@ -148,6 +150,13 @@ function inlineHtml(nodes: PmNode[], depth: number): string {
   let out = '';
   for (const node of nodes) {
     if (node.type === 'hardBreak') { out += '<br>'; continue; }
+    if (node.type === 'mention') {
+      // Stap 2-1a, de strenge standaard: de klant ziet alleen de soort
+      // ("klant", "project"), geen naam. Of hij de naam mag zien, is nog een
+      // vraag aan de gebruiker (bouwplan §18, fase 2).
+      out += `<span class="rf-mention">${escapeHtml(mentionText(mentionOf(node), null))}</span>`;
+      continue;
+    }
     if (node.type === 'text') {
       if (typeof node.text === 'string' && node.text) out += marked(node.text, node.marks);
       continue;
@@ -159,7 +168,7 @@ function inlineHtml(nodes: PmNode[], depth: number): string {
   return out;
 }
 
-const isInline = (node: PmNode) => node.type === 'text' || node.type === 'hardBreak';
+const isInline = (node: PmNode) => node.type === 'text' || node.type === 'hardBreak' || node.type === 'mention';
 
 function blocksHtml(nodes: PmNode[], ctx: Ctx, depth: number): string {
   if (depth > MAX_DEPTH) return '';

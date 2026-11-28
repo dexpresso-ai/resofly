@@ -169,7 +169,8 @@ jobs:
             supabase/functions/_shared/zipWriter.ts supabase/functions/_shared/pageExportFonts.ts \
             supabase/functions/_shared/pageHtml.ts supabase/functions/_shared/pageReferences.ts \
             supabase/functions/_shared/pageExport.ts supabase/functions/_shared/pageTreeOrder.ts \
-            supabase/functions/_shared/pdfLetterhead.ts supabase/functions/page-export/index.ts
+            supabase/functions/_shared/pdfLetterhead.ts supabase/functions/_shared/pageMentions.ts \
+            supabase/functions/page-export/index.ts
 
   # De hele migratieketen op een lege database, met de echte Supabase-images in
   # de versies uit supabase/.temp (Postgres 17.6.1.111, net als staging). Een

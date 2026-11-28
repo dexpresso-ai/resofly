@@ -150,6 +150,7 @@ const SAMPLES: Record<string, { node: Node; expect: RegExp }> = {
 const INSIDE: Record<string, string> = {
   doc: 'de pagina zelf',
   text: 'paragraph',
+  mention: 'een eigen test hieronder',
   hardBreak: 'paragraph',
   listItem: 'bulletList',
   taskItem: 'taskList',
@@ -173,6 +174,17 @@ test('elk bloktype uit de database komt in de HTML, met zijn tekst', () => {
     assert.match(html, /^<div class="rf-page">.*<\/div>$/s, type);
     assertAllowed(html, type);
   }
+});
+
+// Stap 2-1a, de strenge standaard: de klant ziet bij een vermelding alleen de
+// soort, geen naam en geen id. Of hij de naam mag zien, vraagt het rapport.
+test('de klant ziet bij een @-vermelding alleen de soort', () => {
+  const id = '11111111-2222-4333-8444-555555555555';
+  const html = renderPageHtml(doc(p(t('Bel '), { type: 'mention', attrs: { kind: 'project', id } }, t(' morgen.'))), CONTEXT);
+  assert.match(html, /<p>Bel <span class="rf-mention">project<\/span> morgen\.<\/p>/);
+  assert.ok(!html.includes(id), 'het id staat in de HTML');
+  assertAllowed(html, 'vermelding');
+  assert.match(renderPageHtml(doc(p({ type: 'mention', attrs: { kind: '<b>', id: 'x' } })), CONTEXT), /<span class="rf-mention">vermelding<\/span>/);
 });
 
 test('alle opmaak, binnen naar buiten in een vaste volgorde', () => {

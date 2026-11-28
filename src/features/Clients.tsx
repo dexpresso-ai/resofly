@@ -42,6 +42,7 @@ import { loadTransfersForEmails } from '../lib/transfers-api';
 import { transferRecipientOptions } from '../lib/transfers';
 import { ContractStatusBadge } from './Contracts';
 import { portalLoginPath, usePortalLoginKey } from '../lib/portalAddress';
+import { MentionedIn } from './MentionedIn';
 
 // Vaste kolommen voor de bulk CSV-import van klanten. Het klantnummer ontbreekt
 // bewust: dat wordt server-side atomair toegekend (createClientWithServerCode).
@@ -502,6 +503,8 @@ export function ClientDetailPage({
   onOpenBookingLink,
   onNewBookingLink,
   teamMembers = [],
+  canReadContent = false,
+  refreshKey = 0,
 }: {
   data: AppData;
   client: Client;
@@ -543,6 +546,10 @@ export function ClientDetailPage({
   onNewBookingLink?: () => void;
   /** Voor de naam van de accountlead. */
   teamMembers?: OrganizationMember[];
+  /** Module Inhoud: dan staat "Genoemd in" erbij (stap 2-1c). */
+  canReadContent?: boolean;
+  /** De verversteller van de app, voor wat dit scherm zelf ophaalt. */
+  refreshKey?: number;
 }) {
   const projects = data.projects.filter(project => project.client_id === client.id);
   // Het eigen inlogadres van het portaal: daar staat het inlogscherm meteen in
@@ -817,6 +824,9 @@ export function ClientDetailPage({
             {projects.length > 6 && <button type="button" className="client-overview-more-link" onClick={() => switchTab('projects')}>+{projects.length - 6} meer projecten</button>}
           </div>
         </article>
+
+        {/* De pagina's die deze klant met @ noemen (stap 2-1c). */}
+        {canReadContent && <MentionedIn organizationId={organizationId} kind="client" entityId={client.id} data={data} refreshKey={refreshKey} onOpen={onEditDocument} />}
 
       </aside>
 

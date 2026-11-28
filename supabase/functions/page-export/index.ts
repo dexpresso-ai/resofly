@@ -8,7 +8,8 @@ import {
 import { documentAssetsFromSettings, PAGE_HEIGHT, parseDocumentLayouts, resolveDocumentLayout } from '../_shared/documentLayout.ts';
 import { buildPageDocx, DOCX_MIME, type PageDocxChapter, type PageDocxFont, type PageDocxImage, type PageDocxLetterhead } from '../_shared/pageDocx.ts';
 import {
-  collectSubpages, EXPORT_SUBPAGE_LIMIT, exportBrand, exportContext, exportCover, exportLogo, exportOptions, exportReferences, letterheadMargins,
+  collectSubpages, EXPORT_SUBPAGE_LIMIT, exportBrand, exportContext, exportCover, exportLogo, exportMentionNames, exportOptions, exportReferences,
+  letterheadMargins,
 } from '../_shared/pageExport.ts';
 import { pageExportFonts, type PageExportFont } from '../_shared/pageExportFonts.ts';
 import { PDF_FONT_FILES } from '../_shared/pdfFonts.ts';
@@ -107,6 +108,12 @@ serve(async (req) => {
       toc: body.toc === true,
       chapters: body.chapters === true,
       letterhead: body.letterhead === true,
+      // Namen (bij @-vermeldingen, en de klant en het project op het
+      // voorblad) alleen als de app erom vraagt: bij een download. Een PDF die
+      // in het dossier komt, kan iedereen met Inhoud openen, ook wie de klant
+      // of de factuur niet mag zien (regel 3, stap 2-1a). Eerst kwam de klant
+      // ook op het voorblad van een vastgelegde PDF.
+      names: body.names === true,
     });
     return new Response(pdf, {
       status: 200,
@@ -238,7 +245,7 @@ async function letterheadOf(settings: Settings | null): Promise<{ docx: PageDocx
 async function pagePdf(
   db: SupabaseClient,
   page: PageRow,
-  choice: { cover: boolean; toc: boolean; chapters: boolean; letterhead: boolean },
+  choice: { cover: boolean; toc: boolean; chapters: boolean; letterhead: boolean; names: boolean },
 ): Promise<ArrayBuffer> {
   const org = page.organization_id;
   const chapters = choice.chapters ? await loadChapters(db, page) : [];
@@ -251,10 +258,13 @@ async function pagePdf(
   // Eerst het briefpapier: een fout daar hoort vóór al het andere werk.
   const letterhead = choice.letterhead ? await letterheadOf(settings) : null;
 
-  const [titleRows, fileRows, imageRows] = await Promise.all([
+  const [titleRows, fileRows, imageRows, mentionNames] = await Promise.all([
     rowsById<{ id: string; title: string }>(db, 'documents', 'id,title', org, refs.pages),
     rowsById<{ id: string; name: string }>(db, 'attachments', 'id,name', org, refs.files),
     rowsById<{ id: string; storage_key: string; mime_type: string }>(db, 'attachments', 'id,storage_key,mime_type', org, refs.images),
+    // De namen bij @-vermeldingen (stap 2-1a), met de rechten van wie
+    // exporteert: wat de database niet geeft, wordt de soort.
+    choice.names ? exportMentionNames(refs.mentions, (source, ids) => mentionRows(db, org, source, ids)) : [],
   ]);
   const titleOf = new Map(titleRows.map(row => [row.id, row.title]));
   const nameOf = new Map(fileRows.map(row => [row.id, row.name]));
@@ -268,7 +278,7 @@ async function pagePdf(
     })),
     loadFont(fonts.body),
     fonts.heading.key === fonts.body.key ? null : loadFont(fonts.heading),
-    choice.cover ? dossierNames(db, page) : null,
+    choice.cover ? (choice.names ? dossierNames(db, page) : { client: null, project: null }) : null,
   ]);
   const context = exportContext({
     titles: refs.pages.map((id): [string, string | null] => [id, titleOf.get(id) ?? null]),
@@ -277,6 +287,7 @@ async function pagePdf(
     font: body,
     headingFont: heading,
     brand: exportBrand(settings, logo),
+    mentionNames,
   });
   const cover = names
     ? exportCover({
@@ -294,6 +305,29 @@ async function pagePdf(
   const withPaper = await underlayLetterhead(PdfLib, new Uint8Array(pdf), letterhead.pdf);
   // Een eigen ArrayBuffer van precies deze bytes (zie hierboven).
   return withPaper.buffer.slice(withPaper.byteOffset, withPaper.byteOffset + withPaper.byteLength) as ArrayBuffer;
+}
+
+/**
+ * De rijen achter de vermeldingen van één soort. Lukt het lezen niet, dan
+ * staat de soort er: een naam is geen reden om de hele PDF te laten mislukken.
+ */
+async function mentionRows(
+  db: SupabaseClient,
+  organizationId: string,
+  source: { table: string; idColumn: string; nameColumn: string },
+  ids: string[],
+): Promise<Array<Record<string, unknown>>> {
+  const out: Array<Record<string, unknown>> = [];
+  for (let i = 0; i < ids.length; i += 100) {
+    const { data, error } = await db.from(source.table).select(`${source.idColumn},${source.nameColumn}`)
+      .eq('organization_id', organizationId).in(source.idColumn, ids.slice(i, i + 100));
+    if (error) {
+      console.warn('page-export: namen van vermeldingen niet gelezen', { table: source.table, error: error.message });
+      return out;
+    }
+    out.push(...((data ?? []) as unknown as Array<Record<string, unknown>>));
+  }
+  return out;
 }
 
 /** De klant en het project, als je die mag zien; anders blijft die regel leeg. */

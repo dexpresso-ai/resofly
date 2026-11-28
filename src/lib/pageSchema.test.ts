@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
-import { CALLOUT_VARIANTS, PAGE_LINK_PATTERN, PAGE_MARK_TYPES, PAGE_NODE_TYPES, TABLE_CELL_ALIGNS, calloutVariant, isAllowedPageLink } from './pageSchema.ts';
+import { CALLOUT_VARIANTS, MENTION_KINDS, PAGE_LINK_PATTERN, PAGE_MARK_TYPES, PAGE_NODE_TYPES, TABLE_CELL_ALIGNS, calloutVariant, isAllowedPageLink, mentionKind } from './pageSchema.ts';
 
 /**
  * De database keurt een pagina af met een blok of opmaak die niet in
@@ -46,6 +46,16 @@ test('de soorten callout en het uitlijnen in een cel zijn die van de database', 
   assert.deepEqual(quoted(variants).filter((name) => name !== 'callout_variants'), [...CALLOUT_VARIANTS]);
   const aligns = sql.slice(sql.indexOf("'cell_aligns'"));
   assert.deepEqual(quoted(aligns).filter((name) => name !== 'cell_aligns'), [...TABLE_CELL_ALIGNS]);
+});
+
+// Stap 2-1a: de soorten @-vermelding. Kent de app een soort die de database
+// niet kent, dan mislukt opslaan; andersom toont de app er niets bij.
+test('de soorten @-vermelding zijn die van de database', () => {
+  const sql = latestAllowedSql();
+  const kinds = sql.slice(sql.indexOf("'mention_kinds'"), sql.indexOf("'callout_variants'"));
+  assert.deepEqual(quoted(kinds).filter((name) => name !== 'mention_kinds'), [...MENTION_KINDS]);
+  assert.equal(mentionKind('invoice'), 'invoice');
+  for (const value of ['', 'Client', 'leverancier', null, 3]) assert.equal(mentionKind(value), null);
 });
 
 test('een onbekende soort callout wordt info', () => {
