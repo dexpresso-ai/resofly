@@ -457,3 +457,220 @@ test('koppen in hun eigen letter; dezelfde familie gaat één keer mee', () => {
   assert.match(kop.get('word/styles.xml') as string, new RegExp(`w:styleId="Heading1">${BINNEN_STIJL}<w:rFonts w:ascii="Lora"`));
   for (const [path, data] of twee) if (typeof data === 'string') assertWellFormed(data, path);
 });
+
+// ── De opties van het exportvenster (stap 1B-4) ─────────────────────────────
+
+/** Elke alinea- en tekenstijl die document.xml gebruikt, bestaat in styles.xml. De XSD ziet dat niet. */
+function assertStylesExist(all: Map<string, string | Uint8Array>, label: string): void {
+  const styles = all.get('word/styles.xml') as string;
+  const defined = new Set([...styles.matchAll(/w:styleId="([^"]+)"/g)].map(match => match[1]));
+  const used = new Set([...(all.get('word/document.xml') as string).matchAll(/<w:[pr]Style w:val="([^"]+)"\/>/g)].map(match => match[1]));
+  for (const style of used) assert.ok(defined.has(style), `${label}: stijl ${style} ontbreekt in styles.xml`);
+}
+
+const RICH = doc(
+  { type: 'tableOfContents' },
+  h(1, 'Inleiding'),
+  p(t('Tekst van de pagina.')),
+  { type: 'image', attrs: { attachmentId: 'beeld' } },
+);
+
+test('zonder opties is het bestand gelijk, hoe de opties ook leeg zijn; geen extra stijlen of secties', () => {
+  const context = { images: { beeld: { bytes: pngHeader(200, 100), contentType: 'image/png' } } };
+  const plain = pageDocxFiles('Handboek', RICH, context);
+  for (const options of [{}, { cover: null, toc: false, chapters: [] }]) {
+    assert.deepEqual(pageDocxFiles('Handboek', RICH, context, options), plain);
+  }
+  const all = new Map(plain.map(file => [file.path, file.data]));
+  assert.doesNotMatch(all.get('word/styles.xml') as string, /Heading4|Subtitle/);
+  assert.equal((all.get('word/document.xml') as string).match(/<w:sectPr>/g)?.length, 1);
+  assertStylesExist(all, 'zonder opties');
+});
+
+test('voorblad: een eerste bladzijde zonder voet, met logo, titel, klant, project en datum, dan een paginagrens; de titel niet nog eens', () => {
+  const cover = {
+    lines: ['Klant: Bakkerij Jansen', ' ', 'Project: Verbouwing'],
+    date: '28 november 2026',
+    company: 'Studio Noord',
+    logo: { bytes: pngHeader(800, 200), contentType: 'image/png' },
+  };
+  const all = files(RICH, {}, 'Handboek');
+  const withCover = new Map(pageDocxFiles('Handboek', RICH, {}, { cover }).map(file => [file.path, file.data]));
+  const xml = withCover.get('word/document.xml') as string;
+  // Eén sectie, met een eigen eerste bladzijde (titlePg) zonder voet: geen
+  // tweede sectie, want die schrijft LibreOffice bij opnieuw opslaan tegen het schema in.
+  const sections = [...xml.matchAll(/<w:sectPr>(.*?)<\/w:sectPr>/g)].map(match => match[1]);
+  assert.equal(sections.length, 1);
+  assert.match(sections[0], /^<w:footerReference w:type="default" r:id="rId4"\/><w:pgSz [^>]*\/><w:pgMar [^>]*\/><w:titlePg\/>$/);
+  // Het voorblad staat vóór de paginagrens, de tekst erna.
+  const [voor, na] = xml.split('<w:p><w:r><w:br w:type="page"/></w:r></w:p>');
+  assert.match(voor, /<w:drawing>.*descr="Logo van Studio Noord".*Handboek.*Klant: Bakkerij Jansen.*Project: Verbouwing.*28 november 2026/);
+  assert.doesNotMatch(voor, /Studio Noord<\/w:t>/, 'met logo niet ook de naam');
+  assert.equal(xml.match(/<w:pStyle w:val="Title"\/>/g)?.length, 1, 'de titel staat één keer');
+  assert.match(na, /Inleiding.*Tekst van de pagina/);
+  // 800 bij 200 px past niet in 5 bij 2,5 cm: terug tot 5 cm breed.
+  assert.match(voor, /<wp:extent cx="1800000" cy="450000"\/>/);
+  assert.ok(withCover.has('word/media/afbeelding1.png'));
+  assertStylesExist(withCover, 'voorblad');
+  assert.match(withCover.get('word/styles.xml') as string, /w:styleId="Subtitle"/);
+  // Een logo dat Word niet kan tonen (svg, webp): de naam van het bedrijf.
+  const svg = pageDocxFiles('Handboek', RICH, {}, { cover: { ...cover, logo: { bytes: new Uint8Array([60, 115]), contentType: 'image/svg+xml' } } });
+  const svgXml = svg.find(file => file.path === 'word/document.xml')?.data as string;
+  assert.match(svgXml.split('<w:br w:type="page"/>')[0], /<w:b\/><w:color w:val="64748B"\/><\/w:rPr><w:t xml:space="preserve">Studio Noord<\/w:t>/);
+  assert.ok(!svg.some(file => file.path.startsWith('word/media/')), 'een svg komt niet in het bestand');
+  // Zonder voorblad blijft het zoals het was.
+  assert.doesNotMatch(all.get('word/document.xml') as string, /Subtitle/);
+});
+
+test('inhoudsopgave vooraan: één TOC-veld met de koppen van het hele bestand; de blokken in de pagina vallen weg', () => {
+  const chapters = [{ title: 'Werkwijze', body: doc({ type: 'tableOfContents' }, h(1, 'Afspraken'), h(3, 'Te diep')), depth: 1 }];
+  const xml = pageDocxFiles('Handboek', RICH, {}, { toc: true, chapters }).find(file => file.path === 'word/document.xml')?.data as string;
+  assert.equal(xml.match(/fldCharType="begin"/g)?.length, 1, 'één veld');
+  assert.equal(xml.match(/TOCHeading/g)?.length, 1);
+  // Vooraan: direct na de titel, vóór de tekst van de pagina.
+  assert.ok(xml.indexOf('TOCHeading') < xml.indexOf('Tekst van de pagina'));
+  const toc = xml.slice(xml.indexOf('TOCHeading'), xml.indexOf('<w:pStyle w:val="Heading1"/>'));
+  assert.deepEqual([...toc.matchAll(/<w:pStyle w:val="(TOC\d)"\/><\/w:pPr>(?:<w:r><w:fldChar[^>]*><\/w:r><w:r><w:instrText[^<]*<\/w:instrText><\/w:r><w:r><w:fldChar[^>]*><\/w:r>)?<w:r><w:t xml:space="preserve">([^<]*)</g)].map(match => `${match[1]} ${match[2]}`),
+    // De kop 3 in het hoofdstuk wordt niveau 4: die toont het veld (\o "1-3") niet, en dus wij ook niet.
+    ['TOC1 Inleiding', 'TOC1 Werkwijze', 'TOC2 Afspraken']);
+});
+
+test('hoofdstukken: de titel op zijn diepte, de koppen een niveau lager, een nieuwe bladzijde per hoofdstuk, en nooit dieper dan Heading6', () => {
+  const chapters = [
+    { title: 'Werkwijze', body: doc(h(1, 'Afspraken'), p(t('Tekst van het hoofdstuk.')), { type: 'image', attrs: { attachmentId: 'beeld2' } }), depth: 1 },
+    { title: ' ', body: doc(h(2, 'Onder de werkwijze')), depth: 2 },
+    { title: 'Diep', body: doc(h(3, 'Heel diep')), depth: 9 },
+    { title: 'Tarieven', body: '{kapot', depth: 1 },
+  ];
+  const context = { images: { beeld: { bytes: pngHeader(200, 100), contentType: 'image/png' }, beeld2: { bytes: pngHeader(100, 50), contentType: 'image/png' } } };
+  const all = new Map(pageDocxFiles('Handboek', RICH, context, { chapters }).map(file => [file.path, file.data]));
+  const xml = all.get('word/document.xml') as string;
+  const heading = (style: string, text: string) => new RegExp(`<w:pStyle w:val="${style}"/>(<w:pageBreakBefore/>)?</w:pPr><w:r><w:t xml:space="preserve">${text}</w:t>`);
+  assert.match(xml, heading('Heading1', 'Werkwijze'));
+  assert.match(xml, /<w:pStyle w:val="Heading1"\/><w:pageBreakBefore\/><\/w:pPr><w:r><w:t xml:space="preserve">Werkwijze/);
+  assert.match(xml, /<w:pStyle w:val="Heading2"\/><\/w:pPr><w:r><w:t xml:space="preserve">Afspraken/);
+  // Diepte 2: de titel als Heading2 zonder nieuwe bladzijde; een lege titel zoals in de app.
+  assert.match(xml, /<w:pStyle w:val="Heading2"\/><\/w:pPr><w:r><w:t xml:space="preserve">Naamloze pagina/);
+  assert.match(xml, /<w:pStyle w:val="Heading4"\/><\/w:pPr><w:r><w:t xml:space="preserve">Onder de werkwijze/);
+  // Diepte 9: alles Heading6.
+  assert.match(xml, /<w:pStyle w:val="Heading6"\/><\/w:pPr><w:r><w:t xml:space="preserve">Diep/);
+  assert.match(xml, /<w:pStyle w:val="Heading6"\/><\/w:pPr><w:r><w:t xml:space="preserve">Heel diep/);
+  // Een kapotte inhoud: het hoofdstuk staat er, met alleen zijn titel.
+  assert.match(xml, /<w:pStyle w:val="Heading1"\/><w:pageBreakBefore\/><\/w:pPr><w:r><w:t xml:space="preserve">Tarieven<\/w:t><\/w:r><\/w:p><w:sectPr>/);
+  // De volgorde: de pagina, dan de hoofdstukken zoals gegeven. Na de
+  // inhoudsopgave tellen: daarin staan de hoofdstuktitels al vooraan.
+  const text = xml.slice(xml.indexOf('fldCharType="end"'));
+  const order = ['Tekst van de pagina', 'Werkwijze', 'Tekst van het hoofdstuk', 'Naamloze pagina', 'Diep', 'Tarieven'].map(part => text.indexOf(part));
+  assert.ok(order.every(index => index >= 0), `niet alles na de inhoudsopgave: ${order}`);
+  assert.deepEqual([...order].sort((a, b) => a - b), order);
+  // Een afbeelding in een hoofdstuk gaat mee, net als die in de pagina.
+  assert.deepEqual([...all.keys()].filter(path => path.startsWith('word/media/')), ['word/media/afbeelding1.png', 'word/media/afbeelding2.png']);
+  // Het inhoudsopgave-blok in de pagina blijft, met de hoofdstukken erin.
+  assert.equal(xml.match(/fldCharType="begin"/g)?.length, 1);
+  assert.match(xml.slice(0, xml.indexOf('Tekst van de pagina')), /<w:pStyle w:val="TOC1"\/><\/w:pPr><w:r><w:t xml:space="preserve">Werkwijze/);
+  assertStylesExist(all, 'hoofdstukken');
+  for (const style of ['Heading4', 'Heading5', 'Heading6']) assert.match(all.get('word/styles.xml') as string, new RegExp(`w:styleId="${style}"`));
+  for (const [path, data] of all) if (typeof data === 'string') assertWellFormed(data, path);
+});
+
+test('alles tegelijk: voorblad, inhoudsopgave en hoofdstukken; elke stijl bestaat en elke XML is welgevormd', () => {
+  const all = new Map(pageDocxFiles('Handboek', RICH, {}, {
+    cover: { lines: ['Klant: Bakkerij Jansen'], date: '28 november 2026', company: 'Studio Noord' },
+    toc: true,
+    chapters: [{ title: 'Werkwijze', body: doc(h(1, 'Afspraken')), depth: 1 }, { title: 'Details', body: doc(h(3, 'Klein')), depth: 2 }],
+  }).map(file => [file.path, file.data]));
+  assertStylesExist(all, 'alles');
+  for (const [path, data] of all) if (typeof data === 'string') assertWellFormed(data, path);
+  const xml = all.get('word/document.xml') as string;
+  assert.equal(xml.match(/fldCharType="begin"/g)?.length, 1);
+  // De inhoudsopgave staat na het voorblad, niet erop.
+  assert.ok(xml.indexOf('<w:br w:type="page"/>') < xml.indexOf('TOCHeading'));
+});
+
+test('briefpapier: een afbeelding over de hele bladzijde, achter de tekst, op elke bladzijde, met de marges die het vrijlaat', () => {
+  const letterhead = { image: { bytes: pngHeader(2480, 3508), contentType: 'image/png' }, top: 3000, bottom: 2040 };
+  const all = new Map(pageDocxFiles('Handboek', RICH, {}, { letterhead }).map(file => [file.path, file.data]));
+  const header = all.get('word/header1.xml') as string;
+  assert.match(header, /<wp:anchor [^>]*behindDoc="1"[^>]*>/);
+  assert.match(header, /<wp:positionH relativeFrom="page"><wp:posOffset>0<\/wp:posOffset><\/wp:positionH><wp:positionV relativeFrom="page"><wp:posOffset>0<\/wp:posOffset><\/wp:positionV>/);
+  // Zo groot als A4: 11906 bij 16838 twips.
+  assert.match(header, /<wp:extent cx="7560310" cy="10692130"\/>.*<wp:wrapNone\/>/);
+  assert.match(all.get('word/_rels/header1.xml.rels') as string, /Id="rId1" Type="[^"]+\/image" Target="media\/briefpapier\.png"/);
+  assert.ok(all.has('word/media/briefpapier.png'));
+  assert.match(all.get('word/_rels/document.xml.rels') as string, /Id="rId6" Type="[^"]+\/header" Target="header1\.xml"/);
+  const types = all.get('[Content_Types].xml') as string;
+  assert.match(types, /PartName="\/word\/header1\.xml" ContentType="[^"]+header\+xml"/);
+  assert.match(types, /<Default Extension="png" ContentType="image\/png"\/>/);
+  const xml = all.get('word/document.xml') as string;
+  assert.match(xml, /<w:sectPr><w:headerReference w:type="default" r:id="rId6"\/><w:footerReference w:type="default" r:id="rId4"\/>/);
+  // De marges van het briefpapier; het paginanummer net boven zijn voet.
+  assert.match(xml, /<w:pgMar w:top="3000" w:right="1418" w:bottom="2040" w:left="1418" w:header="709" w:footer="1720" w:gutter="0"\/>/);
+  for (const [path, data] of all) if (typeof data === 'string') assertWellFormed(data, path);
+  // Met een voorblad: daar ook het briefpapier (de kop van de eerste bladzijde), maar geen voet.
+  const withCover = pageDocxFiles('Handboek', RICH, {}, { letterhead, cover: { date: '28 november 2026' } }).find(file => file.path === 'word/document.xml')?.data as string;
+  assert.match(withCover, /<w:sectPr><w:headerReference w:type="default" r:id="rId6"\/><w:headerReference w:type="first" r:id="rId6"\/><w:footerReference w:type="default" r:id="rId4"\/>.*<w:titlePg\/><\/w:sectPr>/);
+  assert.doesNotMatch(withCover, /footerReference w:type="first"/);
+  // Minder dan de gewone marge, of iets anders dan een getal: de gewone marge.
+  const small = pageDocxFiles('Handboek', RICH, {}, { letterhead: { ...letterhead, top: 10, bottom: Number.NaN } }).find(file => file.path === 'word/document.xml')?.data as string;
+  assert.match(small, /<w:pgMar w:top="1418" w:right="1418" w:bottom="1418" w:left="1418" w:header="709" w:footer="709" w:gutter="0"\/>/);
+});
+
+test('briefpapier dat Word niet kan tonen (een pdf, svg of webp): geen kop, en de gewone marges', () => {
+  for (const contentType of ['application/pdf', 'image/svg+xml', 'image/webp']) {
+    const all = new Map(pageDocxFiles('Handboek', RICH, {}, { letterhead: { image: { bytes: new Uint8Array([1, 2, 3]), contentType }, top: 3000 } }).map(file => [file.path, file.data]));
+    assert.ok(!all.has('word/header1.xml'), contentType);
+    assert.deepEqual([...all.keys()], pageDocxFiles('Handboek', RICH, {}).map(file => file.path), contentType);
+    assert.doesNotMatch(all.get('word/document.xml') as string, /headerReference/, contentType);
+  }
+});
+
+test('kop en voet in de huisstijl: het logo rechts in de kop met een lijn in de merkkleur, de voettekst links en het nummer rechts', () => {
+  const brand = { logo: { bytes: pngHeader(600, 200), contentType: 'image/png' }, color: '#1d4ed8', footerText: 'Studio Noord · Havenstraat 1' };
+  const all = new Map(pageDocxFiles('Handboek', RICH, { brand }).map(file => [file.path, file.data]));
+  const header = all.get('word/header1.xml') as string;
+  assert.match(header, /<w:pPr><w:pStyle w:val="Header"\/><w:pBdr><w:bottom w:val="single" w:sz="8" w:space="6" w:color="1D4ED8"\/><\/w:pBdr><w:jc w:val="right"\/><\/w:pPr>/);
+  // 600 bij 200 px past niet in 4,5 bij 1,1 cm: terug tot 1,1 cm hoog.
+  assert.match(header, /<wp:extent cx="1188000" cy="396000"\/>.*<a:blip r:embed="rId1"\/>/);
+  assert.match(all.get('word/_rels/header1.xml.rels') as string, /Id="rId1" Type="[^"]+\/image" Target="media\/logo-kop\.png"/);
+  assert.ok(all.has('word/media/logo-kop.png'));
+  assert.match(all.get('word/_rels/document.xml.rels') as string, /Id="rId6" Type="[^"]+\/header" Target="header1\.xml"/);
+  assert.match(all.get('[Content_Types].xml') as string, /PartName="\/word\/header1\.xml"/);
+  assert.match(all.get('word/document.xml') as string, /<w:sectPr><w:headerReference w:type="default" r:id="rId6"\/><w:footerReference w:type="default" r:id="rId4"\/>/);
+  assert.match(all.get('word/styles.xml') as string, /w:styleId="Header"/);
+  const footer = all.get('word/footer1.xml') as string;
+  assert.match(footer, /<w:tabs><w:tab w:val="right" w:pos="9070"\/><\/w:tabs><\/w:pPr><w:r><w:t xml:space="preserve">Studio Noord · Havenstraat 1<\/w:t><\/w:r><w:r><w:tab\/><\/w:r><w:r><w:t xml:space="preserve">Pagina /);
+  for (const [path, data] of all) if (typeof data === 'string') assertWellFormed(data, path);
+  assertStylesExist(all, 'huisstijl');
+  // Alleen een kleur: de lijn, zonder logo en zonder relaties van de kop.
+  const line = new Map(pageDocxFiles('Handboek', RICH, { brand: { color: '#FD6' } }).map(file => [file.path, file.data]));
+  assert.match(line.get('word/header1.xml') as string, /w:color="FFDD66"/);
+  assert.doesNotMatch(line.get('word/header1.xml') as string, /w:drawing/);
+  assert.ok(!line.has('word/_rels/header1.xml.rels'));
+  // Een kleur die geen kleur is, geen logo, en een lege voettekst: geen kop, en de voet zoals in 1B-3.
+  const none = new Map(pageDocxFiles('Handboek', RICH, { brand: { color: 'red; x', footerText: '  ' } }).map(file => [file.path, file.data]));
+  assert.ok(!none.has('word/header1.xml'));
+  assert.equal(none.get('word/footer1.xml'), new Map(pageDocxFiles('Handboek', RICH, {}).map(file => [file.path, file.data])).get('word/footer1.xml'));
+  // Met een voorblad: de eerste bladzijde blijft kaal (geen eigen kop).
+  const cover = pageDocxFiles('Handboek', RICH, { brand }, { cover: { date: '28 november 2026' } }).find(file => file.path === 'word/document.xml')?.data as string;
+  assert.match(cover, /<w:sectPr><w:headerReference w:type="default" r:id="rId6"\/><w:footerReference w:type="default" r:id="rId4"\/>.*<w:titlePg\/><\/w:sectPr>/);
+  assert.doesNotMatch(cover, /w:type="first"/);
+  // Met briefpapier: alleen het briefpapier, geen logo of lijn, en in de voet alleen het nummer.
+  const paper = new Map(pageDocxFiles('Handboek', RICH, { brand }, { letterhead: { image: { bytes: pngHeader(2480, 3508), contentType: 'image/png' }, top: 3000 } }).map(file => [file.path, file.data]));
+  assert.match(paper.get('word/header1.xml') as string, /behindDoc="1"/);
+  assert.doesNotMatch(paper.get('word/header1.xml') as string, /Header|pBdr/);
+  assert.ok(!paper.has('word/media/logo-kop.png'));
+  assert.doesNotMatch(paper.get('word/footer1.xml') as string, /Studio Noord/);
+});
+
+test('een lege bovenste pagina met hoofdstukken: het eerste hoofdstuk begint niet na een lege bladzijde', () => {
+  const chapters = [{ title: 'Eén', body: doc(p(t('a'))), depth: 1 }, { title: 'Twee', body: doc(p(t('b'))), depth: 1 }];
+  const xml = (options: Record<string, unknown>) => pageDocxFiles('Handboek', doc({ type: 'paragraph' }, p(t('  '))), {}, { chapters, ...options })
+    .find(file => file.path === 'word/document.xml')?.data as string;
+  for (const options of [{}, { cover: { date: '28 november 2026' } }]) {
+    const out = xml(options);
+    assert.match(out, /<w:pStyle w:val="Heading1"\/><\/w:pPr><w:r><w:t xml:space="preserve">Eén/, JSON.stringify(options));
+    assert.match(out, /<w:pStyle w:val="Heading1"\/><w:pageBreakBefore\/><\/w:pPr><w:r><w:t xml:space="preserve">Twee/, JSON.stringify(options));
+  }
+  // Met een inhoudsopgave vooraan staat er wel iets: dan begint het eerste hoofdstuk op een nieuwe bladzijde.
+  assert.match(xml({ toc: true }), /<w:pStyle w:val="Heading1"\/><w:pageBreakBefore\/><\/w:pPr><w:r><w:t xml:space="preserve">Eén/);
+});

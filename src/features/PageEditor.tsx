@@ -35,7 +35,7 @@ import { EditorContent, useEditor, useEditorState } from '@tiptap/react';
 import type { Editor, JSONContent } from '@tiptap/react';
 import {
   AlignCenter, AlignLeft, AlignRight, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, BetweenHorizontalEnd, BetweenHorizontalStart,
-  BetweenVerticalEnd, BetweenVerticalStart, Bold, Braces, ChevronLeft, Copy, FileDown, Heading1, Heading2, Heading3, History, Info, Italic, Lightbulb, Link2,
+  BetweenVerticalEnd, BetweenVerticalStart, Bold, Braces, ChevronLeft, Copy, FileOutput, Heading1, Heading2, Heading3, History, Info, Italic, Lightbulb, Link2,
   List, ListChecks, ListOrdered, Minus, OctagonAlert, PanelLeft, PanelTop, Pilcrow, Plus, Quote, Redo2, Share2, Strikethrough, TableCellsMerge,
   TableCellsSplit, Trash2, TriangleAlert, Underline as UnderlineIcon, Undo2, X,
 } from 'lucide-react';
@@ -44,12 +44,18 @@ import { pageEditorExtensions, type PageLinks, type PageMedia } from '../lib/pag
 import { fetchStoredFileBlob, uploadToR2 } from '../lib/r2';
 import { calloutVariant, isAllowedPageLink, type CalloutVariant } from '../lib/pageSchema';
 import { pageBodyFit } from '../lib/pageBodyCheck';
+import { LETTERHEAD_PDF_MESSAGE } from '../lib/pageExportParts';
+import { warmupOfficeEditor } from '../lib/office';
+import type { InternalDocument } from '../types';
+// Alleen het type: de export zelf laadt pas bij een klik (import()).
+import type { PageWordHouseStyle } from '../lib/pageWordExport';
 import {
-  attachmentInfo, attachmentStorageKey, claimPageEdit, createPage, listDossierFiles, listPageVersions, loadPage, loadPageShareStatus, loadPageVersion, pageAncestors, pageTitle,
+  attachmentInfo, attachmentStorageKey, claimPageEdit, createPage, EXPORT_SUBPAGE_LIMIT, listDossierFiles, listPageVersions, listSubpages, loadPage, loadPageShareStatus, loadPageVersion, pageAncestors, pageTitle,
   releasePageEdit, releasePageToShares, restorePageVersion, savePage, type DossierFile,
   savePageVersion, type PageShareStatus, type PageVersionSummary,
 } from '../lib/repository';
 import { useBackStep } from '../lib/useBackStep';
+import { NO_EXPORT_OPTIONS, PageExportDialog, type PageExportAction, type PageExportOptions, type PageExportSubpages } from './PageExportDialog';
 import { PageFilePicker, type FileChoice } from './PageFilePicker';
 import { PageTree, saveTreePreference, treePreference, useTreeDrawer } from './PageTree';
 import {
@@ -57,6 +63,26 @@ import {
 } from './PageBlockMenu';
 
 const SAVE_DELAY_MS = 1500;
+
+/** De laatste keuzes in het exportvenster, per browser (stap 1B-4). Een gemak: zonder opslag gewoon alles uit. */
+const EXPORT_OPTIONS_KEY = 'resofly.paginaExport.opties';
+
+function readExportOptions(): PageExportOptions {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(EXPORT_OPTIONS_KEY) ?? 'null') as Partial<PageExportOptions> | null;
+    return { cover: saved?.cover === true, toc: saved?.toc === true, chapters: saved?.chapters === true, letterhead: saved?.letterhead === true };
+  } catch {
+    return NO_EXPORT_OPTIONS;
+  }
+}
+
+function saveExportOptions(options: PageExportOptions): void {
+  try {
+    window.localStorage.setItem(EXPORT_OPTIONS_KEY, JSON.stringify(options));
+  } catch {
+    // Privévenster of volle opslag: dan onthouden we het niet.
+  }
+}
 const HEARTBEAT_MS = 30_000;
 /** Een claim telt als vers zolang de laatste geslaagde hartslag niet ouder is. */
 const CLAIM_FRESH_MS = 75_000;
@@ -104,7 +130,7 @@ export type PageShareRequest = {
   done: () => void;
 };
 
-export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClose, onOpenPage, backTo = null, ownDossierName = 'Eigen dossier', houseStyle = null, onShare }: {
+export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClose, onOpenPage, backTo = null, ownDossierName = 'Eigen dossier', houseStyle = null, onShare, onOpenDocument }: {
   documentId: string;
   organizationId: string;
   /** Schrijfrechten op Inhoud. Zonder: alleen lezen, en geen claim. */
@@ -118,10 +144,15 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
   backTo?: string | null;
   /** De naam van het eigen dossier (het bedrijf), boven de boom. */
   ownDossierName?: string;
-  /** De letters van de huisstijl, voor de Word-export. */
-  houseStyle?: { brand_heading_font?: string | null; brand_body_font?: string | null } | null;
+  /** De bedrijfsinstellingen voor de Word-export: letters, naam en logo, briefpapier en Documentopmaak. */
+  houseStyle?: PageWordHouseStyle | null;
   /** Delen (stap 1C): het deelvenster openen; klaar als het open is. Zonder deze functie geen knop. */
   onShare?: (request: PageShareRequest) => Promise<void> | void;
+  /**
+   * Een Word-kopie openen (stap 1B-3), nadat de editor netjes dicht is.
+   * Zonder deze functie geen "Maak er een Word-document van".
+   */
+  onOpenDocument?: (doc: InternalDocument) => void;
 }) {
   const [mode, setModeState] = useState<Mode>('laden');
   const [saveState, setSaveState] = useState<SaveState>('opgeslagen');
@@ -131,7 +162,25 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
   const [closeAnyway, setCloseAnyway] = useState(false);
   const [versionsOpen, setVersionsOpen] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [exporting, setExporting] = useState(false);
+  /** Het exportvenster (stap 1B-3), wat er loopt, en wat er misging. */
+  const [exportOpen, setExportOpenState] = useState(false);
+  const exportOpenRef = useRef(false);
+  const setExportOpen = (open: boolean) => { exportOpenRef.current = open; setExportOpenState(open); };
+  const [exportBusy, setExportBusy] = useState<PageExportAction | null>(null);
+  const exportBusyRef = useRef<PageExportAction | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
+  /**
+   * De Word-kopie die al gemaakt is, en bij welke stand van de pagina. Lukte
+   * daarna het sluiten niet, dan opent een tweede klik deze, en maakt hij er
+   * geen tweede bij, zolang je niets wijzigde.
+   */
+  const wordCopyRef = useRef<{ doc: InternalDocument; edits: number; options: string } | null>(null);
+  /** De opties voor Word (stap 1B-4), onthouden per browser; en de subpagina's eronder. */
+  const [exportOptions, setExportOptionsState] = useState<PageExportOptions>(readExportOptions);
+  const setExportOptions = (options: PageExportOptions) => { setExportOptionsState(options); saveExportOptions(options); };
+  const [exportSubpages, setExportSubpages] = useState<Awaited<ReturnType<typeof listSubpages>> | null>(null);
+  const letterheadKind = houseStyle?.invoice_template_kind === 'image' ? 'image' as const
+    : houseStyle?.invoice_template_kind === 'pdf' ? 'pdf' as const : null;
   const [refreshHelps, setRefreshHelps] = useState(true);
   /** Het kruimelpad: de bovenliggende pagina's, van boven naar de directe ouder. */
   const [ancestors, setAncestors] = useState<Array<{ id: string; title: string }>>([]);
@@ -487,8 +536,10 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
     };
   }, [currentSnapshot, documentId]);
 
-  const close = useCallback(async (discard = false, next?: PageStep) => {
-    if (closingRef.current) return;
+  // Geeft terug of de editor dicht is. De Word-kopie (stap 1B-3) opent pas
+  // daarna: lukte opslaan niet, dan blijft de pagina open, met "Toch sluiten".
+  const close = useCallback(async (discard = false, next?: PageStep): Promise<boolean> => {
+    if (closingRef.current) return false;
     closingRef.current = true;
     if (timerRef.current) { window.clearTimeout(timerRef.current); timerRef.current = null; }
     if (!discard && modeRef.current === 'bewerken') {
@@ -496,7 +547,7 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
       if (!ok) {
         closingRef.current = false;
         setCloseAnyway(true);
-        return;
+        return false;
       }
     }
     if (savedThisSessionRef.current) await savePageVersion(documentId).catch(() => {});
@@ -506,6 +557,7 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
     }
     if (next && onOpenPage) onOpenPage(next);
     else onClose();
+    return true;
   }, [documentId, onClose, onOpenPage, queueSave]);
 
   // De terugknop van de telefoon: terug naar de pagina waar je vandaan kwam,
@@ -740,23 +792,82 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
     }
   };
 
-  // Word (stap 1B-2): de opgeslagen pagina, in de huisstijl. Eerst opslaan wat
-  // er nog staat: de export leest uit de database, net als de server straks.
+  // Exporteren (stap 1B-2 en 1B-3): de opgeslagen pagina, in de huisstijl.
+  // Eerst opslaan wat er nog staat: de export leest uit de database, net als
+  // de server straks. Bij een conflict of een mislukte opslag staat er op het
+  // scherm iets anders dan in de database; dan geen export (zoals bij delen).
   // Het bouwen laadt pas bij een klik, zodat de editor er niet zwaarder van wordt.
-  const exportWord = async () => {
-    if (exporting) return;
-    setExporting(true);
+  const runExport = async (action: PageExportAction) => {
+    if (exportBusyRef.current) return;
+    if (action === 'afdrukken') {
+      // Alleen CSS (@media print): het venster gaat dicht, en staat ook niet op papier.
+      setExportOpen(false);
+      window.setTimeout(() => window.print(), 50);
+      return;
+    }
+    exportBusyRef.current = action;
+    setExportBusy(action);
+    setExportError(null);
     try {
-      if (modeRef.current === 'bewerken' && !(await queueSave())) {
+      // De opties van het venster (stap 1B-4). Subpagina's als hoofdstukken:
+      // de lijst die het venster toonde, of nu opgehaald als die er nog niet was.
+      let subpages = exportSubpages;
+      if (exportOptions.chapters && !subpages) {
+        subpages = await listSubpages(documentId, organizationId);
+        setExportSubpages(subpages);
+      }
+      if (exportOptions.chapters && subpages?.tooMany) {
+        throw new Error(`Er staan meer dan ${EXPORT_SUBPAGE_LIMIT} subpagina's onder deze pagina. Zoveel hoofdstukken passen niet in één bestand.`);
+      }
+      const wordOptions = {
+        cover: exportOptions.cover,
+        toc: exportOptions.toc,
+        // Alleen een briefpapier dat een afbeelding is; bij een PDF staat de optie uit (het venster zegt waarom).
+        letterhead: exportOptions.letterhead && letterheadKind === 'image',
+        chapters: exportOptions.chapters ? (subpages?.subpages ?? []).map(({ page, depth }) => ({ id: page.id, title: page.title, depth })) : [],
+      };
+      if (action === 'kopie') {
+        if (!onOpenDocument) return;
+        const edits = editCountRef.current;
+        const optionsKey = JSON.stringify(wordOptions);
+        const earlier = wordCopyRef.current;
+        let copy = earlier && earlier.edits === edits && earlier.options === optionsKey ? earlier.doc : null;
+        if (!copy) {
+          if (!(await flushForShare())) {
+            throw new Error('De pagina kon niet worden opgeslagen, dus er is ook geen Word-document van gemaakt. Probeer het zo nog eens.');
+          }
+          const { buildPageWord, createPageWordCopy } = await import('../lib/pageWordExport');
+          const { blob } = await buildPageWord(documentId, organizationId, houseStyle, wordOptions);
+          copy = await createPageWordCopy(documentId, organizationId, title, blob);
+          wordCopyRef.current = { doc: copy, edits, options: optionsKey };
+        }
+        setExportOpen(false);
+        // Eerst netjes dicht (opslaan, een versie, de claim vrij), dan Word.
+        // Lukt sluiten niet, dan staat het document er wel al; de melding van
+        // de editor zegt wat er misging.
+        if (await close()) onOpenDocument(copy);
+        return;
+      }
+      if (!(await flushForShare())) {
         throw new Error('De pagina kon niet worden opgeslagen, dus ook niet als Word-bestand. Probeer het zo nog eens.');
       }
       const { buildPageWord, saveFile } = await import('../lib/pageWordExport');
-      const { blob, fileName } = await buildPageWord(documentId, organizationId, houseStyle);
+      const { blob, fileName } = await buildPageWord(documentId, organizationId, houseStyle, wordOptions);
       saveFile(blob, fileName);
+      setExportOpen(false);
     } catch (error) {
-      setMessage(error instanceof Error && error.message ? error.message : 'Het Word-bestand kon niet worden gemaakt.');
+      // Een fout van de database is geen Error maar een object met een
+      // message; met alleen `instanceof Error` zag je bij een geweigerde rij
+      // niet waarom.
+      const raw = (error as { message?: unknown } | null)?.message;
+      const text = typeof raw === 'string' && raw ? raw
+        : action === 'kopie' ? 'Het Word-document kon niet worden gemaakt.' : 'Het Word-bestand kon niet worden gemaakt.';
+      // Is het venster al dicht (terug, Escape), dan in de melding van de editor.
+      if (exportOpenRef.current) setExportError(text);
+      else setMessage(text);
     } finally {
-      setExporting(false);
+      exportBusyRef.current = null;
+      setExportBusy(null);
     }
   };
 
@@ -802,8 +913,24 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
         <button type="button" className="page-editor-action" onClick={() => void copyLink()} title="Een link naar deze pagina, voor collega's">
           <Copy size={15} /><span>{copied ? 'Gekopieerd' : 'Link'}</span>
         </button>
-        <button type="button" className="page-editor-action page-editor-word" onClick={() => void exportWord()} disabled={exporting} title="Download deze pagina als Word-bestand (.docx), in je huisstijl">
-          <FileDown size={15} /><span>{exporting ? 'Bezig…' : 'Word'}</span>
+        <button
+          type="button"
+          className={`page-editor-action page-editor-export${exportOpen ? ' is-active' : ''}`}
+          onClick={() => {
+            setExportError(null);
+            setExportOpen(true);
+            // Hoeveel subpagina's er nu onder staan: voor de optie "als hoofdstukken".
+            setExportSubpages(null);
+            listSubpages(documentId, organizationId).then(setExportSubpages, () => setExportSubpages(null));
+            // De Word-kopie opent in Collabora, en die start koud (tot een
+            // minuut). Zo loopt het opstarten al terwijl je kiest (§9).
+            if (canWrite && onOpenDocument) warmupOfficeEditor();
+          }}
+          aria-haspopup="dialog"
+          aria-label="Exporteren"
+          title="Deze pagina als Word-bestand, als Word-document in het dossier, of afdrukken"
+        >
+          <FileOutput size={15} /><span>{exportBusy ? 'Bezig…' : 'Exporteren'}</span>
         </button>
         <button type="button" className={`page-editor-action${versionsOpen ? ' is-active' : ''}`} onClick={() => setVersionsOpen(open => !open)} aria-expanded={versionsOpen}>
           <History size={15} /><span>Versies</span>
@@ -816,7 +943,19 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
         error={filePicker.error}
         onChoose={choice => { filePicker.resolve(choice); setFilePicker(null); }}
       />}
-      {editable && blockMenu && <BlockMenu menu={blockMenu} onHover={index => { if (menuRef.current) showMenu({ ...menuRef.current, active: index }); }} onClose={closeBlockMenu} />}
+      {exportOpen && <PageExportDialog
+        busy={exportBusy}
+        error={exportError}
+        canCopy={canWrite && Boolean(onOpenDocument)}
+        options={exportOptions}
+        subpages={exportSubpages ? { count: exportSubpages.subpages.length, tooMany: exportSubpages.tooMany, limit: EXPORT_SUBPAGE_LIMIT } : null}
+        letterhead={letterheadKind}
+        letterheadPdfNote={LETTERHEAD_PDF_MESSAGE}
+        onOptions={setExportOptions}
+        onChoose={action => void runExport(action)}
+        onClose={() => setExportOpen(false)}
+      />}
+      {editable && blockMenu &&<BlockMenu menu={blockMenu} onHover={index => { if (menuRef.current) showMenu({ ...menuRef.current, active: index }); }} onClose={closeBlockMenu} />}
 
       {(message || (mode === 'lezen' && holder)) && <div className={`page-editor-banner${mode === 'conflict' || mode === 'geen_recht' || mode === 'fout' || mode === 'onbekend' ? ' is-warning' : ''}`}>
         <span>{message ?? `${nameOf(holder as string)} bewerkt deze pagina. Je kunt meelezen; zodra die klaar is, kun je verder.`}</span>

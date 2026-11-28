@@ -3,7 +3,7 @@
  * UI-test — de knoppen en formulieren van offertes, facturen, herinneringen en
  * contracten in Chromium, tegen de echte backend.
  *
- *   node --enable-source-maps --import ./tests/stromen/register.mjs tests/stromen/ui.mjs [offerte] [factuur] [intrekken] [contract] [rollen] [agenda] [mollie] [documenten] [paginas] [paginadrive] [paginadelen] [bank] [inrichten] [opname] [klantdomein] [rapportage] [tickets] [vooruitbetaald] [galerij] [prognose]
+ *   node --enable-source-maps --import ./tests/stromen/register.mjs tests/stromen/ui.mjs [offerte] [factuur] [intrekken] [contract] [rollen] [agenda] [mollie] [documenten] [paginas] [paginadrive] [paginadelen] [paginaexport] [bank] [inrichten] [opname] [klantdomein] [rapportage] [tickets] [vooruitbetaald] [galerij] [prognose]
  *
  *   --schermafdrukken=<map>   waar schermafdrukken van mislukte stappen heen gaan
  *                             (standaard <tmp>/stromen-ui; ook STROMEN_UI_SCHERMAFDRUKKEN)
@@ -50,7 +50,7 @@ const opties = Object.fromEntries(argumenten.filter((a) => a.startsWith('--')).m
   const m = /^--([^=]+)(?:=(.*))?$/.exec(a);
   return [m[1], m[2] ?? 'true'];
 }));
-const ALLE = ['offerte', 'factuur', 'intrekken', 'contract', 'rollen', 'agenda', 'mollie', 'documenten', 'paginas', 'paginadrive', 'paginadelen', 'bank', 'inrichten', 'opname', 'klantdomein', 'rapportage', 'tickets', 'vooruitbetaald', 'galerij', 'prognose'];
+const ALLE = ['offerte', 'factuur', 'intrekken', 'contract', 'rollen', 'agenda', 'mollie', 'documenten', 'paginas', 'paginadrive', 'paginadelen', 'paginaexport', 'bank', 'inrichten', 'opname', 'klantdomein', 'rapportage', 'tickets', 'vooruitbetaald', 'galerij', 'prognose'];
 const gekozen = argumenten.filter((a) => !a.startsWith('-'));
 for (const naam of gekozen) {
   if (!ALLE.includes(naam)) throw new Error(`Onbekend scenario "${naam}". Kies uit: ${ALLE.join(', ')}`);
@@ -1671,6 +1671,20 @@ async function naarKlantdossier(scherm, klantNaam) {
   await wachtTot(async () => tekst(await huidig.innerText().catch(() => '')) === klantNaam, { melding: `dossier van ${klantNaam} niet open` });
 }
 
+/**
+ * Exporteren → Word downloaden in de pagina-editor (stap 1B-3). Geeft de
+ * download; het venster gaat daarna dicht.
+ */
+async function exporteerWord(page) {
+  const onderweg = page.waitForEvent('download', { timeout: 30000 });
+  onderweg.catch(() => {});
+  await page.locator('.page-editor-export').click();
+  await page.locator('.page-export-word').click();
+  const download = await onderweg;
+  await page.locator('.page-export').waitFor({ state: 'detached', timeout: 10000 });
+  return download;
+}
+
 /** Een open venster voor een document (nieuw of bewerken). */
 function documentVenster(page) {
   return page.locator('section.modal').filter({ has: page.locator('.modal-head h3', { hasText: /^(Nieuw document|Document bewerken)$/ }) });
@@ -2525,10 +2539,7 @@ async function scenarioPaginas() {
     await terug.waitForTimeout(1500);
     // Word: de afbeeldingen komen van de worker en gaan mee in het bestand. De
     // export slaat alleen op als er iets veranderd is, dus ook dit verandert niets.
-    const wordOnderweg = terug.waitForEvent('download', { timeout: 30000 });
-    wordOnderweg.catch(() => {});
-    await terug.locator('.page-editor-word').click();
-    const docx = new Map(leesZip(readFileSync(await (await wordOnderweg).path())).map((deel) => [deel.name, deel.data]));
+    const docx = new Map(leesZip(readFileSync(await (await exporteerWord(terug)).path())).map((deel) => [deel.name, deel.data]));
     const media = [...docx.keys()].filter((naam) => naam.startsWith('word/media/'));
     gelijk(media.length, 3, `de afbeeldingen in het Word-bestand: ${media.join(', ')}`);
     gelijk((docx.get('word/document.xml')?.toString('utf8').match(/<w:drawing>/g) ?? []).length, 3, 'de afbeeldingen in document.xml');
@@ -2866,7 +2877,7 @@ async function scenarioPaginadrive() {
     await sluitPagina(page);
   });
   // ── Word (stap 1B-2): de opgeslagen pagina, in de huisstijl ────────────────
-  await uiStap('Word: de pagina als .docx met wat je net typte, de subpagina en de huisstijlletter; de balk past op de telefoon', async () => {
+  await uiStap('Word: de pagina als .docx met wat je net typte, de subpagina en de huisstijlletter (via Exporteren); de balk past op de telefoon', async () => {
     const tag = Date.now().toString(36);
     const nieuwePagina = (titel, body, ouder = null) => {
       sql(`insert into public.documents (organization_id, created_by, title, format, body, client_id, parent_id)
@@ -2892,10 +2903,7 @@ async function scenarioPaginadrive() {
     // Net getypt, nog niet opgeslagen: de export slaat eerst op.
     await page.locator('.page-editor .tiptap p').last().click();
     await page.keyboard.type(`Net getypt ${tag}`);
-    const downloadOnderweg = page.waitForEvent('download', { timeout: 30000 });
-    downloadOnderweg.catch(() => {});
-    await page.locator('.page-editor-word').click();
-    const download = await downloadOnderweg;
+    const download = await exporteerWord(page);
     gelijk(download.suggestedFilename(), `Exportproef-${tag}.docx`, 'de naam van het bestand');
     const delen = new Map(leesZip(readFileSync(await download.path())).map(deel => [deel.name, deel.data]));
     const documentXml = delen.get('word/document.xml')?.toString('utf8') ?? '';
@@ -2913,7 +2921,7 @@ async function scenarioPaginadrive() {
     const breed = page.viewportSize();
     await page.setViewportSize({ width: 390, height: 844 });
     try {
-      await wachtTot(async () => page.locator('.page-editor-word').isVisible(), { melding: 'de Word-knop staat niet in beeld op de telefoon' });
+      await wachtTot(async () => page.locator('.page-editor-export').isVisible(), { melding: 'de knop Exporteren staat niet in beeld op de telefoon' });
       const maten = await page.evaluate(() => {
         const balk = document.querySelector('.page-editor-bar');
         return { pagina: document.documentElement.scrollWidth, scherm: window.innerWidth, balk: balk ? balk.scrollWidth - balk.clientWidth : -1 };
@@ -3383,6 +3391,361 @@ async function scenarioPaginadelen() {
     gelijk(await venster.locator('.share-outdated').count(), 0, 'na bijwerken geen melding van een oudere versie');
     await venster.locator('.modal-close').click();
     await venster.waitFor({ state: 'detached', timeout: 5000 });
+  });
+}
+
+// ── Pagina's exporteren (stap 1B-3) ─────────────────────────────────────────
+
+/**
+ * Het exportvenster in de pagina-editor: Word downloaden, afdrukken, en "Maak
+ * er een Word-document van". De worker en Collabora draaien hier niet: de
+ * upload en de sessie zijn nagebootst (page.route), de documents-rij is echt.
+ * Of Collabora dit bestand goed bewerkt en terugschrijft, toetst dit dus niet.
+ */
+async function scenarioPaginaexport() {
+  groep('UI: pagina\'s exporteren');
+  const { w } = t;
+  const tag = Date.now().toString(36);
+  const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  const woord = (text) => ({ type: 'text', text });
+  sql(`insert into public.content_folders (organization_id, client_id, name) values (${q(w.orgId)}, ${q(w.klantA.id)}, ${q(`Exportmap ${tag}`)})`);
+  const map = sqlRij(`select id from public.content_folders where organization_id = ${q(w.orgId)} and name = ${q(`Exportmap ${tag}`)}`).id;
+  const nieuwePagina = (titel, body, { ouder = null, folder = null } = {}) => {
+    sql(`insert into public.documents (organization_id, created_by, title, format, body, client_id, folder_id, parent_id)
+      values (${q(w.orgId)}, ${q(w.medewerker.id)}, ${q(titel)}, 'page', ${q(JSON.stringify(body))}::jsonb, ${q(w.klantA.id)}, ${folder ? q(folder) : 'null'}, ${ouder ? q(ouder) : 'null'})`);
+    return sqlRij(`select id from public.documents where organization_id = ${q(w.orgId)} and title = ${q(titel)}`).id;
+  };
+  const ouder = nieuwePagina(`Export ouder ${tag}`, { type: 'doc', content: [
+    { type: 'heading', attrs: { level: 1 }, content: [woord('Afspraken')] },
+    { type: 'paragraph' },
+  ] }, { folder: map });
+  const kind = nieuwePagina(`Export kind ${tag}`, { type: 'doc', content: [
+    { type: 'paragraph', content: [woord(`Tekst van het hoofdstuk ${tag}`)] },
+    { type: 'paragraph' },
+  ] }, { ouder });
+  verwacht(sqlRij(`select folder_id from public.documents where id = ${q(kind)}`).folder_id === null, 'een subpagina heeft zelf geen map');
+  const kleinkind = nieuwePagina(`Export kleinkind ${tag}`, { type: 'doc', content: [
+    { type: 'heading', attrs: { level: 1 }, content: [woord('Kop in het kleinkind')] },
+    { type: 'paragraph', content: [woord(`Tekst van het kleinkind ${tag}`)] },
+  ] }, { ouder: kind });
+
+  const sluitPagina = async (page) => {
+    await page.locator('.page-editor-bar .page-editor-close').click();
+    await page.locator('.page-editor').waitFor({ state: 'detached', timeout: 15000 });
+  };
+  // Via het adres: de bovenste pagina staat in een map, de subpagina onder haar.
+  const openPagina = async (lid, id, { schrijven = true } = {}) => {
+    const adres = new URL(lid.page.url());
+    adres.searchParams.set('pagina', id);
+    await lid.page.goto(adres.toString());
+    await lid.page.locator('.page-editor').waitFor({ timeout: 30000 });
+    const status = lid.page.locator('.page-editor .page-editor-status');
+    const verwachtStatus = schrijven ? 'Opgeslagen' : 'Alleen lezen';
+    await wachtTot(async () => tekst(await status.innerText().catch(() => '')) === verwachtStatus, { melding: `de editor staat niet op "${verwachtStatus}"` });
+  };
+  const beideThemas = async (lid, naam) => {
+    const voor = await lid.page.evaluate(() => document.documentElement.getAttribute('data-theme'));
+    try {
+      for (const thema of ['light', 'dark']) {
+        await lid.page.evaluate((waarde) => document.documentElement.setAttribute('data-theme', waarde), thema);
+        await schermafdruk(`${naam}-${thema}`, lid);
+      }
+    } finally {
+      await lid.page.evaluate((waarde) => {
+        if (waarde) document.documentElement.setAttribute('data-theme', waarde); else document.documentElement.removeAttribute('data-theme');
+      }, voor);
+    }
+  };
+  const docxDelen = (bytes) => new Map(leesZip(bytes).map(deel => [deel.name, deel.data]));
+
+  await uiStap('Exporteren: een venster vóór de editor; terug en Escape sluiten het venster en niet de pagina; Word downloaden met wat je net typte; afdrukken', async () => {
+    const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+    const page = lid.page;
+    await openPagina(lid, ouder);
+    await page.locator('.page-editor .tiptap p').last().click();
+    await page.keyboard.type(`Net getypt ${tag}`);
+    const venster = page.locator('.page-export');
+    const openVenster = async () => {
+      await page.locator('.page-editor-export').click();
+      await venster.waitFor({ timeout: 10000 });
+    };
+    await openVenster();
+    const vooraan = await page.evaluate(() => {
+      const el = document.querySelector('.page-export');
+      if (!el) return false;
+      const r = el.getBoundingClientRect();
+      const punt = document.elementFromPoint(r.left + r.width / 2, r.top + 20);
+      return Boolean(punt && el.contains(punt));
+    });
+    verwacht(vooraan, 'het exportvenster ligt achter de editor');
+    gelijk(await venster.locator('.page-export-option').count(), 3, 'Word downloaden, een Word-document maken en afdrukken');
+    await beideThemas(lid, 'paginaexport-venster');
+    await page.goBack();
+    await venster.waitFor({ state: 'detached', timeout: 5000 });
+    verwacht(await page.locator('.page-editor').isVisible(), 'terug sloot de pagina in plaats van het venster');
+    await openVenster();
+    await page.keyboard.press('Escape');
+    await venster.waitFor({ state: 'detached', timeout: 5000 });
+    verwacht(await page.locator('.page-editor').isVisible(), 'Escape sloot de pagina in plaats van het venster');
+    // Word downloaden slaat eerst op wat je net typte.
+    const download = await exporteerWord(page);
+    gelijk(download.suggestedFilename(), `Export-ouder-${tag}.docx`, 'de naam van het bestand');
+    const delen = docxDelen(readFileSync(await download.path()));
+    const xml = delen.get('word/document.xml')?.toString('utf8') ?? '';
+    verwacht(xml.includes(`Net getypt ${tag}`), 'wat je net typte, staat niet in het Word-bestand');
+    // Kop en voet in de huisstijl (stap 1B-4c): een lijn in de merkkleur, en de voettekst of de bedrijfsnaam.
+    const stijl = sqlRij(`select brand_accent_color, brand_footer_text, company_name from public.company_settings where organization_id = ${q(w.orgId)}`);
+    const kleur = String(stijl.brand_accent_color ?? '').replace('#', '').toUpperCase();
+    verwacht(/^[0-9A-F]{6}$/.test(kleur) && (delen.get('word/header1.xml')?.toString('utf8') ?? '').includes(`w:color="${kleur}"`), `geen lijn in de merkkleur ${kleur} in de kop`);
+    const voettekst = (stijl.brand_footer_text ?? '').trim() || (stijl.company_name ?? '').trim();
+    verwacht(voettekst && (delen.get('word/footer1.xml')?.toString('utf8') ?? '').includes(voettekst), `de voet noemt "${voettekst}" niet`);
+    // Afdrukken: het venster gaat dicht, en de browser drukt af (alleen CSS, zie CHANGELOG_PAGINAS_AFDRUKKEN).
+    await page.evaluate(() => { window.__afgedrukt = 0; window.print = () => { window.__afgedrukt += 1; }; });
+    await openVenster();
+    await venster.locator('.page-export-afdrukken').click();
+    await venster.waitFor({ state: 'detached', timeout: 5000 });
+    await wachtTot(async () => (await page.evaluate(() => window.__afgedrukt)) === 1, { melding: 'er is niet afgedrukt' });
+    // Op de telefoon: de balk past, en het venster komt van onderen, helemaal in beeld.
+    const breed = page.viewportSize();
+    await page.setViewportSize({ width: 390, height: 844 });
+    try {
+      await wachtTot(async () => page.locator('.page-editor-export').isVisible(), { melding: 'de knop Exporteren staat niet in beeld op de telefoon' });
+      const balk = await page.evaluate(() => {
+        const el = document.querySelector('.page-editor-bar');
+        return { pagina: document.documentElement.scrollWidth, scherm: window.innerWidth, balk: el ? el.scrollWidth - el.clientWidth : -1 };
+      });
+      verwacht(balk.pagina <= balk.scherm && balk.balk <= 0, `de balk loopt over op 390px: ${JSON.stringify(balk)}`);
+      await openVenster();
+      const vak = await venster.boundingBox();
+      verwacht(vak && vak.x >= 0 && vak.x + vak.width <= 391 && vak.y >= 0 && vak.y + vak.height <= 845, `het venster past niet op de telefoon: ${JSON.stringify(vak)}`);
+      await beideThemas(lid, 'paginaexport-telefoon');
+      await venster.locator('.page-editor-close').click();
+      await venster.waitFor({ state: 'detached', timeout: 5000 });
+    } finally {
+      if (breed) await page.setViewportSize(breed);
+    }
+    await sluitPagina(page);
+  });
+
+  await uiStap('Word met voorblad, inhoudsopgave vooraan en de subpagina\'s als hoofdstukken; de keuzes blijven bewaard', async () => {
+    const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+    const page = lid.page;
+    await openPagina(lid, ouder);
+    const venster = page.locator('.page-export');
+    await page.locator('.page-editor-export').click();
+    await venster.waitFor({ timeout: 10000 });
+    // Twee subpagina's onder de pagina: het kind en het kleinkind.
+    const hoofdstukken = venster.locator('.page-export-check').filter({ hasText: "Subpagina's als hoofdstukken (2)" });
+    await hoofdstukken.waitFor({ timeout: 10000 });
+    for (const optie of [venster.locator('.page-export-check').filter({ hasText: 'Voorblad' }), venster.locator('.page-export-check').filter({ hasText: 'Inhoudsopgave vooraan' }), hoofdstukken]) {
+      await optie.locator('input').check();
+    }
+    await beideThemas(lid, 'paginaexport-opties');
+    // Dicht en weer open: de keuzes staan er nog.
+    await page.keyboard.press('Escape');
+    await venster.waitFor({ state: 'detached', timeout: 5000 });
+    const download = await exporteerWord(page);
+    const delen = docxDelen(readFileSync(await download.path()));
+    const xml = delen.get('word/document.xml')?.toString('utf8') ?? '';
+    // Het voorblad: de eerste bladzijde zonder voet (titlePg), dan een paginagrens.
+    const [voorblad, rest] = xml.split('<w:p><w:r><w:br w:type="page"/></w:r></w:p>');
+    verwacht(rest && xml.includes('<w:titlePg/></w:sectPr>'), 'geen voorblad op een eigen eerste bladzijde');
+    for (const zin of [`Export ouder ${tag}`, `Klant: ${w.klantA.name}`, new Date().getFullYear().toString()]) {
+      verwacht(voorblad.includes(zin), `"${zin}" staat niet op het voorblad`);
+    }
+    gelijk(xml.match(/<w:pStyle w:val="Title"\/>/g)?.length, 1, 'de titel staat één keer');
+    gelijk(xml.match(/fldCharType="begin"/g)?.length, 1, 'één inhoudsopgave');
+    const inhoudsopgave = rest.slice(rest.indexOf('TOCHeading'), rest.indexOf('fldCharType="end"'));
+    for (const regel of ['Afspraken', `Export kind ${tag}`, `Export kleinkind ${tag}`]) verwacht(inhoudsopgave.includes(regel), `"${regel}" staat niet in de inhoudsopgave`);
+    // Het kind begint op een nieuwe bladzijde als hoofdstuk; het kleinkind loopt door, een niveau lager.
+    verwacht(rest.includes(`<w:pStyle w:val="Heading1"/><w:pageBreakBefore/></w:pPr><w:r><w:t xml:space="preserve">Export kind ${tag}</w:t>`), 'het kind is geen hoofdstuk');
+    verwacht(rest.includes(`<w:pStyle w:val="Heading2"/></w:pPr><w:r><w:t xml:space="preserve">Export kleinkind ${tag}</w:t>`), 'het kleinkind staat niet onder het kind');
+    verwacht(rest.includes('<w:pStyle w:val="Heading3"/></w:pPr><w:r><w:t xml:space="preserve">Kop in het kleinkind</w:t>'), 'de kop in het kleinkind schoof niet op');
+    const volgorde = ['Afspraken', `Tekst van het hoofdstuk ${tag}`, `Tekst van het kleinkind ${tag}`].map(zin => rest.lastIndexOf(zin));
+    gelijk([...volgorde].sort((a, b) => a - b), volgorde, 'de volgorde: de pagina, het kind, het kleinkind');
+    // Elke stijl die het bestand gebruikt, bestaat.
+    const stijlen = new Set([...(delen.get('word/styles.xml')?.toString('utf8') ?? '').matchAll(/w:styleId="([^"]+)"/g)].map(m => m[1]));
+    for (const [, stijl] of xml.matchAll(/<w:pStyle w:val="([^"]+)"\/>/g)) verwacht(stijlen.has(stijl), `de stijl ${stijl} ontbreekt`);
+    // De keuzes zijn bewaard: weer open, alles nog aan.
+    await page.locator('.page-editor-export').click();
+    await venster.waitFor({ timeout: 10000 });
+    await hoofdstukken.waitFor({ timeout: 10000 });
+    gelijk(await venster.locator('.page-export-check input:checked').count(), 3, 'de keuzes zijn niet bewaard');
+    await venster.locator('.page-editor-close').click();
+    await venster.waitFor({ state: 'detached', timeout: 5000 });
+    await sluitPagina(page);
+  });
+
+  await uiStap('Maak er een Word-document van: een Word-document in de map van de bovenste pagina, met wat je net typte; de pagina gaat netjes dicht en Word opent', async () => {
+    const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+    const page = lid.page;
+    const geupload = [];
+    const sessies = [];
+    await page.route(/\/__media\/office\/document-upload$/, async (route) => {
+      const verzoek = route.request();
+      const kop = verzoek.headers();
+      const naam = decodeURIComponent(kop['x-file-name'] ?? '');
+      const bytes = verzoek.postDataBuffer() ?? Buffer.alloc(0);
+      const key = `${w.orgId}/document/${randomUUID()}-${naam}`;
+      geupload.push({ naam, org: kop['x-organization-id'], soort: kop['x-file-type'], bytes, key });
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, key, size_bytes: bytes.length, mime_type: DOCX, name: naam }) });
+    });
+    await page.route(/\/__media\/office\/session$/, async (route) => {
+      sessies.push(JSON.parse(route.request().postData() ?? '{}').documentId);
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+        editorUrl: `${APP}/__nep-collabora`, accessToken: 'nep', accessTokenTtl: 3600000, accessTokenExp: Date.now() + 3600000,
+        fileName: `Export kind ${tag} (Word).docx`, canWrite: true,
+      }) });
+    });
+    await page.route(/\/__nep-collabora$/, (route) => route.fulfill({ status: 200, contentType: 'text/html', body: '<!doctype html><title>Nep-Collabora</title><p>Nep-Collabora</p>' }));
+    await openPagina(lid, kind);
+    await page.locator('.page-editor .tiptap p').last().click();
+    await page.keyboard.type(`Laatste zin ${tag}`);
+    await page.locator('.page-editor-export').click();
+    await page.locator('.page-export-kopie').click();
+    await page.locator('.page-editor').waitFor({ state: 'detached', timeout: 30000 });
+    const word = page.getByRole('dialog', { name: `Export kind ${tag} (Word).docx` });
+    await word.waitFor({ timeout: 15000 });
+    const kopie = sqlRij(`select id, format, folder_id, client_id, parent_id, storage_key, mime_type, size_bytes, content, created_by
+      from public.documents where organization_id = ${q(w.orgId)} and title = ${q(`Export kind ${tag} (Word)`)}`);
+    verwacht(kopie, 'er is geen Word-document gemaakt');
+    gelijk(geupload.length, 1, 'één upload');
+    gelijk([kopie.format, kopie.folder_id, kopie.client_id, kopie.parent_id, kopie.storage_key, kopie.mime_type, Number(kopie.size_bytes), kopie.content, kopie.created_by],
+      ['office', map, w.klantA.id, null, geupload[0].key, DOCX, geupload[0].bytes.length, '', w.medewerker.id], 'het Word-document: in de map van de bovenste pagina, bij de klant');
+    gelijk([geupload[0].naam, geupload[0].org, geupload[0].soort], [`Export-kind-${tag}-Word.docx`, w.orgId, DOCX], 'wat de worker kreeg');
+    gelijk(sessies, [kopie.id], 'Word opent de kopie');
+    const xml = docxDelen(geupload[0].bytes).get('word/document.xml')?.toString('utf8') ?? '';
+    for (const zin of [`Export kind ${tag}`, `Tekst van het hoofdstuk ${tag}`, `Laatste zin ${tag}`]) verwacht(xml.includes(zin), `"${zin}" staat niet in het Word-document`);
+    // De pagina zelf: opgeslagen, en weer vrij voor anderen.
+    verwacht(sqlRij(`select content from public.documents where id = ${q(kind)}`).content.includes(`Laatste zin ${tag}`), 'de pagina is niet opgeslagen');
+    gelijk(sqlRij(`select count(*)::int as n from public.document_edit_claims where document_id = ${q(kind)}`).n, 0, 'de pagina is nog geclaimd');
+    await schermafdruk('paginaexport-word-open', lid);
+    // Word dicht: het document staat in de map, naast de pagina.
+    await word.getByRole('button', { name: 'Editor sluiten' }).click();
+    await word.waitFor({ state: 'detached', timeout: 10000 });
+    await naarKlantdossier(lid, w.klantA.name);
+    await inhoud(page).locator('.odrv-row').filter({ hasText: `Exportmap ${tag}` }).first().click();
+    await inhoud(page).locator('.odrv-row').filter({ hasText: `Export kind ${tag} (Word)` }).first().waitFor({ timeout: 15000 });
+  });
+
+  await uiStap('lukt het Word-document niet, dan zegt het venster het: de pagina blijft open, er komt geen document, en een al opgeslagen bestand gaat weer weg', async () => {
+    const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+    const page = lid.page;
+    let uploadFout = true;
+    const geupload = [];
+    const gewist = [];
+    await page.route(/\/__media\/office\/document-upload$/, async (route) => {
+      if (uploadFout) {
+        await route.fulfill({ status: 507, contentType: 'application/json', body: JSON.stringify({ error: 'De opslag van je organisatie is vol.' }) });
+        return;
+      }
+      const naam = decodeURIComponent(route.request().headers()['x-file-name'] ?? '');
+      const key = `${w.orgId}/document/${randomUUID()}-${naam}`;
+      geupload.push(key);
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, key, size_bytes: 10, mime_type: DOCX, name: naam }) });
+    });
+    await page.route(/\/__media\/file\/.+$/, async (route) => {
+      if (route.request().method() !== 'DELETE') return route.fallback();
+      gewist.push(decodeURIComponent(new URL(route.request().url()).pathname.replace(/^.*\/__media\/file\//, '')));
+      await route.fulfill({ status: 200, body: '' });
+    });
+    const titel = `Export ouder ${tag} (Word)`;
+    const aantal = () => sqlRij(`select count(*)::int as n from public.documents where organization_id = ${q(w.orgId)} and title = ${q(titel)}`).n;
+    await openPagina(lid, ouder);
+    const venster = page.locator('.page-export');
+    const fout = venster.locator('.page-export-error');
+    await page.locator('.page-editor-export').click();
+    await venster.locator('.page-export-kopie').click();
+    await wachtTot(async () => tekst(await fout.innerText().catch(() => '')) === 'De opslag van je organisatie is vol.', { melding: 'het venster zegt niet wat er misging' });
+    verwacht(await page.locator('.page-editor').isVisible(), 'de pagina ging toch dicht');
+    gelijk(aantal(), 0, 'er kwam toch een document');
+    // Het bestand staat in R2, maar de rij komt er niet (een trigger die
+    // weigert): dan gaat het bestand weer weg, anders bleef het als wees staan.
+    uploadFout = false;
+    sql(`create or replace function public.stromen_weiger_wordkopie() returns trigger language plpgsql as $$ begin raise exception 'Proef: geen Word-kopie'; end $$`);
+    sql(`create trigger stromen_weiger_wordkopie before insert on public.documents for each row when (new.title = ${q(titel)}) execute function public.stromen_weiger_wordkopie()`);
+    try {
+      await venster.locator('.page-export-kopie').click();
+      await wachtTot(async () => tekst(await fout.innerText().catch(() => '')).includes('Proef: geen Word-kopie'), { melding: 'de geweigerde rij staat niet in het venster' });
+      await wachtTot(async () => gewist.length === 1, { melding: 'het bestand is niet opgeruimd' });
+      gelijk(gewist, geupload, 'het opgeruimde bestand is het geüploade');
+    } finally {
+      sql('drop trigger if exists stromen_weiger_wordkopie on public.documents');
+      sql('drop function if exists public.stromen_weiger_wordkopie()');
+    }
+    verwacht(await page.locator('.page-editor').isVisible(), 'de pagina ging toch dicht');
+    gelijk(aantal(), 0, 'er kwam toch een document');
+    await venster.locator('.page-editor-close').click();
+    await venster.waitFor({ state: 'detached', timeout: 5000 });
+    await sluitPagina(page);
+  }, { toegestaan: [{ tabel: 'documents', methode: 'POST', antwoord: /Proef: geen Word-kopie/ }] });
+
+  await uiStap('alleen lezen (de kijker): Word downloaden en afdrukken kan, een Word-document maken niet', async () => {
+    const kijker = await openWerkruimte(w.kijker, 'kijker', w.orgId, { tijdelijk: true });
+    const page = kijker.page;
+    await openPagina(kijker, ouder, { schrijven: false });
+    await page.locator('.page-editor-export').click();
+    const venster = page.locator('.page-export');
+    await venster.waitFor({ timeout: 10000 });
+    gelijk(await venster.locator('.page-export-kopie').count(), 0, 'een kijker kan een Word-document maken');
+    gelijk(await venster.locator('.page-export-afdrukken').count(), 1, 'afdrukken staat er niet');
+    await venster.locator('.page-editor-close').click();
+    await venster.waitFor({ state: 'detached', timeout: 5000 });
+    const download = await exporteerWord(page);
+    const xml = docxDelen(readFileSync(await download.path())).get('word/document.xml')?.toString('utf8') ?? '';
+    verwacht(xml.includes(`Net getypt ${tag}`), 'de kijker kreeg niet de opgeslagen pagina');
+    await sluitPagina(page);
+  });
+
+  await uiStap('briefpapier: een afbeelding achter elke bladzijde, met de marges van Documentopmaak; een briefpapier als PDF kan niet, en het venster zegt waarom', async () => {
+    const papier = pngVlak(210, 297, [250, 246, 235]);
+    const zet = (soort, dataUrl, mime) => sql(`update public.company_settings set invoice_template_kind = ${q(soort)},
+      invoice_template_mime_type = ${mime ? q(mime) : 'null'}, invoice_template_file_name = ${soort === 'none' ? 'null' : q('briefpapier')},
+      invoice_template_file_size = ${dataUrl ? dataUrl.length : 0}, invoice_template_data_url = ${dataUrl ? q(dataUrl) : 'null'},
+      invoice_template_updated_at = now() where organization_id = ${q(w.orgId)}`);
+    try {
+      zet('image', `data:image/png;base64,${papier.toString('base64')}`, 'image/png');
+      const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+      const page = lid.page;
+      await openPagina(lid, ouder);
+      const venster = page.locator('.page-export');
+      await page.locator('.page-editor-export').click();
+      await venster.waitFor({ timeout: 10000 });
+      // De app laadt het briefpapier niet bij het opstarten (letterhead.ts): de export haalt het op.
+      await venster.locator('.page-export-check').filter({ hasText: 'Briefpapier, achter elke bladzijde' }).locator('input').check();
+      await page.keyboard.press('Escape');
+      await venster.waitFor({ state: 'detached', timeout: 5000 });
+      const delen = docxDelen(readFileSync(await (await exporteerWord(page)).path()));
+      verwacht(/<wp:anchor [^>]*behindDoc="1"/.test(delen.get('word/header1.xml')?.toString('utf8') ?? ''), 'geen briefpapier achter de tekst');
+      verwacht(delen.get('word/media/briefpapier.png')?.equals(papier), 'het briefpapier in het bestand is niet dat van de instellingen');
+      const xml = delen.get('word/document.xml')?.toString('utf8') ?? '';
+      verwacht(xml.includes('<w:headerReference w:type="default" r:id="rId6"/>'), 'de kop met het briefpapier staat niet in de sectie');
+      // Zonder eigen opmaak: de standaard van een factuur (voet vanaf 768 pt), en boven nooit minder dan de gewone marge.
+      verwacht(xml.includes('<w:pgMar w:top="1418" w:right="1418" w:bottom="1478" w:left="1418" w:header="709" w:footer="1158" w:gutter="0"/>'), `de marges: ${xml.match(/<w:pgMar [^>]*>/)?.[0]}`);
+      await sluitPagina(page);
+      // Een briefpapier als PDF: de optie staat uit, met de uitleg.
+      zet('pdf', 'data:application/pdf;base64,JVBERi0xLjQK', 'application/pdf');
+      const ander = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+      // Bewaard van eerder: het briefpapier aan.
+      await ander.page.evaluate(() => window.localStorage.setItem('resofly.paginaExport.opties', JSON.stringify({ letterhead: true })));
+      await openPagina(ander, ouder);
+      await ander.page.locator('.page-editor-export').click();
+      const venster2 = ander.page.locator('.page-export');
+      await venster2.waitFor({ timeout: 10000 });
+      const optie = venster2.locator('.page-export-check').filter({ hasText: 'Briefpapier' });
+      verwacht(await optie.locator('input').isDisabled(), 'een briefpapier als PDF kan toch aan');
+      verwacht(tekst(await venster2.locator('.page-export-note').innerText()).includes('Je briefpapier is een PDF'), 'het venster zegt niet waarom');
+      // De bewaarde keuze telt dan niet: Word downloaden geeft een bestand zonder briefpapier.
+      await venster2.locator('.page-editor-close').click();
+      await venster2.waitFor({ state: 'detached', timeout: 5000 });
+      const zonder = docxDelen(readFileSync(await (await exporteerWord(ander.page)).path()));
+      // Geen briefpapier in het bestand; de kop in de huisstijl (stap 1B-4c) staat er wel.
+      verwacht(![...zonder.keys()].some(naam => naam.startsWith('word/media/briefpapier')), 'met een PDF-briefpapier toch een briefpapier');
+      verwacht(!/behindDoc="1"/.test(zonder.get('word/header1.xml')?.toString('utf8') ?? ''), 'met een PDF-briefpapier toch een afbeelding achter de tekst');
+      await sluitPagina(ander.page);
+    } finally {
+      zet('none', null, null);
+    }
   });
 }
 
@@ -5336,7 +5699,7 @@ try {
       // De app praat met deze testserver, niet met een ander Supabase-adres.
       verwacht(server.verkeer.some((r) => r.soort === 'rpc' && r.status < 400), 'de app deed geen enkele aanroep via de testserver');
     });
-    const scenarios = { offerte: scenarioOfferte, factuur: scenarioFactuur, intrekken: scenarioIntrekken, contract: scenarioContract, rollen: scenarioRollen, agenda: scenarioAgenda, mollie: scenarioMollie, documenten: scenarioDocumenten, paginas: scenarioPaginas, paginadrive: scenarioPaginadrive, paginadelen: scenarioPaginadelen, bank: scenarioBank, inrichten: scenarioInrichten, opname: scenarioOpname, klantdomein: scenarioKlantdomein, rapportage: scenarioRapportage, tickets: scenarioTickets, vooruitbetaald: scenarioVooruitbetaald, galerij: scenarioGalerij, prognose: scenarioPrognose };
+    const scenarios = { offerte: scenarioOfferte, factuur: scenarioFactuur, intrekken: scenarioIntrekken, contract: scenarioContract, rollen: scenarioRollen, agenda: scenarioAgenda, mollie: scenarioMollie, documenten: scenarioDocumenten, paginas: scenarioPaginas, paginadrive: scenarioPaginadrive, paginadelen: scenarioPaginadelen, paginaexport: scenarioPaginaexport, bank: scenarioBank, inrichten: scenarioInrichten, opname: scenarioOpname, klantdomein: scenarioKlantdomein, rapportage: scenarioRapportage, tickets: scenarioTickets, vooruitbetaald: scenarioVooruitbetaald, galerij: scenarioGalerij, prognose: scenarioPrognose };
     for (const naam of SCENARIOS) await scenarios[naam]();
   }
   fouten = samenvatting();

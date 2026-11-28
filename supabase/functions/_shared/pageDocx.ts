@@ -34,6 +34,17 @@
 //    die letter vervangt LibreOffice (en dus de PDF via Collabora) hem door een
 //    andere, en een .woff neemt hij niet aan (docs/rapporten/
 //    PROEF_1B1_LETTERS_EMOJI_2026-11-28.md). Een .woff zet woff.ts eerst om.
+//  - De opties van het exportvenster (stap 1B-4, PageDocxOptions): een
+//    voorblad, een inhoudsopgave vooraan, subpagina's als hoofdstukken, en
+//    het briefpapier (een afbeelding achter elke bladzijde, in de kop).
+//  - Kop en voet in de huisstijl (stap 1B-4c, context.brand): het logo
+//    rechts in de kop met een lijn in de merkkleur, en in de voet de naam of
+//    voettekst links en het paginanummer rechts. Met briefpapier niet: dat
+//    heeft zijn eigen kop en voet. Zonder huisstijl in de context blijft het
+//    bestand dat van 1B-3.
+//    Zonder opties is het bestand precies dat van 1B-3; pageDocx.test.ts
+//    bewaakt dat. De aanroeper geeft namen, de datum en het logo mee: deze
+//    module kent geen klok en geen database.
 // ============================================================
 
 import { ZipBuilder } from './zipWriter.ts';
@@ -67,6 +78,58 @@ export type PageDocxContext = {
   fileNames?: Record<string, string>;
   /** Afbeeldingen (attachmentId → bytes). */
   images?: Record<string, PageDocxImage>;
+  /** Kop en voet in de huisstijl (stap 1B-4c). Zonder: alleen het paginanummer, zoals in 1B-3. */
+  brand?: PageDocxBrand | null;
+};
+
+/** De huisstijl in kop en voet (stap 1B-4c). */
+export type PageDocxBrand = {
+  /** Png, jpeg of gif, rechts in de kop; iets anders laat de kop zonder logo. */
+  logo?: PageDocxImage | null;
+  /** De merkkleur, als #RRGGBB: een lijn onder de kop. */
+  color?: string | null;
+  /** Links in de voet: de voettekst van de huisstijl, of de naam van het bedrijf. */
+  footerText?: string | null;
+};
+
+/** Een subpagina als hoofdstuk (stap 1B-4). Diepte 1 is een directe subpagina. */
+export type PageDocxChapter = { title: string; body: unknown; depth: number };
+
+/** Het voorblad (stap 1B-4). Alles als tekst: de datum maakt de aanroeper. */
+export type PageDocxCover = {
+  /** Regels onder de titel, zoals de klant en het project. */
+  lines?: string[];
+  date?: string | null;
+  /** De naam van het bedrijf: bovenaan als er geen logo is. */
+  company?: string | null;
+  /** Png, jpeg of gif; iets anders wordt de naam van het bedrijf. */
+  logo?: PageDocxImage | null;
+};
+
+/**
+ * Het briefpapier (stap 1B-4b): een afbeelding over de hele bladzijde, achter
+ * de tekst, op elke bladzijde. Een briefpapier als PDF kan niet in een .docx;
+ * de aanroeper zegt dat, en geeft dan niets mee.
+ */
+export type PageDocxLetterhead = {
+  image: PageDocxImage;
+  /** De ruimte die het briefpapier boven en onder voor zichzelf houdt, in twips. Nooit minder dan de gewone marge. */
+  top?: number;
+  bottom?: number;
+};
+
+/** De keuzes in het exportvenster (stap 1B-4). Alles uit: het bestand van 1B-3. */
+export type PageDocxOptions = {
+  letterhead?: PageDocxLetterhead | null;
+  cover?: PageDocxCover | null;
+  /**
+   * Een inhoudsopgave vooraan, van het hele bestand. De inhoudsopgave-blokken
+   * in de pagina's vallen dan weg: een TOC-veld somt in Word altijd het hele
+   * document op, dus twee zouden na bijwerken dezelfde lijst tonen.
+   */
+  toc?: boolean;
+  /** Subpagina's als hoofdstukken, in de volgorde van de boom. */
+  chapters?: PageDocxChapter[];
 };
 
 type Mark = { type?: string; attrs?: Record<string, unknown> };
@@ -91,6 +154,20 @@ const EMU_PER_PX = 9525;
 const EMU_PER_TWIP = 635;
 /** Meer kolommen kan Word niet aan. */
 const MAX_COLUMNS = 63;
+/**
+ * Koppen tot en met Heading6. Een hoofdstuk schuift de koppen van zijn pagina
+ * op (een kop 1 in een subpagina wordt Heading2), en subpagina's gaan tot 20
+ * diep: daaronder wordt alles Heading6. Elke kop die het bestand gebruikt, staat
+ * in styles.xml (pageDocx.test.ts kijkt dat na); een ontbrekende stijl ziet de
+ * XSD niet, en Word maakt er dan gewone tekst van.
+ */
+const MAX_HEADING = 6;
+/** Het logo op het voorblad: hoogstens 5 bij 2,5 cm. */
+const LOGO_MAX_CX = 1800000;
+const LOGO_MAX_CY = 900000;
+/** Het logo in de kop: hoogstens 4,5 bij 1,1 cm. */
+const HEADER_LOGO_MAX_CX = 1620000;
+const HEADER_LOGO_MAX_CY = 396000;
 
 const BORDER = 'CBD5E1';
 const SHADE = 'F1F5F9';
@@ -215,6 +292,10 @@ type Ctx = {
   bold: boolean;
   align?: string;
   toc: TocEntry[];
+  /** Hoeveel niveaus de koppen opschuiven: de diepte van het hoofdstuk (stap 1B-4). */
+  shift: number;
+  /** Geen TOC-veld voor een inhoudsopgave-blok: er staat er al een, of er komt er een vooraan. */
+  dropToc: boolean;
 };
 
 type RunLook = { bold?: boolean; italic?: boolean; color?: string; style?: string };
@@ -248,15 +329,23 @@ function run(text: string, marks?: Mark[], look: RunLook = {}): string {
   return `<w:r>${runProps(marks, look)}${body}</w:r>`;
 }
 
-type ParaLook = { style?: string; numId?: number; ilvl?: number; rule?: boolean; tab?: number; indent?: number; hanging?: number; align?: string };
+type ParaLook = {
+  style?: string; numId?: number; ilvl?: number; rule?: boolean; tab?: number; indent?: number; hanging?: number; align?: string;
+  /** Op een nieuwe pagina beginnen (een hoofdstuk). */
+  pageBreak?: boolean;
+  /** Ruimte erboven, in twips (het voorblad). */
+  before?: number;
+};
 
 function para(look: ParaLook, runs: string): string {
   // De volgorde van CT_PPrBase.
   let props = '';
   if (look.style) props += `<w:pStyle w:val="${look.style}"/>`;
+  if (look.pageBreak) props += '<w:pageBreakBefore/>';
   if (look.numId !== undefined) props += `<w:numPr><w:ilvl w:val="${look.ilvl ?? 0}"/><w:numId w:val="${look.numId}"/></w:numPr>`;
   if (look.rule) props += `<w:pBdr><w:bottom w:val="single" w:sz="6" w:space="1" w:color="${BORDER}"/></w:pBdr>`;
   if (look.tab) props += `<w:tabs><w:tab w:val="left" w:pos="${look.tab}"/></w:tabs>`;
+  if (look.before) props += `<w:spacing w:before="${look.before}"/>`;
   if (look.indent) props += `<w:ind w:left="${look.indent}"${look.hanging ? ` w:hanging="${look.hanging}"` : ''}/>`;
   if (look.align) props += `<w:jc w:val="${look.align}"/>`;
   return `<w:p>${props ? `<w:pPr>${props}</w:pPr>` : ''}${runs}</w:p>`;
@@ -318,7 +407,7 @@ function blockXml(node: PmNode, b: DocxBuilder, ctx: Ctx): string {
     case 'paragraph':
       return para({ style: ctx.quote ? 'Quote' : undefined, indent: indentOf(ctx), align: ctx.align }, inlineXml(node.content, b, ctx));
     case 'heading':
-      return para({ style: `Heading${headingLevel(node)}`, indent: indentOf(ctx), align: ctx.align }, inlineXml(node.content, b, ctx));
+      return para({ style: `Heading${Math.min(MAX_HEADING, headingLevel(node) + ctx.shift)}`, indent: indentOf(ctx), align: ctx.align }, inlineXml(node.content, b, ctx));
     case 'blockquote':
       return blocksXml(node.content, b, { ...ctx, quote: true });
     case 'codeBlock':
@@ -340,7 +429,7 @@ function blockXml(node: PmNode, b: DocxBuilder, ctx: Ctx): string {
     case 'columns':
       return columnsXml(node, b, ctx);
     case 'tableOfContents':
-      return tocXml(ctx);
+      return ctx.dropToc ? '' : tocXml(ctx);
     case 'subpage': {
       const title = b.context.pageTitles?.[attrText(node, 'pageId')];
       const label = title === undefined ? 'Pagina niet gevonden' : title.trim() || 'Naamloze pagina';
@@ -531,15 +620,17 @@ function columnsXml(node: PmNode, b: DocxBuilder, ctx: Ctx): string {
 }
 
 function tocXml(ctx: Ctx): string {
-  if (ctx.toc.length === 0) return '';
+  // Wat het veld bij bijwerken zelf ook toont: de koppen 1 tot en met 3.
+  const entries = ctx.toc.filter(entry => entry.level <= 3);
+  if (entries.length === 0) return '';
   // Een veld over meer alinea's: het begin in de eerste, het einde in de laatste.
   const begin = '<w:r><w:fldChar w:fldCharType="begin"/></w:r>'
     + '<w:r><w:instrText xml:space="preserve"> TOC \\o "1-3" \\h \\z \\u </w:instrText></w:r>'
     + '<w:r><w:fldChar w:fldCharType="separate"/></w:r>';
   const end = '<w:r><w:fldChar w:fldCharType="end"/></w:r>';
-  const last = ctx.toc.length - 1;
+  const last = entries.length - 1;
   return para({ style: 'TOCHeading' }, run('Inhoud'))
-    + ctx.toc.map((entry, i) => para({ style: `TOC${entry.level}` },
+    + entries.map((entry, i) => para({ style: `TOC${entry.level}` },
       `${i === 0 ? begin : ''}${run(entry.text || 'Kop zonder tekst')}${i === last ? end : ''}`)).join('');
 }
 
@@ -559,23 +650,148 @@ function imageXml(node: PmNode, b: DocxBuilder, ctx: Ctx): string {
     ((TEXT_HEIGHT - 720) * EMU_PER_TWIP) / (size.height * EMU_PER_PX));
   const cx = Math.max(1, Math.round(size.width * EMU_PER_PX * scale));
   const cy = Math.max(1, Math.round(size.height * EMU_PER_PX * scale));
-  const relId = b.image(id, image, ext);
+  return para({ indent: indentOf(ctx), align: ctx.align }, inlineDrawing(b, b.image(id, image, ext), cx, cy, alt));
+}
+
+/** Een afbeelding in de tekst, cx bij cy EMU. */
+function inlineDrawing(b: DocxBuilder, relId: string, cx: number, cy: number, alt: string): string {
   const docPr = b.drawingId();
-  return para({ indent: indentOf(ctx), align: ctx.align }, '<w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0">'
+  return '<w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0">'
     + `<wp:extent cx="${cx}" cy="${cy}"/><wp:docPr id="${docPr}" name="Afbeelding ${docPr}" descr="${escapeXml(alt)}"/>`
     + '<wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>'
     + '<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic>'
     + `<pic:nvPicPr><pic:cNvPr id="0" name="Afbeelding ${docPr}"/><pic:cNvPicPr/></pic:nvPicPr>`
     + `<pic:blipFill><a:blip r:embed="${relId}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>`
     + `<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>`
-    + '</pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>');
+    + '</pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>';
 }
 
-function collectHeadings(node: PmNode, out: TocEntry[]): void {
+/** De maat van een logo binnen een kader, in EMU; null als het geen png, jpeg of gif is. */
+function logoSize(logo: PageDocxImage, maxCx: number, maxCy: number): { ext: string; cx: number; cy: number } | null {
+  const ext = IMAGE_EXT[logo.contentType];
+  const given = logo.width && logo.height && logo.width > 0 && logo.height > 0 ? { width: logo.width, height: logo.height } : null;
+  const size = ext ? given ?? imageSize(logo.bytes) : null;
+  if (!ext || !size) return null;
+  const scale = Math.min(1, maxCx / (size.width * EMU_PER_PX), maxCy / (size.height * EMU_PER_PX));
+  return { ext, cx: Math.max(1, Math.round(size.width * EMU_PER_PX * scale)), cy: Math.max(1, Math.round(size.height * EMU_PER_PX * scale)) };
+}
+
+/** Het logo op het voorblad, binnen 5 bij 2,5 cm; '' als het geen png, jpeg of gif is. */
+function logoXml(logo: PageDocxImage, b: DocxBuilder, company: string): string {
+  const size = logoSize(logo, LOGO_MAX_CX, LOGO_MAX_CY);
+  if (!size) return '';
+  // Een sleutel die geen attachmentId kan zijn: het logo is geen bijlage van de pagina.
+  return inlineDrawing(b, b.image(':logo', logo, size.ext), size.cx, size.cy, company ? `Logo van ${company}` : 'Logo');
+}
+
+/** Een merkkleur als RRGGBB, of null. Alleen #RRGGBB (of #RGB): de rest kan Word niet lezen. */
+function brandColor(value: string | null | undefined): string | null {
+  const color = typeof value === 'string' ? value.trim() : '';
+  if (/^#[0-9a-f]{6}$/i.test(color)) return color.slice(1).toUpperCase();
+  if (/^#[0-9a-f]{3}$/i.test(color)) return color.slice(1).split('').map(c => c + c).join('').toUpperCase();
+  return null;
+}
+
+/**
+ * De kop in de huisstijl (stap 1B-4c): het logo rechts, en een lijn in de
+ * merkkleur eronder. Het logo is een relatie van de kop zelf (rId1 in
+ * header1.xml.rels), niet van document.xml.
+ */
+function brandHeaderXml(logo: { cx: number; cy: number } | null, color: string | null, docPr: number): string {
+  const border = color ? `<w:pBdr><w:bottom w:val="single" w:sz="8" w:space="6" w:color="${color}"/></w:pBdr>` : '';
+  const drawing = logo
+    ? '<w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0">'
+      + `<wp:extent cx="${logo.cx}" cy="${logo.cy}"/><wp:docPr id="${docPr}" name="Logo" descr="Logo"/>`
+      + '<wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>'
+      + '<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic>'
+      + '<pic:nvPicPr><pic:cNvPr id="0" name="Logo"/><pic:cNvPicPr/></pic:nvPicPr>'
+      + '<pic:blipFill><a:blip r:embed="rId1"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>'
+      + `<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${logo.cx}" cy="${logo.cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>`
+      + '</pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>'
+    : '';
+  // De volgorde van CT_PPrBase: pStyle, pBdr, jc.
+  return `${XML_HEAD}<w:hdr ${NS}><w:p><w:pPr><w:pStyle w:val="Header"/>${border}<w:jc w:val="right"/></w:pPr>${drawing}</w:p></w:hdr>`;
+}
+
+type Margins = { top: number; bottom: number; header: number; footer: number };
+const PLAIN_MARGINS: Margins = { top: MARGIN, bottom: MARGIN, header: 709, footer: 709 };
+/**
+ * Met de kop in de huisstijl (stap 1B-4c): de kop 1 cm van de rand, en de
+ * tekst pas op 3 cm. Met de gewone marges stond de lijn onder het logo
+ * tegen de eerste regel aan.
+ */
+const BRAND_MARGINS: Margins = { top: 1701, bottom: MARGIN, header: 567, footer: 709 };
+
+/** Papier en marges. */
+function pageSetup(margins: Margins): string {
+  return `<w:pgSz w:w="${PAGE_WIDTH}" w:h="${PAGE_HEIGHT}"/>`
+    + `<w:pgMar w:top="${margins.top}" w:right="${MARGIN}" w:bottom="${margins.bottom}" w:left="${MARGIN}" w:header="${margins.header}" w:footer="${margins.footer}" w:gutter="0"/>`;
+}
+
+/**
+ * Het briefpapier als kop (stap 1B-4b): een afbeelding vanaf de hoek van de
+ * bladzijde, zo groot als A4, achter de tekst. In de kop staat ze op elke
+ * bladzijde, zoals het briefpapier onder elke bladzijde van een factuur.
+ */
+function letterheadHeaderXml(): string {
+  const cx = PAGE_WIDTH * EMU_PER_TWIP;
+  const cy = PAGE_HEIGHT * EMU_PER_TWIP;
+  // Een docPr-nummer ver van die van de afbeeldingen in de tekst (1, 2, …).
+  return `${XML_HEAD}<w:hdr ${NS}><w:p><w:r><w:drawing>`
+    + '<wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="0" behindDoc="1" locked="1" layoutInCell="1" allowOverlap="1">'
+    + '<wp:simplePos x="0" y="0"/>'
+    + '<wp:positionH relativeFrom="page"><wp:posOffset>0</wp:posOffset></wp:positionH>'
+    + '<wp:positionV relativeFrom="page"><wp:posOffset>0</wp:posOffset></wp:positionV>'
+    + `<wp:extent cx="${cx}" cy="${cy}"/><wp:effectExtent l="0" t="0" r="0" b="0"/><wp:wrapNone/>`
+    + '<wp:docPr id="9000" name="Briefpapier"/>'
+    + '<wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>'
+    + '<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic>'
+    + '<pic:nvPicPr><pic:cNvPr id="0" name="Briefpapier"/><pic:cNvPicPr/></pic:nvPicPr>'
+    + '<pic:blipFill><a:blip r:embed="rId1"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>'
+    + `<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>`
+    + '</pic:pic></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r></w:p></w:hdr>';
+}
+
+/**
+ * Het voorblad (stap 1B-4), met daarna een paginagrens. Er staat geen
+ * paginanummer op: de sectie heeft een eigen eerste bladzijde (titlePg, zie
+ * pageDocxFiles) zonder voet, zoals Word zelf een voorblad maakt.
+ *
+ * Eerst stond het voorblad in een eigen sectie. Ons bestand was geldig, maar
+ * na opnieuw opslaan in LibreOffice (en dus Collabora, bij de Word-kopie) niet
+ * meer: LibreOffice 24.2 zet de sectiegrens dan vóór de opmaak van de alinea,
+ * tegen het schema in. Met één sectie blijft het ook na opslaan geldig.
+ *
+ * De nummering loopt door: de eerste bladzijde van de tekst is 2. Opnieuw bij
+ * 1 beginnen kan in Word, maar LibreOffice telt het totaal dan verkeerd (in een
+ * proef "van 5" bij vier bladen), en het aantal bladzijden van een sectie
+ * (SECTIONPAGES) kent het niet.
+ */
+function coverXml(name: string, cover: PageDocxCover, b: DocxBuilder): string {
+  const company = cover.company?.trim() ?? '';
+  const logo = cover.logo ? logoXml(cover.logo, b, company) : '';
+  let out = '';
+  if (logo) out += para({}, logo);
+  else if (company) out += para({}, run(company, undefined, { bold: true, color: MUTED }));
+  out += para({ style: 'Title', before: logo || company ? 3600 : 4800 }, run(name));
+  for (const line of cover.lines ?? []) {
+    if (line.trim()) out += para({ style: 'Subtitle' }, run(line.trim()));
+  }
+  if (cover.date?.trim()) out += para({ style: 'Subtitle', before: 360 }, run(cover.date.trim()));
+  return `${out}<w:p><w:r><w:br w:type="page"/></w:r></w:p>`;
+}
+
+/** Staat er iets op de pagina, behalve lege alinea's? */
+function hasVisibleContent(doc: PmNode): boolean {
+  return (doc.content ?? []).some(node => node.type !== 'paragraph' || textOf(node).trim() !== '');
+}
+
+function collectHeadings(node: PmNode, out: TocEntry[], shift = 0): void {
   // Zoals de inhoudsopgave in de app (pageEditorExtensions.ts): alle koppen,
-  // ook die in een kader of uitklapper, in volgorde.
-  if (node.type === 'heading') { out.push({ level: headingLevel(node), text: textOf(node).trim() }); return; }
-  for (const child of node.content ?? []) collectHeadings(child, out);
+  // ook die in een kader of uitklapper, in volgorde. In een hoofdstuk een of
+  // meer niveaus lager, net als in blockXml.
+  if (node.type === 'heading') { out.push({ level: Math.min(MAX_HEADING, headingLevel(node) + shift), text: textOf(node).trim() }); return; }
+  for (const child of node.content ?? []) collectHeadings(child, out, shift);
 }
 
 // ── De vaste onderdelen ─────────────────────────────────────────────────────
@@ -598,7 +814,11 @@ function fontKey(n: number): string {
   return `{5C1A9D2E-7B3F-4E8A-9C6D-${(0x1f2e3a4b5c00 + n).toString(16).toUpperCase().padStart(12, '0')}}`;
 }
 
-function stylesXml(fontFamily: string | null, headingFamily: string | null): string {
+/**
+ * extra: de stijlen die alleen een optie van het exportvenster gebruikt. Alleen
+ * dan erin, zodat het bestand zonder opties gelijk blijft aan dat van 1B-3.
+ */
+function stylesXml(fontFamily: string | null, headingFamily: string | null, extra: { deepHeadings?: boolean; cover?: boolean; header?: boolean } = {}): string {
   const family = escapeXml(fontFamily ?? 'Calibri');
   // De titel en de koppen in hun eigen letter. rFonts staat vooraan in rPr (CT_RPr).
   const heading = headingFamily && headingFamily !== fontFamily
@@ -616,6 +836,12 @@ function stylesXml(fontFamily: string | null, headingFamily: string | null): str
     + style('Heading1', 'heading 1', '<w:keepNext/><w:spacing w:before="360" w:after="120"/><w:outlineLvl w:val="0"/>', `${heading}<w:b/><w:sz w:val="36"/><w:szCs w:val="36"/>`)
     + style('Heading2', 'heading 2', '<w:keepNext/><w:spacing w:before="280" w:after="100"/><w:outlineLvl w:val="1"/>', `${heading}<w:b/><w:sz w:val="30"/><w:szCs w:val="30"/>`)
     + style('Heading3', 'heading 3', '<w:keepNext/><w:spacing w:before="240" w:after="80"/><w:outlineLvl w:val="2"/>', `${heading}<w:b/><w:sz w:val="26"/><w:szCs w:val="26"/>`)
+    + (extra.deepHeadings
+      ? style('Heading4', 'heading 4', '<w:keepNext/><w:spacing w:before="200" w:after="60"/><w:outlineLvl w:val="3"/>', `${heading}<w:b/><w:sz w:val="24"/><w:szCs w:val="24"/>`)
+        + style('Heading5', 'heading 5', '<w:keepNext/><w:spacing w:before="200" w:after="60"/><w:outlineLvl w:val="4"/>', `${heading}<w:b/><w:sz w:val="22"/><w:szCs w:val="22"/>`)
+        + style('Heading6', 'heading 6', '<w:keepNext/><w:spacing w:before="200" w:after="60"/><w:outlineLvl w:val="5"/>', `${heading}<w:b/><w:i/><w:sz w:val="22"/><w:szCs w:val="22"/>`)
+      : '')
+    + (extra.cover ? style('Subtitle', 'Subtitle', '<w:spacing w:after="80"/>', `<w:color w:val="${MUTED}"/><w:sz w:val="28"/><w:szCs w:val="28"/>`) : '')
     + style('Quote', 'Quote', `<w:pBdr><w:left w:val="single" w:sz="18" w:space="8" w:color="${BORDER}"/></w:pBdr><w:ind w:left="360"/>`, '<w:i/><w:color w:val="475569"/>')
     + style('Code', 'Code', `<w:shd w:val="clear" w:color="auto" w:fill="${SHADE}"/><w:spacing w:after="120" w:line="240" w:lineRule="auto"/>`,
       '<w:rFonts w:ascii="Consolas" w:hAnsi="Consolas" w:cs="Consolas"/><w:sz w:val="20"/><w:szCs w:val="20"/>')
@@ -624,6 +850,7 @@ function stylesXml(fontFamily: string | null, headingFamily: string | null): str
     + style('TOC2', 'toc 2', '<w:spacing w:after="60"/><w:ind w:left="360"/>', '')
     + style('TOC3', 'toc 3', '<w:spacing w:after="60"/><w:ind w:left="720"/>', '')
     + style('Footer', 'footer', '<w:spacing w:after="0"/>', `<w:color w:val="${MUTED}"/><w:sz w:val="18"/><w:szCs w:val="18"/>`)
+    + (extra.header ? style('Header', 'header', '<w:spacing w:after="0"/>', '') : '')
     + '<w:style w:type="character" w:styleId="Hyperlink"><w:name w:val="Hyperlink"/><w:rPr><w:color w:val="2563EB"/><w:u w:val="single"/></w:rPr></w:style>'
     + '</w:styles>';
 }
@@ -641,11 +868,15 @@ function numberingXml(orderedLists: number[]): string {
     + '</w:numbering>';
 }
 
-function footerXml(): string {
-  // Paginanummers, zoals §9 vraagt. Kop en voet in de huisstijl komen met het exportvenster.
+function footerXml(text: string | null): string {
+  // Paginanummers, zoals §9 vraagt. Met een tekst van de huisstijl (stap
+  // 1B-4c): die links, het nummer rechts, op een tabstop aan de rechterkant.
   const field = (instr: string) => `<w:fldSimple w:instr=" ${instr} "><w:r><w:t>1</w:t></w:r></w:fldSimple>`;
+  const number = `${run('Pagina ')}${field('PAGE')}${run(' van ')}${field('NUMPAGES')}`;
   return `${XML_HEAD}<w:ftr xmlns:w="${W_NS}">`
-    + `<w:p><w:pPr><w:pStyle w:val="Footer"/><w:jc w:val="center"/></w:pPr>${run('Pagina ')}${field('PAGE')}${run(' van ')}${field('NUMPAGES')}</w:p>`
+    + (text
+      ? `<w:p><w:pPr><w:pStyle w:val="Footer"/><w:tabs><w:tab w:val="right" w:pos="${TEXT_WIDTH}"/></w:tabs></w:pPr>${run(text)}<w:r><w:tab/></w:r>${number}</w:p>`
+      : `<w:p><w:pPr><w:pStyle w:val="Footer"/><w:jc w:val="center"/></w:pPr>${number}</w:p>`)
     + '</w:ftr>';
 }
 
@@ -671,13 +902,24 @@ function asDoc(body: unknown): PmNode {
 }
 
 /** De onderdelen van het Word-bestand, met hun plek in de zip. Los, zodat de tests de XML kunnen lezen. */
-export function pageDocxFiles(title: string, body: unknown, context: PageDocxContext = {}): PageDocxFile[] {
+export function pageDocxFiles(title: string, body: unknown, context: PageDocxContext = {}, options: PageDocxOptions = {}): PageDocxFile[] {
   const b = new DocxBuilder(context);
   const doc = asDoc(body);
+  const chapters = (options.chapters ?? []).map(chapter => ({
+    title: (typeof chapter.title === 'string' ? chapter.title.trim() : '') || 'Naamloze pagina',
+    doc: asDoc(chapter.body),
+    depth: whole(chapter.depth, 1, 20),
+  }));
+  // Alle koppen van het bestand, met de hoofdstukken erbij: zo vult het
+  // TOC-veld wat Word er bij bijwerken zelf van maakt.
   const toc: TocEntry[] = [];
   collectHeadings(doc, toc);
+  for (const chapter of chapters) {
+    toc.push({ level: Math.min(MAX_HEADING, chapter.depth), text: chapter.title });
+    collectHeadings(chapter.doc, toc, chapter.depth);
+  }
   const name = title.trim() || 'Naamloze pagina';
-  const ctx: Ctx = { indent: 0, width: TEXT_WIDTH, listDepth: 0, quote: false, bold: false, toc };
+  const ctx: Ctx = { indent: 0, width: TEXT_WIDTH, listDepth: 0, quote: false, bold: false, toc, shift: 0, dropToc: Boolean(options.toc) };
   // De letters van de huisstijl, met wat er van mee kan: normaal en vet. Een
   // familie die voor koppen en tekst dezelfde is, gaat één keer mee.
   const fontFamily = context.font?.family.trim() || null;
@@ -698,24 +940,71 @@ export function pageDocxFiles(title: string, body: unknown, context: PageDocxCon
           bytes: (style === 'Regular' ? font.regular : font.bold) as Uint8Array };
       }),
   })).filter(entry => entry.files.length > 0);
-  const content = para({ style: 'Title' }, run(name)) + blocksXml(doc.content, b, ctx);
+  // Het briefpapier: alleen een afbeelding die Word kan tonen; de marges
+  // houden vrij wat het briefpapier boven en onder zelf gebruikt.
+  const paperImage = options.letterhead?.image;
+  const paperExt = paperImage ? IMAGE_EXT[paperImage.contentType] : undefined;
+  const paper = paperImage && paperExt ? { image: paperImage, ext: paperExt } : null;
+  const clampMargin = (value: number | undefined) => Math.min(Math.round(PAGE_HEIGHT / 3), Math.max(MARGIN, whole(value, MARGIN, PAGE_HEIGHT)));
+  // Kop en voet in de huisstijl (stap 1B-4c). Met briefpapier niet: dat heeft
+  // zijn eigen kop en voet, en een logo of lijn kwam er dan overheen (zoals
+  // builtInLayout de gekleurde balk weglaat bij briefpapier).
+  const brand = paper ? null : context.brand ?? null;
+  const brandLogo = brand?.logo ? logoSize(brand.logo, HEADER_LOGO_MAX_CX, HEADER_LOGO_MAX_CY) : null;
+  const brandLine = brandColor(brand?.color);
+  const brandHeader = Boolean(brandLogo || brandLine);
+  const footerText = brand?.footerText?.trim() || null;
+  const margins: Margins = paper
+    ? (() => {
+      const top = clampMargin(options.letterhead?.top);
+      const bottom = clampMargin(options.letterhead?.bottom);
+      // Het paginanummer net onder de tekst, boven de voet van het briefpapier
+      // (zoals "Voor briefpapier" in Documentopmaak het zet).
+      return { top, bottom, header: 709, footer: bottom > MARGIN ? bottom - 320 : 709 };
+    })()
+    : brandHeader ? BRAND_MARGINS : PLAIN_MARGINS;
+  // Het briefpapier op elke bladzijde; met een voorblad ook op die eerste
+  // (titlePg geeft de eerste bladzijde een eigen kop en voet). Verder blijft
+  // het voorblad kaal: geen kop in de huisstijl, en geen voet.
+  const header = paper
+    ? `<w:headerReference w:type="default" r:id="rId6"/>${options.cover ? '<w:headerReference w:type="first" r:id="rId6"/>' : ''}`
+    : brandHeader ? '<w:headerReference w:type="default" r:id="rId6"/>' : '';
+  // Met een voorblad staat de titel daar, en niet nog eens boven de tekst.
+  let content = options.cover ? coverXml(name, options.cover, b) : para({ style: 'Title' }, run(name));
+  if (options.toc) content += tocXml(ctx);
+  content += blocksXml(doc.content, b, ctx);
+  // Een hoofdstuk begint op een nieuwe bladzijde; een subpagina daaronder
+  // loopt door. Maar alleen als er al iets staat: bij een lege bovenste pagina
+  // (een handboek met alleen subpagina's) begon het eerste hoofdstuk anders na
+  // een lege bladzijde. Een inhoudsopgave-blok in een hoofdstuk valt weg: het
+  // veld zou het hele bestand opsommen, net als dat van de pagina zelf.
+  let written = hasVisibleContent(doc) || (Boolean(options.toc) && toc.some(entry => entry.level <= 3));
+  for (const chapter of chapters) {
+    content += para({ style: `Heading${Math.min(MAX_HEADING, chapter.depth)}`, pageBreak: chapter.depth === 1 && written }, run(chapter.title));
+    content += blocksXml(chapter.doc.content, b, { ...ctx, shift: chapter.depth, dropToc: true });
+    written = true;
+  }
   const documentXml = `${XML_HEAD}<w:document ${NS}><w:body>${content}`
-    + '<w:sectPr><w:footerReference w:type="default" r:id="rId4"/>'
-    + `<w:pgSz w:w="${PAGE_WIDTH}" w:h="${PAGE_HEIGHT}"/>`
-    + `<w:pgMar w:top="${MARGIN}" w:right="${MARGIN}" w:bottom="${MARGIN}" w:left="${MARGIN}" w:header="709" w:footer="709" w:gutter="0"/>`
-    + '</w:sectPr></w:body></w:document>';
+    + `<w:sectPr>${header}<w:footerReference w:type="default" r:id="rId4"/>${pageSetup(margins)}`
+    // Een voorblad: de eerste bladzijde zonder voet, dus zonder paginanummer.
+    + `${options.cover ? '<w:titlePg/>' : ''}</w:sectPr></w:body></w:document>`;
   const rels = [
     { id: 'rId1', type: `${REL}/styles`, target: 'styles.xml', external: false },
     { id: 'rId2', type: `${REL}/numbering`, target: 'numbering.xml', external: false },
     { id: 'rId3', type: `${REL}/settings`, target: 'settings.xml', external: false },
     { id: 'rId4', type: `${REL}/footer`, target: 'footer1.xml', external: false },
     ...(embedded.length ? [{ id: 'rId5', type: `${REL}/fontTable`, target: 'fontTable.xml', external: false }] : []),
+    ...(paper || brandHeader ? [{ id: 'rId6', type: `${REL}/header`, target: 'header1.xml', external: false }] : []),
     ...b.rels,
   ];
   const relsXml = `${XML_HEAD}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">`
     + rels.map(rel => `<Relationship Id="${rel.id}" Type="${rel.type}" Target="${escapeXml(rel.target)}"${rel.external ? ' TargetMode="External"' : ''}/>`).join('')
     + '</Relationships>';
-  const used = new Set(b.media.map(item => item.contentType));
+  const used = new Set([
+    ...b.media.map(item => item.contentType),
+    ...(paper ? [paper.image.contentType] : []),
+    ...(brandLogo && brand?.logo ? [brand.logo.contentType] : []),
+  ]);
   const contentTypesXml = `${XML_HEAD}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">`
     + '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
     + '<Default Extension="xml" ContentType="application/xml"/>'
@@ -726,6 +1015,7 @@ export function pageDocxFiles(title: string, body: unknown, context: PageDocxCon
     + '<Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>'
     + '<Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>'
     + '<Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>'
+    + (paper || brandHeader ? '<Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>' : '')
     + (embedded.length ? '<Override PartName="/word/fontTable.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.fontTable+xml"/>' : '')
     + '<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>'
     + '</Types>';
@@ -754,19 +1044,33 @@ export function pageDocxFiles(title: string, body: unknown, context: PageDocxCon
     { path: 'docProps/core.xml', data: coreXml },
     { path: 'word/document.xml', data: documentXml },
     { path: 'word/_rels/document.xml.rels', data: relsXml },
-    { path: 'word/styles.xml', data: stylesXml(fontFamily, headingFamily) },
+    { path: 'word/styles.xml', data: stylesXml(fontFamily, headingFamily, { deepHeadings: chapters.length > 0, cover: Boolean(options.cover), header: brandHeader }) },
     { path: 'word/numbering.xml', data: numberingXml(b.orderedLists) },
     { path: 'word/settings.xml', data: settingsXml(embedded.length > 0) },
-    { path: 'word/footer1.xml', data: footerXml() },
+    { path: 'word/footer1.xml', data: footerXml(footerText) },
+    ...(paper ? [
+      { path: 'word/header1.xml', data: letterheadHeaderXml() },
+      { path: 'word/_rels/header1.xml.rels', data: `${XML_HEAD}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">`
+        + `<Relationship Id="rId1" Type="${REL}/image" Target="media/briefpapier.${paper.ext}"/></Relationships>` },
+      { path: `word/media/briefpapier.${paper.ext}`, data: paper.image.bytes },
+    ] : []),
+    ...(brandHeader ? [
+      { path: 'word/header1.xml', data: brandHeaderXml(brandLogo, brandLine, 9001) },
+      ...(brandLogo && brand?.logo ? [
+        { path: 'word/_rels/header1.xml.rels', data: `${XML_HEAD}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">`
+          + `<Relationship Id="rId1" Type="${REL}/image" Target="media/logo-kop.${brandLogo.ext}"/></Relationships>` },
+        { path: `word/media/logo-kop.${brandLogo.ext}`, data: brand.logo.bytes },
+      ] : []),
+    ] : []),
     ...fontFiles,
     ...b.media.map(item => ({ path: item.path, data: item.bytes })),
   ];
 }
 
 /** Het Word-bestand van een pagina. */
-export async function buildPageDocx(title: string, body: unknown, context: PageDocxContext = {}): Promise<Blob> {
+export async function buildPageDocx(title: string, body: unknown, context: PageDocxContext = {}, options: PageDocxOptions = {}): Promise<Blob> {
   const zip = new ZipBuilder();
-  for (const file of pageDocxFiles(title, body, context)) {
+  for (const file of pageDocxFiles(title, body, context, options)) {
     // De XML en de letters comprimeren; afbeeldingen zijn dat al.
     await zip.add(file.path, file.data, { compress: typeof file.data === 'string' || file.path.endsWith('.odttf') });
   }

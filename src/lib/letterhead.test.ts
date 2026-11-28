@@ -59,20 +59,29 @@ function sourceFiles(dir: string): string[] {
 test('een PDF in de browser gaat altijd via het opgehaalde briefpapier', () => {
   // documentAssetsFromSettings zet het briefpapier in de PDF. Buiten
   // documentLayout.ts zelf mag dat alleen in lib/pdf.ts (na
-  // withInvoiceLetterhead) en in de documentopmaak-editor (het formulier van
-  // Instellingen, dat het briefpapier zelf ophaalt). Een nieuwe plek: haal het
-  // briefpapier daar eerst op en zet hem in deze lijst.
+  // withInvoiceLetterhead), in de documentopmaak-editor (het formulier van
+  // Instellingen, dat het briefpapier zelf ophaalt), en in de Word-export van
+  // een pagina (lib/pageWordExport.ts, stap 1B-4b: na loadInvoiceLetterhead).
+  // Een nieuwe plek: haal het briefpapier daar eerst op en zet hem in deze lijst.
   const callers = sourceFiles(SRC)
     .filter(file => /documentAssetsFromSettings\(/.test(readFileSync(file, 'utf8')))
     .map(file => file.slice(SRC.length).split('\\').join('/').replace(/^\//, ''))
     .filter(file => file !== 'lib/documentLayout.ts')
     .sort();
-  assert.deepEqual(callers, ['features/DocumentLayoutEditor.tsx', 'lib/pdf.ts']);
+  assert.deepEqual(callers, ['features/DocumentLayoutEditor.tsx', 'lib/pageWordExport.ts', 'lib/pdf.ts']);
 
   const pdf = read('lib/pdf.ts');
   const load = pdf.indexOf('await withInvoiceLetterhead(');
   const use = pdf.indexOf('documentAssetsFromSettings(');
   assert.ok(load > 0 && load < use, 'lib/pdf.ts moet het briefpapier ophalen vóór documentAssetsFromSettings');
+
+  // De Word-export haalt een niet-geladen briefpapier op, en mislukt als dat
+  // niet lukt: nooit stil een bestand zonder het briefpapier waar je om vroeg.
+  const word = read('lib/pageWordExport.ts');
+  const wordLoad = word.indexOf('await loadInvoiceLetterhead(');
+  const wordUse = word.indexOf('documentAssetsFromSettings(');
+  assert.ok(wordLoad > 0 && wordLoad < wordUse, 'lib/pageWordExport.ts moet het briefpapier ophalen vóór documentAssetsFromSettings');
+  assert.match(word.slice(wordLoad, wordUse), /throw new Error\('Het briefpapier kon niet worden geladen/, 'een briefpapier dat niet laadt, moet de export laten mislukken');
 });
 
 test('Instellingen haalt het briefpapier op en maakt van "niet geladen" geen "geen briefpapier"', () => {

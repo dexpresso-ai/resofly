@@ -1,11 +1,44 @@
 # Pagina's: de nachtsessie van 27 op 28 november 2026
 
-Wat er op de branch `claude/affectionate-meitner-arfqck` is gebouwd sinds de laatste merge naar
-staging (`416b997`, 27 november 17:07), en wat ik je wil vragen. Er is niets naar staging
-gegaan: mergen gebeurt pas als jij het zegt.
+Wat er op de branch `claude/affectionate-meitner-arfqck` is gebouwd sinds de merge naar staging
+van 27 november 17:07 (`416b997`), en wat ik je wil vragen.
+
+**Op 28 november om 09:34 UTC naar staging gezet, op jouw verzoek** (`59fab7e`).
+- De uitrol is geslaagd: de zeven migraties, de edge functions en de rooktest.
+- Overgeslagen: de Word-proef in echte Word (vraag 4) en de bevestiging van de keuzes van 1C
+  (vraag 8). Die vragen blijven staan.
+- Ververs open tabbladen: een oude versie van de app opent een pagina met nieuwe blokken alleen
+  om te lezen.
 
 Het bouwplan is `docs/plannen/PAGINAS_BOUWPLAN_2026-11-27.md`. In §18 staan de stappen en de
 stand voor de overdracht.
+
+**Na de merge, op de branch: de export (1B-3 tot en met 1B-4c).** Het exportvenster, de
+Word-kopie, het voorblad, de inhoudsopgave, de hoofdstukken, het briefpapier, en de kop en voet
+in de huisstijl. Wat nu nog in fase 1 zit, wacht op jou. Daarom bouw ik niet verder.
+
+## Wat ik van je nodig heb, op volgorde
+
+1. **De PDF (1B-5): twee antwoorden** (vraag 10).
+   - Rol jij de media-worker uit?
+   - Moet de server de Word-file bouwen, of mag dat in de app blijven? Dat is ook vraag 5.
+2. **Open de vier proefbestanden in echte Word** (vragen 4 en 11):
+   - zonder huisstijl;
+   - met huisstijl;
+   - met alle opties;
+   - met briefpapier.
+
+   Zeg wat er niet klopt.
+3. **Bevestig de keuzes van 1C** (vraag 8).
+4. **Zeg of ik de export naar staging mag mergen.** Daarna op staging:
+   - één Word-kopie bewerken en bewaren in Collabora (vraag 11);
+   - één gedeelde pagina met een afbeelding in het portaal bekijken (vraag 9);
+   - open tabbladen verversen (vraag 6).
+5. **Tekstdocumenten omzetten (1A-5d): twee besluiten** (vraag 1). Omzetten kan niet terug.
+6. **Staging nakijken:**
+   - staat pg_cron aan (vraag 2)?
+   - wordt de opruimwachtrij geleegd (vraag 3)?
+   - de letterproef op de Collabora-container (vraag 7).
 
 ## Vragen voor jou
 
@@ -23,10 +56,10 @@ stand voor de overdracht.
    `file-transfer` (`?cron=purge`), als die is ingepland. Zie
    `docs/setup/BESTANDEN_VERSTUREN_SETUP.md`. Staat die taak er niet, dan blijven de bestanden
    in de opslag staan.
-4. **Open de twee proefbestanden in echte Word: dat is de voorwaarde om de knop "Word" te
-   mergen.**
+4. **Open de proefbestanden in echte Word: dat is de voorwaarde om de knop "Word" te
+   mergen.** (Sinds 1B-4c zijn het er vier; ze komen uit `scripts/proef-word-export.mjs`.)
    - In de editor staat nu een knop "Word": de pagina als .docx, in de letters van je
-     huisstijl.
+     huisstijl. Sinds 1B-3 heet die knop "Exporteren", met daarin "Word downloaden".
    - Het bestand voldoet aan het schema van Word (ECMA-376) en opent goed in LibreOffice.
    - Word zelf kan ik in een cloudsessie niet openen. Vooral de ingesloten letter is daar
      nog niet gezien.
@@ -39,6 +72,15 @@ stand voor de overdracht.
      bijlage en een afbeelding (een rood blok).
    - Let op cursief: de huisstijlletters hebben geen cursieve variant, en LibreOffice nam
      daarvoor een andere letter.
+   - Sinds 1B-4c staan er nog twee naast: met alle opties, en met briefpapier. In de
+     proefbestanden is de huisstijl verzonnen; dat is geen fout:
+     - het logo ("Studio Noord", een blauw vlak met een lichte balk);
+     - de lijn in de kop;
+     - de voettekst "Studio Noord · Havenstraat 1, Noorddorp";
+     - het briefpapier met de blauwe en lichte band.
+
+     In de app komen het logo, de merkkleur en de voettekst uit jouw Huisstijl, en het
+     briefpapier uit Documentopmaak.
 5. **Akkoord met een afwijking van het plan?** §9 laat de server (`page-export`) de DOCX bouwen.
    Voor alleen Word doet de app het nu zelf, met dezelfde module en dezelfde letterkeuze. De
    server komt er pas bij met de PDF. Zie §18, "Afwijking van §9".
@@ -77,8 +119,8 @@ stand voor de overdracht.
    deling aan, maar alleen met een vrijgegeven versie, en het portaal en de geheime link tonen
    alleen die versie. Sinds 1C-3 kun je in de app een pagina delen en bijwerken.
 
-   **Merge 1C-2, 1C-3 en 1C-4 samen.** In 1C-4 kwam wat de klant ziet: opmaak, afbeeldingen
-   en bijlagen die nog in het dossier horen. Bekeken in de browser via een geheime link, die
+   **1C-2, 1C-3 en 1C-4 zijn samen naar staging gegaan** (28 november). In 1C-4 kwam wat de
+   klant ziet: opmaak, afbeeldingen en bijlagen die nog in het dossier horen. Bekeken in de browser via een geheime link, die
    hetzelfde leesvenster gebruikt als het portaal. Het portaal zelf is niet in een browser
    bekeken: inloggen vraagt een mail. Wat de server het portaal geeft, is wel getest.
 
@@ -89,6 +131,24 @@ stand voor de overdracht.
      mag naar buiten, en het beeldtype dat de worker voor `inline=1` nodig heeft, wordt bij
      het uploaden opgeslagen.
    - Staat er alleen "[Afbeelding]", dan ligt het aan de koppeling met de worker.
+10. **De PDF (1B-5): twee antwoorden nodig.** Die stap bouw ik pas als je ze gegeven hebt.
+    - **Rol jij de media-worker uit?** De PDF komt via Collabora, met een nieuw intern pad in de
+      media-worker. Die rol je uit met wrangler; vanuit een cloudsessie kan dat niet.
+    - **Moet de server de Word-file bouwen, of mag dat in de app blijven?**
+      - Op de server kunnen Gerrie en de API ook zonder browser exporteren.
+      - In de app (zoals nu) is het eenvoudiger; dan bouwt de server alleen de PDF.
+
+    Tot dan kun je afdrukken via Exporteren, en in het afdrukvenster "Opslaan als PDF" kiezen.
+11. **Na de volgende merge: maak één Word-document van een pagina op staging, bewerk het en
+    bewaar het.** Dat is "Maak er een Word-document van" (1B-3). Open ook
+    `docs/rapporten/PROEF_WORD_OPTIES_2026-11-28.docx` in echte Word: een voorblad met logo,
+    een inhoudsopgave en drie hoofdstukken (1B-4a). Werk in Word de inhoudsopgave bij (F9);
+    dan komen de paginanummers erbij. En `docs/rapporten/PROEF_WORD_BRIEFPAPIER_2026-11-28.docx`:
+    een briefpapier met een blauwe kopband en een voetband achter elke bladzijde (1B-4b).
+    - De test hier bootst de worker en Collabora na. Een proef met LibreOffice, de motor van
+      Collabora, ging goed: het bestand overleeft opnieuw opslaan.
+    - Let op de grootte. Na de eerste keer bewaren in Collabora werd het bestand in de proef
+      veel groter (107 kB werd 2 MB): LibreOffice sluit dan alle letters in hun geheel in.
 
 ## Gevonden en gerepareerd
 
@@ -119,7 +179,18 @@ stand voor de overdracht.
     vast met precies deze fout; met de reparatie slaagt hij.
   - Zie `docs/changelog/CHANGELOG_PAGINAS_EDITOR_ZWART_SCHERM_2026-11-28.md`.
 
-## Wat er klaarstaat (nog niet op staging)
+## Na de merge gebouwd (op de branch, nog niet op staging)
+
+| Stap | Wat | Changelog |
+| --- | --- | --- |
+| 1B-3 | "Exporteren" in de editor: Word downloaden, "Maak er een Word-document van" (een Word-document naast de pagina, dat meteen opent in Word) en afdrukken. | `CHANGELOG_PAGINAS_EXPORTEREN_2026-11-28.md` |
+| 1B-4a | De opties voor Word: een voorblad (logo, titel, klant, project, datum), een inhoudsopgave vooraan, en de subpagina's als hoofdstukken. | `CHANGELOG_PAGINAS_EXPORTEREN_2026-11-28.md` |
+| 1B-4b | Het briefpapier achter elke bladzijde, als het een afbeelding is (een PDF kan niet in Word), met de marges uit Documentopmaak. Gerepareerd: het voorblad overleefde opnieuw opslaan in Collabora niet goed. | `CHANGELOG_PAGINAS_EXPORTEREN_2026-11-28.md` |
+| 1B-4c | De kop en voet in de huisstijl: het logo en een lijn in de merkkleur, de voettekst en het paginanummer. De controle met LibreOffice is nu een script (`scripts/proef-word-rondgang.sh`). | `CHANGELOG_PAGINAS_EXPORTEREN_2026-11-28.md` |
+
+Geen migraties.
+
+## Wat er op 28 november naar staging ging
 
 | Stap | Wat | Changelog |
 | --- | --- | --- |
@@ -137,7 +208,7 @@ stand voor de overdracht.
 | 1C-3 | Een pagina delen in de app: "Delen" in de editor en de drive, subpagina's aanvinken, en de melding "De klant ziet een oudere versie" met "Bijwerken bij klant". Gerrie deelt een pagina ook, met een vrijgave van wie goedkeurt. | `CHANGELOG_PAGINAS_BIJWERKEN_BIJ_KLANT_2026-11-28.md` |
 | 1C-4 | Wat de klant ziet: de pagina met opmaak, kaders, tabellen, taken en afbeeldingen, in het portaal en bij een geheime link. Gerepareerd: samengevoegde cellen en het startnummer van een lijst gingen verloren, en een afgevinkte taak in een gedeelde notitie leek open. | `CHANGELOG_PAGINAS_PORTAAL_WEERGAVE_2026-11-28.md` |
 
-Er komen zeven migraties mee die nog niet op staging staan:
+Er gingen zeven migraties mee:
 - `20261127140000_paginas_blokken`;
 - `20261127150000_paginas_verwijzingen`;
 - `20261128100000_paginas_prullenbak`;
@@ -150,11 +221,14 @@ Ze mogen opnieuw draaien, en de databasetests lopen ze na.
 
 ## Getest
 
-- **De CI op de branch:** runs 304 tot en met 309 zijn helemaal groen:
+- **De CI op de branch:** runs 304 tot en met 310, en 312, zijn helemaal groen:
   - 308 is fe9a4d7 (1C-1 en 1C-2);
-  - 309 is a080604 (1C-3 en 1C-4).
+  - 309 is a080604 (1C-3 en 1C-4);
+  - 310 is 983b12d, met de verhuisreparatie (migratie `20261128150000`);
+  - 312 is 9b92cc4: na de merge, 1B-3 en 1B-4a.
 
-  Run 310, met de verhuisreparatie (migratie `20261128150000`), is gestart. Groen betekent:
+  Run 311 op staging (59fab7e, dezelfde code na de merge) is ook helemaal groen. Run 313
+  (0d3ccbe, met 1B-4b en 1B-4c) loopt nog. Groen betekent:
   - de migraties vanaf nul met de databasetests;
   - `deno check`;
   - typecheck en de unit tests;
@@ -166,8 +240,14 @@ Ze mogen opnieuw draaien, en de databasetests lopen ze na.
   - `npm test` en typecheck;
   - de databasetests;
   - de terugknop, en laden per module;
-  - de drie UI-scenario's voor pagina's, alle stappen goed:
+  - de UI-scenario's voor pagina's, alle stappen goed:
     - `documenten` (10 stappen);
     - `paginas` (18);
-    - `paginadrive` (10).
+    - `paginadrive` (10);
+    - `paginaexport` (8, na de merge: het exportvenster, de Word-kopie, de opties en het
+      briefpapier);
+  - na de merge: `scripts/proef-word-rondgang.sh`. De vier proefbestanden zijn geldig vóór en
+    na opnieuw opslaan in LibreOffice;
+  - de productiebuild (`npm run build`, met nep-waarden voor Supabase). De Word-export blijft
+    een eigen stuk bundel, dat pas bij een klik laadt.
 - **De mobiele lay-outtest** duurt lokaal te lang voor een sessie; die draait in de CI.

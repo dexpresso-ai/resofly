@@ -5101,6 +5101,11 @@ function App() {
         setPageShare({ id, organizationId, name: request.title || 'Pagina', flush: request.flush, done: request.done });
       }}
       onClose={() => { setPageTrail([]); setPageEditDoc(null); refresh(); }}
+      onOpenDocument={(doc) => {
+        // De Word-kopie (stap 1B-3): de editor is dan al dicht. Alleen met een
+        // bestand: een document zonder storage_key opende in de teksteditor.
+        if (doc.storage_key) void openDocument(doc);
+      }}
     /></DialogDeferred>}
     {pageShare && pageEditDoc?.id === pageShare.id && <DialogDeferred><ShareDialog
       data={data}

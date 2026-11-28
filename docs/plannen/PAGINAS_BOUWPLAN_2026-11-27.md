@@ -503,21 +503,24 @@ akkoord is.
 | 1A-2 | Laden en zoeken: de kolomlijst in `loadCoreData`, `excerpt` in de kaarten, GlobalSearch en `content.search` via de zoek-RPC. In één stap, anders breekt zoeken (§6). | gebouwd en op staging gezet op 27 november; zie `docs/changelog/CHANGELOG_PAGINAS_LADEN_ZOEKEN_2026-11-27.md`. Gerrie zoekt bewust nog zoals voorheen (zie daar) |
 | 1A-3a | De editor: Tiptap als eigen stuk bundel, het pagina-scherm, de basisblokken, opslaan met `edit_version`, één tegelijk bewerken. | gebouwd en op staging gezet op 27 november; zie `docs/changelog/CHANGELOG_PAGINAS_EDITOR_2026-11-27.md` |
 | 1A-3b | Het versiepaneel (bekijken en terugzetten) en een eigen adres per pagina. | gebouwd en op staging gezet op 27 november; zie `docs/changelog/CHANGELOG_PAGINAS_VERSIES_ADRES_2026-11-27.md` |
-| 1A-4a | Eerst een grendel: een pagina met een blok dat de editor niet kent, gaat niet open om te bewerken. Dan de blokken zonder opslag: gewone tabel, callout, uitklapper, inhoudsopgave. Het blokmenu: `/` in de tekst en de +-knop, ook op de telefoon. Een migratie die de maten van tabelcellen en de soort callout nakijkt. | gebouwd op 27 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_BLOKKEN_2026-11-27.md` |
-| 1A-4b-1 | De subpagina (maken met `/pagina`, openen, omhoog, de terugknop langs de weg), en een migratie die afdwingt dat afbeeldingen, bestanden en subpagina's bij dezelfde organisatie en hetzelfde dossier horen (§8). | gebouwd op 27 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_SUBPAGINAS_2026-11-27.md` |
-| 1A-4b-2 | Afbeelding: uploaden, plakken, slepen (§8). | gebouwd op 27 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_AFBEELDINGEN_2026-11-27.md` |
-| 1A-4b-3 | Bestand uit het dossier (of van de computer), met naam, grootte en downloaden (§8). | gebouwd op 28 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_BESTANDEN_2026-11-28.md` |
-| 1A-5a | De boom in de lijst van de drive (uitklappen), een pagina op een pagina slepen, een subpagina terug naar een map, het kruimelpad in de editor. ("Pagina" in het Nieuw-menu kwam al in 1A-3a.) | gebouwd op 28 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_BOOM_2026-11-28.md` |
-| 1A-5b | De prullenbak: weggooien zet `archived_at` op de pagina en haar subpagina's, 30 dagen terugzetten, daarna definitief weg met de bijlagen via de opruimwachtrij. Een pagina in de prullenbak is nergens zichtbaar. | gebouwd op 28 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_PRULLENBAK_2026-11-28.md` |
-| 1A-5c | Het eigen dossier met logo en naam, bovenaan de drive, in plaats van "Geen klant". | gebouwd op 28 november, op de branch; zie `docs/changelog/CHANGELOG_EIGEN_DOSSIER_2026-11-28.md` |
-| 1A-5e | De boom van het dossier naast de pagina (§4, "het pagina-scherm"): een kolom op een breed scherm, een lade op de telefoon. | gebouwd op 28 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_DOSSIERBOOM_2026-11-28.md` |
+| 1A-4a | Eerst een grendel: een pagina met een blok dat de editor niet kent, gaat niet open om te bewerken. Dan de blokken zonder opslag: gewone tabel, callout, uitklapper, inhoudsopgave. Het blokmenu: `/` in de tekst en de +-knop, ook op de telefoon. Een migratie die de maten van tabelcellen en de soort callout nakijkt. | gebouwd op 27 november, op staging gezet op 28 november; zie `docs/changelog/CHANGELOG_PAGINAS_BLOKKEN_2026-11-27.md` |
+| 1A-4b-1 | De subpagina (maken met `/pagina`, openen, omhoog, de terugknop langs de weg), en een migratie die afdwingt dat afbeeldingen, bestanden en subpagina's bij dezelfde organisatie en hetzelfde dossier horen (§8). | gebouwd op 27 november, op staging gezet op 28 november; zie `docs/changelog/CHANGELOG_PAGINAS_SUBPAGINAS_2026-11-27.md` |
+| 1A-4b-2 | Afbeelding: uploaden, plakken, slepen (§8). | gebouwd op 27 november, op staging gezet op 28 november; zie `docs/changelog/CHANGELOG_PAGINAS_AFBEELDINGEN_2026-11-27.md` |
+| 1A-4b-3 | Bestand uit het dossier (of van de computer), met naam, grootte en downloaden (§8). | gebouwd op 28 november, op staging gezet op 28 november; zie `docs/changelog/CHANGELOG_PAGINAS_BESTANDEN_2026-11-28.md` |
+| 1A-5a | De boom in de lijst van de drive (uitklappen), een pagina op een pagina slepen, een subpagina terug naar een map, het kruimelpad in de editor. ("Pagina" in het Nieuw-menu kwam al in 1A-3a.) | gebouwd op 28 november, op staging gezet op 28 november; zie `docs/changelog/CHANGELOG_PAGINAS_BOOM_2026-11-28.md` |
+| 1A-5b | De prullenbak: weggooien zet `archived_at` op de pagina en haar subpagina's, 30 dagen terugzetten, daarna definitief weg met de bijlagen via de opruimwachtrij. Een pagina in de prullenbak is nergens zichtbaar. | gebouwd op 28 november, op staging gezet op 28 november; zie `docs/changelog/CHANGELOG_PAGINAS_PRULLENBAK_2026-11-28.md` |
+| 1A-5c | Het eigen dossier met logo en naam, bovenaan de drive, in plaats van "Geen klant". | gebouwd op 28 november, op staging gezet op 28 november; zie `docs/changelog/CHANGELOG_EIGEN_DOSSIER_2026-11-28.md` |
+| 1A-5e | De boom van het dossier naast de pagina (§4, "het pagina-scherm"): een kolom op een breed scherm, een lade op de telefoon. | gebouwd op 28 november, op staging gezet op 28 november; zie `docs/changelog/CHANGELOG_PAGINAS_DOSSIERBOOM_2026-11-28.md` |
 | 1A-5d | De tekstdocumenten omzetten naar pagina's (§10). | wacht op 1C en op een besluit van de gebruiker (zie de stand hieronder) |
 | 1B-1 | Proef: huisstijlletters en emoji in een PDF via Collabora (§9). | voorlopig gedaan op 28 november, met LibreOffice in de cloudsessie: .woff werkt niet, TTF wel, en een in de DOCX ingesloten letter ook. Nog te herhalen op de Collabora-container (de vervanger, emoji). Zie `docs/rapporten/PROEF_1B1_LETTERS_EMOJI_2026-11-28.md`. |
-| 1B-2 | Export: `page-export`, de DOCX-module, het interne PDF-pad, het exportvenster, vastleggen in het dossier, de Word-kopie. | gebouwd op 28 november, op de branch: de DOCX-module (`_shared/pageDocx.ts`, met de huisstijlletters ingesloten via `_shared/woff.ts`), en de knop "Word" in de editor, die de DOCX in de app bouwt (zie de afwijking hieronder). Zie `docs/changelog/CHANGELOG_PAGINAS_WORD_2026-11-28.md`. `page-export`, de PDF, het exportvenster, vastleggen en de Word-kopie wachten op Collabora. |
-| 1C-1 | De omzetting van een pagina naar HTML voor de klant (`_shared/pageHtml.ts`, `renderPageHtml`), zonder browser, en `pageReferences` in `_shared`. Verandert nog niets aan wat een klant ziet. | gebouwd op 28 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_HTML_2026-11-28.md` |
-| 1C-2 | De vrijgave in de database: `drive_shares.document_version_id`, alleen een vrijgegeven versie van die pagina en organisatie. In dezelfde stap lezen het portaal en de geheime link die versie, via `renderPageHtml`. | gebouwd op 28 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_DELEN_VRIJGAVE_2026-11-28.md`. Migratie `20261128120000_paginas_delen`. |
-| 1C-3 | Het deelvenster voor een pagina: vrijgeven, subpagina's aanvinken, "De klant ziet een oudere versie" met "Bijwerken bij klant", het logboek. | gebouwd op 28 november, op de branch: 1C-3a (database en server: `file-share` met de vrijgave, `page_share_status`, `release_page_to_shares`, migratie `20261128130000`) en 1C-3b (het venster, de knop en de melding in de editor, Gerrie); zie `docs/changelog/CHANGELOG_PAGINAS_BIJWERKEN_BIJ_KLANT_2026-11-28.md` |
-| 1C-4 | De weergave in het portaal en bij een geheime link: de opmaak, en afbeeldingen die de server alleen tekent als ze in de gedeelde versie staan. Een klantpagina gaat alleen naar het portaal. | gebouwd op 28 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_PORTAAL_WEERGAVE_2026-11-28.md`. Migratie `20261128140000`. Een klantpagina via een losse link weigerde de database al. |
+| 1B-2 | Export: `page-export`, de DOCX-module, het interne PDF-pad, het exportvenster, vastleggen in het dossier, de Word-kopie. | gebouwd op 28 november, op staging gezet op 28 november: de DOCX-module (`_shared/pageDocx.ts`, met de huisstijlletters ingesloten via `_shared/woff.ts`), en de knop "Word" in de editor, die de DOCX in de app bouwt (zie de afwijking hieronder). Zie `docs/changelog/CHANGELOG_PAGINAS_WORD_2026-11-28.md`. Het exportvenster en de Word-kopie kwamen in 1B-3; `page-export`, de PDF en vastleggen in het dossier wachten op Collabora (1B-5). |
+| 1B-3 | Het exportvenster ("Exporteren" in de balk) met Word downloaden, "Maak er een Word-document van" (een Word-document naast de pagina, dat meteen opent in Collabora) en afdrukken. | gebouwd op 28 november, na de merge, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_EXPORTEREN_2026-11-28.md`. Op staging na te lopen: een Word-document bewerken en bewaren in Collabora. |
+| 1B-4 | De opties in het exportvenster: een voorblad (titel, klant, project, datum, logo), een inhoudsopgave vooraan, subpagina's als hoofdstukken, briefpapier aan of uit. | 1B-4a (voorblad, inhoudsopgave vooraan, subpagina's als hoofdstukken) gebouwd op 28 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_EXPORTEREN_2026-11-28.md`. 1B-4b (briefpapier als afbeelding achter elke bladzijde, met de marges uit Documentopmaak) en 1B-4c (de kop en voet in de huisstijl: logo, merkkleur, voettekst) gebouwd op 28 november, op de branch; in een .docx kan alleen een briefpapier dat een afbeelding is. Een briefpapier als PDF hoort bij de PDF (1B-5), met pdf-lib zoals bij facturen. |
+| 1B-5 | De PDF: `page-export` (de DOCX op de server, in R2 onder `page-export`), een intern pad in de media-worker naar Collabora, en "Vastleggen in dossier". | wacht op twee antwoorden van de gebruiker: rolt hij de media-worker uit (met wrangler, niet vanuit een cloudsessie), en moet de server de DOCX bouwen (zodat Gerrie en de API zonder browser kunnen exporteren) of mag dat in de app blijven? |
+| 1C-1 | De omzetting van een pagina naar HTML voor de klant (`_shared/pageHtml.ts`, `renderPageHtml`), zonder browser, en `pageReferences` in `_shared`. Verandert nog niets aan wat een klant ziet. | gebouwd op 28 november, op staging gezet op 28 november; zie `docs/changelog/CHANGELOG_PAGINAS_HTML_2026-11-28.md` |
+| 1C-2 | De vrijgave in de database: `drive_shares.document_version_id`, alleen een vrijgegeven versie van die pagina en organisatie. In dezelfde stap lezen het portaal en de geheime link die versie, via `renderPageHtml`. | gebouwd op 28 november, op staging gezet op 28 november; zie `docs/changelog/CHANGELOG_PAGINAS_DELEN_VRIJGAVE_2026-11-28.md`. Migratie `20261128120000_paginas_delen`. |
+| 1C-3 | Het deelvenster voor een pagina: vrijgeven, subpagina's aanvinken, "De klant ziet een oudere versie" met "Bijwerken bij klant", het logboek. | gebouwd op 28 november, op staging gezet op 28 november: 1C-3a (database en server: `file-share` met de vrijgave, `page_share_status`, `release_page_to_shares`, migratie `20261128130000`) en 1C-3b (het venster, de knop en de melding in de editor, Gerrie); zie `docs/changelog/CHANGELOG_PAGINAS_BIJWERKEN_BIJ_KLANT_2026-11-28.md` |
+| 1C-4 | De weergave in het portaal en bij een geheime link: de opmaak, en afbeeldingen die de server alleen tekent als ze in de gedeelde versie staan. Een klantpagina gaat alleen naar het portaal. | gebouwd op 28 november, op staging gezet op 28 november; zie `docs/changelog/CHANGELOG_PAGINAS_PORTAAL_WEERGAVE_2026-11-28.md`. Migratie `20261128140000`. Een klantpagina via een losse link weigerde de database al. |
 
 **1C wordt gebouwd volgens de lezing van §1 (28 november):**
 
@@ -580,6 +583,16 @@ akkoord is.
 - **De editor:** de licentie per Tiptap-extensie nakijken. De namen van de blokken moeten
   precies die van `src/lib/pageSchema.ts` zijn. De editor blijft een eigen stuk bundel,
   dat pas laadt als je een pagina opent.
+
+**Op staging sinds 28 november 2026, 09:34 UTC (59fab7e), op verzoek van de gebruiker:** alles van
+1A-4a tot en met 1C, met de zeven migraties `20261127140000` tot en met `20261128150000`. De
+uitrol (Deploy Supabase, run 266) is geslaagd, met de rooktest. Bij deze merge is overgeslagen:
+
+- de Word-proef in echte Word, de voorwaarde voor de knop "Word" (zie hierboven);
+- de bevestiging van de keuzes van 1C (zie het rapport, vraag 8).
+
+Open tabbladen met een oude versie van de app moeten worden ververst. Een oude versie kent de
+nieuwe blokken niet, en opent zo'n pagina alleen om te lezen.
 
 **Stand op 27 november 2026, einde van de eerste bouwsessie (overdracht):**
 
@@ -652,6 +665,38 @@ akkoord is.
 - **Daarna gerepareerd, op de branch:** een pagina die met alleen `parent_id` naar een andere
   klant verhuisde, liet haar subpagina's bij de oude klant en haar delingen lopen (migratie
   `20261128150000`). Zie `docs/changelog/CHANGELOG_PAGINAS_VERHUIZEN_2026-11-28.md`.
+- **Na de merge van 28 november gebouwd, op de branch:** 1B-3, het exportvenster met Word
+  downloaden, de Word-kopie en afdrukken. Zie
+  `docs/changelog/CHANGELOG_PAGINAS_EXPORTEREN_2026-11-28.md`. Een proef met LibreOffice (de
+  motor van Collabora): de kopie overleeft opnieuw opslaan, maar wordt daarna veel groter
+  (107 kB werd 2 MB), omdat LibreOffice alle letters in hun geheel insluit. UI-scenario
+  `paginaexport`.
+- **Daarna gebouwd, op de branch:** 1B-4a, de opties voor Word: een voorblad, een
+  inhoudsopgave vooraan, en de subpagina's als hoofdstukken. Zonder opties is het bestand byte
+  voor byte dat van 1B-3.
+  - De nummering loopt na het voorblad door. LibreOffice telt het totaal fout als ze opnieuw
+    begint.
+  - Er staat één inhoudsopgave in een bestand.
+  - Een hoofdstuk dat niet laadt, laat de export mislukken.
+  - Proefbestand: `docs/rapporten/PROEF_WORD_OPTIES_2026-11-28.docx`.
+- **Daarna gebouwd, op de branch:** 1B-4b, het briefpapier: een afbeelding achter elke
+  bladzijde, met de marges uit Documentopmaak. Een briefpapier als PDF kan niet in Word; het
+  venster zegt dat.
+  - Gerepareerd: het voorblad stond in een eigen sectie, en LibreOffice (Collabora) schreef
+    zo'n bestand bij opnieuw opslaan tegen het schema in. Nu één sectie met `w:titlePg`.
+  - Proefbestand: `docs/rapporten/PROEF_WORD_BRIEFPAPIER_2026-11-28.docx`.
+- **Daarna gebouwd, op de branch:** 1B-4c, de kop en voet in de huisstijl (§9).
+  - De kop: het logo en een lijn in de merkkleur.
+  - De voet: de voettekst en het paginanummer.
+  - Met briefpapier niet, en het voorblad blijft kaal.
+  - Bij een lege bovenste pagina begint het eerste hoofdstuk niet meer na een lege bladzijde.
+  - De controle met LibreOffice is nu een script: `scripts/proef-word-rondgang.sh`, met de
+    proefbestanden uit `scripts/proef-word-export.mjs`.
+- **Wat de CI niet bewaakt.** §14 vraagt `test:terugknop` en `test:mobile` voor de editor en het
+  exportvenster. Die staan in `ui.mjs` (scenario's `paginas`, `paginadrive` en `paginaexport`:
+  terug sluit het venster, en de telefoonmaat). `ui.mjs` draait niet in de CI; `test:terugknop`
+  en `test:mobile` openen geen pagina. Draai `ui.mjs` dus zelf bij een wijziging aan de editor
+  of de export.
 - **De CI op de branch (Frontend checks, met de hand gestart):**
   - run 304 (ba3ee84): helemaal groen;
   - run 305 (bf471ad, met de boom naast de pagina): helemaal groen, ook de mobiele
@@ -670,8 +715,13 @@ akkoord is.
     met de knop "Delen" in de balk (41 minuten), `deno check` van `file-share`, `mcp` en
     `gerrie-agent` met de handelingen, en de migraties vanaf nul met
     `paginas_bijwerken.sql` en `paginas_portaal_bijlagen.sql`;
-  - run 310 (de verhuisreparatie, migratie `20261128150000`, en wat erna kwam): gestart op
-    28 november.
+  - run 310 (983b12d, de verhuisreparatie, migratie `20261128150000`): helemaal groen, ook
+    de mobiele lay-outtest, laden, de inrichting en de terugknop;
+  - run 311 (staging, 59fab7e, dezelfde code na de merge): helemaal groen;
+  - run 312 (9b92cc4, 1B-3 en 1B-4a, na de merge): helemaal groen. Daarbij waren:
+    - de mobiele lay-outtest (37 minuten), laden, de inrichting en de terugknop;
+    - `deno check` van `pageDocx.ts` met het voorblad en de hoofdstukken;
+  - run 313 (0d3ccbe, met 1B-4b en 1B-4c): loopt nog.
 - **`deno check` op de modules van pagina's:** sinds 1C-1 een eigen stap in
   `.github/workflows/frontend-checks.yml` ("Deno-typecheck pagina's"): `pageDocx.ts`,
   `woff.ts`, `zipWriter.ts`, `pageExportFonts.ts`, `pageHtml.ts` en `pageReferences.ts`. Geen
