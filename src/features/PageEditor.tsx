@@ -45,10 +45,12 @@ import { fetchStoredFileBlob, uploadToR2 } from '../lib/r2';
 import { calloutVariant, isAllowedPageLink, type CalloutVariant } from '../lib/pageSchema';
 import { pageBodyFit } from '../lib/pageBodyCheck';
 import {
-  attachmentStorageKey, claimPageEdit, createPage, listPageVersions, loadPage, loadPageVersion, pageTitle, releasePageEdit, restorePageVersion, savePage,
+  attachmentInfo, attachmentStorageKey, claimPageEdit, createPage, listDossierFiles, listPageVersions, loadPage, loadPageVersion, pageTitle,
+  releasePageEdit, restorePageVersion, savePage, type DossierFile,
   savePageVersion, type PageVersionSummary,
 } from '../lib/repository';
 import { useBackStep } from '../lib/useBackStep';
+import { PageFilePicker, type FileChoice } from './PageFilePicker';
 import {
   BlockMenu, closeSlashMenu, pageBlocksFor, runPageBlock, slashMenuExtension, type BlockMenuState, type SlashBridge,
 } from './PageBlockMenu';
@@ -115,6 +117,10 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
   const [copied, setCopied] = useState(false);
   const [refreshHelps, setRefreshHelps] = useState(true);
   const [parent, setParent] = useState<{ id: string; title: string | null } | null>(null);
+  /** De kiezer van het bestandsblok, met de belofte die de keuze teruggeeft. */
+  const [filePicker, setFilePicker] = useState<{ files: DossierFile[] | null; error: string | null; resolve: (choice: FileChoice) => void } | null>(null);
+  /** Het dossier van de pagina, voor de kiezer. */
+  const placeRef = useRef<{ client_id: string | null; project_id: string | null }>({ client_id: null, project_id: null });
 
   const modeRef = useRef<Mode>('laden');
   const titleRef = useRef('');
@@ -220,6 +226,7 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
     // alleen preventUpdate, niet addToHistory (nagekeken in @tiptap/core 3.35.1).
     ed.chain().setMeta('addToHistory', false).setContent(row.body as JSONContent, { emitUpdate: false }).run();
     setTitle(row.title);
+    placeRef.current = { client_id: row.client_id, project_id: row.project_id };
     setParent(previous => (row.parent_id ? { id: row.parent_id, title: previous?.id === row.parent_id ? previous.title : null } : null));
     versionRef.current = row.edit_version;
     baselineRef.current = snapshotOf(row.title.trim() || 'Naamloze pagina', ed.getJSON());
@@ -453,7 +460,7 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
   const connectPreview = useCallback((preview: Editor) => {
     const store = preview.storage as unknown as Record<string, Record<string, unknown>>;
     if (linksRef.current) store.subpage.links = { ...linksRef.current, open: () => {}, create: async () => null };
-    if (mediaRef.current) store.image.media = { ...mediaRef.current, upload: async () => null, refuse: () => {} };
+    if (mediaRef.current) store.image.media = { ...mediaRef.current, upload: async () => null, refuse: () => {}, chooseFile: async () => null };
   }, []);
   useEffect(() => {
     if (!editor) return;
@@ -520,6 +527,37 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
         }
       },
       refuse: reason => setMessage(reason),
+      fileInfo: async attachmentId => {
+        const info = await attachmentInfo(attachmentId, organizationId);
+        return info ? { name: info.name, size: info.size_bytes } : null;
+      },
+      // Altijd opslaan via een downloadlink, nooit openen: een blob-URL draait
+      // in de herkomst van de app, zonder de sandbox van de worker.
+      download: async attachmentId => {
+        try {
+          const info = await attachmentInfo(attachmentId, organizationId);
+          const blob = info ? await fetchStoredFileBlob(info.storage_key) : null;
+          if (!info || !blob) { setMessage('Dit bestand is er niet meer.'); return; }
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = info.name;
+          link.rel = 'noopener';
+          link.hidden = true;
+          document.body.append(link);
+          link.click();
+          link.remove();
+          window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+        } catch (error) {
+          setMessage((error as { message?: string } | null)?.message || 'Het bestand kon niet worden opgehaald.');
+        }
+      },
+      chooseFile: () => new Promise<FileChoice>(resolve => {
+        setFilePicker({ files: null, error: null, resolve });
+        listDossierFiles(organizationId, placeRef.current)
+          .then(files => setFilePicker(current => (current ? { ...current, files } : current)))
+          .catch(() => setFilePicker(current => (current ? { ...current, error: 'De bestanden van dit dossier konden niet worden geladen.' } : current)));
+      }),
     };
     (editor.storage as unknown as Record<string, { media: PageMedia | null }>).image.media = media;
     mediaRef.current = media;
@@ -613,6 +651,11 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
       </div>
 
       {editable && editor && <Toolbar editor={editor} onInsert={openPlusMenu} />}
+      {editable && filePicker && <PageFilePicker
+        files={filePicker.files}
+        error={filePicker.error}
+        onChoose={choice => { filePicker.resolve(choice); setFilePicker(null); }}
+      />}
       {editable && blockMenu && <BlockMenu menu={blockMenu} onHover={index => { if (menuRef.current) showMenu({ ...menuRef.current, active: index }); }} onClose={closeBlockMenu} />}
 
       {(message || (mode === 'lezen' && holder)) && <div className={`page-editor-banner${mode === 'conflict' || mode === 'geen_recht' || mode === 'fout' || mode === 'onbekend' ? ' is-warning' : ''}`}>

@@ -506,7 +506,7 @@ akkoord is.
 | 1A-4a | Eerst een grendel: een pagina met een blok dat de editor niet kent, gaat niet open om te bewerken. Dan de blokken zonder opslag: gewone tabel, callout, uitklapper, inhoudsopgave. Het blokmenu: `/` in de tekst en de +-knop, ook op de telefoon. Een migratie die de maten van tabelcellen en de soort callout nakijkt. | gebouwd op 27 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_BLOKKEN_2026-11-27.md` |
 | 1A-4b-1 | De subpagina (maken met `/pagina`, openen, omhoog, de terugknop langs de weg), en een migratie die afdwingt dat afbeeldingen, bestanden en subpagina's bij dezelfde organisatie en hetzelfde dossier horen (§8). | gebouwd op 27 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_SUBPAGINAS_2026-11-27.md` |
 | 1A-4b-2 | Afbeelding: uploaden, plakken, slepen (§8). | gebouwd op 27 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_AFBEELDINGEN_2026-11-27.md` |
-| 1A-4b-3 | Bestand uit het dossier (of van de computer), met naam, grootte en downloaden (§8). | gepland |
+| 1A-4b-3 | Bestand uit het dossier (of van de computer), met naam, grootte en downloaden (§8). | gebouwd op 28 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_BESTANDEN_2026-11-28.md` |
 | 1A-5 | De drive: de boom, het eigen dossier met logo, "Pagina" in het Nieuw-menu, slepen, de prullenbak. De tekstdocumenten omzetten. | gepland |
 | 1B-1 | Proef: huisstijlletters en emoji in een PDF via Collabora (§9). | gepland |
 | 1B-2 | Export: `page-export`, de DOCX-module, het interne PDF-pad, het exportvenster, vastleggen in het dossier, de Word-kopie. | gepland |
@@ -560,24 +560,21 @@ akkoord is.
   - Kolommen schuiven naar fase 2, zoals §3 toeliet.
 - **Daarna gebouwd, op de branch:** 1A-4b-1, de subpagina en de controle op verwijzingen
   (migratie 20261127150000).
-- **Daarna gebouwd, op de branch:** 1A-4b-2, afbeeldingen.
-- **Volgende stap: 1A-4b-3**, het bestandsblok. Wat al vaststaat (uitgezocht op 27
-  november):
-  - **Uploaden:** via `uploadToR2` (`src/lib/r2.ts`) met entity_type `document` en de pagina
-    als entity_id, daarna `createAttachment`. Hooguit 25 MB.
-  - **Tonen:** `fetchStoredFileBlob` en een blob-URL, alleen in de weergave van het blok,
-    nooit in attrs. De database weigert `src`, en een adres in attrs zou elke opening
-    laten opslaan.
-  - **Geplakte plaatjes van buiten** (`<img src="https://…">`) worden geen afbeeldingsblok:
-    opslaan zou dan voorgoed mislukken.
-  - **Een bestand uit het dossier kiezen** kan met `TransferSourcePicker`
-    (`src/components/SendFilesDialog.tsx`).
-  - **Verdwenen bestanden** tonen "niet gevonden", ook in oude versies.
-- **Nog open:** hoeveel bestaande mapdelingen de datastap van `20261127120000` omzette.
-  `supabase db push` toont geen aantallen, en een cloudsessie kan staging niet lezen. In
-  de werkruimte van de ResoFly-koppeling liepen geen delingen. Voor de andere organisaties:
-  nakijken in de app, zie "Nakijken op staging" in
-  `docs/changelog/CHANGELOG_GEDEELDE_MAPPEN_2026-11-27.md`.
+- **Daarna gebouwd, op de branch:** 1A-4b-2 (afbeeldingen) en 1A-4b-3 (bestanden). Stap 1A-4
+  is daarmee klaar.
+- **Volgende stap: 1A-5**, de drive:
+  - de boom van pagina's en subpagina's in de lijst;
+  - het eigen dossier met logo;
+  - slepen;
+  - de prullenbak (archived_at, 30 dagen);
+  - de tekstdocumenten omzetten (§10).
+
+  Bij de prullenbak horen ook de bijlagen die nu blijven liggen:
+  - van subpagina's die met hun ouder verdwijnen (`parent_id … on delete cascade`);
+  - van weggehaalde afbeeldings- en bestandsblokken.
+
+  De opruimwachtrij `storage_purge_queue` neemt reden `document` al aan, maar niets zet er
+  nu iets in (uitgezocht op 27 november).
 - **Tip voor de volgende sessie:**
   - Start `dockerd` pas vlak voor de database- en UI-tests: een achtergrondtaak stopt na
     twee uur.

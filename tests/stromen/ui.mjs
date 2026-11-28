@@ -2386,6 +2386,7 @@ async function scenarioDocumenten() {
     // Eerst luisteren, dan pas Enter: Playwright vangt de bestandskiezer pas op
     // als het luisteren loopt, en dat wordt los van de toets aangezet.
     const kiezerOnderweg = page.waitForEvent('filechooser', { timeout: 30000 });
+    kiezerOnderweg.catch(() => {});
     await page.keyboard.type('/afb');
     const menu = page.locator('.page-block-menu');
     await menu.waitFor({ timeout: 10000 });
@@ -2470,6 +2471,83 @@ async function scenarioDocumenten() {
     await sluitPagina(zonder);
   // De geweigerde opslag met de vreemde afbeelding is precies wat deze stap toetst.
   }, { toegestaan: [{ tabel: 'documents', methode: 'PATCH', status: 400, antwoord: /ander dossier/ }] });
+  // ── Bestanden (stap 1A-4b) ─────────────────────────────────────────────────
+  await uiStap('bestanden: kiezen uit het dossier (alleen dat dossier), opslaan via een download, van de computer en slepen; een verdwenen bestand zegt het', async () => {
+    if (!blokPagina) throw new Error('geen pagina');
+    // Een bestand in het dossier van klant A, en een in dat van klant B (dat hoort niet in de kiezer).
+    const bijlageIn = (klant, naam) => {
+      sql(`insert into public.content_folders (organization_id, client_id, name) values (${q(w.orgId)}, ${q(klant)}, ${q(`Map ${naam}`)})`);
+      const map = sqlRij(`select id from public.content_folders where organization_id = ${q(w.orgId)} and name = ${q(`Map ${naam}`)}`);
+      const sleutel = `${w.orgId}/folder/${map.id}/${randomUUID()}-${naam}`;
+      post.r2.set(sleutel, new TextEncoder().encode(`inhoud van ${naam}`));
+      sql(`insert into public.attachments (organization_id, entity_type, entity_id, name, mime_type, size_bytes, storage_key)
+        values (${q(w.orgId)}, 'folder', ${q(map.id)}, ${q(naam)}, 'application/pdf', 2048, ${q(sleutel)})`);
+      return sqlRij(`select id from public.attachments where organization_id = ${q(w.orgId)} and name = ${q(naam)}`).id;
+    };
+    const offerte = bijlageIn(w.klantA.id, 'Offerte.pdf');
+    bijlageIn(w.klantB.id, 'Geheim.pdf');
+    const page = await openMetMedia();
+    const bestanden = editorVak(page).locator('.page-file');
+    await editorVak(page).locator('h2').filter({ hasText: 'Planning' }).click();
+    // De laatste regel heeft tekst ("Van internet"): eerst een nieuwe regel, want
+    // een / direct na een letter is geen opdracht.
+    await page.keyboard.press('Control+End');
+    await page.keyboard.press('Enter');
+    await kiesBlok(page, 'bestand', 'Bestand');
+    const kiezer = page.locator('.page-file-picker');
+    await kiezer.waitFor({ timeout: 10000 });
+    await wachtTot(async () => (await kiezer.locator('.page-file-picker-item').filter({ hasText: 'Offerte.pdf' }).count()) === 1, { melding: `het bestand van klant A staat niet in de kiezer: ${tekst(await kiezer.innerText().catch(() => ''))}` });
+    gelijk(await kiezer.locator('.page-file-picker-item').filter({ hasText: 'Geheim.pdf' }).count(), 0, 'een bestand van klant B in de kiezer');
+    await kiezer.locator('.page-file-picker-item').filter({ hasText: 'Offerte.pdf' }).click();
+    await kiezer.waitFor({ state: 'detached', timeout: 5000 });
+    await wachtTot(async () => tekst(await bestanden.first().innerText().catch(() => '')).includes('Offerte.pdf'), { melding: 'het bestandsblok toont de naam niet' });
+    verwacht(tekst(await bestanden.first().innerText()).includes('2 kB'), `de grootte: ${tekst(await bestanden.first().innerText())}`);
+    // Na het invoegen typ je gewoon verder, onder het blok.
+    await page.keyboard.type('Na het bestand');
+    await wachtTot(async () => (await editorVak(page).locator('p').filter({ hasText: 'Na het bestand' }).count()) === 1, { melding: 'de tekst kwam niet onder het bestand' });
+    gelijk(await bestanden.count(), 1, 'het bestandsblok staat er nog na typen');
+    await wachtOpgeslagen(page);
+    gelijk(telBlok(blokPagina.id, `@.type == "fileBlock" && @.attrs.attachmentId == "${offerte}"`), 1, 'het blok wijst naar het dossierbestand');
+    // Klikken slaat het bestand op (een download), en opent niets in de app.
+    const downloadOnderweg = page.waitForEvent('download', { timeout: 15000 });
+    // Mislukt de stap eerder, dan mag deze wachtende belofte het proces niet laten vallen.
+    downloadOnderweg.catch(() => {});
+    await bestanden.first().locator('button').click();
+    const download = await downloadOnderweg;
+    gelijk(download.suggestedFilename(), 'Offerte.pdf', 'de naam van de download');
+    gelijk(page.url().includes('blob:'), false, 'de app opende het bestand');
+    // Van de computer: via de kiezer, als bijlage van de pagina.
+    await page.keyboard.press('End');
+    await page.keyboard.press('Enter');
+    await kiesBlok(page, 'bestand', 'Bestand');
+    await kiezer.waitFor({ timeout: 10000 });
+    const kiezerOnderweg = page.waitForEvent('filechooser', { timeout: 30000 });
+    kiezerOnderweg.catch(() => {});
+    await page.waitForTimeout(500);
+    await kiezer.getByRole('button', { name: /Van je computer/ }).click();
+    const bestandskiezer = await kiezerOnderweg;
+    await bestandskiezer.setFiles({ name: 'notitie.txt', mimeType: 'text/plain', buffer: Buffer.from('een notitie') });
+    await wachtTot(async () => (await bestanden.filter({ hasText: 'notitie.txt' }).count()) === 1, { melding: 'het geüploade bestand staat er niet' });
+    // Slepen: een PDF wordt een bestandsblok, geen afbeelding, en de browser opent hem niet.
+    const doel = await editorVak(page).locator('p').filter({ hasText: 'Na het bestand' }).first().boundingBox();
+    await page.evaluate(({ x, y }) => {
+      const data = new DataTransfer();
+      data.items.add(new File([new TextEncoder().encode('%PDF-1.4 brief')], 'brief.pdf', { type: 'application/pdf' }));
+      document.querySelector('.page-editor .tiptap').dispatchEvent(new DragEvent('drop', { dataTransfer: data, clientX: x, clientY: y, bubbles: true, cancelable: true }));
+    }, { x: doel.x + 4, y: doel.y + doel.height / 2 });
+    await wachtTot(async () => (await bestanden.filter({ hasText: 'brief.pdf' }).count()) === 1, { melding: 'een gesleepte PDF werd geen bestandsblok' });
+    await wachtOpgeslagen(page);
+    const eigen = sqlRij(`select count(*)::int as n from public.attachments where entity_type = 'document' and entity_id = ${q(blokPagina.id)} and name in ('notitie.txt', 'brief.pdf')`);
+    gelijk(eigen.n, 2, 'de geüploade en gesleepte bestanden zijn bijlagen van de pagina');
+    gelijk(telBlok(blokPagina.id, '@.type == "fileBlock"'), 3, 'bestandsblokken in body');
+    await sluitPagina(page);
+    // Een verdwenen bestand: het blok zegt het, en klikken doet niets.
+    sql(`delete from public.attachments where id = ${q(offerte)}`);
+    const zonder = await openMetMedia();
+    const weg = editorVak(zonder).locator(`.page-file[data-attachment-id="${offerte}"]`);
+    await wachtTot(async () => tekst(await weg.innerText().catch(() => '')) === 'Bestand niet gevonden', { melding: 'een verdwenen bestand toont geen melding' });
+    await sluitPagina(zonder);
+  });
 }
 
 // ── Bank: mutaties met de hand boeken ──────────────────────────────────────

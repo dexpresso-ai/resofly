@@ -31,7 +31,7 @@ import { calloutVariant, isAllowedPageLink } from './pageSchema.ts';
 export const PAGE_BLOCKS_WITH_ID = [
   'paragraph', 'heading', 'bulletList', 'orderedList', 'listItem', 'taskList', 'taskItem',
   'blockquote', 'codeBlock', 'horizontalRule',
-  'table', 'callout', 'details', 'tableOfContents', 'subpage', 'image',
+  'table', 'callout', 'details', 'tableOfContents', 'subpage', 'image', 'fileBlock',
 ] as const;
 
 /** De smalste kolom van een tabel, ook bij slepen. */
@@ -64,6 +64,15 @@ export const Callout = Node.create({
     return ['div', mergeAttributes(HTMLAttributes, { 'data-type': 'callout', class: 'page-callout' }), 0];
   },
 });
+
+/**
+ * Een knop in een blok (inhoudsopgave, subpagina, bestand) pakt bij een klik
+ * de focus niet: anders stond de cursor daarna nergens, en ging wat je typte
+ * verloren. De klik zelf werkt gewoon.
+ */
+function keepEditorFocus(button: HTMLButtonElement): void {
+  button.addEventListener('mousedown', event => event.preventDefault());
+}
 
 type TocItem = { id: string | null; level: number; text: string };
 
@@ -131,6 +140,7 @@ const tableOfContentsView: NodeViewRenderer = ({ editor }) => {
       const button = document.createElement('button');
       button.type = 'button';
       button.textContent = item.text.trim() || 'Kop zonder tekst';
+      keepEditorFocus(button);
       button.addEventListener('click', event => { event.preventDefault(); scrollToHeading(editor, item, index); });
       li.append(button);
       list.append(li);
@@ -202,6 +212,7 @@ const subpageView: NodeViewRenderer = ({ editor, node }) => {
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'page-subpage-link';
+  keepEditorFocus(button);
   const icon = document.createElement('span');
   icon.className = 'page-subpage-icon';
   icon.setAttribute('aria-hidden', 'true');
@@ -318,6 +329,12 @@ export type PageMedia = {
   upload: (file: File) => Promise<string | null>;
   /** Zeggen waarom iets niet kan (in de balk van de editor). */
   refuse: (reason: string) => void;
+  /** Naam en grootte van een bestand, of null als het er niet (meer) is. */
+  fileInfo: (attachmentId: string) => Promise<{ name: string; size: number } | null>;
+  /** Een bestand opslaan op de computer. Nooit openen in de app: zie het bestandsblok. */
+  download: (attachmentId: string) => Promise<void>;
+  /** De kiezer: een bestand uit het dossier (id), of bestanden van de computer. */
+  chooseFile: () => Promise<{ attachmentId: string } | { files: File[] } | null>;
 };
 
 export function pageMediaOf(editor: Editor): PageMedia | null {
@@ -378,6 +395,139 @@ export async function insertImages(editor: Editor, files: File[], pos?: number):
     at = undefined;
   }
 }
+
+/** Bestanden uploaden en als bestandsblok invoegen, op `pos` of waar de cursor staat. */
+export async function insertFiles(editor: Editor, files: File[], pos?: number): Promise<void> {
+  const media = pageMediaOf(editor);
+  if (!media || files.length === 0) return;
+  if (!canInsertFileBlock(editor, pos)) {
+    media.refuse('Hier kan geen bestand staan. Zet de cursor op een gewone regel.');
+    return;
+  }
+  let at = pos;
+  for (const file of files) {
+    const attachmentId = await media.upload(file);
+    if (!attachmentId || editor.isDestroyed || !editor.isEditable) return;
+    insertFileBlock(editor, attachmentId, at);
+    at = undefined;
+  }
+}
+
+export function canInsertFileBlock(editor: Editor, pos?: number): boolean {
+  const probe = { type: 'fileBlock', attrs: { attachmentId: PROBE_ATTACHMENT_ID } };
+  return typeof pos === 'number' ? editor.can().insertContentAt(pos, probe) : editor.can().insertContent(probe);
+}
+
+export function insertFileBlock(editor: Editor, attachmentId: string, pos?: number): void {
+  const content = { type: 'fileBlock', attrs: { attachmentId } };
+  const chain = editor.chain().focus();
+  if (typeof pos === 'number') chain.insertContentAt(pos, content);
+  else chain.insertContent(content);
+  chain.command(cursorOnText('na-dit-blok')).run();
+}
+
+function sizeLabel(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} kB`;
+  return `${(bytes / 1024 / 1024).toFixed(1).replace('.', ',')} MB`;
+}
+
+/**
+ * Een bestand uit ResoFly, met naam en grootte. Klikken slaat het op, via een
+ * downloadlink. Nooit openen in een tabblad of frame: een blob-URL draait in de
+ * herkomst van de app, zonder de sandbox die de worker meestuurt. Een
+ * geüpload HTML-bestand zou dan als de app draaien.
+ */
+const fileBlockView: NodeViewRenderer = ({ editor, node }) => {
+  const dom = document.createElement('div');
+  dom.className = 'page-file';
+  dom.setAttribute('data-type', 'file-block');
+  dom.contentEditable = 'false';
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'page-file-link';
+  keepEditorFocus(button);
+  const icon = document.createElement('span');
+  icon.className = 'page-file-icon';
+  icon.setAttribute('aria-hidden', 'true');
+  const name = document.createElement('span');
+  name.className = 'page-file-name';
+  const meta = document.createElement('span');
+  meta.className = 'page-file-meta';
+  button.append(icon, name, meta);
+  dom.append(button);
+  let current: string | null = typeof node.attrs.attachmentId === 'string' ? node.attrs.attachmentId : null;
+  let alive = true;
+  let available = false;
+  const load = (attachmentId: string | null) => {
+    const media = pageMediaOf(editor);
+    available = false;
+    if (attachmentId) dom.dataset.attachmentId = attachmentId;
+    else delete dom.dataset.attachmentId;
+    dom.classList.remove('is-missing');
+    name.textContent = 'Laden…';
+    meta.textContent = '';
+    if (!attachmentId || !media) { dom.classList.add('is-missing'); name.textContent = 'Bestand niet gevonden'; return; }
+    media.fileInfo(attachmentId).then(info => {
+      if (!alive || current !== attachmentId) return;
+      available = info !== null;
+      dom.classList.toggle('is-missing', !available);
+      name.textContent = info ? info.name : 'Bestand niet gevonden';
+      meta.textContent = info ? sizeLabel(info.size) : '';
+      button.title = info ? `${info.name} opslaan` : '';
+    }, () => {
+      if (alive && current === attachmentId) name.textContent = 'Het bestand kon niet worden geladen';
+    });
+  };
+  load(current);
+  button.addEventListener('click', event => {
+    event.preventDefault();
+    const media = pageMediaOf(editor);
+    if (media && current && available) void media.download(current);
+  });
+  return {
+    dom,
+    update: updated => {
+      if (updated.type.name !== 'fileBlock') return false;
+      const next = typeof updated.attrs.attachmentId === 'string' ? updated.attrs.attachmentId : null;
+      if (next !== current) { current = next; load(current); }
+      return true;
+    },
+    ignoreMutation: () => true,
+    stopEvent: (event: Event) => event.target instanceof Element && event.target.closest('button') !== null,
+    destroy: () => { alive = false; },
+  };
+};
+
+export const FileBlock = Node.create({
+  name: 'fileBlock',
+  group: 'block',
+  atom: true,
+  selectable: true,
+  draggable: false,
+  addAttributes() {
+    return {
+      attachmentId: {
+        default: null,
+        parseHTML: (element: HTMLElement) => element.getAttribute('data-attachment-id'),
+        renderHTML: (attributes: Record<string, unknown>) => ({ 'data-attachment-id': attributes.attachmentId }),
+      },
+    };
+  },
+  parseHTML() {
+    return [{
+      tag: 'div[data-type="file-block"]',
+      getAttrs: (element: HTMLElement) => (UUID_PATTERN.test(element.getAttribute('data-attachment-id') ?? '') ? null : false),
+    }];
+  },
+  renderHTML({ HTMLAttributes }) {
+    return ['div', mergeAttributes(HTMLAttributes, { 'data-type': 'file-block', class: 'page-file' })];
+  },
+  addNodeView() {
+    return fileBlockView;
+  },
+});
 
 /**
  * Een afbeelding: een bestand in ResoFly (attachmentId), nooit een adres. Een
@@ -480,10 +630,20 @@ export const PageImage = Node.create({
       props: {
         // Een plaatje plakken of erop slepen: uploaden als bijlage van deze pagina.
         handlePaste: (view, event) => {
-          const files = pastedImageFiles(event.clipboardData);
-          if (files.length === 0 || !view.editable || !pageMediaOf(editor)) return false;
+          if (!view.editable || !pageMediaOf(editor)) return false;
+          const images = pastedImageFiles(event.clipboardData);
+          if (images.length > 0) {
+            event.preventDefault();
+            void insertImages(editor, images);
+            return true;
+          }
+          // Bestanden geplakt uit een verkenner (geen tekst of HTML erbij):
+          // een bestandsblok. Met tekst erbij gaat de tekst voor.
+          const data = event.clipboardData;
+          const others = Array.from(data?.files ?? []).filter(file => !IMAGE_TYPES.test(file.type));
+          if (others.length === 0 || data?.getData('text/html') || data?.getData('text/plain')) return false;
           event.preventDefault();
-          void insertImages(editor, files);
+          void insertFiles(editor, others);
           return true;
         },
         handleDrop: (view, event, _slice, moved) => {
@@ -491,12 +651,15 @@ export const PageImage = Node.create({
           const dropped = Array.from((event as DragEvent).dataTransfer?.files ?? []);
           if (dropped.length === 0 || !view.editable) return false;
           // Elk bestand dat erop valt, houden we tegen: anders opent de browser
-          // het en verlaat je de app.
+          // het en verlaat je de app. Plaatjes worden een afbeelding, de rest
+          // een bestandsblok.
           event.preventDefault();
           const files = imageFilesOf(dropped);
-          if (files.length < dropped.length) pageMediaOf(editor)?.refuse('Alleen afbeeldingen kun je hier neerzetten.');
+          const others = dropped.filter(file => !IMAGE_TYPES.test(file.type));
           const pos = view.posAtCoords({ left: (event as DragEvent).clientX, top: (event as DragEvent).clientY })?.pos;
-          void insertImages(editor, files, pos);
+          // Eerst de plaatjes, dan de rest; de tweede groep komt waar de cursor
+          // na de eerste staat.
+          void insertImages(editor, files, pos).then(() => insertFiles(editor, others, files.length > 0 ? undefined : pos));
           return true;
         },
       },
@@ -556,6 +719,7 @@ export function pageEditorExtensions(options: { placeholder?: string } = {}) {
     TableOfContents,
     Subpage,
     PageImage,
+    FileBlock,
     UniqueID.configure({ types: [...PAGE_BLOCKS_WITH_ID] }),
     Placeholder.configure({ placeholder: options.placeholder ?? 'Typ hier, of typ / voor een tabel, callout of ander blok.' }),
   ];

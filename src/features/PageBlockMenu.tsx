@@ -18,11 +18,13 @@ import { Suggestion, exitSuggestion } from '@tiptap/suggestion';
 import type { SuggestionProps } from '@tiptap/suggestion';
 import { PluginKey } from '@tiptap/pm/state';
 import {
-  Braces, FileText, Heading1, Heading2, Heading3, Image as ImageIcon, List, ListChecks, ListCollapse, ListOrdered, ListTree,
+  Braces, FileText, Heading1, Heading2, Heading3, Image as ImageIcon, List, Paperclip, ListChecks, ListCollapse, ListOrdered, ListTree,
   MessageSquareText, Minus, Pilcrow, Quote, Table2,
 } from 'lucide-react';
 import { filterPageBlocks, type PageBlock, type PageBlockKey } from '../lib/pageBlocks';
-import { cursorOnText, imageFilesOf, insertImages, pageLinksOf, pageMediaOf } from '../lib/pageEditorExtensions';
+import {
+  canInsertFileBlock, cursorOnText, imageFilesOf, insertFileBlock, insertFiles, insertImages, pageLinksOf, pageMediaOf,
+} from '../lib/pageEditorExtensions';
 import { useBackStep } from '../lib/useBackStep';
 
 const ICONS: Record<PageBlockKey, JSX.Element> = {
@@ -39,6 +41,7 @@ const ICONS: Record<PageBlockKey, JSX.Element> = {
   inhoudsopgave: <ListTree size={17} />,
   subpagina: <FileText size={17} />,
   afbeelding: <ImageIcon size={17} />,
+  bestand: <Paperclip size={17} />,
   citaat: <Quote size={17} />,
   code: <Braces size={17} />,
   scheidingslijn: <Minus size={17} />,
@@ -63,6 +66,7 @@ function blockChain(chain: ChainedCommands, key: PageBlockKey): ChainedCommands 
     case 'subpagina': return chain.insertContent({ type: 'subpage', attrs: { pageId: PROBE_PAGE_ID } });
     // Idem: de echte afbeelding komt na het kiezen en uploaden (pickImages).
     case 'afbeelding': return chain.insertContent({ type: 'image', attrs: { attachmentId: PROBE_PAGE_ID } });
+    case 'bestand': return chain.insertContent({ type: 'fileBlock', attrs: { attachmentId: PROBE_PAGE_ID } });
     case 'citaat': return chain.toggleBlockquote();
     case 'code': return chain.setCodeBlock();
     case 'scheidingslijn': return chain.setHorizontalRule().command(cursorOnText('voor-het-volgende'));
@@ -80,7 +84,7 @@ export function canRunPageBlock(editor: Editor, key: PageBlockKey): boolean {
   if (editor.isActive('table') && NOT_IN_TABLE.has(key)) return false;
   if (editor.isActive('callout') && NOT_IN_CALLOUT.has(key)) return false;
   if (key === 'subpagina' && !pageLinksOf(editor)) return false;
-  if (key === 'afbeelding' && !pageMediaOf(editor)) return false;
+  if ((key === 'afbeelding' || key === 'bestand') && !pageMediaOf(editor)) return false;
   try {
     return blockChain(editor.can().chain(), key).run();
   } catch {
@@ -143,10 +147,28 @@ function pickImages(editor: Editor, range?: Range): boolean {
   return true;
 }
 
+/** Een bestand: de kiezer (dossier of computer), dan uploaden of verwijzen. */
+function pickFile(editor: Editor, range?: Range): boolean {
+  const media = pageMediaOf(editor);
+  if (!media) return false;
+  if (range) editor.chain().focus().deleteRange(range).run();
+  if (!canInsertFileBlock(editor)) {
+    media.refuse('Hier kan geen bestand staan. Zet de cursor op een gewone regel.');
+    return true;
+  }
+  void media.chooseFile().then(choice => {
+    if (!choice || editor.isDestroyed || !editor.isEditable) return;
+    if ('attachmentId' in choice) insertFileBlock(editor, choice.attachmentId);
+    else void insertFiles(editor, choice.files);
+  });
+  return true;
+}
+
 /** Voert het blok uit. Met `range` (na `/`) eerst de schuine streep en het zoekwoord weg. */
 export function runPageBlock(editor: Editor, key: PageBlockKey, range?: Range): boolean {
   if (key === 'subpagina') return insertSubpage(editor, range);
   if (key === 'afbeelding') return pickImages(editor, range);
+  if (key === 'bestand') return pickFile(editor, range);
   let chain = editor.chain().focus();
   if (range) chain = chain.deleteRange(range);
   const done = blockChain(chain, key).run();

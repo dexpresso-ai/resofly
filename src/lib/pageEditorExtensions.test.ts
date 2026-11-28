@@ -27,7 +27,7 @@ test('een lege pagina uit de editor past in het schema', () => {
 // pagina leeg (pageBodyCheck.ts) of weigerde de database het opslaan.
 test('een pagina met elk nieuw blok past in het schema', () => {
   const schema = getSchema(pageEditorExtensions());
-  for (const name of ['table', 'tableRow', 'tableHeader', 'tableCell', 'callout', 'details', 'detailsSummary', 'detailsContent', 'tableOfContents']) {
+  for (const name of ['table', 'tableRow', 'tableHeader', 'tableCell', 'callout', 'details', 'detailsSummary', 'detailsContent', 'tableOfContents', 'subpage', 'image', 'fileBlock']) {
     assert.ok(schema.nodes[name], `blok ${name} ontbreekt in de editor`);
   }
   assert.equal(schema.marks.textStyle, undefined, 'textStyle hoort niet in de editor: de database kent die opmaak niet');

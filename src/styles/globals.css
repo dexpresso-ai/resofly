@@ -13763,3 +13763,29 @@ button.alog-feed-row:hover{background:var(--bg3)}
 .page-image.is-loading,.page-image.is-missing{padding:18px;border:1px dashed var(--border2);border-radius:12px;background:var(--bg2);text-align:center}
 .page-image.is-missing .page-image-note{font-style:italic}
 .page-prose .tiptap .page-image.ProseMirror-selectednode img{outline:2px solid rgba(var(--accent-rgb),.6);outline-offset:2px}
+/* Stap 1A-4b: het bestandsblok (naam, grootte, opslaan) en de kiezer. */
+.page-prose .tiptap .page-file{margin:0}
+.page-file-link{display:flex;align-items:center;gap:10px;width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:12px;background:var(--bg2);color:var(--text);font:inherit;text-align:left;cursor:pointer}
+.page-file-link:hover{border-color:rgba(var(--accent-rgb),.45)}
+.page-prose .tiptap .page-file.ProseMirror-selectednode .page-file-link{outline:2px solid rgba(var(--accent-rgb),.5);outline-offset:1px}
+.page-file-icon{flex:0 0 auto;width:18px;height:18px;background:var(--muted2);-webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M13.234 20.252 21 12.3'/%3E%3Cpath d='m16 6-8.414 8.586a2 2 0 0 0 0 2.828 2 2 0 0 0 2.828 0l8.414-8.586a4 4 0 0 0 0-5.656 4 4 0 0 0-5.656 0l-8.415 8.585a6 6 0 1 0 8.486 8.486'/%3E%3C/svg%3E") center/contain no-repeat;mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M13.234 20.252 21 12.3'/%3E%3Cpath d='m16 6-8.414 8.586a2 2 0 0 0 0 2.828 2 2 0 0 0 2.828 0l8.414-8.586a4 4 0 0 0 0-5.656 4 4 0 0 0-5.656 0l-8.415 8.585a6 6 0 1 0 8.486 8.486'/%3E%3C/svg%3E") center/contain no-repeat}
+.page-file-name{flex:1 1 auto;min-width:0;overflow:hidden;font-size:14.5px;font-weight:600;text-overflow:ellipsis;white-space:nowrap}
+.page-file-meta{flex:0 0 auto;font-size:12.5px;color:var(--muted2)}
+.page-file.is-missing .page-file-link{border-style:dashed;color:var(--muted2);cursor:default}
+.page-file.is-missing .page-file-name{font-weight:500;font-style:italic}
+.page-file-picker-backdrop{position:fixed;inset:0;z-index:2004;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(var(--shade-rgb),calc(.55 * var(--shade-k)))}
+.page-file-picker{display:flex;flex-direction:column;gap:10px;width:min(520px,100%);max-height:min(640px,calc(100vh - 32px));padding:14px;border:1px solid var(--border2);border-radius:16px;background:var(--bg);box-shadow:0 24px 64px rgba(var(--shade-rgb),calc(.4 * var(--shade-k)))}
+.page-file-picker-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.page-file-picker-upload{align-self:flex-start;min-height:36px}
+.page-file-picker-search{display:flex;align-items:center;gap:8px;padding:0 10px;border:1px solid var(--border);border-radius:10px;background:var(--bg2);color:var(--muted2)}
+.page-file-picker-search input{flex:1 1 auto;min-width:0;height:36px;border:none;background:transparent;color:var(--text);font:inherit;font-size:14px;outline:none}
+.page-file-picker-list{display:flex;flex-direction:column;gap:2px;min-height:80px;overflow-y:auto}
+.page-file-picker-item{display:flex;align-items:center;gap:10px;width:100%;padding:9px 10px;border:none;border-radius:10px;background:transparent;color:var(--text);font:inherit;text-align:left;cursor:pointer}
+.page-file-picker-item:hover,.page-file-picker-item:focus-visible{background:rgba(var(--accent-rgb),.1);outline:none}
+.page-file-picker-name{flex:1 1 auto;min-width:0;overflow:hidden;font-size:14px;font-weight:600;text-overflow:ellipsis;white-space:nowrap}
+.page-file-picker-meta{flex:0 0 auto;font-size:12px;color:var(--muted2)}
+.page-file-picker-empty{margin:0;padding:12px 4px;font-size:13px;color:var(--muted2)}
+@media (max-width:640px){
+  .page-file-picker-backdrop{align-items:flex-end;padding:0}
+  .page-file-picker{width:100%;max-height:80vh;border-radius:18px 18px 0 0;padding-bottom:calc(14px + env(safe-area-inset-bottom))}
+}

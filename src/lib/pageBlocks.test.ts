@@ -32,6 +32,13 @@ test('/pagina geeft eerst de subpagina', () => {
   assert.equal(keys('sub')[0], 'subpagina');
 });
 
+test('/afb en /bestand, ook met andere woorden', () => {
+  assert.equal(keys('afb')[0], 'afbeelding');
+  assert.equal(keys('foto')[0], 'afbeelding');
+  assert.equal(keys('bestand')[0], 'bestand');
+  assert.equal(keys('pdf')[0], 'bestand');
+});
+
 test('hoofdletters en accenten maken niet uit', () => {
   assert.equal(keys('TABEL')[0], 'tabel');
   assert.equal(keys('tâbel')[0], 'tabel');

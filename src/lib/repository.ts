@@ -7345,6 +7345,67 @@ export async function attachmentStorageKey(id: UUID, organizationId: UUID): Prom
   return (data as { storage_key: string } | null)?.storage_key ?? null;
 }
 
+/** Wat een bestandsblok in een pagina toont (stap 1A-4b): naam en grootte, of null als hij weg is. */
+export type PageFileInfo = { id: UUID; name: string; size_bytes: number; mime_type: string; storage_key: string };
+
+export async function attachmentInfo(id: UUID, organizationId: UUID): Promise<PageFileInfo | null> {
+  const { data, error } = await supabase
+    .from('attachments')
+    .select('id,name,size_bytes,mime_type,storage_key')
+    .eq('id', id)
+    .eq('organization_id', organizationId)
+    .maybeSingle();
+  if (error) throw error;
+  return (data as PageFileInfo | null) ?? null;
+}
+
+/** Een bestand uit een dossier, voor de kiezer van het bestandsblok. */
+export type DossierFile = { id: UUID; name: string; size_bytes: number; mime_type: string; created_at: string; folder: string | null };
+
+/**
+ * De bestanden in het dossier van een pagina: in de mappen van dat dossier, en
+ * de bestanden die aan de klant zelf hangen. Het dossier volgt dezelfde regel
+ * als de database (page_attachment_dossier, migratie 20261127150000): hangt er
+ * een project aan, dan telt de klant van dat project. Zo biedt de kiezer
+ * alleen aan wat de database bij opslaan ook aanneemt.
+ */
+export async function listDossierFiles(
+  organizationId: UUID, page: { client_id: UUID | null; project_id: UUID | null },
+): Promise<DossierFile[]> {
+  const [projectsRes, foldersRes] = await Promise.all([
+    supabase.from('projects').select('id,client_id').eq('organization_id', organizationId),
+    supabase.from('content_folders').select('id,name,client_id,project_id').eq('organization_id', organizationId),
+  ]);
+  if (projectsRes.error) throw projectsRes.error;
+  if (foldersRes.error) throw foldersRes.error;
+  const projectClient = new Map((projectsRes.data as Array<{ id: UUID; client_id: UUID | null }>).map(p => [p.id, p.client_id]));
+  const dossierOf = (clientId: UUID | null, projectId: UUID | null) =>
+    projectId && projectClient.has(projectId) ? (projectClient.get(projectId) ?? clientId) : clientId;
+  const pageClient = dossierOf(page.client_id, page.project_id);
+  const folders = (foldersRes.data as Array<{ id: UUID; name: string; client_id: UUID | null; project_id: UUID | null }>)
+    .filter(f => dossierOf(f.client_id, f.project_id) === pageClient);
+  const folderName = new Map(folders.map(f => [f.id, f.name]));
+  const rows: Array<DossierFile & { entity_id: UUID }> = [];
+  const columns = 'id,name,size_bytes,mime_type,created_at,entity_id';
+  // In stukken: een lange in-lijst past niet in één adres.
+  const ids = [...folderName.keys()];
+  for (let i = 0; i < ids.length; i += 100) {
+    const { data, error } = await supabase.from('attachments').select(columns)
+      .eq('organization_id', organizationId).eq('entity_type', 'folder').in('entity_id', ids.slice(i, i + 100));
+    if (error) throw error;
+    rows.push(...(data as Array<DossierFile & { entity_id: UUID }>).map(row => ({ ...row, folder: folderName.get(row.entity_id) ?? null })));
+  }
+  if (pageClient) {
+    const { data, error } = await supabase.from('attachments').select(columns)
+      .eq('organization_id', organizationId).eq('entity_type', 'client').eq('entity_id', pageClient);
+    if (error) throw error;
+    rows.push(...(data as Array<DossierFile & { entity_id: UUID }>).map(row => ({ ...row, folder: null })));
+  }
+  return rows
+    .map(({ entity_id: _entity, ...file }) => file)
+    .sort((a, b) => a.name.localeCompare(b.name, 'nl'));
+}
+
 export async function loadAttachmentRef(id: UUID, organizationId: UUID): Promise<{ id: UUID; storage_key: string; organization_id: UUID; entity_type: string; entity_id: UUID }> {
   const { data, error } = await supabase
     .from('attachments')

@@ -10,7 +10,7 @@
 export type PageBlockKey =
   | 'tekst' | 'kop1' | 'kop2' | 'kop3'
   | 'opsomming' | 'nummering' | 'takenlijst'
-  | 'tabel' | 'callout' | 'uitklapper' | 'inhoudsopgave' | 'subpagina' | 'afbeelding'
+  | 'tabel' | 'callout' | 'uitklapper' | 'inhoudsopgave' | 'subpagina' | 'afbeelding' | 'bestand'
   | 'citaat' | 'code' | 'scheidingslijn';
 
 export type PageBlock = {
@@ -36,6 +36,7 @@ export const PAGE_BLOCKS: readonly PageBlock[] = [
   { key: 'inhoudsopgave', label: 'Inhoudsopgave', hint: 'Een lijst van de koppen op deze pagina', words: ['inhoud', 'overzicht', 'toc'] },
   { key: 'subpagina', label: 'Subpagina', hint: 'Een nieuwe pagina onder deze', words: ['pagina', 'onderliggend', 'subpage', 'page'] },
   { key: 'afbeelding', label: 'Afbeelding', hint: 'Een foto of plaatje van je computer', words: ['foto', 'plaatje', 'beeld', 'image', 'png', 'jpg'] },
+  { key: 'bestand', label: 'Bestand', hint: 'Uit dit dossier of van je computer', words: ['bijlage', 'document', 'pdf', 'file', 'download'] },
   { key: 'citaat', label: 'Citaat', hint: 'Een aanhaling', words: ['aanhaling', 'quote'] },
   { key: 'code', label: 'Code', hint: 'Code of tekst die precies zo blijft staan', words: ['codeblok', 'pre'] },
   { key: 'scheidingslijn', label: 'Scheidingslijn', hint: 'Een lijn tussen twee stukken', words: ['lijn', 'streep', 'divider'] },
