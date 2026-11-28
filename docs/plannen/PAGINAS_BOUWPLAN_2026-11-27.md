@@ -512,7 +512,7 @@ akkoord is.
 | 1A-5c | Het eigen dossier met logo en naam, bovenaan de drive, in plaats van "Geen klant". | gebouwd op 28 november, op de branch; zie `docs/changelog/CHANGELOG_EIGEN_DOSSIER_2026-11-28.md` |
 | 1A-5e | De boom van het dossier naast de pagina (§4, "het pagina-scherm"): een kolom op een breed scherm, een lade op de telefoon. | gebouwd op 28 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_DOSSIERBOOM_2026-11-28.md` |
 | 1A-5d | De tekstdocumenten omzetten naar pagina's (§10). | wacht op 1C en op een besluit van de gebruiker (zie de stand hieronder) |
-| 1B-1 | Proef: huisstijlletters en emoji in een PDF via Collabora (§9). | gepland |
+| 1B-1 | Proef: huisstijlletters en emoji in een PDF via Collabora (§9). | voorlopig gedaan op 28 november, met LibreOffice in de cloudsessie: .woff werkt niet, TTF wel, en een in de DOCX ingesloten letter ook. Nog te herhalen op de Collabora-container (de vervanger, emoji). Zie `docs/rapporten/PROEF_1B1_LETTERS_EMOJI_2026-11-28.md`. |
 | 1B-2 | Export: `page-export`, de DOCX-module, het interne PDF-pad, het exportvenster, vastleggen in het dossier, de Word-kopie. | de DOCX-module is gebouwd op 28 november, op de branch (`_shared/pageDocx.ts`); zie `docs/changelog/CHANGELOG_PAGINAS_WORD_2026-11-28.md`. De rest wacht op Collabora. |
 | 1C | Pagina's delen: vrijgeven, "Bijwerken bij klant", subpagina's, de weergave in het portaal en bij een geheime link. | gepland |
 
@@ -578,6 +578,17 @@ akkoord is.
   PDF wachten op Collabora.
 - **Daarna gebouwd, op de branch:** 1A-5e, de boom van het dossier naast de pagina (een
   kolom die je kunt verbergen, op de telefoon een lade).
+- **Proef 1B-1, voorlopig:** met LibreOffice 24.2 in de cloudsessie
+  (`docs/rapporten/PROEF_1B1_LETTERS_EMOJI_2026-11-28.md`).
+  - LibreOffice gebruikt geen .woff, ook niet als het geïnstalleerd is. TTF werkt wel.
+  - Een TTF die in de DOCX is ingesloten, werkt zonder installatie. Word kan zo'n letter ook
+    gebruiken; met Word zelf is dat niet getest.
+  - Voorstel: `page-export` sluit de huisstijlletter in.
+  - Nog te doen op de Collabora-container: welke letter hij neemt als de huisstijlletter
+    ontbreekt, of hij de ingesloten letter gebruikt, en of er een emoji-letter is.
+- **Nog niet door `deno check`:** `_shared/pageDocx.ts` en `_shared/zipWriter.ts`. Dat gebeurt
+  vanzelf zodra `page-export` ze importeert en in de lijst van
+  `.github/workflows/frontend-checks.yml` staat.
 - **1A-5d (omzetten) wacht.** Omzetten bij het openen gaat één kant op, en het neemt een
   document dingen af tot 1C er is:
   - een pagina kun je niet delen (`drive_shares_no_pages_yet`);

@@ -29,7 +29,12 @@ stand voor de overdracht.
 5. **Bij de volgende merge: ververs open tabbladen.** Een oude versie van de app kent de nieuwe
    blokken (tabel, kader, afbeelding enzovoort) niet. Ze opent zo'n pagina alleen om te lezen,
    met de knop "App verversen".
-6. **1C (pagina's delen) heb ik laten liggen.** Dat raakt wat klanten zien, en jij zei: klanten
+6. **De proef met letters (1B-1) graag op de Collabora-container herhalen.** Hier, met
+   LibreOffice, bleek: .woff werkt niet, TTF wel, en een letter die in de DOCX is ingesloten
+   ook. Op de container moet blijken welke letter hij neemt als de huisstijlletter ontbreekt,
+   en of er een emoji-letter is. Zie `docs/rapporten/PROEF_1B1_LETTERS_EMOJI_2026-11-28.md`;
+   het script is `scripts/proef-letters-docx.py`.
+7. **1C (pagina's delen) heb ik laten liggen.** Dat raakt wat klanten zien, en jij zei: klanten
    lezen pas mee als de eigenaar deelt, en alleen een owner of admin publiceert. Dat wil ik met
    je doorlopen voor ik het bouw.
 
