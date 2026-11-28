@@ -98,10 +98,15 @@ een naam (`label`) of inhoud wordt geweigerd.
   - de PDF van de medewerker heeft de naam van de klant, en bij een taak die er niet is de soort;
   - iemand met Inhoud maar zonder Klanten krijgt de soort;
   - een klant van de buren weigert de database via de API.
-- **`ui.mjs paginas`**, een nieuwe stap:
+- **`ui.mjs paginas`: 20 stappen, 0 fout.** De nieuwe stap:
   - een chip met de naam van de klant, en een gedempte "@taak";
   - typen en opslaan houdt de vermeldingen;
   - iemand zonder Klanten ziet "@klant".
+
+  De eerste run faalde bij "Nieuw → Pagina". De editor haalt nu waarden uit `@tiptap/pm/model`
+  (Fragment en Slice). Vite bundelde dat pakket met een lege cache pas tijdens de run, en
+  herlaadde de pagina midden in de stap. `ui.mjs` bundelt het nu vooraf, zoals fontkit. De
+  testen van de CI openen de pagina-editor niet.
 - **`npm test`** (2450), **`npm run typecheck`**, en `tsc` op `page-export` en de gedeelde
   modules. De CI doet `deno check` (`pageMentions.ts` staat in de stap "Deno-typecheck
   pagina's").
