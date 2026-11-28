@@ -59,6 +59,10 @@ Er is niets nieuws nodig.
 
 - **`page-export`** gebruikt `MEDIA_WORKER_URL` en `INTERNAL_UPLOAD_SECRET`, net als het
   klantportaal en de transcriptie.
+- **De origin van de app** leest `page-export` uit `APP_PUBLIC_URL` of `GERRIE_ALLOWED_ORIGINS`,
+  net als Gerrie; een van die twee staat er dus al. Zegt het venster bij een PDF "Deze
+  frontend-origin is niet toegestaan", zet dan de origin waarmee je de app opent (zonder slash
+  aan het eind) in `PAGE_EXPORT_ALLOWED_ORIGINS`.
 - **De media-worker** gebruikt `COLLABORA_URL` en `OFFICE_CONVERT_SECRET`, net als de PDF van een
   contract. Het secret is gelijk aan dat op de office-server.
 

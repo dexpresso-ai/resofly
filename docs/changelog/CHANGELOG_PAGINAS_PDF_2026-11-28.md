@@ -73,6 +73,10 @@ gebruiker met de hand uit; zie `docs/setup/PAGINA_PDF_SETUP.md`.
   pdf-lib tekent altijd bovenop. De module zet zijn tekening daarom vooraan de pagina, zodat de
   tekst erop staat. De pagina's zelf blijven staan; de links, de bladwijzers en de titel blijven
   dus die van Collabora. De pagina's opnieuw insluiten in een nieuw document zou ze kwijtraken.
+- **De origin van de app:** `page-export` leest hem uit `APP_PUBLIC_URL` of
+  `GERRIE_ALLOWED_ORIGINS`, net als Gerrie. Eerst las ze alleen de eerste. Staat de app op een
+  omgeving alleen in de tweede, dan weigerde ze elke PDF met 403, en dat ziet de rooktest niet.
+  Gevonden vóór de merge naar staging; staging zelf is vanuit de cloudsessie niet te bereiken.
 - **De rooktest na de uitrol** (`scripts/supabase-smoke-test.sh`) kijkt nu ook of `page-export`
   er staat. Hij stuurt origin "null", en dat weigert de functie altijd (403, "zonder herkomst"),
   wat de omgeving ook toestaat. Zonder de functie antwoordt Supabase zelf met 404.

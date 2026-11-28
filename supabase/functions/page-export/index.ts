@@ -47,11 +47,17 @@ const admin = createAdminClient();
 const MEDIA_WORKER_URL = (Deno.env.get('MEDIA_WORKER_URL') || '').replace(/\/$/, '');
 const MEDIA_INTERNAL_SECRET = Deno.env.get('INTERNAL_UPLOAD_SECRET') || Deno.env.get('R2_INTERNAL_SECRET') || '';
 
+// De origin van de app staat per omgeving in APP_PUBLIC_URL óf in
+// GERRIE_ALLOWED_ORIGINS (docs/setup/SUPABASE_STAGING_LAPTOP.md), dus beide,
+// net als gerrie-agent. Eerst las deze functie alleen de eerste: stond de app
+// alleen in de tweede, dan weigerde ze elke PDF met 403, en dat zag de
+// rooktest niet (die stuurt origin "null"). Gevonden vóór de merge.
 const cors = makeCors(
   parseAllowedOrigins([
     Deno.env.get('PAGE_EXPORT_ALLOWED_ORIGINS'),
     Deno.env.get('APP_ALLOWED_ORIGINS'),
     Deno.env.get('APP_PUBLIC_URL'),
+    Deno.env.get('GERRIE_ALLOWED_ORIGINS'),
     Deno.env.get('MAIL_ALLOWED_ORIGINS'),
   ]),
   // localhost en verzoeken zonder Origin alleen als je dat lokaal aanzet (ALLOW_LOCAL_DEV=1).
