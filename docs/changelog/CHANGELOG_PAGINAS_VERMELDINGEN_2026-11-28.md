@@ -127,6 +127,10 @@ een naam (`label`) of inhoud wordt geweigerd.
 - **`npm test`** (2450), **`npm run typecheck`**, en `tsc` op `page-export` en de gedeelde
   modules. De CI doet `deno check` (`pageMentions.ts` staat in de stap "Deno-typecheck
   pagina's").
+- **De CI** (run 319, 3af67b4, met 2-1a en 2-1b): helemaal groen. Dat zijn de migraties vanaf een
+  lege database met `20261128160000`, de databasetests (ook `paginas_vermeldingen.sql`) en `deno
+  check` op `pageMentions.ts`. Verder de typecheck, de unit tests, de mobiele lay-outtest (38
+  minuten), laden, de inrichting en de terugknop.
 
 ## Stap 2-1b: de @-kiezer, en een chip openen
 

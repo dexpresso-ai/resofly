@@ -179,7 +179,9 @@ export const EXPORT_FORMAT_VERSION = 1;
 // functies; geen tabellen of kolommen.
 // 20261128160000 (@-vermeldingen, stap 2-1a): de tabel page_mentions, afgeleid
 // uit de pagina's, dus intern.
-export const EXPORT_SCHEMA_VERSION = '20261128160000';
+// 20261128170000 (actiepunten worden taken, stap 2-2a): tasks.page_id en
+// tasks.page_block_id. Gaan mee met de taken.
+export const EXPORT_SCHEMA_VERSION = '20261128170000';
 
 export type TableKind =
   | 'export'

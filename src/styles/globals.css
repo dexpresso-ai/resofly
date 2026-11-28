@@ -13783,6 +13783,18 @@ button.alog-feed-row:hover{background:var(--bg3)}
 .page-prose .tiptap[contenteditable="false"] .page-mention:not(.is-unknown):not([data-kind="member"]){cursor:pointer}
 .page-prose .tiptap[contenteditable="false"] .page-mention:not(.is-unknown):not([data-kind="member"]):hover{text-decoration:underline}
 .page-mention-menu .page-block-hint{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* Actiepunten die een taak werden (stap 2-2a): achter de regel de stand van de taak. Een
+   decoratie, geen inhoud; de kleur volgt de stand, zoals de kolommen op het kanbanbord. */
+.page-prose .tiptap .page-task-badge{display:inline-block;margin-left:8px;padding:0 7px;border-radius:999px;border:1px solid var(--border);background:var(--bg3);color:var(--muted);font-size:11.5px;font-weight:600;line-height:1.6;white-space:nowrap;vertical-align:1px;cursor:pointer;user-select:none}
+.page-prose .tiptap .page-task-badge:hover{border-color:var(--border2);color:var(--text)}
+.page-prose .tiptap .page-task-badge.is-doing{color:var(--accent-b);border-color:color-mix(in srgb,var(--accent-b) 35%,transparent)}
+.page-prose .tiptap .page-task-badge.is-review{color:var(--accent-o);border-color:color-mix(in srgb,var(--accent-o) 35%,transparent)}
+.page-prose .tiptap .page-task-badge.is-done{color:var(--accent-g);border-color:color-mix(in srgb,var(--accent-g) 35%,transparent)}
+/* "Uit pagina" in het taakvenster: een link naar de pagina, geen veld. */
+.task-source-page{display:inline-flex;align-items:center;gap:6px;max-width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:9px;background:var(--bg3);color:var(--text);font:inherit;font-size:13px;cursor:pointer;text-align:left}
+.task-source-page span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.task-source-page:hover{background:var(--bg4);border-color:var(--border2)}
+.task-source-page:focus-visible{outline:none;box-shadow:var(--ring)}
 .rich-text-viewer .rf-mention{padding:0 5px;border-radius:6px;background:var(--bg3);color:var(--muted2)}
 /* Stap 2-0: kolommen. Even breed naast elkaar; op een smal scherm onder elkaar.
    Tijdens het bewerken een stippellijn om elke kolom: anders zag je niet waar

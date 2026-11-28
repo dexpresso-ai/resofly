@@ -119,6 +119,10 @@ import {
 } from './lib/repository';
 import { memberShortName, memberColor, memberInitials, memberEmail, memberName, projectTeamAdditions, taskAssigneeChoices } from './lib/members';
 import { cachedMentionCandidates, mentionMembers, searchMentions } from './lib/pageMentionSearch';
+import { pageTaskLinks, type PageTaskLink } from './lib/pageTasks';
+
+/** Geen pagina open, of geen taken: steeds dezelfde lege lijst. */
+const NO_TASK_LINKS: ReadonlyMap<string, PageTaskLink> = new Map();
 import { uploadToR2 } from './lib/r2';
 import { listExternalCalendarEvents, createExternalCalendarEvent, updateCalendarEvent, deleteCalendarEvent, completeCalendarOAuth, takeCalendarOAuthReturn, invalidateCalendarEventsCache, type CalendarEventInput } from './lib/calendar-api';
 import { calendarOAuthErrorText } from './lib/calendarConnection';
@@ -1317,6 +1321,12 @@ function App() {
   const [officeDoc, setOfficeDoc] = useState<InternalDocument | null>(null);
   /** De pagina die open staat in de pagina-editor (stap 1A-3a). */
   const [pageEditDoc, setPageEditDoc] = useState<InternalDocument | null>(null);
+  // De taken van de geopende pagina, per regel (stap 2-2a). Eén lijst zolang de
+  // taken niet veranderen: bij een nieuwe tekent de editor de labels opnieuw.
+  const pageEditTaskLinks = useMemo(
+    () => (pageEditDoc ? pageTaskLinks(data.tasks, pageEditDoc.id) : NO_TASK_LINKS),
+    [data.tasks, pageEditDoc?.id], // eslint-disable-line react-hooks/exhaustive-deps
+  );
   // De weg langs subpagina's (stap 1A-4b): de terugknop gaat een pagina terug.
   const [pageTrail, setPageTrail] = useState<string[]>([]);
   /** Het deelvenster van de open pagina (stap 1C), met hoe de editor eerst opslaat. */
@@ -5039,7 +5049,7 @@ function App() {
                 notify({ tone: 'ok', title: `Conceptfactuur ${invoice.number} gemaakt`, detail: 'Kijk hem na en verstuur hem. De uren staan nu als gefactureerd.' });
               }} />
           </Suspense>}
-          {tab.edit && <EditModal edit={tab.edit} data={data} dataStatus={dataGroupStatus} organizationId={activeOrg.id} currentUserId={currentUserId} teamMembers={workMembers} canWrite={canEditKind(tab.edit.kind)} readOnly={!canEditKind(tab.edit.kind)} onClose={() => setEdit(null)} onSave={saveEdit} onDelete={removeCurrent} onAttachmentsChanged={refresh} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewClientNote={(client) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id }})} onConvertToWord={convertDocumentToWord} onCreateFromOfficeFile={createDocumentFromOfficeFile} onCreateBlankOffice={createDocumentFromBlankOffice} onNoteHandwritingChanged={applyNoteHandwritingSummary} onCreateNoteNow={createNoteNow} taskAgenda={{ onReserve: reserveTimeForTask, onLinkEvent: linkTaskToEvent, onUnlink: unlinkTaskEvent, onOpenDay: (dateKey) => { setEdit(null); setCalendarJump(dateKey); setPage('calendar'); } }} />}
+          {tab.edit && <EditModal edit={tab.edit} data={data} dataStatus={dataGroupStatus} organizationId={activeOrg.id} currentUserId={currentUserId} teamMembers={workMembers} canWrite={canEditKind(tab.edit.kind)} readOnly={!canEditKind(tab.edit.kind)} onClose={() => setEdit(null)} onSave={saveEdit} onDelete={removeCurrent} onAttachmentsChanged={refresh} onEditNote={(note) => setEdit({kind:'note', item: note})} onNewClientNote={(client) => ensureCanWrite() && setEdit({kind:'note', item: undefined, defaults: { client_id: client.id }})} onConvertToWord={convertDocumentToWord} onCreateFromOfficeFile={createDocumentFromOfficeFile} onCreateBlankOffice={createDocumentFromBlankOffice} onNoteHandwritingChanged={applyNoteHandwritingSummary} onCreateNoteNow={createNoteNow} taskAgenda={{ onReserve: reserveTimeForTask, onLinkEvent: linkTaskToEvent, onUnlink: unlinkTaskEvent, onOpenDay: (dateKey) => { setEdit(null); setCalendarJump(dateKey); setPage('calendar'); } }} onOpenPage={(doc) => { setEdit(null); void openDocument(doc); }} />}
           </BackScope.Provider>
         </section>
       ))}
@@ -5119,6 +5129,29 @@ function App() {
           if (invoice) setEdit({ kind: 'invoice', item: invoice });
         }
       }}
+      // Actiepunten worden taken (stap 2-2a): met de rechten van wie klikt, langs
+      // dezelfde weg als "+ Taak". Zonder Projecten schrijven geen knop.
+      taskLinks={pageEditTaskLinks}
+      onMakeTask={orgCanWrite && permissions.canWrite('projects') && permissions.canWrite('content') ? async ({ blockId, title, projectId, clientId }) => {
+        try {
+          const created = await insertRow<Task>('tasks', activeOrg.id, {
+            title,
+            project_id: projectId,
+            // Bij een project volgt de klant uit het project (tasks_org_integrity).
+            client_id: projectId ? null : clientId,
+            page_id: pageEditDoc.id,
+            page_block_id: blockId,
+          });
+          setData(prev => ({ ...prev, tasks: mergeTaskRows(prev.tasks, [created]) }));
+        } catch (e) {
+          // Eén taak per regel (tasks_page_block_unique): een collega was je voor.
+          if ((e as { code?: string } | null)?.code === '23505') {
+            void refresh();
+            throw new Error('Van deze regel is net al een taak gemaakt. Hij verschijnt zo.');
+          }
+          throw e;
+        }
+      } : undefined}
       backTo={pageTrail[pageTrail.length - 1] ?? null}
       ownDossierName={data.companySettings?.company_name?.trim() || 'Eigen dossier'}
       houseStyle={data.companySettings}
@@ -5577,7 +5610,7 @@ function ClientFromMailNote({ fromMail }: { fromMail: ClientFromMail }) {
   </div>;
 }
 
-function EditModal({ edit, data, dataStatus, organizationId, currentUserId, teamMembers, canWrite, readOnly, onClose, onSave, onDelete, onAttachmentsChanged, onEditNote, onNewClientNote, onConvertToWord, onCreateFromOfficeFile, onCreateBlankOffice, onNoteHandwritingChanged, onCreateNoteNow, taskAgenda }: { edit: NonNullable<EditMode>; data: AppData; dataStatus: (group: DataGroup) => DataGroupStatus; organizationId: string; currentUserId: string | null; teamMembers: OrganizationMember[]; canWrite: boolean; readOnly: boolean; onClose: () => void; onSave: (v: Record<string, unknown>) => void; onDelete: () => void; onAttachmentsChanged: () => void; onEditNote: (note: Note) => void; onNewClientNote: (client: Client) => void; onConvertToWord: (doc: InternalDocument) => void; onCreateFromOfficeFile: (file: File, values: Record<string, unknown>) => void; onCreateBlankOffice: (docType: NewOfficeType, values: Record<string, unknown>) => void; onNoteHandwritingChanged: (noteId: string, summary: NoteHandwritingSummary | null) => void; onCreateNoteNow: (values: Record<string, unknown>) => Promise<Note>; taskAgenda: TaskAgendaHandlers }) {
+function EditModal({ edit, data, dataStatus, organizationId, currentUserId, teamMembers, canWrite, readOnly, onClose, onSave, onDelete, onAttachmentsChanged, onEditNote, onNewClientNote, onConvertToWord, onCreateFromOfficeFile, onCreateBlankOffice, onNoteHandwritingChanged, onCreateNoteNow, taskAgenda, onOpenPage }: { edit: NonNullable<EditMode>; data: AppData; dataStatus: (group: DataGroup) => DataGroupStatus; organizationId: string; currentUserId: string | null; teamMembers: OrganizationMember[]; canWrite: boolean; readOnly: boolean; onClose: () => void; onSave: (v: Record<string, unknown>) => void; onDelete: () => void; onAttachmentsChanged: () => void; onEditNote: (note: Note) => void; onNewClientNote: (client: Client) => void; onConvertToWord: (doc: InternalDocument) => void; onCreateFromOfficeFile: (file: File, values: Record<string, unknown>) => void; onCreateBlankOffice: (docType: NewOfficeType, values: Record<string, unknown>) => void; onNoteHandwritingChanged: (noteId: string, summary: NoteHandwritingSummary | null) => void; onCreateNoteNow: (values: Record<string, unknown>) => Promise<Note>; taskAgenda: TaskAgendaHandlers; onOpenPage?: (doc: InternalDocument) => void }) {
   const item = 'item' in edit ? edit.item : undefined;
   const [form, setForm] = useState<Record<string, any>>(() => initialForm(edit, data));
   const set = (k: string, v: unknown) => setForm(prev => ({ ...prev, [k]: v }));
@@ -5866,6 +5899,14 @@ function EditModal({ edit, data, dataStatus, organizationId, currentUserId, team
         de titel, niet na de planning. Indeling in globals.css bij .task-form-grid. */}
     {edit.kind === 'task' && <FormGrid className="task-form-grid">
       <Field label="Taaktitel" className="tf-title"><Input value={form.title} onChange={e=>set('title',e.target.value)} placeholder="Taaktitel" disabled={disabled}/></Field>
+      {/* Uit welke pagina deze taak kwam (stap 2-2a). Alleen als je die pagina
+          mag lezen: anders zit ze niet in data.documents. Na definitief wissen
+          ook niet: de link heeft geen foreign key. */}
+      {(() => {
+        const pageId = (item as Task | undefined)?.page_id;
+        const page = pageId ? data.documents.find(doc => doc.id === pageId && doc.format === 'page') : undefined;
+        return page && onOpenPage ? <Field label="Uit pagina" className="tf-wide" group><button type="button" className="task-source-page" onClick={() => onOpenPage(page)}><FileText size={14} aria-hidden="true"/><span>{page.title?.trim() || 'Zonder titel'}</span></button></Field> : null;
+      })()}
       <Field label="Status" className="tf-narrow"><Select value={form.status} onChange={e=>set('status',e.target.value)} disabled={disabled}><option value="todo">Te doen</option><option value="doing">Bezig</option><option value="review">Review</option><option value="done">Klaar</option></Select></Field>
       <Field label="Prioriteit" className="tf-narrow"><Select value={form.priority} onChange={e=>set('priority',e.target.value)} disabled={disabled}><option value="low">Laag</option><option value="med">Normaal</option><option value="high">Hoog</option></Select></Field>
       <Field label="Beschrijving" className="tf-description"><Textarea value={form.description} onChange={e=>set('description',e.target.value)} placeholder="Beschrijving" disabled={disabled}/></Field>

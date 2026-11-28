@@ -16,7 +16,8 @@
 import { Extension, Node, mergeAttributes } from '@tiptap/core';
 import type { Editor, NodeViewRenderer } from '@tiptap/core';
 import { Fragment, Slice, type Node as PmNode } from '@tiptap/pm/model';
-import { NodeSelection, Plugin, Selection, TextSelection } from '@tiptap/pm/state';
+import { NodeSelection, Plugin, PluginKey, Selection, TextSelection } from '@tiptap/pm/state';
+import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import type { Transaction } from '@tiptap/pm/state';
 import { columnResizing } from '@tiptap/pm/tables';
 import { StarterKit } from '@tiptap/starter-kit';
@@ -28,6 +29,7 @@ import { Details, DetailsContent, DetailsSummary } from '@tiptap/extension-detai
 import { calloutVariant, isAllowedPageLink } from './pageSchema.ts';
 import { MENTION_KIND_WORDS, mentionKind, mentionOf, type MentionKind } from '../../supabase/functions/_shared/pageMentions.ts';
 import type { MentionCandidate } from './pageMentionSearch.ts';
+import { TASK_STATUS_WORDS, type PageTaskLink } from './pageTasks.ts';
 
 /** Blokken met een vast id (attrs.id): waar Gerrie straks per blok iets voorstelt. */
 export const PAGE_BLOCKS_WITH_ID = [
@@ -275,6 +277,93 @@ export const Mention = Node.create({
           };
           const content = withoutUnknownMentions(slice.content, keep);
           return content === slice.content ? slice : new Slice(content, slice.openStart, slice.openEnd);
+        },
+      },
+    })];
+  },
+});
+
+/**
+ * Actiepunten die een taak werden (stap 2-2a): wat PageEditor in
+ * editor.storage.pageTaskLinks zet. De link staat bij de taak (tasks.page_id
+ * en page_block_id), niet in de pagina. De taken komen uit wat de app geladen
+ * heeft: wie Projecten niet mag lezen, heeft ze niet, en ziet een gewone
+ * takenlijst (regel 3).
+ */
+export type PageTaskLinksStorage = {
+  /** Per regel (het id van het blok) de taak. */
+  links: ReadonlyMap<string, PageTaskLink>;
+  /** De taak openen; de pagina gaat eerst netjes dicht. Zonder: het label opent niets. */
+  open: ((taskId: string) => void) | null;
+  /** Van een regel een taak maken. Zonder (geen rechten op Projecten): geen knop. */
+  make: ((blockId: string, title: string) => Promise<void>) | null;
+};
+
+export const PAGE_TASK_LINKS_KEY = new PluginKey('pageTaskLinks');
+
+export function pageTaskLinksOf(editor: Editor): PageTaskLinksStorage | null {
+  return (editor.storage as unknown as Record<string, PageTaskLinksStorage | undefined>).pageTaskLinks ?? null;
+}
+
+/**
+ * Het label achter een regel met een taak: "Taak · Te doen". Alleen lezen: een
+ * klik opent de taak. Bij bewerken zet een klik de cursor aan het eind van de
+ * regel, en opent "Openen" in de balk; daar klik je ook om de cursor te
+ * zetten, net als bij een chip.
+ */
+function taskBadge(editor: Editor, link: PageTaskLink, getPos: () => number | undefined): HTMLElement {
+  const badge = document.createElement('span');
+  badge.className = `page-task-badge is-${link.status}`;
+  badge.contentEditable = 'false';
+  badge.setAttribute('role', 'button');
+  badge.setAttribute('aria-label', `Taak: ${link.title}, ${TASK_STATUS_WORDS[link.status].toLowerCase()}`);
+  badge.title = `Taak: ${link.title}`;
+  badge.textContent = `Taak · ${TASK_STATUS_WORDS[link.status]}`;
+  badge.addEventListener('mousedown', event => event.preventDefault());
+  badge.addEventListener('click', event => {
+    event.preventDefault();
+    if (!editor.isEditable) {
+      pageTaskLinksOf(editor)?.open?.(link.id);
+      return;
+    }
+    const at = getPos();
+    if (typeof at === 'number') editor.chain().focus().setTextSelection(at).run();
+  });
+  return badge;
+}
+
+/**
+ * De labels zelf. Een decoratie, geen inhoud: de pagina verandert er niet
+ * door, en de klant, de export en de versies zien ze niet. PageEditor stuurt
+ * een lege transactie met PAGE_TASK_LINKS_KEY als de taken veranderen.
+ */
+export const PageTaskLinks = Extension.create({
+  name: 'pageTaskLinks',
+  addStorage(): PageTaskLinksStorage {
+    return { links: new Map(), open: null, make: null };
+  },
+  addProseMirrorPlugins() {
+    const editor = this.editor;
+    return [new Plugin({
+      key: PAGE_TASK_LINKS_KEY,
+      props: {
+        decorations: state => {
+          const links = pageTaskLinksOf(editor)?.links;
+          if (!links || links.size === 0) return DecorationSet.empty;
+          const found: Decoration[] = [];
+          state.doc.descendants((node, pos) => {
+            if (node.type.name !== 'taskItem') return true;
+            const link = typeof node.attrs.id === 'string' ? links.get(node.attrs.id) : undefined;
+            const first = node.firstChild;
+            if (link && first?.type.name === 'paragraph') {
+              // Aan het eind van de eerste alinea van de regel, niet achter een lijst eronder.
+              found.push(Decoration.widget(pos + first.nodeSize, (_view, getPos) => taskBadge(editor, link, getPos), {
+                side: 1, ignoreSelection: true, key: `taak:${link.id}:${link.status}:${link.title}`,
+              }));
+            }
+            return true;
+          });
+          return DecorationSet.create(state.doc, found);
         },
       },
     })];
@@ -992,6 +1081,7 @@ export function pageEditorExtensions(options: { placeholder?: string } = {}) {
     Columns,
     Column,
     Mention,
+    PageTaskLinks,
     TableOfContents,
     Subpage,
     PageImage,

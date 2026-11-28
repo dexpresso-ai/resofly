@@ -41,13 +41,20 @@ op 1A-5d na. Fase 2 staat nu in stappen in §18 van het bouwplan.
   bij bewerken via "Openen" in de balk, zodat een klik om de cursor te zetten niets opent.
   - Een kopie voor het dossier (de Word-kopie, de vastgelegde PDF) krijgt geen namen meer,
     ook niet op het voorblad (vraag 12).
-  - Nog niet door de CI: de migratie vanaf een lege database en `deno check` op de nieuwe
-    code. Lokaal is alles groen.
+  - De CI (run 319) is helemaal groen, ook de migratie vanaf een lege database en `deno
+    check` op de nieuwe code.
 - **2-1c, "Genoemd in"**: bij een klant en een project een paneel met de pagina's die hen
   noemen, en waar die staan. Een tik opent de pagina.
   - Alleen wat je mag lezen. Zonder Inhoud geen paneel. Een plek die je niet mag zien heet
     "Ander dossier".
   - Geen migratie; het leest de tabel van 2-1a.
+- **2-2a, actiepunten worden taken**: zet de cursor in een regel van een takenlijst en kies "Maak
+  er een taak van". De taak komt in het project van de pagina; achter de regel staat dan "Taak ·
+  Te doen", en het taakvenster zegt uit welke pagina ze komt.
+  - De link staat bij de taak, niet in de pagina. Wie Projecten niet mag lezen, de klant en de
+    export zien een gewone takenlijst.
+  - Een migratie: `20261128170000_paginas_taken.sql`.
+  - Het vinkje en de taak samen komen in 2-2b.
 - Dit staat op de branch tot je zegt dat het naar staging mag. De migratie moet uiterlijk
   samen met de @-kiezer naar staging. Komt de app eerder live dan de migratie, dan weigert de
   database de vermeldingen die de kiezer maakt.
@@ -206,6 +213,14 @@ op 1A-5d na. Fase 2 staat nu in stappen in §18 van het bouwplan.
       soort, en op het voorblad geen klant of project meer. Dat laatste deden ze sinds 1B-4a,
       en het staat op staging. Een download houdt de namen. Wil je de namen ook in een kopie,
       zeg het dan.
+13. **Een ticket wissen waar een taak aan hangt, mislukt voor wie Projecten niet mag
+    schrijven** (gevonden bij 2-2a, nog niet gerepareerd). `tasks.ticket_id` wijst met een
+    foreign key naar het ticket (`on delete set null`, migratie `20260822020000`). Wissen
+    verandert dan ook de taak, en de schrijfpoort van Projecten houdt dat tegen: "Geen toegang
+    tot de module projects in deze organisatie". Lokaal nagespeeld in een teruggedraaide
+    transactie, met iemand die Tickets mag schrijven en Projecten niet. Voor pagina's heb ik dat in 2-2a vermeden: daar
+    is de link zonder foreign key. Wil je dat ik het voor tickets ook zo oplos, zeg het dan.
+    Dat raakt de tickets, niet de pagina's.
 
 ## Gevonden en gerepareerd
 
@@ -260,6 +275,7 @@ Na de merge van 14:39, op de branch (fase 2):
 | 2-1a | @-vermeldingen, de basis: de database, de chip in de editor, Word, de PDF en de klant. Alleen de soort en het id in de pagina. Migratie `20261128160000`. | `CHANGELOG_PAGINAS_VERMELDINGEN_2026-11-28.md` |
 | 2-1b | De @-kiezer, en een chip openen. Moet samen met de migratie van 2-1a naar staging. | `CHANGELOG_PAGINAS_VERMELDINGEN_2026-11-28.md` |
 | 2-1c | "Genoemd in" bij een klant en een project. Leest de tabel van 2-1a; ook samen met of na die migratie. | `CHANGELOG_PAGINAS_VERMELDINGEN_2026-11-28.md` |
+| 2-2a | Een regel in een takenlijst wordt een taak, met een label in de pagina en "Uit pagina" in het taakvenster. Migratie `20261128170000`. | `CHANGELOG_PAGINAS_TAKEN_2026-11-28.md` |
 
 ## Wat er op 28 november om 09:34 naar staging ging
 

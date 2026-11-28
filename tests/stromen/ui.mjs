@@ -168,8 +168,9 @@ const vite = await createServer({
   // blijft de pagina staan. @tiptap/pm/model: de pagina-editor (een eigen stuk
   // bundel) haalt er sinds de @-vermeldingen (stap 2-1a) Fragment en Slice uit;
   // met een lege cache herlaadde Vite toen bij de eerste pagina, en faalde
-  // "Nieuw → Pagina".
-  optimizeDeps: { include: ['@pdf-lib/fontkit', '@tiptap/pm/model'] },
+  // "Nieuw → Pagina". Hetzelfde met @tiptap/pm/view sinds de labels achter
+  // een actiepunt (stap 2-2a, Decoration).
+  optimizeDeps: { include: ['@pdf-lib/fontkit', '@tiptap/pm/model', '@tiptap/pm/view'] },
   server: { port: 5310, strictPort: false, host: '127.0.0.1', hmr: false },
 });
 await vite.listen();
@@ -2479,6 +2480,93 @@ async function scenarioPaginas() {
     gelijk(await paneel(zi.page).count(), 0, 'zonder Inhoud: een paneel');
     gelijk(vragen.length, 0, 'zonder Inhoud: een vraag naar page_mentions');
     await sluit(zi);
+  });
+
+  await uiStap('actiepunten worden taken (stap 2-2a): een regel in een takenlijst wordt met één klik een taak in het project, met een label in de pagina en "Uit pagina" in het taakvenster; zonder Projecten schrijven geen knop, zonder Projecten lezen geen label', async () => {
+    const tag = Date.now().toString(36);
+    const projectNaam = `Actiepunten ${tag}`;
+    sql(`insert into public.projects (organization_id, created_by, client_id, name) values (${q(w.orgId)}, ${q(w.medewerker.id)}, ${q(w.klantA.id)}, ${q(projectNaam)})`);
+    const project = sqlRij(`select id from public.projects where organization_id = ${q(w.orgId)} and name = ${q(projectNaam)}`);
+    const regel = randomUUID();
+    const leeg = randomUUID();
+    const titel = `Notulen ${tag}`;
+    const item = (id, inhoud) => ({ type: 'taskItem', attrs: { checked: false, id }, content: [{ type: 'paragraph', ...(inhoud.length ? { content: inhoud } : {}) }] });
+    const body = { type: 'doc', content: [{ type: 'taskList', content: [
+      item(regel, [{ type: 'text', text: 'Offerte sturen naar ' }, { type: 'mention', attrs: { kind: 'client', id: w.klantA.id } }]),
+      item(leeg, []),
+    ] }] };
+    sql(`insert into public.documents (organization_id, created_by, title, format, body, client_id, project_id)
+      values (${q(w.orgId)}, ${q(w.medewerker.id)}, ${q(titel)}, 'page', ${q(JSON.stringify(body))}::jsonb, ${q(w.klantA.id)}, ${q(project.id)})`);
+    const pagina = sqlRij(`select id from public.documents where organization_id = ${q(w.orgId)} and title = ${q(titel)}`);
+    const openAls = async (gebruiker, naam) => {
+      const lid = await openWerkruimte(gebruiker, naam, w.orgId, { tijdelijk: true });
+      const adres = new URL(lid.page.url());
+      adres.searchParams.set('pagina', pagina.id);
+      await lid.page.goto(adres.toString());
+      await lid.page.locator('.page-editor').waitFor({ timeout: 30000 });
+      return lid;
+    };
+    // De editor tekent een takenregel als <li data-id data-checked>, zonder data-type.
+    const regelIn = (page, id) => editorVak(page).locator(`li[data-checked][data-id="${id}"] p`).first();
+    const balk = (page) => page.locator('.page-editor-subbar[aria-label="Actiepunt"]');
+    const label = (page) => editorVak(page).locator('.page-task-badge');
+
+    // De medewerker: de regel wordt een taak, in het project, met de naam van de klant.
+    const lid = await openAls(w.medewerker, 'medewerker');
+    const page = lid.page;
+    await wachtOpgeslagen(page, 'de pagina met actiepunten kwam niet in bewerken');
+    await regelIn(page, regel).click();
+    await page.keyboard.press('End');
+    await balk(page).getByRole('button', { name: 'Maak er een taak van' }).click();
+    const taak = await wachtTot(async () => sqlRij(`select id, title, status, project_id, client_id, page_block_id from public.tasks where page_id = ${q(pagina.id)}`), { melding: 'geen taak in de database' });
+    gelijk([taak.title, taak.status, taak.project_id, taak.client_id, taak.page_block_id],
+      [`Offerte sturen naar ${w.klantA.name}`, 'todo', project.id, w.klantA.id, regel], 'de taak');
+    await wachtTot(async () => tekst(await label(page).innerText().catch(() => '')) === 'Taak · Te doen', { melding: 'geen label achter de regel' });
+    gelijk(await label(page).count(), 1, 'één label');
+    await wachtTot(async () => tekst(await balk(page).innerText().catch(() => '')).includes('Te doen'), { melding: 'de balk toont de taak niet' });
+    // De pagina zelf weet niets van de taak.
+    await wachtOpgeslagen(page);
+    verwacht(!sqlRij(`select body::text as body from public.documents where id = ${q(pagina.id)}`).body.includes(taak.id), 'het id van de taak staat in de pagina');
+    // Een lege regel wordt geen taak.
+    await regelIn(page, leeg).click();
+    await wachtTot(async () => tekst(await balk(page).innerText().catch(() => '')).includes('Typ eerst wat er moet gebeuren'), { melding: 'een lege regel: geen uitleg' });
+    gelijk(await balk(page).getByRole('button', { name: 'Maak er een taak van' }).count(), 0, 'een knop bij een lege regel');
+    // Openen: de pagina gaat netjes dicht, het taakvenster toont "Uit pagina", en dat opent de pagina weer.
+    await regelIn(page, regel).click();
+    await balk(page).getByRole('button', { name: 'Taak openen' }).click();
+    await page.locator('.page-editor').waitFor({ state: 'detached', timeout: 15000 });
+    const venster = modal(page, 'Taak bewerken');
+    await venster.waitFor({ timeout: 15000 });
+    gelijk(sqlRij(`select count(*)::int as n from public.document_edit_claims where document_id = ${q(pagina.id)}`).n, 0, 'de claim is vrij');
+    await venster.getByRole('button', { name: titel }).click();
+    await page.locator('.page-editor').waitFor({ timeout: 20000 });
+    await wachtTot(async () => (await page.locator('.page-editor-title').inputValue().catch(() => '')) === titel, { melding: '"Uit pagina" opende de pagina niet' });
+    await wachtTot(async () => (await label(page).count()) === 1, { melding: 'na opnieuw openen geen label' });
+    await sluitPagina(page);
+    await sluit(lid);
+
+    // Projecten lezen maar niet schrijven: het label wel, de knop niet.
+    const lezer = await maakGebruiker('ui-projecten-lezen');
+    sql(`insert into public.organization_members (organization_id, user_id, email, role, status, module_access)
+      values (${q(w.orgId)}, ${q(lezer.id)}, ${q(lezer.email)}, 'member', 'active', '{"content":"write","projects":"read","clients":"read"}'::jsonb)`);
+    const metLezen = await openAls(lezer, 'projecten-lezen');
+    await wachtOpgeslagen(metLezen.page, 'projecten lezen: de pagina kwam niet in bewerken');
+    await wachtTot(async () => (await label(metLezen.page).count()) === 1, { melding: 'projecten lezen: geen label' });
+    await regelIn(metLezen.page, leeg).click();
+    await metLezen.page.waitForTimeout(300);
+    gelijk(await balk(metLezen.page).count(), 0, 'projecten lezen: een balk om een taak te maken');
+    await sluitPagina(metLezen.page);
+    await sluit(metLezen);
+
+    // Projecten niet lezen: een gewone takenlijst, zonder label.
+    const zonder = await maakGebruiker('ui-zonder-projecten-2');
+    sql(`insert into public.organization_members (organization_id, user_id, email, role, status, module_access)
+      values (${q(w.orgId)}, ${q(zonder.id)}, ${q(zonder.email)}, 'member', 'active', '{"content":"read","projects":"none","clients":"read"}'::jsonb)`);
+    const zonderProjecten = await openAls(zonder, 'zonder-projecten-2');
+    await editorVak(zonderProjecten.page).locator('li[data-checked]').first().waitFor({ timeout: 15000 });
+    await zonderProjecten.page.waitForTimeout(500);
+    gelijk(await label(zonderProjecten.page).count(), 0, 'zonder Projecten: een label');
+    await sluit(zonderProjecten);
   });
 
   await uiStap('plakken uit Excel of Word wordt een tabel, zonder de stijl van buiten', async () => {

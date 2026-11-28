@@ -670,6 +670,10 @@ export interface Task extends OrgScopedRow {
   project_id: UUID | null; client_id: UUID | null; title: string; description: string | null; status: TaskStatus; priority: Priority; tags: string[]; start_date: string | null; end_date: string | null; planned_date: string | null;
   /** Het ticket waaruit deze taak is ingepland. Leeg voor gewoon projectwerk. */
   ticket_id: UUID | null;
+  /** De pagina en de regel waar deze taak uit kwam (stap 2-2a). Zonder foreign key:
+   *  na definitief wissen van de pagina wijst page_id nergens meer heen. */
+  page_id?: UUID | null;
+  page_block_id?: UUID | null;
   /** Laatste dag van een meerdaagse taak. Leeg = gewone dagtaak; gevuld = weekstrook. */
   planned_end_date: string | null;
   /** Minuten na middernacht waarop het tijdblok van deze taak begint (weekplanner).
