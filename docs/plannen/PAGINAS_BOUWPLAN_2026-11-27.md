@@ -717,7 +717,11 @@ nieuwe blokken niet, en opent zo'n pagina alleen om te lezen.
     `paginas_bijwerken.sql` en `paginas_portaal_bijlagen.sql`;
   - run 310 (983b12d, de verhuisreparatie, migratie `20261128150000`): helemaal groen, ook
     de mobiele lay-outtest, laden, de inrichting en de terugknop;
-  - run 311 (staging, 59fab7e, dezelfde code na de merge): helemaal groen.
+  - run 311 (staging, 59fab7e, dezelfde code na de merge): helemaal groen;
+  - run 312 (9b92cc4, 1B-3 en 1B-4a, na de merge): helemaal groen. Daarbij waren:
+    - de mobiele lay-outtest (37 minuten), laden, de inrichting en de terugknop;
+    - `deno check` van `pageDocx.ts` met het voorblad en de hoofdstukken;
+  - run 313 (0d3ccbe, met 1B-4b en 1B-4c): loopt nog.
 - **`deno check` op de modules van pagina's:** sinds 1C-1 een eigen stap in
   `.github/workflows/frontend-checks.yml` ("Deno-typecheck pagina's"): `pageDocx.ts`,
   `woff.ts`, `zipWriter.ts`, `pageExportFonts.ts`, `pageHtml.ts` en `pageReferences.ts`. Geen

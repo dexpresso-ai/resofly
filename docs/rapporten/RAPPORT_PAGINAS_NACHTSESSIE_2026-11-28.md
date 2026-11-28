@@ -221,13 +221,14 @@ Ze mogen opnieuw draaien, en de databasetests lopen ze na.
 
 ## Getest
 
-- **De CI op de branch:** runs 304 tot en met 310 zijn helemaal groen:
+- **De CI op de branch:** runs 304 tot en met 310, en 312, zijn helemaal groen:
   - 308 is fe9a4d7 (1C-1 en 1C-2);
   - 309 is a080604 (1C-3 en 1C-4);
-  - 310 is 983b12d, met de verhuisreparatie (migratie `20261128150000`).
+  - 310 is 983b12d, met de verhuisreparatie (migratie `20261128150000`);
+  - 312 is 9b92cc4: na de merge, 1B-3 en 1B-4a.
 
-  Run 311 op staging (59fab7e, dezelfde code na de merge) is ook helemaal groen. Groen
-  betekent:
+  Run 311 op staging (59fab7e, dezelfde code na de merge) is ook helemaal groen. Run 313
+  (0d3ccbe, met 1B-4b en 1B-4c) loopt nog. Groen betekent:
   - de migraties vanaf nul met de databasetests;
   - `deno check`;
   - typecheck en de unit tests;
