@@ -707,8 +707,8 @@ nieuwe blokken niet, en opent zo'n pagina alleen om te lezen.
   - De app kan de PDF downloaden en hem vastleggen in de map van de pagina.
   - De worker rolt de gebruiker met de hand uit (`docs/setup/PAGINA_PDF_SETUP.md`). Tot dan zegt
     het venster waarom er geen PDF is.
-  - De rooktest na de uitrol kijkt of `page-export` er staat (zonder inlog: 401). De worker
-    kijkt hij niet na.
+  - De rooktest na de uitrol kijkt of `page-export` er staat (origin "null": altijd 403). De
+    worker kijkt hij niet na.
 - **Wat de CI niet bewaakt.** §14 vraagt `test:terugknop` en `test:mobile` voor de editor en het
   exportvenster. Die staan in `ui.mjs` (scenario's `paginas`, `paginadrive` en `paginaexport`:
   terug sluit het venster, en de telefoonmaat). `ui.mjs` draait niet in de CI; `test:terugknop`

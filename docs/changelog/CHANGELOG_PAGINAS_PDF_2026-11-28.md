@@ -54,9 +54,12 @@ gebruiker met de hand uit; zie `docs/setup/PAGINA_PDF_SETUP.md`.
 - **Vastleggen** loopt langs de gewone upload van de drive (`uploadToR2`, map), met de rechten
   van wie het doet.
 - **De rooktest na de uitrol** (`scripts/supabase-smoke-test.sh`) kijkt nu ook of `page-export`
-  er staat: zonder inlog moet ze zelf weigeren (401, "Niet ingelogd"). Het platform controleert
-  daar geen JWT (`verify_jwt = false`), net als bij het klantportaal. De stroomtest bewaakt
-  dezelfde woorden.
+  er staat. Hij stuurt origin "null", en dat weigert de functie altijd (403, "zonder herkomst"),
+  wat de omgeving ook toestaat. Zonder de functie antwoordt Supabase zelf met 404.
+  - Eerst stuurde hij geen Origin en verwachtte hij 401 ("Niet ingelogd"). Op staging was dat
+    403 geweest: zonder Origin mag alleen lokaal (`ALLOW_LOCAL_DEV`). De uitrol was dan rood
+    geworden. Gevonden vóór een merge, bij het nalezen.
+  - De stroomtest stuurt nu precies het verzoek van de rooktest.
 
 ## Afwijkingen van §9
 

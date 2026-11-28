@@ -33,7 +33,8 @@ npm run deploy:staging
 ## Nagaan of het werkt
 
 De rooktest van *Deploy Supabase (staging)* kijkt na de merge al of `page-export` er staat
-("page-export weigert zonder inlog"). De worker kijkt hij niet na; dat doe je zo:
+("page-export staat er en weigert een verzoek zonder herkomst"). De worker kijkt hij niet na;
+dat doe je zo:
 
 1. Open op staging een pagina, kies **Exporteren**, en dan **PDF downloaden**. De eerste PDF na
    een pauze kan tot een minuut duren: Collabora start dan koud.

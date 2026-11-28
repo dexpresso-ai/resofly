@@ -624,9 +624,12 @@ export default async function documentenScenario() {
       gelijk((await exporteer(w.kijker.token, {})).status, 200, 'de kijker');
       geweigerd(await exporteer(zonderInhoud?.geen.token, {}), 'Inhoud "geen"', [403, 404]);
       if (ander) geweigerd(await exporteer(ander.medewerker.token, {}), 'de buren', [403, 404]);
-      // De rooktest na de uitrol zoekt naar precies deze woorden (scripts/supabase-smoke-test.sh).
-      const zonderSessie = geweigerd(await exporteer(null, {}), 'zonder sessie', [401]);
-      if (!String(zonderSessie?.error || '').includes('Niet ingelogd')) throw new Error(`zonder sessie: een andere melding dan de rooktest verwacht: ${JSON.stringify(zonderSessie)}`);
+      geweigerd(await exporteer(null, {}), 'zonder sessie', [401]);
+      // Precies het verzoek van de rooktest na de uitrol (scripts/supabase-smoke-test.sh):
+      // origin "null", zonder sessie, met een verzonnen pagina.
+      const rooktest = await roep('page-export', { origin: 'null', body: { pageId: '00000000-0000-4000-8000-000000000000' } });
+      gelijk(rooktest.status, 403, `het verzoek van de rooktest: ${rooktest.tekst.slice(0, 200)}`);
+      verwacht(rooktest.tekst.includes('zonder herkomst'), `de rooktest zoekt "zonder herkomst": ${rooktest.tekst.slice(0, 200)}`);
       geweigerd(await roep('page-export', { token: w.medewerker.token, body: { pageId: 'geen-uuid' } }), 'geen geldige pagina', [400]);
       geweigerd(await roep('page-export', { token: w.medewerker.token, body: { pageId: pdfPagina.weg.id } }), 'een pagina in de prullenbak', [404]);
     });
