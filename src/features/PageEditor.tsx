@@ -45,7 +45,7 @@ import { fetchStoredFileBlob, uploadToR2 } from '../lib/r2';
 import { calloutVariant, isAllowedPageLink, type CalloutVariant } from '../lib/pageSchema';
 import { pageBodyFit } from '../lib/pageBodyCheck';
 import {
-  attachmentInfo, attachmentStorageKey, claimPageEdit, createPage, listDossierFiles, listPageVersions, loadPage, loadPageVersion, pageTitle,
+  attachmentInfo, attachmentStorageKey, claimPageEdit, createPage, listDossierFiles, listPageVersions, loadPage, loadPageVersion, pageAncestors, pageTitle,
   releasePageEdit, restorePageVersion, savePage, type DossierFile,
   savePageVersion, type PageVersionSummary,
 } from '../lib/repository';
@@ -116,7 +116,8 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
   const [versionsOpen, setVersionsOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [refreshHelps, setRefreshHelps] = useState(true);
-  const [parent, setParent] = useState<{ id: string; title: string | null } | null>(null);
+  /** Het kruimelpad: de bovenliggende pagina's, van boven naar de directe ouder. */
+  const [ancestors, setAncestors] = useState<Array<{ id: string; title: string }>>([]);
   /** De kiezer van het bestandsblok, met de belofte die de keuze teruggeeft. */
   const [filePicker, setFilePicker] = useState<{ files: DossierFile[] | null; error: string | null; resolve: (choice: FileChoice) => void } | null>(null);
   /** Het dossier van de pagina, voor de kiezer. */
@@ -227,7 +228,11 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
     ed.chain().setMeta('addToHistory', false).setContent(row.body as JSONContent, { emitUpdate: false }).run();
     setTitle(row.title);
     placeRef.current = { client_id: row.client_id, project_id: row.project_id };
-    setParent(previous => (row.parent_id ? { id: row.parent_id, title: previous?.id === row.parent_id ? previous.title : null } : null));
+    if (row.parent_id) {
+      pageAncestors(documentId, organizationId).then(setAncestors, () => setAncestors([]));
+    } else {
+      setAncestors([]);
+    }
     versionRef.current = row.edit_version;
     baselineRef.current = snapshotOf(row.title.trim() || 'Naamloze pagina', ed.getJSON());
     setSaveState('opgeslagen');
@@ -564,15 +569,7 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
     return () => { for (const url of made) URL.revokeObjectURL(url); };
   }, [editor, documentId, organizationId]);
 
-  // De titel van de bovenliggende pagina, voor de knop omhoog.
-  useEffect(() => {
-    if (!parent || parent.title !== null) return;
-    let cancelled = false;
-    pageTitle(parent.id, organizationId)
-      .then(title => { if (!cancelled) setParent(current => (current?.id === parent.id ? { id: parent.id, title: title ?? 'Pagina' } : current)); })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, [parent, organizationId]);
+
 
   const reloadAfterConflict = async () => {
     setMessage(null);
@@ -633,13 +630,18 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
     <div className="page-editor" role="dialog" aria-modal="true" aria-label={title || 'Pagina'}>
       <div className="page-editor-bar">
         <button type="button" className="page-editor-close" onClick={() => void close()} aria-label="Pagina sluiten"><X size={18} /></button>
-        {parent && <button
-          type="button"
-          className="page-editor-parent"
-          onClick={() => void close(false, { id: parent.id, how: 'vooruit' })}
-          title={`Naar ${parent.title ?? 'de bovenliggende pagina'}`}
-          aria-label={`Naar de bovenliggende pagina${parent.title ? `: ${parent.title}` : ''}`}
-        ><ChevronLeft size={15} /><span>{parent.title ?? '…'}</span></button>}
+        {ancestors.length > 0 && <nav className="page-editor-crumbs" aria-label="Bovenliggende pagina's">
+          {ancestors.map((ancestor, index) => (
+            <button
+              key={ancestor.id}
+              type="button"
+              className={`page-editor-parent${index === ancestors.length - 1 ? ' is-direct' : ''}`}
+              onClick={() => void close(false, { id: ancestor.id, how: 'vooruit' })}
+              title={`Naar ${ancestor.title || 'Naamloze pagina'}`}
+              aria-label={index === ancestors.length - 1 ? `Naar de bovenliggende pagina: ${ancestor.title || 'Naamloze pagina'}` : `Naar ${ancestor.title || 'Naamloze pagina'}`}
+            >{index === ancestors.length - 1 && <ChevronLeft size={15} />}<span>{ancestor.title || 'Naamloze pagina'}</span></button>
+          ))}
+        </nav>}
         <span className="page-editor-crumb" title={title}>{title || 'Pagina'}</span>
         <span className={`page-editor-status is-${mode === 'bewerken' ? saveState : mode}`} role="status">{statusText}</span>
         <button type="button" className="page-editor-action" onClick={() => void copyLink()} title="Een link naar deze pagina, voor collega's">

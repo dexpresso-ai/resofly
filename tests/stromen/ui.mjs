@@ -2548,6 +2548,46 @@ async function scenarioDocumenten() {
     await wachtTot(async () => tekst(await weg.innerText().catch(() => '')) === 'Bestand niet gevonden', { melding: 'een verdwenen bestand toont geen melding' });
     await sluitPagina(zonder);
   });
+  // ── De boom in de drive (stap 1A-5) ────────────────────────────────────────
+  await uiStap('de drive: subpagina\'s onder hun pagina, uitklappen, een pagina op een pagina slepen, het kruimelpad, en terug naar een map', async () => {
+    const boom = Date.now().toString(36);
+    const nieuwePagina = (titel, ouder = null) => {
+      sql(`insert into public.documents (organization_id, created_by, title, format, body, client_id, parent_id)
+        values (${q(w.orgId)}, ${q(w.medewerker.id)}, ${q(titel)}, 'page', '{"type":"doc","content":[{"type":"paragraph"}]}'::jsonb, ${q(w.klantA.id)}, ${ouder ? q(ouder) : 'null'})`);
+      return sqlRij(`select id from public.documents where organization_id = ${q(w.orgId)} and title = ${q(titel)}`).id;
+    };
+    const ouder = nieuwePagina(`Boom ouder ${boom}`);
+    nieuwePagina(`Boom kind ${boom}`, ouder);
+    const los = nieuwePagina(`Boom los ${boom}`);
+    sql(`insert into public.content_folders (organization_id, client_id, name) values (${q(w.orgId)}, ${q(w.klantA.id)}, ${q(`Boommap ${boom}`)})`);
+    const map = sqlRij(`select id from public.content_folders where organization_id = ${q(w.orgId)} and name = ${q(`Boommap ${boom}`)}`).id;
+    const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+    const page = lid.page;
+    await naarKlantdossier(lid, w.klantA.name);
+    const rij = (titel) => inhoud(page).locator('.odrv-row').filter({ hasText: titel }).first();
+    await rij(`Boom ouder ${boom}`).waitFor({ timeout: 15000 });
+    verwacht(tekst(await rij(`Boom ouder ${boom}`).innerText()).includes('1 subpagina'), `de pagina noemt haar subpagina niet: ${tekst(await rij(`Boom ouder ${boom}`).innerText())}`);
+    gelijk(await inhoud(page).locator('.odrv-row').filter({ hasText: `Boom kind ${boom}` }).count(), 0, 'de subpagina staat los in het dossier');
+    // Uitklappen: de subpagina komt eronder.
+    await rij(`Boom ouder ${boom}`).locator('.odrv-tree-toggle').click();
+    await rij(`Boom kind ${boom}`).waitFor({ timeout: 5000 });
+    // Een pagina op een pagina slepen: ze wordt een subpagina.
+    await rij(`Boom los ${boom}`).dragTo(rij(`Boom ouder ${boom}`));
+    await wachtTot(async () => sqlRij(`select parent_id from public.documents where id = ${q(los)}`).parent_id === ouder, { melding: 'slepen maakte geen subpagina' });
+    await wachtTot(async () => tekst(await rij(`Boom ouder ${boom}`).innerText().catch(() => '')).includes("2 subpagina's"), { melding: 'de lijst toont de nieuwe subpagina niet' });
+    gelijk(sqlRij(`select folder_id, client_id from public.documents where id = ${q(los)}`).client_id, w.klantA.id, 'de subpagina hoort bij klant A');
+    // Het kruimelpad in de editor.
+    await rij(`Boom los ${boom}`).click();
+    await page.locator('.page-editor').waitFor({ timeout: 20000 });
+    await wachtTot(async () => tekst(await page.locator('.page-editor-crumbs').innerText().catch(() => '')).includes(`Boom ouder ${boom}`), { melding: 'geen kruimelpad naar de bovenliggende pagina' });
+    await sluitPagina(page);
+    // Een subpagina naar een map slepen: ze komt los van haar ouder en staat in de map.
+    await rij(`Boom kind ${boom}`).dragTo(rij(`Boommap ${boom}`));
+    await wachtTot(async () => {
+      const kind = sqlRij(`select parent_id, folder_id from public.documents where organization_id = ${q(w.orgId)} and title = ${q(`Boom kind ${boom}`)}`);
+      return kind.parent_id === null && kind.folder_id === map;
+    }, { melding: 'een subpagina in een map gesleept, kwam niet los van haar ouder' });
+  });
 }
 
 // ── Bank: mutaties met de hand boeken ──────────────────────────────────────

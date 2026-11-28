@@ -2051,6 +2051,29 @@ export async function createPage(
 }
 
 /**
+ * De bovenliggende pagina's, van de bovenste tot de directe ouder: het
+ * kruimelpad in de editor (stap 1A-5). Hoogstens 20 stappen, zoals de boom in
+ * de database. Een ouder die je niet mag zien, sluit het pad af.
+ */
+export async function pageAncestors(pageId: UUID, organizationId: UUID): Promise<Array<{ id: UUID; title: string }>> {
+  const chain: Array<{ id: UUID; title: string }> = [];
+  const { data: start, error: startError } = await supabase
+    .from('documents').select('parent_id').eq('id', pageId).eq('organization_id', organizationId).maybeSingle();
+  if (startError) throw startError;
+  let next = (start as { parent_id: UUID | null } | null)?.parent_id ?? null;
+  for (let step = 0; next && step < 20; step += 1) {
+    const { data, error } = await supabase
+      .from('documents').select('id,title,parent_id').eq('id', next).eq('organization_id', organizationId).eq('format', 'page').maybeSingle();
+    if (error) throw error;
+    const row = data as { id: UUID; title: string; parent_id: UUID | null } | null;
+    if (!row) break;
+    chain.unshift({ id: row.id, title: row.title });
+    next = row.parent_id;
+  }
+  return chain;
+}
+
+/**
  * De titel van een pagina, voor een subpagina-blok en de knop naar de
  * bovenliggende pagina. null als hij niet (meer) bestaat of je hem niet mag
  * zien (RLS en de module Inhoud).
@@ -7296,7 +7319,23 @@ export async function moveDriveItem(item: DriveDragItem, target: DriveLocation, 
     await updateRow('content_folders', item.id, { client_id: target.clientId, project_id: target.projectId, parent_id: target.folderId }, organizationId);
     return;
   }
-  await updateRow(item.kind === 'note' ? 'notes' : 'documents', item.id, { client_id: target.clientId, project_id: target.projectId, folder_id: target.folderId }, organizationId);
+  if (item.kind === 'note') {
+    await updateRow('notes', item.id, { client_id: target.clientId, project_id: target.projectId, folder_id: target.folderId }, organizationId);
+    return;
+  }
+  // Een subpagina die je naar een map of dossier sleept, komt los van haar ouder
+  // (stap 1A-5). Zonder parent_id = null zette de database haar stil terug: een
+  // subpagina volgt de plek van haar ouder (20261127130000).
+  await updateRow('documents', item.id, { client_id: target.clientId, project_id: target.projectId, folder_id: target.folderId, parent_id: null }, organizationId);
+}
+
+/**
+ * Een pagina onder een andere zetten (slepen in de drive, stap 1A-5). De
+ * database bewaakt de rest: dezelfde organisatie, geen kring, hoogstens 20 diep,
+ * en de subpagina neemt klant en project van haar ouder over, zonder eigen map.
+ */
+export async function nestPageUnder(pageId: UUID, parentId: UUID, organizationId: UUID): Promise<void> {
+  await updateRow('documents', pageId, { parent_id: parentId }, organizationId);
 }
 
 /**

@@ -13789,3 +13789,21 @@ button.alog-feed-row:hover{background:var(--bg3)}
   .page-file-picker-backdrop{align-items:flex-end;padding:0}
   .page-file-picker{width:100%;max-height:80vh;border-radius:18px 18px 0 0;padding-bottom:calc(14px + env(safe-area-inset-bottom))}
 }
+/* Stap 1A-5: het kruimelpad boven een subpagina. Op een groot scherm alle
+   bovenliggende pagina's, op een telefoon alleen een pijltje naar de directe ouder. */
+.page-editor-crumbs{display:flex;align-items:center;gap:2px;min-width:0;max-width:45%;flex:0 1 auto}
+.page-editor-crumbs::after{content:'›';flex:0 0 auto;padding:0 2px 0 4px;color:var(--muted)}
+.page-editor-crumbs .page-editor-parent{max-width:none;padding:0 6px;flex:0 1 auto}
+.page-editor-crumbs .page-editor-parent+.page-editor-parent::before{content:'›';margin-right:6px;color:var(--muted)}
+.page-editor-crumbs .page-editor-parent svg{display:none}
+@media (max-width:640px){
+  .page-editor-crumbs{max-width:none;flex:0 0 auto}
+  .page-editor-crumbs::after{display:none}
+  .page-editor-crumbs .page-editor-parent:not(.is-direct){display:none}
+  .page-editor-crumbs .page-editor-parent::before{display:none}
+  .page-editor-crumbs .page-editor-parent svg{display:inline}
+}
+/* Stap 1A-5: de boom van pagina's in de lijst van de drive. */
+.odrv-tree-toggle{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;width:22px;height:22px;margin-right:4px;padding:0;border:none;border-radius:6px;background:transparent;color:var(--muted2);cursor:pointer}
+.odrv-tree-toggle:hover{background:var(--bg3);color:var(--text)}
+.odrv-tree-spacer{display:inline-block;flex:0 0 auto;width:26px}

@@ -127,5 +127,12 @@ en §18). Afbeelding, bestand en subpagina volgen in 1A-4b.
   - `deno check` (geen edge function gewijzigd).
 
   De workflow Frontend checks draait niet vanzelf op een branch, alleen bij een push naar
-  staging of een pull request. Daarom is hij op de branch met de hand gestart; zie de
-  commit van deze changelog.
+  staging of een pull request. Daarom is hij op de branch met de hand gestart.
+  - Run 301, op commit 85e0625 (deze stap plus het eerste deel van 1A-4b), was helemaal
+    groen:
+    - typecheck en unit tests;
+    - de mobiele lay-outtest in donker en licht;
+    - laden per module, inrichting en terugknop;
+    - `deno check`;
+    - de migraties vanaf nul, met de databasetests.
+  - Een eerdere run op ff9f1d4 is afgebroken: die was ingehaald door 301.
