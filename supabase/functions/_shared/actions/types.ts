@@ -270,8 +270,13 @@ export function ids(input: Record<string, unknown>, key: string, max = 200): str
 export async function row<T = Record<string, unknown>>(
   ctx: ActionCtx, table: string, rowId: string, select = '*', label = 'Rij',
 ): Promise<T> {
-  const { data, error } = await ctx.db.from(table).select(select)
-    .eq('organization_id', ctx.organizationId).eq('id', rowId).maybeSingle();
+  let query = ctx.db.from(table).select(select)
+    .eq('organization_id', ctx.organizationId).eq('id', rowId);
+  // Een pagina in de prullenbak (stap 1A-5b) is er voor handelingen niet: de
+  // service role ziet haar wel, de policy die haar verbergt geldt alleen voor
+  // ingelogde gebruikers.
+  if (table === 'documents') query = query.is('archived_at', null);
+  const { data, error } = await query.maybeSingle();
   if (error) throw new ActionError(`${label} ophalen mislukt: ${error.message}`);
   if (!data) throw new ActionError(`${label} niet gevonden in deze organisatie.`);
   return data as T;
@@ -279,7 +284,9 @@ export async function row<T = Record<string, unknown>>(
 
 /** Lijst binnen de organisatie, met een harde bovengrens op het aantal rijen. */
 export function orgQuery(ctx: ActionCtx, table: string, select = '*') {
-  return ctx.db.from(table).select(select).eq('organization_id', ctx.organizationId);
+  const query = ctx.db.from(table).select(select).eq('organization_id', ctx.organizationId);
+  // Zie row(): een pagina in de prullenbak telt niet mee.
+  return table === 'documents' ? query.is('archived_at', null) : query;
 }
 
 /**

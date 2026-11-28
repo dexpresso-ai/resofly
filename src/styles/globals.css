@@ -13807,3 +13807,13 @@ button.alog-feed-row:hover{background:var(--bg3)}
 .odrv-tree-toggle{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;width:22px;height:22px;margin-right:4px;padding:0;border:none;border-radius:6px;background:transparent;color:var(--muted2);cursor:pointer}
 .odrv-tree-toggle:hover{background:var(--bg3);color:var(--text)}
 .odrv-tree-spacer{display:inline-block;flex:0 0 auto;width:26px}
+/* Stap 1A-5b: de prullenbak van pagina's. */
+.modal.page-trash{width:640px}
+.page-trash-intro{margin:0 0 12px;color:var(--muted2);font-size:13px;line-height:1.5}
+.page-trash-empty{margin:0;color:var(--muted2);font-size:13px}
+.page-trash-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.page-trash-item{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:var(--bg3)}
+.page-trash-text{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1 1 260px}
+.page-trash-text strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.page-trash-text span{font-size:12px;color:var(--muted2)}
+.page-trash-actions{display:flex;flex-wrap:wrap;gap:6px}

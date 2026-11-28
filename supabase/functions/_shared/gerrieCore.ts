@@ -4502,7 +4502,11 @@ async function resolveProposalHolder(
 
 /** Elke query begint hier: altijd vastgepind op de geverifieerde organisatie. */
 function orgTable(table: string, orgId: string) {
-  return supabaseAdmin.from(table).select('*').eq('organization_id', orgId);
+  const query = supabaseAdmin.from(table).select('*').eq('organization_id', orgId);
+  // Een pagina in de prullenbak (stap 1A-5b) bestaat voor Gerrie niet: de
+  // service role ziet haar wel, de policy die haar verbergt geldt alleen voor
+  // ingelogde gebruikers.
+  return table === 'documents' ? query.is('archived_at', null) : query;
 }
 
 /**

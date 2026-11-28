@@ -3,7 +3,7 @@
  * UI-test — de knoppen en formulieren van offertes, facturen, herinneringen en
  * contracten in Chromium, tegen de echte backend.
  *
- *   node --enable-source-maps --import ./tests/stromen/register.mjs tests/stromen/ui.mjs [offerte] [factuur] [intrekken] [contract] [rollen] [agenda] [mollie] [documenten] [bank] [inrichten] [opname] [klantdomein] [rapportage] [tickets] [vooruitbetaald] [galerij] [prognose]
+ *   node --enable-source-maps --import ./tests/stromen/register.mjs tests/stromen/ui.mjs [offerte] [factuur] [intrekken] [contract] [rollen] [agenda] [mollie] [documenten] [paginadrive] [bank] [inrichten] [opname] [klantdomein] [rapportage] [tickets] [vooruitbetaald] [galerij] [prognose]
  *
  *   --schermafdrukken=<map>   waar schermafdrukken van mislukte stappen heen gaan
  *                             (standaard <tmp>/stromen-ui; ook STROMEN_UI_SCHERMAFDRUKKEN)
@@ -49,7 +49,7 @@ const opties = Object.fromEntries(argumenten.filter((a) => a.startsWith('--')).m
   const m = /^--([^=]+)(?:=(.*))?$/.exec(a);
   return [m[1], m[2] ?? 'true'];
 }));
-const ALLE = ['offerte', 'factuur', 'intrekken', 'contract', 'rollen', 'agenda', 'mollie', 'documenten', 'bank', 'inrichten', 'opname', 'klantdomein', 'rapportage', 'tickets', 'vooruitbetaald', 'galerij', 'prognose'];
+const ALLE = ['offerte', 'factuur', 'intrekken', 'contract', 'rollen', 'agenda', 'mollie', 'documenten', 'paginadrive', 'bank', 'inrichten', 'opname', 'klantdomein', 'rapportage', 'tickets', 'vooruitbetaald', 'galerij', 'prognose'];
 const gekozen = argumenten.filter((a) => !a.startsWith('-'));
 for (const naam of gekozen) {
   if (!ALLE.includes(naam)) throw new Error(`Onbekend scenario "${naam}". Kies uit: ${ALLE.join(', ')}`);
@@ -2548,6 +2548,21 @@ async function scenarioDocumenten() {
     await wachtTot(async () => tekst(await weg.innerText().catch(() => '')) === 'Bestand niet gevonden', { melding: 'een verdwenen bestand toont geen melding' });
     await sluitPagina(zonder);
   });
+
+}
+
+/**
+ * Pagina's in de drive (stap 1A-5): de boom en de prullenbak. Een eigen
+ * scenario, los van "documenten": de stappen maken hun eigen pagina's, en zo
+ * draait dit in een paar minuten.
+ */
+async function scenarioPaginadrive() {
+  groep('UI: pagina\'s in de drive');
+  const { w } = t;
+  const sluitPagina = async (page) => {
+    await page.locator('.page-editor-close').click();
+    await page.locator('.page-editor').waitFor({ state: 'detached', timeout: 15000 });
+  };
   // ── De boom in de drive (stap 1A-5) ────────────────────────────────────────
   await uiStap('de drive: subpagina\'s onder hun pagina, uitklappen, een pagina op een pagina slepen, het kruimelpad, en terug naar een map', async () => {
     const boom = Date.now().toString(36);
@@ -2587,6 +2602,53 @@ async function scenarioDocumenten() {
       const kind = sqlRij(`select parent_id, folder_id from public.documents where organization_id = ${q(w.orgId)} and title = ${q(`Boom kind ${boom}`)}`);
       return kind.parent_id === null && kind.folder_id === map;
     }, { melding: 'een subpagina in een map gesleept, kwam niet los van haar ouder' });
+  });
+  // ── De prullenbak (stap 1A-5b) ─────────────────────────────────────────────
+  await uiStap('de prullenbak: een pagina met subpagina weggooien, onzichtbaar, terugzetten, en definitief verwijderen', async () => {
+    const tag = Date.now().toString(36);
+    const nieuwePagina = (titel, ouder = null) => {
+      sql(`insert into public.documents (organization_id, created_by, title, format, body, client_id, parent_id)
+        values (${q(w.orgId)}, ${q(w.medewerker.id)}, ${q(titel)}, 'page', '{"type":"doc","content":[{"type":"paragraph"}]}'::jsonb, ${q(w.klantA.id)}, ${ouder ? q(ouder) : 'null'})`);
+      return sqlRij(`select id from public.documents where organization_id = ${q(w.orgId)} and title = ${q(titel)}`).id;
+    };
+    const ouder = nieuwePagina(`Weg ouder ${tag}`);
+    const kind = nieuwePagina(`Weg kind ${tag}`, ouder);
+    const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+    const page = lid.page;
+    await naarKlantdossier(lid, w.klantA.name);
+    const rij = () => inhoud(page).locator('.odrv-row').filter({ hasText: `Weg ouder ${tag}` }).first();
+    await rij().waitFor({ timeout: 15000 });
+    // Weggooien via het menu: de pagina en haar subpagina gaan samen.
+    await rij().locator('.odrv-td-act button').first().click();
+    await page.locator('.drive-pop').getByRole('menuitem', { name: 'Verwijderen', exact: true }).click();
+    await wachtTot(async () => sqlRij(`select count(*)::int as n from public.documents where id in (${q(ouder)}, ${q(kind)}) and archived_at is not null`).n === 2, { melding: 'de pagina en haar subpagina gingen niet naar de prullenbak' });
+    await wachtTot(async () => (await inhoud(page).locator('.odrv-row').filter({ hasText: `Weg ouder ${tag}` }).count()) === 0, { melding: 'een weggegooide pagina staat nog in de lijst' });
+    // De prullenbak toont één regel, met de subpagina erbij.
+    await inhoud(page).getByRole('button', { name: /Prullenbak/ }).click();
+    const bak = page.locator('.page-trash');
+    await bak.waitFor({ timeout: 10000 });
+    const regel = bak.locator('.page-trash-item').filter({ hasText: `Weg ouder ${tag}` });
+    await regel.waitFor({ timeout: 10000 });
+    verwacht(tekst(await regel.innerText()).includes('met 1 subpagina'), `de regel: ${tekst(await regel.innerText())}`);
+    gelijk(await bak.locator('.page-trash-item').filter({ hasText: `Weg kind ${tag}` }).count(), 0, 'de subpagina heeft geen eigen regel');
+    // Terugzetten: samen terug, en weer in de lijst.
+    await regel.getByRole('button', { name: /Terugzetten/ }).click();
+    await wachtTot(async () => (await regel.count()) === 0, { melding: 'na terugzetten staat de pagina nog in de prullenbak' });
+    gelijk(sqlRij(`select count(*)::int as n from public.documents where id in (${q(ouder)}, ${q(kind)}) and archived_at is null`).n, 2, 'beide terug');
+    await page.keyboard.press('Escape');
+    await bak.locator('.modal-close').click();
+    await bak.waitFor({ state: 'detached', timeout: 5000 });
+    await rij().waitFor({ timeout: 15000 });
+    // Nog eens weg, en nu definitief.
+    await rij().locator('.odrv-td-act button').first().click();
+    await page.locator('.drive-pop').getByRole('menuitem', { name: 'Verwijderen', exact: true }).click();
+    await wachtTot(async () => sqlRij(`select count(*)::int as n from public.documents where id = ${q(ouder)} and archived_at is not null`).n === 1, { melding: 'niet opnieuw in de prullenbak' });
+    await inhoud(page).getByRole('button', { name: /Prullenbak/ }).click();
+    await regel.waitFor({ timeout: 10000 });
+    await regel.getByRole('button', { name: /Definitief verwijderen/ }).click();
+    await wachtTot(async () => sqlRij(`select count(*)::int as n from public.documents where id in (${q(ouder)}, ${q(kind)})`).n === 0, { melding: 'definitief verwijderen liet de pagina staan' });
+    await wachtTot(async () => tekst(await bak.innerText().catch(() => '')).includes('De prullenbak is leeg') || (await regel.count()) === 0, { melding: 'de regel blijft staan' });
+    await bak.locator('.modal-close').click();
   });
 }
 
@@ -4545,7 +4607,7 @@ try {
       // De app praat met deze testserver, niet met een ander Supabase-adres.
       verwacht(server.verkeer.some((r) => r.soort === 'rpc' && r.status < 400), 'de app deed geen enkele aanroep via de testserver');
     });
-    const scenarios = { offerte: scenarioOfferte, factuur: scenarioFactuur, intrekken: scenarioIntrekken, contract: scenarioContract, rollen: scenarioRollen, agenda: scenarioAgenda, mollie: scenarioMollie, documenten: scenarioDocumenten, bank: scenarioBank, inrichten: scenarioInrichten, opname: scenarioOpname, klantdomein: scenarioKlantdomein, rapportage: scenarioRapportage, tickets: scenarioTickets, vooruitbetaald: scenarioVooruitbetaald, galerij: scenarioGalerij, prognose: scenarioPrognose };
+    const scenarios = { offerte: scenarioOfferte, factuur: scenarioFactuur, intrekken: scenarioIntrekken, contract: scenarioContract, rollen: scenarioRollen, agenda: scenarioAgenda, mollie: scenarioMollie, documenten: scenarioDocumenten, paginadrive: scenarioPaginadrive, bank: scenarioBank, inrichten: scenarioInrichten, opname: scenarioOpname, klantdomein: scenarioKlantdomein, rapportage: scenarioRapportage, tickets: scenarioTickets, vooruitbetaald: scenarioVooruitbetaald, galerij: scenarioGalerij, prognose: scenarioPrognose };
     for (const naam of SCENARIOS) await scenarios[naam]();
   }
   fouten = samenvatting();

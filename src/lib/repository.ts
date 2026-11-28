@@ -7329,6 +7329,39 @@ export async function moveDriveItem(item: DriveDragItem, target: DriveLocation, 
   await updateRow('documents', item.id, { client_id: target.clientId, project_id: target.projectId, folder_id: target.folderId, parent_id: null }, organizationId);
 }
 
+/** Een regel in de prullenbak van pagina's (stap 1A-5b): wat je in één keer weggooide. */
+export type PageTrashItem = {
+  id: UUID; title: string; archived_at: string; archived_by: UUID | null;
+  client_id: UUID | null; project_id: UUID | null; subpages: number; purge_on: string;
+};
+
+/** Een pagina met haar subpagina's naar de prullenbak. Geeft het aantal pagina's. */
+export async function trashPage(pageId: UUID): Promise<number> {
+  const { data, error } = await supabase.rpc('trash_page', { p_page_id: pageId });
+  if (error) throw error;
+  return Number(data ?? 0);
+}
+
+/** Terugzetten, met de subpagina's die er tegelijk in gingen. */
+export async function restorePage(pageId: UUID): Promise<number> {
+  const { data, error } = await supabase.rpc('restore_page', { p_page_id: pageId });
+  if (error) throw error;
+  return Number(data ?? 0);
+}
+
+export async function listPageTrash(organizationId: UUID): Promise<PageTrashItem[]> {
+  const { data, error } = await supabase.rpc('list_page_trash', { p_organization_id: organizationId });
+  if (error) throw error;
+  return (data ?? []) as PageTrashItem[];
+}
+
+/** Definitief weg, met de subpagina's en hun bijlagen (via de opruimwachtrij). */
+export async function deletePageForever(pageId: UUID): Promise<number> {
+  const { data, error } = await supabase.rpc('delete_page_forever', { p_page_id: pageId });
+  if (error) throw error;
+  return Number(data ?? 0);
+}
+
 /**
  * Een pagina onder een andere zetten (slepen in de drive, stap 1A-5). De
  * database bewaakt de rest: dezelfde organisatie, geen kring, hoogstens 20 diep,

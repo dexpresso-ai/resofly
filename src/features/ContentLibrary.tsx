@@ -7,7 +7,8 @@ import {
 } from 'lucide-react';
 import type { AppData, Attachment, ContentFolder, InternalDocument, Note, Project } from '../types';
 import { dateNL } from '../lib/format';
-import { insertRow, updateRow, deleteContentFolder, deleteAttachment, deleteEntityCascade, moveDriveItem, nestPageUnder, renameAttachment, addItemsToDriveShare, loadFolderShareGaps, notifyDriveShareAdded } from '../lib/repository';
+import { insertRow, updateRow, deleteContentFolder, deleteAttachment, deleteEntityCascade, moveDriveItem, nestPageUnder, renameAttachment, addItemsToDriveShare, loadFolderShareGaps, notifyDriveShareAdded, trashPage } from '../lib/repository';
+import { PageTrash, PageTrashButton } from '../components/PageTrash';
 import { uploadToR2, downloadAttachment } from '../lib/r2';
 import { createOfficeSession, createOfficeDocument, isOfficeEditable, NEW_OFFICE_LABEL, type NewOfficeType, type OfficeSession } from '../lib/office';
 import { OfficeEditor } from './OfficeEditor';
@@ -194,6 +195,7 @@ export function ContentLibrary({
   const [sharing, setSharing] = useState<ShareTarget | null>(null);
   /** Het overzicht "wat hebben we allemaal gedeeld en verzonden". */
   const [sharedOpen, setSharedOpen] = useState(false);
+  const [trashOpen, setTrashOpen] = useState(false);
   /** Het venster "Bestanden versturen": wat er al in zit, en voor welke klant. */
   const [sendingFiles, setSendingFiles] = useState<{ sources: TransferSource[]; clientId: string | null; chooseClient: boolean } | null>(null);
   /** Waar de sleep op dit moment boven hangt — stuurt alleen de oplichting. */
@@ -578,6 +580,14 @@ export function ContentLibrary({
 
   /** Een notitie of document verwijderen — de bijlagen eraan gaan mee (ook uit Cloudflare). */
   function deleteContent(kind: 'note' | 'document', id: string, name: string) {
+    // Een pagina gaat naar de prullenbak (stap 1A-5b), met haar subpagina's:
+    // 30 dagen terug te zetten.
+    if (kind === 'document' && docsById.get(id)?.format === 'page') {
+      const subpages = subpagesByParent.get(id)?.length ?? 0;
+      if (!window.confirm(`"${name}"${subpages ? ` en ${subpages === 1 ? 'zijn subpagina' : `zijn ${subpages} subpagina's`}` : ''} naar de prullenbak? Je kunt ${subpages ? 'ze' : 'hem'} 30 dagen terugzetten.`)) return;
+      run(async () => { await trashPage(id); });
+      return;
+    }
     const what = kind === 'note' ? 'De notitie' : 'Het document';
     if (!window.confirm(`"${name}" verwijderen? ${what} en de bijlagen eraan worden definitief verwijderd.`)) return;
     run(async () => { await deleteEntityCascade(kind === 'note' ? 'notes' : 'documents', id, organizationId); });
@@ -1026,14 +1036,17 @@ export function ContentLibrary({
       docs.length ? `${docs.length} ${docs.length === 1 ? 'document' : 'documenten'}` : null,
       folders.length ? `${folders.length} ${folders.length === 1 ? 'map' : 'mappen'}` : null,
     ].filter(Boolean).join(' en ');
-    if (!window.confirm(`${what} verwijderen? Bestanden gaan ook uit de Cloudflare-opslag. Notities en documenten in verwijderde mappen blijven bestaan (ze worden ontkoppeld); geüploade bestanden erin gaan wel weg.`)) return;
+    const pages = docs.filter(row => row.doc?.format === 'page').length;
+    if (!window.confirm(`${what} verwijderen? Bestanden gaan ook uit de Cloudflare-opslag. Notities en documenten in verwijderde mappen blijven bestaan (ze worden ontkoppeld); geüploade bestanden erin gaan wel weg.${pages ? ` Pagina's gaan naar de prullenbak: die kun je 30 dagen terugzetten.` : ''}`)) return;
     setBusy(true); setError(null);
     try {
       for (const row of files) {
         await deleteAttachment({ id: row.att!.id, storage_key: row.att!.storage_key, organization_id: row.att!.organization_id });
       }
       for (const row of [...notes, ...docs]) {
-        await deleteEntityCascade(row.kind === 'note' ? 'notes' : 'documents', row.drag!.id, organizationId);
+        // Pagina's naar de prullenbak (stap 1A-5b), de rest weg.
+        if (row.kind === 'document' && row.doc?.format === 'page') await trashPage(row.drag!.id);
+        else await deleteEntityCascade(row.kind === 'note' ? 'notes' : 'documents', row.drag!.id, organizationId);
       }
       for (const row of folders) {
         const id = row.drag!.id;
@@ -1347,6 +1360,7 @@ export function ContentLibrary({
 
         <div className="odrv-cmdbar-right">
           <SharedOverviewButton data={data} onOpen={() => { setSharedOpen(true); setNewOpen(false); setSortOpen(false); setFilterOpen(false); setMenu(null); }} />
+          <PageTrashButton onOpen={() => { setTrashOpen(true); setNewOpen(false); setSortOpen(false); setFilterOpen(false); setMenu(null); }} />
           <div className="drive-new-wrap">
             <button type="button" className={`odrv-tool drive-pop-trigger${anyFilterOff ? ' is-active' : ''}`} onClick={() => { setFilterOpen(o => !o); setNewOpen(false); setSortOpen(false); setMenu(null); }} aria-haspopup="menu" aria-expanded={filterOpen}>
               <SlidersHorizontal size={14} /> <span className="odrv-tool-label">Weergeven</span> <ChevronDown size={13} />
@@ -1490,6 +1504,7 @@ export function ContentLibrary({
     {officeSession && <OfficeEditor session={officeSession} onClose={() => { setOfficeSession(null); setOfficeAtt(null); onChanged(); }} onDownload={officeAtt ? () => handleDownload(officeAtt) : undefined} />}
     {sharing && <ShareDialog data={data} organizationId={organizationId} target={sharing} onClose={() => setSharing(null)} onChanged={onChanged} />}
     {sharedOpen && <SharedOverview data={data} organizationId={organizationId} canWrite={canWrite} clientId={embedded ? rootClientId : null} onClose={() => setSharedOpen(false)} onChanged={onChanged} />}
+    {trashOpen && <PageTrash organizationId={organizationId} canWrite={canWrite} clientId={embedded ? rootClientId ?? null : null} onClose={() => setTrashOpen(false)} onChanged={onChanged} />}
     {sendingFiles && <SendFilesDialog
       data={data}
       organizationId={organizationId}
