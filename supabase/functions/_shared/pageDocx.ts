@@ -57,8 +57,10 @@ export type PageDocxFont = { family: string; regular?: Uint8Array; bold?: Uint8A
 
 /** Wat de pagina zelf niet weet. De aanroeper zoekt het op, met de rechten van wie exporteert. */
 export type PageDocxContext = {
-  /** De letter van de huisstijl; zonder deze letter wordt het Calibri. */
+  /** De letter van de huisstijl voor tekst; zonder deze letter wordt het Calibri. */
   font?: PageDocxFont;
+  /** De letter voor de titel en de koppen; zonder deze letter die van de tekst. */
+  headingFont?: PageDocxFont;
   /** Titels van subpagina's (pageId → titel). Ontbreekt er een, dan "Pagina niet gevonden", zoals in de app. */
   pageTitles?: Record<string, string>;
   /** Namen van de bestanden in bestandsblokken (attachmentId → naam). */
@@ -591,11 +593,17 @@ function obfuscateFont(bytes: Uint8Array, key: string): Uint8Array {
   return out;
 }
 
-/** Vaste sleutels: elke GUID is goed, en zo blijft de uitkomst van een export voorspelbaar. */
-const FONT_KEYS = { Regular: '{5C1A9D2E-7B3F-4E8A-9C6D-1F2E3A4B5C6D}', Bold: '{6D2B0E3F-8C4A-4F9B-AD7E-2A3F4B5C6D7E}' } as const;
+/** Vaste sleutels, één per bestand: elke GUID is goed, en zo blijft de uitkomst van een export voorspelbaar. */
+function fontKey(n: number): string {
+  return `{5C1A9D2E-7B3F-4E8A-9C6D-${(0x1f2e3a4b5c00 + n).toString(16).toUpperCase().padStart(12, '0')}}`;
+}
 
-function stylesXml(fontFamily: string | null): string {
+function stylesXml(fontFamily: string | null, headingFamily: string | null): string {
   const family = escapeXml(fontFamily ?? 'Calibri');
+  // De titel en de koppen in hun eigen letter. rFonts staat vooraan in rPr (CT_RPr).
+  const heading = headingFamily && headingFamily !== fontFamily
+    ? `<w:rFonts w:ascii="${escapeXml(headingFamily)}" w:hAnsi="${escapeXml(headingFamily)}" w:eastAsia="${escapeXml(headingFamily)}" w:cs="${escapeXml(headingFamily)}"/>`
+    : '';
   const style = (id: string, name: string, pPr: string, rPr: string) =>
     `<w:style w:type="paragraph" w:styleId="${id}"><w:name w:val="${name}"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/>`
     + `${pPr ? `<w:pPr>${pPr}</w:pPr>` : ''}${rPr ? `<w:rPr>${rPr}</w:rPr>` : ''}</w:style>`;
@@ -604,10 +612,10 @@ function stylesXml(fontFamily: string | null): string {
     + '<w:sz w:val="22"/><w:szCs w:val="22"/><w:lang w:val="nl-NL"/></w:rPr></w:rPrDefault>'
     + '<w:pPrDefault><w:pPr><w:spacing w:after="120" w:line="276" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults>'
     + '<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style>'
-    + style('Title', 'Title', '<w:spacing w:after="240"/>', '<w:b/><w:sz w:val="48"/><w:szCs w:val="48"/>')
-    + style('Heading1', 'heading 1', '<w:keepNext/><w:spacing w:before="360" w:after="120"/><w:outlineLvl w:val="0"/>', '<w:b/><w:sz w:val="36"/><w:szCs w:val="36"/>')
-    + style('Heading2', 'heading 2', '<w:keepNext/><w:spacing w:before="280" w:after="100"/><w:outlineLvl w:val="1"/>', '<w:b/><w:sz w:val="30"/><w:szCs w:val="30"/>')
-    + style('Heading3', 'heading 3', '<w:keepNext/><w:spacing w:before="240" w:after="80"/><w:outlineLvl w:val="2"/>', '<w:b/><w:sz w:val="26"/><w:szCs w:val="26"/>')
+    + style('Title', 'Title', '<w:spacing w:after="240"/>', `${heading}<w:b/><w:sz w:val="48"/><w:szCs w:val="48"/>`)
+    + style('Heading1', 'heading 1', '<w:keepNext/><w:spacing w:before="360" w:after="120"/><w:outlineLvl w:val="0"/>', `${heading}<w:b/><w:sz w:val="36"/><w:szCs w:val="36"/>`)
+    + style('Heading2', 'heading 2', '<w:keepNext/><w:spacing w:before="280" w:after="100"/><w:outlineLvl w:val="1"/>', `${heading}<w:b/><w:sz w:val="30"/><w:szCs w:val="30"/>`)
+    + style('Heading3', 'heading 3', '<w:keepNext/><w:spacing w:before="240" w:after="80"/><w:outlineLvl w:val="2"/>', `${heading}<w:b/><w:sz w:val="26"/><w:szCs w:val="26"/>`)
     + style('Quote', 'Quote', `<w:pBdr><w:left w:val="single" w:sz="18" w:space="8" w:color="${BORDER}"/></w:pBdr><w:ind w:left="360"/>`, '<w:i/><w:color w:val="475569"/>')
     + style('Code', 'Code', `<w:shd w:val="clear" w:color="auto" w:fill="${SHADE}"/><w:spacing w:after="120" w:line="240" w:lineRule="auto"/>`,
       '<w:rFonts w:ascii="Consolas" w:hAnsi="Consolas" w:cs="Consolas"/><w:sz w:val="20"/><w:szCs w:val="20"/>')
@@ -670,14 +678,26 @@ export function pageDocxFiles(title: string, body: unknown, context: PageDocxCon
   collectHeadings(doc, toc);
   const name = title.trim() || 'Naamloze pagina';
   const ctx: Ctx = { indent: 0, width: TEXT_WIDTH, listDepth: 0, quote: false, bold: false, toc };
-  // De letter van de huisstijl, met wat er van mee kan: normaal en vet.
+  // De letters van de huisstijl, met wat er van mee kan: normaal en vet. Een
+  // familie die voor koppen en tekst dezelfde is, gaat één keer mee.
   const fontFamily = context.font?.family.trim() || null;
-  const embedded = fontFamily
-    ? (['Regular', 'Bold'] as const)
-      .filter(style => (style === 'Regular' ? context.font?.regular : context.font?.bold)?.length)
-      .map((style, i) => ({ style, relId: `rId${i + 1}`, path: `fonts/font${i + 1}.odttf`, key: FONT_KEYS[style],
-        bytes: (style === 'Regular' ? context.font?.regular : context.font?.bold) as Uint8Array }))
-    : [];
+  const headingFamily = context.headingFont?.family.trim() || fontFamily;
+  const families = new Map<string, PageDocxFont>();
+  for (const font of [context.font, context.headingFont]) {
+    const family = font?.family.trim();
+    if (font && family && !families.has(family)) families.set(family, font);
+  }
+  let fileCount = 0;
+  const embedded = [...families].map(([family, font]) => ({
+    family,
+    files: (['Regular', 'Bold'] as const)
+      .filter(style => (style === 'Regular' ? font.regular : font.bold)?.length)
+      .map(style => {
+        fileCount += 1;
+        return { style, relId: `rId${fileCount}`, path: `fonts/font${fileCount}.odttf`, key: fontKey(fileCount),
+          bytes: (style === 'Regular' ? font.regular : font.bold) as Uint8Array };
+      }),
+  })).filter(entry => entry.files.length > 0);
   const content = para({ style: 'Title' }, run(name)) + blocksXml(doc.content, b, ctx);
   const documentXml = `${XML_HEAD}<w:document ${NS}><w:body>${content}`
     + '<w:sectPr><w:footerReference w:type="default" r:id="rId4"/>'
@@ -717,14 +737,16 @@ export function pageDocxFiles(title: string, body: unknown, context: PageDocxCon
   const coreXml = `${XML_HEAD}<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" `
     + 'xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
     + `<dc:title>${escapeXml(name)}</dc:title><dc:language>nl-NL</dc:language></cp:coreProperties>`;
-  const fontFiles: PageDocxFile[] = embedded.length && fontFamily ? [
-    { path: 'word/fontTable.xml', data: `${XML_HEAD}<w:fonts xmlns:w="${W_NS}" xmlns:r="${REL}"><w:font w:name="${escapeXml(fontFamily)}">`
-      + embedded.map(font => `<w:embed${font.style} r:id="${font.relId}" w:fontKey="${font.key}"/>`).join('')
-      + '</w:font></w:fonts>' },
+  const fontFiles: PageDocxFile[] = embedded.length ? [
+    { path: 'word/fontTable.xml', data: `${XML_HEAD}<w:fonts xmlns:w="${W_NS}" xmlns:r="${REL}">`
+      + embedded.map(entry => `<w:font w:name="${escapeXml(entry.family)}">`
+        + entry.files.map(font => `<w:embed${font.style} r:id="${font.relId}" w:fontKey="${font.key}"/>`).join('')
+        + '</w:font>').join('')
+      + '</w:fonts>' },
     { path: 'word/_rels/fontTable.xml.rels', data: `${XML_HEAD}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">`
-      + embedded.map(font => `<Relationship Id="${font.relId}" Type="${REL}/font" Target="${font.path}"/>`).join('')
+      + embedded.flatMap(entry => entry.files).map(font => `<Relationship Id="${font.relId}" Type="${REL}/font" Target="${font.path}"/>`).join('')
       + '</Relationships>' },
-    ...embedded.map(font => ({ path: `word/${font.path}`, data: obfuscateFont(font.bytes, font.key) })),
+    ...embedded.flatMap(entry => entry.files).map(font => ({ path: `word/${font.path}`, data: obfuscateFont(font.bytes, font.key) })),
   ] : [];
   return [
     { path: '[Content_Types].xml', data: contentTypesXml },
@@ -732,7 +754,7 @@ export function pageDocxFiles(title: string, body: unknown, context: PageDocxCon
     { path: 'docProps/core.xml', data: coreXml },
     { path: 'word/document.xml', data: documentXml },
     { path: 'word/_rels/document.xml.rels', data: relsXml },
-    { path: 'word/styles.xml', data: stylesXml(fontFamily) },
+    { path: 'word/styles.xml', data: stylesXml(fontFamily, headingFamily) },
     { path: 'word/numbering.xml', data: numberingXml(b.orderedLists) },
     { path: 'word/settings.xml', data: settingsXml(embedded.length > 0) },
     { path: 'word/footer1.xml', data: footerXml() },

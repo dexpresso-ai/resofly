@@ -23,18 +23,29 @@ stand voor de overdracht.
    `file-transfer` (`?cron=purge`), als die is ingepland. Zie
    `docs/setup/BESTANDEN_VERSTUREN_SETUP.md`. Staat die taak er niet, dan blijven de bestanden
    in de opslag staan.
-4. **Open één keer een Word-export in echte Word.** De module die een pagina een .docx maakt,
-   is gecontroleerd tegen het schema van Word (ECMA-376) en omgezet in LibreOffice. Word zelf
-   kan ik in een cloudsessie niet openen. Een proefbestand met elk blok stuur ik je mee.
-5. **Bij de volgende merge: ververs open tabbladen.** Een oude versie van de app kent de nieuwe
+4. **Open de twee proefbestanden in echte Word: dat is de voorwaarde om de knop "Word" te
+   mergen.**
+   - In de editor staat nu een knop "Word": de pagina als .docx, in de letters van je
+     huisstijl.
+   - Het bestand voldoet aan het schema van Word (ECMA-376) en opent goed in LibreOffice.
+   - Word zelf kan ik in een cloudsessie niet openen. Vooral de ingesloten letter is daar
+     nog niet gezien.
+   - Ik stuur twee proefbestanden met elk blok mee: één zonder huisstijl, en één met
+     Playfair Display voor koppen en DM Sans voor tekst.
+   - Let op cursief: de huisstijlletters hebben geen cursieve variant, en LibreOffice nam
+     daarvoor een andere letter.
+5. **Akkoord met een afwijking van het plan?** §9 laat de server (`page-export`) de DOCX bouwen.
+   Voor alleen Word doet de app het nu zelf, met dezelfde module en dezelfde letterkeuze. De
+   server komt er pas bij met de PDF. Zie §18, "Afwijking van §9".
+6. **Bij de volgende merge: ververs open tabbladen.** Een oude versie van de app kent de nieuwe
    blokken (tabel, kader, afbeelding enzovoort) niet. Ze opent zo'n pagina alleen om te lezen,
    met de knop "App verversen".
-6. **De proef met letters (1B-1) graag op de Collabora-container herhalen.** Hier, met
+7. **De proef met letters (1B-1) graag op de Collabora-container herhalen.** Hier, met
    LibreOffice, bleek: .woff werkt niet, TTF wel, en een letter die in de DOCX is ingesloten
    ook. Op de container moet blijken welke letter hij neemt als de huisstijlletter ontbreekt,
    en of er een emoji-letter is. Zie `docs/rapporten/PROEF_1B1_LETTERS_EMOJI_2026-11-28.md`;
    het script is `scripts/proef-letters-docx.py`.
-7. **1C (pagina's delen) heb ik laten liggen.** Dat raakt wat klanten zien, en jij zei: klanten
+8. **1C (pagina's delen) heb ik laten liggen.** Dat raakt wat klanten zien, en jij zei: klanten
    lezen pas mee als de eigenaar deelt, en alleen een owner of admin publiceert. Dat wil ik met
    je doorlopen voor ik het bouw.
 
@@ -49,7 +60,7 @@ stand voor de overdracht.
 | 1A-5c | Het eigen dossier met mappen, bovenaan de drive, in plaats van "Geen klant"; ook in de vensters van notities en documenten. | `CHANGELOG_EIGEN_DOSSIER_2026-11-28.md` |
 | 1A-5e | De boom van het dossier naast de pagina: een kolom, op de telefoon een lade. | `CHANGELOG_PAGINAS_DOSSIERBOOM_2026-11-28.md` |
 | §9 | Afdrukken met Ctrl+P: alleen de pagina, over de hele lengte, zwart op wit. | `CHANGELOG_PAGINAS_AFDRUKKEN_2026-11-28.md` |
-| 1B-2 (deel) | De omzetting van een pagina naar Word, als module met tests. Nog zonder knop: de export loopt straks via de server en Collabora. | `CHANGELOG_PAGINAS_WORD_2026-11-28.md` |
+| 1B-2 (deel) | De knop "Word" in de editor: de pagina als .docx, in de letters van de huisstijl. PDF en het exportvenster wachten op Collabora. | `CHANGELOG_PAGINAS_WORD_2026-11-28.md` |
 
 Er komen drie migraties mee die nog niet op staging staan:
 - `20261127140000_paginas_blokken`;
@@ -69,5 +80,5 @@ Ze mogen opnieuw draaien, en de databasetests lopen ze na.
   - de drie UI-scenario's voor pagina's, alle stappen goed:
     - `documenten` (10 stappen);
     - `paginas` (18);
-    - `paginadrive` (7).
+    - `paginadrive` (8).
 - **De mobiele lay-outtest** duurt lokaal te lang voor een sessie; die draait in de CI.

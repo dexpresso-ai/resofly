@@ -428,3 +428,32 @@ test('zonder letter blijft het Calibri, zonder lettertabel; met alleen vet krijg
   assert.match(vet.get('word/fontTable.xml') as string, /<w:font w:name="Huis &amp; Stijl"><w:embedBold r:id="rId1" /);
   assert.equal(vet.has('word/fonts/font1.odttf'), true);
 });
+
+/** Alles tot het einde van dezelfde stijl, niet verder: anders telt de rFonts van een latere stijl mee. */
+const BINNEN_STIJL = '(?:(?!</w:style>).)*?';
+
+test('koppen in hun eigen letter; dezelfde familie gaat één keer mee', () => {
+  const bytes = (n: number) => Uint8Array.from({ length: 40 }, (_, i) => (i * n) % 256);
+  const twee = files(doc(h(1, 'Kop'), p(t('tekst'))), {
+    font: { family: 'Poppins', regular: bytes(1), bold: bytes(2) },
+    headingFont: { family: 'Bebas Neue', regular: bytes(3) },
+  });
+  const table = twee.get('word/fontTable.xml') as string;
+  assert.match(table, /<w:font w:name="Poppins"><w:embedRegular r:id="rId1" [^>]*\/><w:embedBold r:id="rId2" [^>]*\/><\/w:font><w:font w:name="Bebas Neue"><w:embedRegular r:id="rId3" [^>]*\/><\/w:font>/);
+  assert.equal(new Set([...table.matchAll(/w:fontKey="([^"]+)"/g)].map(match => match[1])).size, 3, 'elk bestand een eigen sleutel');
+  assert.deepEqual([...twee.keys()].filter(path => path.endsWith('.odttf')), ['word/fonts/font1.odttf', 'word/fonts/font2.odttf', 'word/fonts/font3.odttf']);
+  const styles = twee.get('word/styles.xml') as string;
+  assert.match(styles, /<w:rPrDefault><w:rPr><w:rFonts w:ascii="Poppins"/);
+  for (const id of ['Title', 'Heading1', 'Heading2', 'Heading3']) {
+    assert.match(styles, new RegExp(`w:styleId="${id}">${BINNEN_STIJL}<w:rPr><w:rFonts w:ascii="Bebas Neue" w:hAnsi="Bebas Neue" w:eastAsia="Bebas Neue" w:cs="Bebas Neue"/><w:b/>`), id);
+  }
+  // Voor koppen en tekst dezelfde: één familie, en de koppen zonder eigen letter.
+  const een = files(doc(h(1, 'Kop')), { font: { family: 'Lora', regular: bytes(1) }, headingFont: { family: 'Lora', regular: bytes(1) } });
+  assert.equal((een.get('word/fontTable.xml') as string).match(/<w:font /g)?.length, 1);
+  assert.doesNotMatch(een.get('word/styles.xml') as string, new RegExp(`w:styleId="Heading1">${BINNEN_STIJL}<w:rFonts`));
+  // Alleen een letter voor koppen: de tekst blijft Calibri.
+  const kop = files(doc(h(1, 'Kop')), { headingFont: { family: 'Lora', regular: bytes(1) } });
+  assert.match(kop.get('word/styles.xml') as string, /<w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri"/);
+  assert.match(kop.get('word/styles.xml') as string, new RegExp(`w:styleId="Heading1">${BINNEN_STIJL}<w:rFonts w:ascii="Lora"`));
+  for (const [path, data] of twee) if (typeof data === 'string') assertWellFormed(data, path);
+});

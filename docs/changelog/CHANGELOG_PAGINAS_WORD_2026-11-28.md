@@ -76,11 +76,54 @@ Na de proef 1B-1 (`docs/rapporten/PROEF_1B1_LETTERS_EMOJI_2026-11-28.md`).
     gebruikt de ingesloten Poppins, normaal en vet, terwijl Poppins niet geïnstalleerd is
     (`pdffonts`).
 
+## Later die nacht: de knop Word in de editor
+
+- **In de balk van de editor staat "Word".** Die geeft de pagina als .docx, in de letters van
+  de huisstijl: koppen en tekst elk in hun eigen letter, zoals bij offertes en facturen.
+  - Eerst slaat de editor op wat er nog stond. De export leest de opgeslagen pagina, zoals de
+    server dat straks ook doet; zo werkt hij ook bij een pagina die de editor niet kent.
+  - Een afbeelding of letter die niet laadt, houdt de export niet tegen: dan staat er
+    "[Afbeelding]", of kiest Word een andere letter.
+  - De code laadt pas bij een klik (een eigen stuk van 12,5 kB gzip), zodat de editor er niet
+    zwaarder van wordt.
+- **Afwijking van §9.** Daar bouwt de edge function `page-export` de DOCX. Voor alleen Word is
+  de server niet nodig:
+  - dezelfde module (`_shared/pageDocx.ts`) draait in de app, met de rechten van wie
+    exporteert (RLS);
+  - de letterkeuze staat in `_shared/pageExportFonts.ts`, dus de server maakt straks dezelfde
+    keuze;
+  - `page-export` komt er pas bij met de PDF, en de afbeeldingen vragen daar een nieuw pad in
+    de media-worker.
+- **De bestanden:**
+  - `src/lib/pageWordExport.ts` haalt op en bouwt;
+  - `src/lib/pageExportParts.ts` bevat de verwijzingen en de bestandsnaam;
+  - `_shared/pageExportFonts.ts` kiest de letters;
+  - `pageDocx.ts` kreeg een eigen letter voor koppen (`headingFont`).
+- **Getest:**
+  - `pageExportFonts.test.ts` (3): dezelfde keuze als `resolveDocumentStyle` voor elke
+    combinatie, en elk genoemd bestand bestaat in de app en op de server;
+  - `pageDocx.test.ts` (20): de koppen in hun eigen letter, en dezelfde familie maar één keer;
+  - `pageExportParts.test.ts` (2);
+  - `npm test` en typecheck;
+  - **`ui.mjs paginadrive`, 8 stappen, 0 fout.** De nieuwe stap typt iets en klikt meteen op
+    "Word". Daarna wordt het bestand in Node uitgepakt:
+    - de titel, de kop, het kader, "→ subpagina" en de net getypte tekst staan erin;
+    - de letter is ingesloten en de letter van het document;
+    - de pagina was opgeslagen;
+    - op 390px past de balk zonder over te lopen.
+  - **Met de hand twee proefbestanden met elk blok:** zonder huisstijl, en met Playfair
+    Display en DM Sans. Beide zijn goed volgens de XSD's, en LibreOffice gebruikt de
+    ingesloten letters.
+- **Cursief valt terug op een andere letter.** In `public/fonts/pdf` staan van elke letter
+  alleen normaal en vet. Cursieve tekst en citaten kreeg LibreOffice daarom in een vervanger
+  (hier Inter). Wat Word doet, is niet getest.
+
 ## Bewust nog niet
 
 - **De rest van de huisstijl:** logo, briefpapier en merkkleur. Dat komt met het
   exportvenster.
-- **Een voorblad, en subpagina's als hoofdstukken.** Ook die horen bij het exportvenster.
+- **Een voorblad, subpagina's als hoofdstukken, en de PDF.** Die komen met het exportvenster en
+  met `page-export`.
 - **Webp en svg:** die worden een regel "[Afbeelding: …]". Omzetten naar png hoort bij
   `page-export`.
 - **De inhoudsopgave in de PDF:** LibreOffice toont de lijst met koppen, maar zonder

@@ -35,7 +35,7 @@ import { EditorContent, useEditor, useEditorState } from '@tiptap/react';
 import type { Editor, JSONContent } from '@tiptap/react';
 import {
   AlignCenter, AlignLeft, AlignRight, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, BetweenHorizontalEnd, BetweenHorizontalStart,
-  BetweenVerticalEnd, BetweenVerticalStart, Bold, Braces, ChevronLeft, Copy, Heading1, Heading2, Heading3, History, Info, Italic, Lightbulb, Link2,
+  BetweenVerticalEnd, BetweenVerticalStart, Bold, Braces, ChevronLeft, Copy, FileDown, Heading1, Heading2, Heading3, History, Info, Italic, Lightbulb, Link2,
   List, ListChecks, ListOrdered, Minus, OctagonAlert, PanelLeft, PanelTop, Pilcrow, Plus, Quote, Redo2, Strikethrough, TableCellsMerge,
   TableCellsSplit, Trash2, TriangleAlert, Underline as UnderlineIcon, Undo2, X,
 } from 'lucide-react';
@@ -95,7 +95,7 @@ function whenLabel(value: string): string {
 /** Naar een andere pagina: verder (een subpagina, of omhoog) of terug langs de weg die je kwam. */
 export type PageStep = { id: string; how: 'vooruit' | 'terug' };
 
-export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClose, onOpenPage, backTo = null, ownDossierName = 'Eigen dossier' }: {
+export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClose, onOpenPage, backTo = null, ownDossierName = 'Eigen dossier', houseStyle = null }: {
   documentId: string;
   organizationId: string;
   /** Schrijfrechten op Inhoud. Zonder: alleen lezen, en geen claim. */
@@ -109,6 +109,8 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
   backTo?: string | null;
   /** De naam van het eigen dossier (het bedrijf), boven de boom. */
   ownDossierName?: string;
+  /** De letters van de huisstijl, voor de Word-export. */
+  houseStyle?: { brand_heading_font?: string | null; brand_body_font?: string | null } | null;
 }) {
   const [mode, setModeState] = useState<Mode>('laden');
   const [saveState, setSaveState] = useState<SaveState>('opgeslagen');
@@ -118,6 +120,7 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
   const [closeAnyway, setCloseAnyway] = useState(false);
   const [versionsOpen, setVersionsOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [refreshHelps, setRefreshHelps] = useState(true);
   /** Het kruimelpad: de bovenliggende pagina's, van boven naar de directe ouder. */
   const [ancestors, setAncestors] = useState<Array<{ id: string; title: string }>>([]);
@@ -641,6 +644,26 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
     }
   };
 
+  // Word (stap 1B-2): de opgeslagen pagina, in de huisstijl. Eerst opslaan wat
+  // er nog staat: de export leest uit de database, net als de server straks.
+  // Het bouwen laadt pas bij een klik, zodat de editor er niet zwaarder van wordt.
+  const exportWord = async () => {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      if (modeRef.current === 'bewerken' && !(await queueSave())) {
+        throw new Error('De pagina kon niet worden opgeslagen, dus ook niet als Word-bestand. Probeer het zo nog eens.');
+      }
+      const { buildPageWord, saveFile } = await import('../lib/pageWordExport');
+      const { blob, fileName } = await buildPageWord(documentId, organizationId, houseStyle);
+      saveFile(blob, fileName);
+    } catch (error) {
+      setMessage(error instanceof Error && error.message ? error.message : 'Het Word-bestand kon niet worden gemaakt.');
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const editable = mode === 'bewerken';
   useEffect(() => {
     if (!editable && menuRef.current) showMenu(null);
@@ -679,6 +702,9 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
         <span className={`page-editor-status is-${mode === 'bewerken' ? saveState : mode}`} role="status">{statusText}</span>
         <button type="button" className="page-editor-action" onClick={() => void copyLink()} title="Een link naar deze pagina, voor collega's">
           <Copy size={15} /><span>{copied ? 'Gekopieerd' : 'Link'}</span>
+        </button>
+        <button type="button" className="page-editor-action page-editor-word" onClick={() => void exportWord()} disabled={exporting} title="Download deze pagina als Word-bestand (.docx), in je huisstijl">
+          <FileDown size={15} /><span>{exporting ? 'Bezig…' : 'Word'}</span>
         </button>
         <button type="button" className={`page-editor-action${versionsOpen ? ' is-active' : ''}`} onClick={() => setVersionsOpen(open => !open)} aria-expanded={versionsOpen}>
           <History size={15} /><span>Versies</span>

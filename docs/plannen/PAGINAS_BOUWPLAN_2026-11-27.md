@@ -513,8 +513,21 @@ akkoord is.
 | 1A-5e | De boom van het dossier naast de pagina (§4, "het pagina-scherm"): een kolom op een breed scherm, een lade op de telefoon. | gebouwd op 28 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_DOSSIERBOOM_2026-11-28.md` |
 | 1A-5d | De tekstdocumenten omzetten naar pagina's (§10). | wacht op 1C en op een besluit van de gebruiker (zie de stand hieronder) |
 | 1B-1 | Proef: huisstijlletters en emoji in een PDF via Collabora (§9). | voorlopig gedaan op 28 november, met LibreOffice in de cloudsessie: .woff werkt niet, TTF wel, en een in de DOCX ingesloten letter ook. Nog te herhalen op de Collabora-container (de vervanger, emoji). Zie `docs/rapporten/PROEF_1B1_LETTERS_EMOJI_2026-11-28.md`. |
-| 1B-2 | Export: `page-export`, de DOCX-module, het interne PDF-pad, het exportvenster, vastleggen in het dossier, de Word-kopie. | de DOCX-module is gebouwd op 28 november, op de branch (`_shared/pageDocx.ts`, met de huisstijlletter ingesloten via `_shared/woff.ts`); zie `docs/changelog/CHANGELOG_PAGINAS_WORD_2026-11-28.md`. De rest wacht op Collabora. |
+| 1B-2 | Export: `page-export`, de DOCX-module, het interne PDF-pad, het exportvenster, vastleggen in het dossier, de Word-kopie. | gebouwd op 28 november, op de branch: de DOCX-module (`_shared/pageDocx.ts`, met de huisstijlletters ingesloten via `_shared/woff.ts`), en de knop "Word" in de editor, die de DOCX in de app bouwt (zie de afwijking hieronder). Zie `docs/changelog/CHANGELOG_PAGINAS_WORD_2026-11-28.md`. `page-export`, de PDF, het exportvenster, vastleggen en de Word-kopie wachten op Collabora. |
 | 1C | Pagina's delen: vrijgeven, "Bijwerken bij klant", subpagina's, de weergave in het portaal en bij een geheime link. | gepland |
+
+**Afwijking van §9, vastgelegd bij de bouw van 1B-2 (28 november):**
+
+- **Word komt uit de app, niet uit `page-export`.** Voor alleen Word is de server niet nodig.
+  - Dezelfde module (`_shared/pageDocx.ts`) draait in de app, met de rechten van wie
+    exporteert.
+  - De letterkeuze staat in `_shared/pageExportFonts.ts`, dus de server kiest straks dezelfde
+    letters.
+- **`page-export` komt pas met de PDF.** Die zet de DOCX in R2, zodat de media-worker hem naar
+  Collabora kan sturen. De afbeeldingen vragen dan een nieuw pad in de media-worker. Dat kan in
+  een cloudsessie niet van begin tot eind getest worden.
+- **Voorwaarde voor het mergen van de knop:** één export opent goed in echte Word. Het schema
+  en LibreOffice zijn nagelopen; Word zelf, en vooral de ingesloten letter, nog niet.
 
 **Afwijkingen van §3 en §5, vastgelegd bij de bouw van 1A-1 (27 november):**
 
@@ -607,7 +620,7 @@ akkoord is.
   - `ui.mjs documenten` (10 stappen);
   - `paginas`, de editor en zijn blokken (18);
   - `paginadrive`, de boom in de drive, de prullenbak, het eigen dossier, de boom naast de
-    pagina en afdrukken (7).
+    pagina, Word en afdrukken (8).
 - **De "Geen klant"-teksten in de documentenomgeving zijn weg** (de vensters van notities en
   documenten, de kaart van een document). Waar het blijft, staat in
   `docs/changelog/CHANGELOG_EIGEN_DOSSIER_2026-11-28.md`.

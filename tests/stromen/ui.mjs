@@ -24,7 +24,8 @@
 import path from 'node:path';
 import os from 'node:os';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { inflateRawSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
 import { chromium } from '@playwright/test';
@@ -65,6 +66,27 @@ const TOTAAL = '€ 173,63';
 /** Tekst zoals een mens hem leest: elke witruimte (ook de harde spatie na €) wordt één spatie. */
 const tekst = (waarde) => String(waarde ?? '').replace(/\s+/g, ' ').trim();
 const q = (waarde) => `'${String(waarde).replace(/'/g, "''")}'`;
+
+/** De delen van een zip (zoals een .docx): naam en inhoud. Alleen opgeslagen of met deflate ingepakt. */
+function leesZip(buffer) {
+  const einde = buffer.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+  if (einde < 0) throw new Error('geen zip: geen einde van de centrale map');
+  const aantal = buffer.readUInt16LE(einde + 10);
+  let pos = buffer.readUInt32LE(einde + 16);
+  const delen = [];
+  for (let i = 0; i < aantal; i += 1) {
+    const methode = buffer.readUInt16LE(pos + 10);
+    const ingepakt = buffer.readUInt32LE(pos + 20);
+    const naamLengte = buffer.readUInt16LE(pos + 28);
+    const plek = buffer.readUInt32LE(pos + 42);
+    const name = buffer.subarray(pos + 46, pos + 46 + naamLengte).toString('utf8');
+    const start = plek + 30 + buffer.readUInt16LE(plek + 26) + buffer.readUInt16LE(plek + 28);
+    const ruw = buffer.subarray(start, start + ingepakt);
+    delen.push({ name, data: methode === 8 ? inflateRawSync(ruw) : Buffer.from(ruw) });
+    pos += 46 + naamLengte + buffer.readUInt16LE(pos + 30) + buffer.readUInt16LE(pos + 32);
+  }
+  return delen;
+}
 const regexVan = (woorden) => new RegExp(`^${String(woorden).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`);
 const slaap = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -2801,6 +2823,65 @@ async function scenarioPaginadrive() {
     if (breed) await page.setViewportSize(breed);
     // Weer breed: de kolom staat er weer.
     await regel(`Handboek ${tag}`).waitFor({ timeout: 10000 });
+    await sluitPagina(page);
+  });
+  // ── Word (stap 1B-2): de opgeslagen pagina, in de huisstijl ────────────────
+  await uiStap('Word: de pagina als .docx met wat je net typte, de subpagina en de huisstijlletter; de balk past op de telefoon', async () => {
+    const tag = Date.now().toString(36);
+    const nieuwePagina = (titel, body, ouder = null) => {
+      sql(`insert into public.documents (organization_id, created_by, title, format, body, client_id, parent_id)
+        values (${q(w.orgId)}, ${q(w.medewerker.id)}, ${q(titel)}, 'page', ${q(JSON.stringify(body))}::jsonb, ${q(w.klantA.id)}, ${ouder ? q(ouder) : 'null'})`);
+      return sqlRij(`select id from public.documents where organization_id = ${q(w.orgId)} and title = ${q(titel)}`).id;
+    };
+    const woord = (text) => ({ type: 'text', text });
+    const ouder = nieuwePagina(`Exportproef ${tag}`, { type: 'doc', content: [{ type: 'paragraph' }] });
+    const kind = nieuwePagina(`Hoofdstuk export ${tag}`, { type: 'doc', content: [{ type: 'paragraph' }] }, ouder);
+    sql(`update public.documents set body = ${q(JSON.stringify({ type: 'doc', content: [
+      { type: 'heading', attrs: { level: 1 }, content: [woord('Werkafspraken')] },
+      { type: 'callout', attrs: { variant: 'tip' }, content: [{ type: 'paragraph', content: [woord(`Kadertekst ${tag}`)] }] },
+      { type: 'subpage', attrs: { pageId: kind } },
+      { type: 'paragraph' },
+    ] }))}::jsonb where id = ${q(ouder)}`);
+    const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+    const page = lid.page;
+    await naarKlantdossier(lid, w.klantA.name);
+    await inhoud(page).locator('.odrv-row').filter({ hasText: `Exportproef ${tag}` }).first().click();
+    await page.locator('.page-editor').waitFor({ timeout: 20000 });
+    const status = page.locator('.page-editor .page-editor-status');
+    await wachtTot(async () => tekst(await status.innerText().catch(() => '')) === 'Opgeslagen', { melding: 'de editor kwam niet in bewerken' });
+    // Net getypt, nog niet opgeslagen: de export slaat eerst op.
+    await page.locator('.page-editor .tiptap p').last().click();
+    await page.keyboard.type(`Net getypt ${tag}`);
+    const downloadOnderweg = page.waitForEvent('download', { timeout: 30000 });
+    downloadOnderweg.catch(() => {});
+    await page.locator('.page-editor-word').click();
+    const download = await downloadOnderweg;
+    gelijk(download.suggestedFilename(), `Exportproef-${tag}.docx`, 'de naam van het bestand');
+    const delen = new Map(leesZip(readFileSync(await download.path())).map(deel => [deel.name, deel.data]));
+    const documentXml = delen.get('word/document.xml')?.toString('utf8') ?? '';
+    for (const verwacht_ of [`Exportproef ${tag}`, 'Werkafspraken', `Kadertekst ${tag}`, `→ Hoofdstuk export ${tag}`, `Net getypt ${tag}`]) {
+      verwacht(documentXml.includes(verwacht_), `"${verwacht_}" staat niet in document.xml`);
+    }
+    // De huisstijlletter is ingesloten, en de letter van het document.
+    const letters = delen.get('word/fontTable.xml')?.toString('utf8') ?? '';
+    verwacht(/<w:embedRegular /.test(letters), `geen ingesloten letter: ${letters.slice(0, 200)}`);
+    verwacht([...delen.keys()].some(naam => naam.endsWith('.odttf')), 'geen letterbestand in de .docx');
+    const familie = letters.match(/<w:font w:name="([^"]+)"/)?.[1];
+    verwacht(familie && (delen.get('word/styles.xml')?.toString('utf8') ?? '').includes(`w:ascii="${familie}"`), `de stijl gebruikt de ingesloten letter niet (${familie})`);
+    gelijk(sqlRij(`select content from public.documents where id = ${q(ouder)}`).content.includes(`Net getypt ${tag}`), true, 'opgeslagen vóór de export');
+    // Op de telefoon: de balk met de nieuwe knop past, zonder dat de pagina opzij schuift.
+    const breed = page.viewportSize();
+    await page.setViewportSize({ width: 390, height: 844 });
+    try {
+      await wachtTot(async () => page.locator('.page-editor-word').isVisible(), { melding: 'de Word-knop staat niet in beeld op de telefoon' });
+      const maten = await page.evaluate(() => {
+        const balk = document.querySelector('.page-editor-bar');
+        return { pagina: document.documentElement.scrollWidth, scherm: window.innerWidth, balk: balk ? balk.scrollWidth - balk.clientWidth : -1 };
+      });
+      verwacht(maten.pagina <= maten.scherm && maten.balk <= 0, `de balk loopt over op 390px: ${JSON.stringify(maten)}`);
+    } finally {
+      if (breed) await page.setViewportSize(breed);
+    }
     await sluitPagina(page);
   });
   // ── Afdrukken (§9: "Ctrl+P blijft werken, met een nette printstijl") ───────
