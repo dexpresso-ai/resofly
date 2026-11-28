@@ -609,9 +609,11 @@ akkoord is.
   - run 304 (ba3ee84): helemaal groen;
   - run 305 (bf471ad, met de boom naast de pagina): helemaal groen, ook de mobiele
     lay-outtest (36 minuten), laden per module, de inrichting en de terugknop;
-  - de run voor 0bff935 (de knop "Word" en alles ervoor) is op 28 november rond 02:46
-    gestart. De uitkomst staat in de changelog van de Word-export, of nog niet: kijk dan in
-    GitHub Actions.
+  - run 306 (0bff935, de knop "Word" en alles ervoor): helemaal groen, ook de mobiele
+    lay-outtest, laden, de inrichting en de terugknop;
+  - de run voor de laatste commit (met Gerrie die aanvult, het afdrukken en de reparatie van
+    het zwarte scherm) is gestart rond 03:50. Zie GitHub Actions, "Frontend checks" op deze
+    branch.
 - **Nog niet door `deno check`:** `_shared/pageDocx.ts`, `_shared/woff.ts` en `_shared/zipWriter.ts`. Dat gebeurt
   vanzelf zodra `page-export` ze importeert en in de lijst van
   `.github/workflows/frontend-checks.yml` staat.
@@ -630,7 +632,7 @@ akkoord is.
   - `ui.mjs documenten` (10 stappen);
   - `paginas`, de editor en zijn blokken (18);
   - `paginadrive`, de boom in de drive, de prullenbak, het eigen dossier, de boom naast de
-    pagina, Word, Gerrie die aanvult, en afdrukken (9).
+    pagina, Word, een trage computer, Gerrie die aanvult, en afdrukken (10).
 - **De "Geen klant"-teksten in de documentenomgeving zijn weg** (de vensters van notities en
   documenten, de kaart van een document). Waar het blijft, staat in
   `docs/changelog/CHANGELOG_EIGEN_DOSSIER_2026-11-28.md`.

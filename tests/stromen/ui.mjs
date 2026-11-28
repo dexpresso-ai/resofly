@@ -2909,6 +2909,33 @@ async function scenarioPaginadrive() {
     }
     await sluitPagina(page);
   });
+  // ── Een trage computer (de editor mag niet al weg zijn bij zijn eerste effect) ──
+  await uiStap('een nieuwe pagina op een trage computer: de editor komt in bewerken, en wat je typt wordt opgeslagen', async () => {
+    const tag = Date.now().toString(36);
+    const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+    const page = lid.page;
+    await naarKlantdossier(lid, w.klantA.name);
+    // Zes keer trager rekenen: dan duurt de eerste render van de editor langer
+    // dan de 1 ms waarna Tiptap een editor opruimt die nog niet in gebruik is.
+    // Zonder immediatelyRender: false werd de app hier zwart.
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: 6 });
+    try {
+      await inhoud(page).locator('.drive-new').click();
+      await page.locator('.drive-pop').getByRole('menuitem', { name: 'Pagina', exact: true }).click();
+      await page.locator('.page-editor').waitFor({ timeout: 30000 });
+      const status = page.locator('.page-editor .page-editor-status');
+      await wachtTot(async () => tekst(await status.innerText().catch(() => '')) === 'Opgeslagen', { timeout: 30000, melding: 'de editor kwam niet in bewerken op een trage computer' });
+      await page.locator('.page-editor-title').fill(`Traag ${tag}`);
+      await page.locator('.page-editor .tiptap').click();
+      await page.keyboard.type(`Getypt op een trage computer ${tag}`);
+      await wachtTot(async () => (sqlRij(`select content from public.documents where organization_id = ${q(w.orgId)} and title = ${q(`Traag ${tag}`)}`)?.content ?? '').includes(tag),
+        { timeout: 30000, melding: 'wat je typte, is niet opgeslagen' });
+    } finally {
+      await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 }).catch(() => {});
+    }
+    await sluitPagina(page);
+  });
   // ── Gerrie vult een pagina aan (§12) ──────────────────────────────────────
   await uiStap('Gerrie vult een pagina aan: een voorstel via een gekoppelde AI, "Uitvoeren" in de wachtrij, en de alinea\'s staan onderaan met een versie', async () => {
     const tag = Date.now().toString(36);
@@ -2954,6 +2981,14 @@ async function scenarioPaginadrive() {
     gelijk(na.edit_version, pagina.edit_version + 1, 'edit_version');
     await wachtTot(async () => Number(sqlRij(`select count(*)::int as n from public.document_versions where document_id = ${q(pagina.id)}`).n) === versies + 1, { melding: 'geen versie na het aanvullen' });
     await wachtTot(async () => sqlRij(`select status from public.ai_action_audit where id = ${q(audit.id)}`).status !== 'proposed', { melding: 'het voorstel bleef in de wachtrij staan' });
+    // De aangevulde blokken komen door de controle van de editor: de pagina gaat
+    // gewoon open om te bewerken, met de nieuwe tekst erin.
+    await naarKlantdossier(beheer, w.klantA.name);
+    await inhoud(page).locator('.odrv-row').filter({ hasText: `Aanvulproef ${tag}` }).first().click();
+    await page.locator('.page-editor').waitFor({ timeout: 20000 });
+    await wachtTot(async () => tekst(await page.locator('.page-editor .page-editor-status').innerText().catch(() => '')) === 'Opgeslagen', { melding: 'de aangevulde pagina gaat niet open om te bewerken' });
+    await page.locator('.page-editor .tiptap').getByText(`Tweede regel ${tag}`).waitFor({ timeout: 10000 });
+    await sluitPagina(page);
   }, { toegestaan: [{ soort: 'functie', functie: 'mcp' }] });
   // ── Afdrukken (§9: "Ctrl+P blijft werken, met een nette printstijl") ───────
   await uiStap('afdrukken: alleen de pagina, over de hele lengte, met de uitklapper open', async () => {

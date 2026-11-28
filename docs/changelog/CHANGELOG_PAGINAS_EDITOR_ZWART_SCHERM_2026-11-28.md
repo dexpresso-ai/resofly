@@ -1,50 +1,57 @@
-# Pagina's: geen zwart scherm meer als de editor opnieuw begint
+# Pagina's: geen zwart scherm meer als de editor traag start
 
-28 november 2026. Gevonden met de UI-test, op de branch; nooit op staging geweest.
+28 november 2026. Gevonden met de UI-test, op de branch. Bestond al vóór vannacht en kon ook in
+productie gebeuren: de oorzaak zit in hoe de editor start.
 
 ## Wat er misging
 
-- **De UI-test `ui.mjs paginas` liep vast bij de stap met het blokmenu.**
-  - Bij het openen van een nieuwe pagina werd de hele app zwart.
+- **De UI-test `ui.mjs paginas` liep vast bij het openen van een nieuwe pagina.**
+  - De hele app werd zwart.
   - De fout: `Cannot set properties of undefined (setting 'links')` in `PageEditor.tsx`.
-- **Het gebeurde alleen met twee dingen tegelijk:**
-  - de boom naast de pagina (stap 1A-5e);
-  - een werkende `calendar-integrations` in de test, dus met het pakket `ical.js`. Daarzonder
-    laadde die functie niet, en kwam de fout niet boven.
-
-  Met de boom uit, of zonder `ical.js`, slaagde dezelfde test.
-- **Waarom het zwart werd:**
-  - Tiptap ruimt een editor 1 ms na het opruimen van zijn effect op, tenzij het effect er
-    dan al weer is.
-  - Draaiden de effecten van de editor later opnieuw met dezelfde staat, dan kregen ze een
-    editor die al vernietigd was. Zijn `storage` is dan leeg, dus `storage.subpage.links = …`
-    gooide een fout.
+- **De oorzaak zit in Tiptap** (`useEditor` uit `@tiptap/react`).
+  - Standaard (`immediatelyRender: true`) maakt `useEditor` de editor al tijdens de eerste
+    render, en plant hij meteen een `destroy()` over 1 ms.
+  - Die wordt pas afgeblazen als het eerste effect van de component draait.
+  - Duren de eerste render en commit langer dan dat, dan krijgen de effecten van de editor een
+    editor die al weg is. Zijn `storage` is dan leeg, dus `storage.subpage.links = …` gooide
+    een fout.
   - `PageLoadBoundary` vangt alleen laadfouten op, dus de fout legde de hele app stil.
-  - Met een diagnose erin liep hetzelfde effect drie keer met dezelfde editor. Waarom React de
-    effecten precies opnieuw liet lopen, is niet vastgesteld: de fout trad niet elke keer op.
+- **Wanneer de start lang duurt:** de eerste keer een pagina openen (de editor laadt dan nog),
+  "Nieuw → Pagina" na het wachten op de database, een trage telefoon. In de UI-test kwam het
+  boven toen er twee dingen bij kwamen:
+  - de boom naast de pagina;
+  - een werkende `calendar-integrations` (met `ical.js`).
+
+  Allebei maken ze de start zwaarder. Met een zes keer trager gezette processor gebeurt het
+  elke keer.
 
 ## Wat er nu is
 
-- **Elk effect in de editor dat de editor gebruikt, stopt bij `editor.isDestroyed`.** Het gaat
-  om laden en claimen, subpagina's, afbeeldingen en bestanden, en de voorvertoning van een
-  versie.
-  - `useEditor` maakt daarna zelf een nieuwe editor, en de effecten lopen met die editor
-    opnieuw.
-  - Er staat uitleg bij het eerste effect in `PageEditor.tsx`.
+- **`immediatelyRender: false`** in beide `useEditor`-aanroepen: de editor en de voorvertoning
+  van een versie. Daarmee maakt `useEditor` de editor pas in zijn effect, als de component er
+  staat, en raakt de geplande `destroy()` niets meer.
+- **Elk effect van de editor stopt bij een vernietigde editor** (`isDestroyed`). Dat is een
+  vangnet: zonder dat vangnet slaagde de test ook.
 - **De UI-test meldt bij een mislukte stap ook de JavaScript- en console-fouten van die stap**
   (`uiStap` in `tests/stromen/ui.mjs`).
   - Eerst stond er alleen de wachttijd, bij een zwart scherm.
-  - Die fouten staan vooraan in de stack, omdat `toets.mjs` daar de eerste regels van afdrukt.
-- **`ui.mjs paginas` drukt ook op "Word" bij de pagina met drie afbeeldingen.** De test
-  controleert dat ze alle drie als bestand in de .docx staan.
+  - Ze staan vooraan in de stack, omdat `toets.mjs` daar de eerste regels van afdrukt.
+- **Een nieuwe stap in `ui.mjs paginadrive`:** "een nieuwe pagina op een trage computer".
+  - De processor gaat zes keer trager (CDP `Emulation.setCPUThrottlingRate`).
+  - Dan "Nieuw → Pagina", wachten op "Opgeslagen", typen, en de tekst moet in de database
+    staan.
+- **`ui.mjs paginas` drukt ook op "Word"** bij de pagina met drie afbeeldingen, en controleert
+  dat ze alle drie in de .docx staan.
 
 ## Getest
 
-- **Met `ical.js` geïnstalleerd** (zoals het hoort; zie de tip in het bouwplan, §18):
-  - `ui.mjs paginas`: twee keer achter elkaar 18 stappen, 0 fout;
-  - `ui.mjs documenten`: 10 stappen, 0 fout.
-- **Ter vergelijking, vóór de reparatie:**
-  - met de boom én `ical.js`: twee keer vastgelopen;
-  - zonder `ical.js`: 18 van 18;
-  - met de boom tijdelijk uit: 18 van 18.
+Steeds met `ical.js` geïnstalleerd (zie de tip in het bouwplan, §18).
+
+- **`ui.mjs paginadrive`, de nieuwe stap:**
+  - zonder `immediatelyRender: false` en zonder vangnet: vastgelopen, met precies deze fout;
+    de stap raakt de race dus;
+  - met alleen `immediatelyRender: false`: 10 stappen, 0 fout;
+  - met beide: 10 stappen, 0 fout.
+- **`ui.mjs paginas`:** twee keer 18 stappen, 0 fout, met het vangnet.
+- **`ui.mjs documenten`:** 10 stappen, 0 fout.
 - **`npm run typecheck`.**

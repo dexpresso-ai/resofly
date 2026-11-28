@@ -164,10 +164,20 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
   const slashBridge = useRef<SlashBridge | null>(null);
   const extensions = useMemo(() => [...pageEditorExtensions(), slashMenuExtension(slashBridge)], []);
 
+  // immediatelyRender: false. Met de standaard (true) maakt Tiptap de editor al
+  // tijdens de eerste render, en plant hij meteen een destroy() over 1 ms, die
+  // pas afgeblazen wordt als het eerste effect draait. Duurde die eerste
+  // render en commit langer (de eerste keer de pagina openen, "Nieuw → Pagina"
+  // na het wachten op de database, een trage telefoon), dan kregen de
+  // effecten hieronder een editor die al weg was. Zijn storage is dan leeg,
+  // `storage.subpage.links = …` gooide, en de hele app werd zwart: de
+  // UI-test zag dat met de boom naast de pagina erbij. Zo maakt useEditor de
+  // editor pas in zijn effect, als de component er staat.
   const editor = useEditor({
     extensions,
     editable: false,
     content: '',
+    immediatelyRender: false,
     onUpdate: () => scheduleRef.current(),
   });
   editorRef.current = editor;
@@ -393,14 +403,11 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
 
   // Laden, dan claimen.
   //
-  // Elk effect hier stopt bij een vernietigde editor (isDestroyed). Tiptap
-  // ruimt een editor 1 ms na het opruimen van zijn effect op, tenzij het
-  // effect er dan al weer is. Draaiden de effecten later opnieuw met dezelfde
-  // staat (in de UI-test: zodra calendar-integrations echt antwoordde en de
-  // boom naast de pagina erbij kwam), dan kregen ze die vernietigde editor:
-  // zijn storage is dan leeg, `storage.subpage.links = …` gooide, en de hele
-  // app werd zwart (PageLoadBoundary vangt alleen laadfouten). Nu wachten ze
-  // op de nieuwe editor die useEditor daarna zelf maakt.
+  // Elk effect hier stopt bij een vernietigde editor (isDestroyed): een vangnet
+  // naast immediatelyRender: false hierboven. Een vernietigde editor heeft een
+  // lege storage, en een fout in een effect legt de hele app stil
+  // (PageLoadBoundary vangt alleen laadfouten). Ze wachten dan op de editor die
+  // useEditor daarna zelf maakt.
   useEffect(() => {
     if (!editor || editor.isDestroyed) return;
     let cancelled = false;
@@ -1044,7 +1051,9 @@ function VersionsPanel({ connectPreview, documentId, organizationId, canRestore,
 /** Een versie alleen-lezen, met dezelfde blokken als de editor. Past hij
  *  niet in deze editor, dan zeggen we dat, in plaats van een lege pagina. */
 function VersionPreview({ title, body, connect }: { title: string; body: unknown; connect: (preview: Editor) => void }) {
-  const editor = useEditor({ extensions: pageEditorExtensions({ placeholder: '' }), editable: false, content: '' }, []);
+  // immediatelyRender: false om dezelfde reden als in PageEditor: anders kan de
+  // editor al weg zijn voordat het eerste effect draait.
+  const editor = useEditor({ extensions: pageEditorExtensions({ placeholder: '' }), editable: false, content: '', immediatelyRender: false }, []);
   const [problem, setProblem] = useState<string | null>(null);
   useEffect(() => {
     if (!editor || editor.isDestroyed) return;

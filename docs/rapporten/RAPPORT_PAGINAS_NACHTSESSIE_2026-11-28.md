@@ -56,14 +56,16 @@ stand voor de overdracht.
 
 ## Gevonden en gerepareerd
 
-- **Een zwart scherm bij het openen van een pagina.**
-  - Waar: alleen in de UI-test, met de boom naast de pagina erbij en een werkende
-    calendar-integrations.
-  - Wat er gebeurde: een effect van de editor kreeg een editor die Tiptap al had opgeruimd, en
-    de hele app viel om.
-  - De reparatie: zulke effecten stoppen nu, en wachten op de nieuwe editor.
-  - Het is nooit op staging geweest. Waarom React de effecten precies opnieuw liet lopen, is
-    niet vastgesteld.
+- **Een zwart scherm bij het openen van een pagina, als de editor traag start.**
+  - De oorzaak: Tiptap maakt de editor standaard al tijdens de eerste render, en ruimt hem na
+    1 ms weer op als zijn effect dan nog niet gedraaid heeft. Op een trage start (de eerste
+    keer openen, een trage telefoon) kregen de effecten een editor die al weg was, en viel de
+    hele app om.
+  - Dat bestond al vóór vannacht, en kon ook op staging gebeuren. De boom naast de pagina
+    maakte de start zwaarder, en zo vond de UI-test het.
+  - De reparatie: `immediatelyRender: false`, plus een vangnet in elk effect.
+  - Een nieuwe UI-stap zet de processor zes keer trager. Zonder de reparatie liep die stap
+    vast met precies deze fout; met de reparatie slaagt hij.
   - Zie `docs/changelog/CHANGELOG_PAGINAS_EDITOR_ZWART_SCHERM_2026-11-28.md`.
 
 ## Wat er klaarstaat (nog niet op staging)
@@ -98,5 +100,5 @@ Ze mogen opnieuw draaien, en de databasetests lopen ze na.
   - de drie UI-scenario's voor pagina's, alle stappen goed:
     - `documenten` (10 stappen);
     - `paginas` (18);
-    - `paginadrive` (9).
+    - `paginadrive` (10).
 - **De mobiele lay-outtest** duurt lokaal te lang voor een sessie; die draait in de CI.
