@@ -109,3 +109,26 @@ export function folderPath(folders: ContentFolder[], folderId: UUID | null): Con
   }
   return path;
 }
+
+/**
+ * Waar een notitie of document in de drive komt, voor het venster waarin je
+ * het bewerkt. Zonder klant maar met een project van klant X staat het bij X
+ * (zoals dossierClientOf in pageTree.ts); pas zonder beide is het het eigen
+ * dossier. Eerst noemde het venster elke lege klantkeuze "Eigen dossier", ook
+ * als het project bij een klant hoorde, en bood het dan geen mappen van dat
+ * project aan.
+ *
+ * `folderClientId` is de klant van de mappen die je kunt kiezen; `emptyLabel`
+ * is hoe de lege klantkeuze heet.
+ */
+export function contentPlace(
+  form: { client_id?: string | null; project_id?: string | null },
+  projects: Array<{ id: UUID; client_id: UUID | null }>,
+  clients: Array<{ id: UUID; name: string }>,
+): { folderClientId: UUID | null; emptyLabel: string } {
+  const projectClient = form.project_id ? projects.find(p => p.id === form.project_id)?.client_id ?? null : null;
+  const emptyLabel = projectClient
+    ? `${clients.find(c => c.id === projectClient)?.name?.trim() || 'Klant'} (via het project)`
+    : 'Eigen dossier';
+  return { folderClientId: form.client_id || projectClient || null, emptyLabel };
+}

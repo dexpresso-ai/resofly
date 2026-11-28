@@ -35,6 +35,11 @@ en §18).
 
 - **In het venster van een notitie of document heet de lege klantkeuze nu "Eigen dossier"**,
   in plaats van "Geen klant". Ook op de kaart van een document staat "Eigen dossier".
+- **Met een project van een klant, maar zonder klant, staat het bij die klant**, zoals in de
+  drive. Het venster noemt de lege keuze dan "Bakkerij Jansen (via het project)" en biedt de
+  mappen van dat project aan, en de kaart zegt "Klant: Bakkerij Jansen". In een eerdere versie
+  van deze nacht stond daar nog "Eigen dossier" (gevonden bij het nalopen; `contentPlace` in
+  `src/lib/folders.ts`, met tests in `folders.test.ts`).
 - **Het veld "Map" verschijnt ook zonder klant**, zodra het eigen dossier mappen heeft, of
   als er al een map gekozen is.
   - Eerst stond het er alleen bij een gekozen klant.

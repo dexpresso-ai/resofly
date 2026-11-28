@@ -143,7 +143,7 @@ import { NoteInkSection, noteHandwritingSummary } from './components/NoteHandwri
 import type { InkDocument } from './lib/ink';
 import { inkSizeIssue } from './lib/ink';
 import { documentTypeLabels } from './features/Documents';
-import { clientFolderOptions } from './lib/folders';
+import { clientFolderOptions, contentPlace } from './lib/folders';
 import { clientEInvoiceChannel, clientWantsEInvoice, eInvoiceReadiness, invoiceRecipientFor, isValidEmail, mollieInvoicingAllowed } from './lib/eInvoicing';
 import type { CreditInput, RefundInput } from './features/Finance';
 import { creditInvoiceAmount, issueCreditNoteForRefund, issueInvoiceWithoutEmail, previewInvoiceSend, refundInvoice as refundInvoiceWithPurpose, type InvoiceBookingNotice } from './services/invoiceRecoveryService';
@@ -5517,6 +5517,8 @@ function EditModal({ edit, data, dataStatus, organizationId, currentUserId, team
   // of allebei. Zodra er een project mét klant gekozen is, is dat project leidend voor de
   // klant — precies zoals de database het ook afdwingt.
   const taskProject = edit.kind === 'task' ? data.projects.find(p => p.id === form.project_id) ?? null : null;
+  // Notitie en document: waar het in de drive komt, voor de klantkeuze en de mappen.
+  const place = edit.kind === 'note' || edit.kind === 'document' ? contentPlace(form, data.projects, data.clients) : null;
   const taskClientFollowsProject = Boolean(taskProject?.client_id);
   const taskProjectOptions = edit.kind === 'task'
     ? data.projects.filter(p =>
@@ -5851,11 +5853,11 @@ function EditModal({ edit, data, dataStatus, organizationId, currentUserId, team
         disabled={disabled}
         onSaved={summary => { if (item) onNoteHandwritingChanged(item.id, summary); }}
       />
-      {/* Zonder klant staat een notitie in het eigen dossier (stap 1A-5c), en dat heeft eigen mappen. */}
-      <Select value={form.client_id} onChange={e=>{set('client_id',e.target.value);set('folder_id','');}} disabled={disabled}><option value="">Eigen dossier</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select>
+      {/* Zonder klant staat een notitie in het eigen dossier (stap 1A-5c), met eigen mappen, of bij de klant van het project. */}
+      <Select value={form.client_id} onChange={e=>{set('client_id',e.target.value);set('folder_id','');}} disabled={disabled}><option value="">{place?.emptyLabel ?? 'Eigen dossier'}</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select>
       <Select value={form.project_id} onChange={e=>{set('project_id',e.target.value);set('folder_id','');}} disabled={disabled}><option value="">Geen project</option>{data.projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</Select>
-      {(form.client_id || form.folder_id || clientFolderOptions(data.folders, null, form.project_id || null).length > 0) && <Field label="Map" hint={form.project_id ? 'Plaats deze notitie in een map van het gekozen project.' : form.client_id ? 'Plaats deze notitie in een map van de gekozen klant.' : 'Plaats deze notitie in een map van het eigen dossier.'}>
-        <Select value={form.folder_id} onChange={e=>set('folder_id',e.target.value)} disabled={disabled}><option value="">Geen map</option>{clientFolderOptions(data.folders, form.client_id || null, form.project_id || null).map(o=><option key={o.id} value={o.id}>{o.label}</option>)}</Select>
+      {(form.client_id || form.folder_id || clientFolderOptions(data.folders, place?.folderClientId ?? null, form.project_id || null).length > 0) && <Field label="Map" hint={form.project_id ? 'Plaats deze notitie in een map van het gekozen project.' : form.client_id ? 'Plaats deze notitie in een map van de gekozen klant.' : 'Plaats deze notitie in een map van het eigen dossier.'}>
+        <Select value={form.folder_id} onChange={e=>set('folder_id',e.target.value)} disabled={disabled}><option value="">Geen map</option>{clientFolderOptions(data.folders, place?.folderClientId ?? null, form.project_id || null).map(o=><option key={o.id} value={o.id}>{o.label}</option>)}</Select>
       </Field>}
       {noteCalEventsLoading && <div className="note-cal-hint">Meetings laden…</div>}
       {!noteCalEventsLoading && noteCalEvents.length > 0 && (
@@ -5895,13 +5897,13 @@ function EditModal({ edit, data, dataStatus, organizationId, currentUserId, team
       </div>}
       <RichTextEditor value={form.content} onChange={value=>set('content', value)} placeholder="Schrijf de inhoud van het document…" disabled={disabled}/>
       <Field label="Klant">
-        <Select value={form.client_id} onChange={e=>{set('client_id',e.target.value);set('folder_id','');}} disabled={disabled}><option value="">Eigen dossier</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select>
+        <Select value={form.client_id} onChange={e=>{set('client_id',e.target.value);set('folder_id','');}} disabled={disabled}><option value="">{place?.emptyLabel ?? 'Eigen dossier'}</option>{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select>
       </Field>
       <Field label="Project">
         <Select value={form.project_id} onChange={e=>{set('project_id',e.target.value);set('folder_id','');}} disabled={disabled}><option value="">Geen project</option>{data.projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</Select>
       </Field>
-      {(form.client_id || form.folder_id || clientFolderOptions(data.folders, null, form.project_id || null).length > 0) && <Field label="Map" hint={form.project_id ? 'Plaats dit document in een map van het gekozen project.' : form.client_id ? 'Plaats dit document in een map van de gekozen klant.' : 'Plaats dit document in een map van het eigen dossier.'}>
-        <Select value={form.folder_id} onChange={e=>set('folder_id',e.target.value)} disabled={disabled}><option value="">Geen map</option>{clientFolderOptions(data.folders, form.client_id || null, form.project_id || null).map(o=><option key={o.id} value={o.id}>{o.label}</option>)}</Select>
+      {(form.client_id || form.folder_id || clientFolderOptions(data.folders, place?.folderClientId ?? null, form.project_id || null).length > 0) && <Field label="Map" hint={form.project_id ? 'Plaats dit document in een map van het gekozen project.' : form.client_id ? 'Plaats dit document in een map van de gekozen klant.' : 'Plaats dit document in een map van het eigen dossier.'}>
+        <Select value={form.folder_id} onChange={e=>set('folder_id',e.target.value)} disabled={disabled}><option value="">Geen map</option>{clientFolderOptions(data.folders, place?.folderClientId ?? null, form.project_id || null).map(o=><option key={o.id} value={o.id}>{o.label}</option>)}</Select>
       </Field>}
       {item && <div className="document-export">
         <div className="document-export-actions">
