@@ -32,7 +32,7 @@ stand voor de overdracht.
 4. **Open de twee proefbestanden in echte Word: dat is de voorwaarde om de knop "Word" te
    mergen.**
    - In de editor staat nu een knop "Word": de pagina als .docx, in de letters van je
-     huisstijl.
+     huisstijl. Sinds 1B-3 heet die knop "Exporteren", met daarin "Word downloaden".
    - Het bestand voldoet aan het schema van Word (ECMA-376) en opent goed in LibreOffice.
    - Word zelf kan ik in een cloudsessie niet openen. Vooral de ingesloten letter is daar
      nog niet gezien.
@@ -95,6 +95,20 @@ stand voor de overdracht.
      mag naar buiten, en het beeldtype dat de worker voor `inline=1` nodig heeft, wordt bij
      het uploaden opgeslagen.
    - Staat er alleen "[Afbeelding]", dan ligt het aan de koppeling met de worker.
+10. **De PDF (1B-5): twee antwoorden nodig.** Die stap bouw ik pas als je ze gegeven hebt.
+    - **Rol jij de media-worker uit?** De PDF komt via Collabora, met een nieuw intern pad in de
+      media-worker. Die rol je uit met wrangler; vanuit een cloudsessie kan dat niet.
+    - **Moet de server de Word-file bouwen, of mag dat in de app blijven?**
+      - Op de server kunnen Gerrie en de API ook zonder browser exporteren.
+      - In de app (zoals nu) is het eenvoudiger; dan bouwt de server alleen de PDF.
+
+    Tot dan kun je afdrukken via Exporteren, en in het afdrukvenster "Opslaan als PDF" kiezen.
+11. **Na de volgende merge: maak één Word-document van een pagina op staging, bewerk het en
+    bewaar het.** Dat is "Maak er een Word-document van" (1B-3).
+    - De test hier bootst de worker en Collabora na. Een proef met LibreOffice, de motor van
+      Collabora, ging goed: het bestand overleeft opnieuw opslaan.
+    - Let op de grootte. Na de eerste keer bewaren in Collabora werd het bestand in de proef
+      veel groter (107 kB werd 2 MB): LibreOffice sluit dan alle letters in hun geheel in.
 
 ## Gevonden en gerepareerd
 
@@ -125,7 +139,15 @@ stand voor de overdracht.
     vast met precies deze fout; met de reparatie slaagt hij.
   - Zie `docs/changelog/CHANGELOG_PAGINAS_EDITOR_ZWART_SCHERM_2026-11-28.md`.
 
-## Wat er klaarstaat (nog niet op staging)
+## Na de merge gebouwd (op de branch, nog niet op staging)
+
+| Stap | Wat | Changelog |
+| --- | --- | --- |
+| 1B-3 | "Exporteren" in de editor: Word downloaden, "Maak er een Word-document van" (een Word-document naast de pagina, dat meteen opent in Word) en afdrukken. | `CHANGELOG_PAGINAS_EXPORTEREN_2026-11-28.md` |
+
+Geen migraties.
+
+## Wat er op 28 november naar staging ging
 
 | Stap | Wat | Changelog |
 | --- | --- | --- |
@@ -143,7 +165,7 @@ stand voor de overdracht.
 | 1C-3 | Een pagina delen in de app: "Delen" in de editor en de drive, subpagina's aanvinken, en de melding "De klant ziet een oudere versie" met "Bijwerken bij klant". Gerrie deelt een pagina ook, met een vrijgave van wie goedkeurt. | `CHANGELOG_PAGINAS_BIJWERKEN_BIJ_KLANT_2026-11-28.md` |
 | 1C-4 | Wat de klant ziet: de pagina met opmaak, kaders, tabellen, taken en afbeeldingen, in het portaal en bij een geheime link. Gerepareerd: samengevoegde cellen en het startnummer van een lijst gingen verloren, en een afgevinkte taak in een gedeelde notitie leek open. | `CHANGELOG_PAGINAS_PORTAAL_WEERGAVE_2026-11-28.md` |
 
-Er komen zeven migraties mee die nog niet op staging staan:
+Er gingen zeven migraties mee:
 - `20261127140000_paginas_blokken`;
 - `20261127150000_paginas_verwijzingen`;
 - `20261128100000_paginas_prullenbak`;

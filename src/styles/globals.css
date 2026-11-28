@@ -13855,9 +13855,26 @@ button.alog-feed-row:hover{background:var(--bg3)}
 .page-file-picker-name{flex:1 1 auto;min-width:0;overflow:hidden;font-size:14px;font-weight:600;text-overflow:ellipsis;white-space:nowrap}
 .page-file-picker-meta{flex:0 0 auto;font-size:12px;color:var(--muted2)}
 .page-file-picker-empty{margin:0;padding:12px 4px;font-size:13px;color:var(--muted2)}
+/* Stap 1B-3: het exportvenster. Net als de bestandskiezer boven de editor, en
+   op een telefoon van onderen. */
+.page-export-backdrop{position:fixed;inset:0;z-index:2004;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(var(--shade-rgb),calc(.55 * var(--shade-k)))}
+.page-export{display:flex;flex-direction:column;gap:12px;width:min(460px,100%);max-height:min(640px,calc(100vh - 32px));overflow-y:auto;padding:14px;border:1px solid var(--border2);border-radius:16px;background:var(--bg);box-shadow:0 24px 64px rgba(var(--shade-rgb),calc(.4 * var(--shade-k)))}
+.page-export-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.page-export-intro{margin:0;font-size:13px;line-height:1.5;color:var(--muted2)}
+.page-export-options{display:flex;flex-direction:column;gap:8px}
+.page-export-option{display:flex;align-items:flex-start;gap:12px;width:100%;padding:12px;border:1px solid var(--border);border-radius:12px;background:var(--bg2);color:var(--text);font:inherit;text-align:left;cursor:pointer}
+.page-export-option:hover:not(:disabled),.page-export-option:focus-visible{border-color:rgba(var(--accent-rgb),.55);outline:none}
+.page-export-option:disabled{cursor:progress;opacity:.65}
+.page-export-option[aria-busy="true"]{opacity:1;border-color:rgba(var(--accent-rgb),.55)}
+.page-export-option svg{flex:0 0 auto;margin-top:1px;color:var(--accent-ink)}
+.page-export-option strong{display:block;font-size:14px;font-weight:600}
+.page-export-option small{display:block;margin-top:2px;font-size:12.5px;line-height:1.45;color:var(--muted2)}
+.page-export-error{margin:0;padding:9px 11px;border:1px solid rgba(var(--danger-rgb),.3);border-radius:10px;background:rgba(var(--danger-rgb),.1);color:var(--accent-r);font-size:13px;line-height:1.45}
 @media (max-width:640px){
   .page-file-picker-backdrop{align-items:flex-end;padding:0}
   .page-file-picker{width:100%;max-height:80vh;border-radius:18px 18px 0 0;padding-bottom:calc(14px + env(safe-area-inset-bottom))}
+  .page-export-backdrop{align-items:flex-end;padding:0}
+  .page-export{width:100%;max-height:85vh;border-radius:18px 18px 0 0;padding-bottom:calc(14px + env(safe-area-inset-bottom))}
 }
 /* Stap 1A-5: het kruimelpad boven een subpagina. Op een groot scherm alle
    bovenliggende pagina's, op een telefoon alleen een pijltje naar de directe ouder. */
@@ -13940,7 +13957,7 @@ button.alog-feed-row:hover{background:var(--bg3)}
   body:has(.page-editor) #root,body:has(.page-editor) #root *:has(.page-editor){position:static!important;display:block!important;overflow:visible!important;width:auto!important;height:auto!important;min-height:0!important;max-height:none!important;margin:0!important;padding:0!important;border:0!important;background:none!important;box-shadow:none!important;transform:none!important;filter:none!important;contain:none!important}
   /* Het donkere thema vult zijn kleuren al op :root in; daarom hier de lichte, op de editor zelf. */
   .page-editor{--text:#1C1B18;--ink:#1C1B18;--muted:#6F6B63;--muted2:#55524B;--border:#D4D1CA;--border2:#C7C3BA;--bg:#fff;--bg2:#fff;--bg3:#F4F3F0;--panel:#fff;--accent-ink:#855800;--accent-rgb:244,188,46;--ok-rgb:11,107,78;--warn-rgb:163,71,10;--danger-rgb:189,31,49;--accent-g:#0B6B4E;--accent-o:#A3470A;--accent-r:#BD1F31;--shade-rgb:28,27,24;--shade-k:.3;color-scheme:light;position:static!important;display:block!important;background:#fff!important;color:#1C1B18!important}
-  .page-editor-bar,.page-editor-toolbar,.page-editor-subbar,.page-editor-banner,.page-tree,.page-tree-backdrop,.page-versions,.page-block-menu,.page-file-picker-backdrop{display:none!important}
+  .page-editor-bar,.page-editor-toolbar,.page-editor-subbar,.page-editor-banner,.page-tree,.page-tree-backdrop,.page-versions,.page-block-menu,.page-file-picker-backdrop,.page-export-backdrop{display:none!important}
   .page-editor-main,.page-editor-scroll{display:block!important;overflow:visible!important;height:auto!important;min-height:0!important}
   .page-editor-sheet{max-width:none;margin:0;padding:0}
   .page-editor-title{display:block;width:100%;margin:0 0 12pt;padding:0;border:0;background:none;color:#1C1B18;font-size:24pt;font-weight:700}

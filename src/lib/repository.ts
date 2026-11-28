@@ -2133,6 +2133,44 @@ export async function pageAncestors(pageId: UUID, organizationId: UUID): Promise
 }
 
 /**
+ * Waar iets naast een pagina hoort (stap 1B-3, de Word-kopie): bij de klant en
+ * het project van de pagina, in de map van de bovenste pagina van haar boom.
+ * Een subpagina heeft zelf geen map; de database haalt die weg (20261127130000).
+ * Met de map van de subpagina zelf belandde een kopie los in het dossier, in
+ * plaats van bij de pagina's.
+ *
+ * Hoogstens 20 stappen omhoog, zoals de boom in de database. Een ouder die je
+ * niet mag zien, sluit het pad af: dan geen map.
+ */
+export async function pageTreePlace(pageId: UUID, organizationId: UUID): Promise<{
+  client_id: UUID | null; project_id: UUID | null; folder_id: UUID | null; document_type: string | null;
+}> {
+  type Row = { parent_id: UUID | null; client_id: UUID | null; project_id: UUID | null; folder_id: UUID | null; document_type: string | null };
+  const read = async (id: UUID): Promise<Row | null> => {
+    const { data, error } = await supabase
+      .from('documents').select('parent_id,client_id,project_id,folder_id,document_type')
+      .eq('id', id).eq('organization_id', organizationId).eq('format', 'page').maybeSingle();
+    if (error) throw error;
+    return data as Row | null;
+  };
+  const page = await read(pageId);
+  if (!page) throw new Error('Deze pagina bestaat niet meer.');
+  let top: Row = page;
+  for (let step = 0; top.parent_id && step < 20; step += 1) {
+    const parent = await read(top.parent_id);
+    if (!parent) break;
+    top = parent;
+  }
+  return {
+    // Klant en project volgen in de database de hele boom; die van de pagina zelf kloppen dus.
+    client_id: page.client_id,
+    project_id: page.project_id,
+    folder_id: top.parent_id ? null : top.folder_id,
+    document_type: page.document_type,
+  };
+}
+
+/**
  * De titel van een pagina, voor een subpagina-blok en de knop naar de
  * bovenliggende pagina. null als hij niet (meer) bestaat of je hem niet mag
  * zien (RLS en de module Inhoud).

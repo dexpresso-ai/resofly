@@ -7,6 +7,9 @@
 // en met dezelfde letterkeuze als de server straks (_shared/pageExportFonts.ts).
 // De server komt er pas bij met de PDF; die gebruikt dan dezelfde module.
 //
+// Sinds stap 1B-3 ook "Maak er een Word-document van": dezelfde .docx, als
+// Word-document in het dossier (createPageWordCopy).
+//
 // De editor laadt dit bestand pas bij een klik (import()), zodat hij er niet
 // zwaarder van wordt.
 // ============================================================
@@ -15,8 +18,11 @@ import { buildPageDocx, type PageDocxContext, type PageDocxFont, type PageDocxIm
 import { pageExportFonts, type PageExportFont } from '../../supabase/functions/_shared/pageExportFonts.ts';
 import { sfntFamilyName, woffToSfnt } from '../../supabase/functions/_shared/woff.ts';
 import { pageReferences, wordFileName } from './pageExportParts';
+import { uploadDocumentDocx } from './office';
 import { fetchStoredFileBlob } from './r2';
-import { attachmentInfo, loadPage, pageTitle } from './repository';
+import { deleteR2Object } from './r2-api';
+import { attachmentInfo, insertRow, loadPage, pageTitle, pageTreePlace } from './repository';
+import type { InternalDocument } from '../types';
 
 /**
  * Eén letter van de huisstijl, als TTF. Laadt hij niet, dan alleen de naam: de
@@ -95,5 +101,52 @@ export function saveFile(blob: Blob, fileName: string): void {
   } finally {
     // Niet meteen: sommige browsers beginnen de download pas na deze taak.
     window.setTimeout(() => URL.revokeObjectURL(url), 1500);
+  }
+}
+
+/** De naam van de Word-kopie: de titel van de pagina, met "(Word)" erachter. */
+export function wordCopyTitle(pageTitle: string): string {
+  return `${pageTitle.trim() || 'Naamloze pagina'} (Word)`;
+}
+
+/**
+ * "Maak er een Word-document van" (stap 1B-3, §9 van het bouwplan): de .docx
+ * van buildPageWord als Word-document naast de pagina, voor de laatste puntjes
+ * in Word. De pagina blijft de bron; wat je in de kopie wijzigt, komt niet
+ * terug in de pagina.
+ *
+ * Hetzelfde pad als een geüpload Word-bestand (createDocumentFromOfficeFile in
+ * main.tsx): de worker zet het bestand in R2, en de rij komt er met de rechten
+ * van wie exporteert (RLS). Lukt de rij niet, dan gaat het bestand weer weg;
+ * anders bleef het als wees in R2 staan, zonder rij die ernaar wijst.
+ */
+export async function createPageWordCopy(
+  pageId: string,
+  organizationId: string,
+  title: string,
+  blob: Blob,
+): Promise<InternalDocument> {
+  const place = await pageTreePlace(pageId, organizationId);
+  const name = wordCopyTitle(title);
+  const upload = await uploadDocumentDocx(organizationId, wordFileName(name), blob);
+  try {
+    return await insertRow<InternalDocument>('documents', organizationId, {
+      title: name,
+      document_type: place.document_type || 'general',
+      client_id: place.client_id,
+      project_id: place.project_id,
+      folder_id: place.folder_id,
+      // Zoals bij elk Word-document: de tekst staat in het bestand. Een kopie
+      // van de tekst hier zou verouderen zodra iemand hem in Word bijwerkt.
+      content: '',
+      storage_key: upload.key,
+      mime_type: upload.mime_type,
+      size_bytes: upload.size_bytes,
+    });
+  } catch (error) {
+    await deleteR2Object(upload.key).catch((cleanupError) => {
+      console.warn('Word-kopie opruimen mislukt na een fout bij de documents-rij (mogelijk een wees in R2):', upload.key, cleanupError);
+    });
+    throw error;
   }
 }
