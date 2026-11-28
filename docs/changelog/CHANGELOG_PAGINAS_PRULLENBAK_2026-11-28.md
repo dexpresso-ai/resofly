@@ -89,7 +89,15 @@ en §18).
   - `deno check` van de gewijzigde edge functions;
   - typecheck en unit tests.
 
-  De mobiele test liep nog bij het schrijven.
+  De mobiele test liep nog bij het schrijven. Die run is daarna afgebroken, omdat er een
+  nieuwe kwam.
+- **De CI-run met de laatste reparaties** (run 304, commit ba3ee84) is helemaal groen, van
+  28 november 01:04 tot 01:44:
+  - de migraties vanaf nul met de databasetests;
+  - `deno check`;
+  - typecheck en unit tests;
+  - de mobiele lay-outtest (donker en licht);
+  - laden per module, de inrichtingsstappen en de terugknop.
 - **Het nieuwe UI-scenario `paginadrive`:** 4 stappen, 0 fout.
   - De boom-stap van gisteren staat nu ook in dit scenario, los van "documenten": de stappen
     maken hun eigen pagina's, en zo draait het in een paar minuten.

@@ -2702,6 +2702,92 @@ async function scenarioPaginadrive() {
     await sluitPagina(page);
     await inhoud(page).locator('.odrv-row').filter({ hasText: `Werkwijze ${tag}` }).first().waitFor({ timeout: 15000 });
   });
+  // ── De boom van het dossier naast de pagina (§4, het pagina-scherm) ────────
+  await uiStap('de boom naast de pagina: het dossier met map en subpagina\'s, wisselen, de terugknop, verbergen, en op de telefoon een lade', async () => {
+    const tag = Date.now().toString(36);
+    const nieuwePagina = (titel, { ouder = null, map = null } = {}) => {
+      sql(`insert into public.documents (organization_id, created_by, title, format, body, client_id, parent_id, folder_id)
+        values (${q(w.orgId)}, ${q(w.medewerker.id)}, ${q(titel)}, 'page', '{"type":"doc","content":[{"type":"paragraph"}]}'::jsonb, ${q(w.klantA.id)}, ${ouder ? q(ouder) : 'null'}, ${map ? q(map) : 'null'})`);
+      return sqlRij(`select id from public.documents where organization_id = ${q(w.orgId)} and title = ${q(titel)}`).id;
+    };
+    sql(`insert into public.content_folders (organization_id, client_id, name) values (${q(w.orgId)}, ${q(w.klantA.id)}, ${q(`Boekenkast ${tag}`)})`);
+    const map = sqlRij(`select id from public.content_folders where organization_id = ${q(w.orgId)} and name = ${q(`Boekenkast ${tag}`)}`).id;
+    const handboek = nieuwePagina(`Handboek ${tag}`);
+    const hoofdstuk = nieuwePagina(`Hoofdstuk ${tag}`, { ouder: handboek });
+    nieuwePagina(`Paragraaf ${tag}`, { ouder: hoofdstuk });
+    const los = nieuwePagina(`Los ${tag}`);
+    nieuwePagina(`In de kast ${tag}`, { map });
+    const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+    const page = lid.page;
+    await naarKlantdossier(lid, w.klantA.name);
+    await inhoud(page).locator('.odrv-row').filter({ hasText: `Handboek ${tag}` }).first().click();
+    await page.locator('.page-editor').waitFor({ timeout: 20000 });
+    const boom = page.locator('.page-tree');
+    const regel = (titel) => boom.locator('.page-tree-row').filter({ hasText: titel }).first();
+    const titelVan = async () => page.locator('.page-editor-title').inputValue().catch(() => '');
+    const huidig = async () => tekst(await boom.locator('[aria-current="page"]').innerText().catch(() => ''));
+    const knop = page.locator('.page-editor-tree-button');
+    // Breed: de boom staat er, met de klant erboven, de map als groep, en de
+    // subpagina van de open pagina eronder. Dieper is nog dichtgeklapt.
+    await regel(`Hoofdstuk ${tag}`).waitFor({ timeout: 15000 });
+    gelijk(tekst(await boom.locator('.page-tree-name').innerText()), w.klantA.name, 'de naam boven de boom');
+    gelijk(await huidig(), `Handboek ${tag}`, 'de open pagina in de boom');
+    await boom.locator('.page-tree-label').filter({ hasText: `Boekenkast ${tag}` }).waitFor({ timeout: 5000 });
+    await regel(`In de kast ${tag}`).waitFor({ timeout: 5000 });
+    await regel(`Los ${tag}`).waitFor({ timeout: 5000 });
+    gelijk(await regel(`Paragraaf ${tag}`).count(), 0, 'een dichtgeklapte tak toont zijn subpagina');
+    await regel(`Hoofdstuk ${tag}`).locator('.page-tree-toggle').click();
+    await regel(`Paragraaf ${tag}`).waitFor({ timeout: 5000 });
+    // Wisselen: de andere pagina gaat open, en de boom blijft zoals hij was.
+    await regel(`Los ${tag}`).locator('.page-tree-page').click();
+    await wachtTot(async () => (await titelVan()) === `Los ${tag}`, { melding: 'een klik in de boom opende de pagina niet' });
+    await wachtTot(async () => (await huidig()) === `Los ${tag}`, { melding: 'de boom wijst de open pagina niet aan' });
+    verwacht(await regel(`Paragraaf ${tag}`).isVisible(), 'de boom klapte dicht bij het wisselen');
+    // Een titel die je typt, staat meteen in de boom.
+    await wachtTot(async () => tekst(await page.locator('.page-editor-status').innerText().catch(() => '')) === 'Opgeslagen', { melding: 'de editor kwam niet in bewerken' });
+    await page.locator('.page-editor-title').fill(`Los hernoemd ${tag}`);
+    await wachtTot(async () => (await huidig()) === `Los hernoemd ${tag}`, { melding: 'de boom volgt de titel niet' });
+    // Een subpagina maken met /pagina: ze komt in de boom.
+    await page.locator('.page-editor .tiptap').click();
+    await page.keyboard.type('/pagina');
+    const menu = page.locator('.page-block-menu');
+    await menu.waitFor({ timeout: 10000 });
+    await wachtTot(async () => tekst(await menu.locator('.page-block-item.is-active .page-block-label').innerText().catch(() => '')) === 'Subpagina', { melding: 'het blokmenu biedt geen subpagina' });
+    await page.keyboard.press('Enter');
+    await wachtTot(async () => sqlRij(`select count(*)::int as n from public.documents where parent_id = ${q(los)}`).n === 1, { melding: 'geen subpagina gemaakt' });
+    await wachtTot(async () => (await boom.locator('.page-tree-row').filter({ hasText: 'Naamloze pagina' }).count()) === 1, { melding: 'de nieuwe subpagina staat niet in de boom' });
+    await wachtTot(async () => tekst(await page.locator('.page-editor-status').innerText().catch(() => '')) === 'Opgeslagen', { melding: 'niet opgeslagen' });
+    // De terugknop gaat naar de pagina waar je vandaan kwam.
+    await page.goBack();
+    await wachtTot(async () => (await titelVan()) === `Handboek ${tag}`, { melding: 'terug ging niet naar de vorige pagina' });
+    // Verbergen: weg, ook bij de volgende pagina. De knop in de balk haalt hem terug.
+    await boom.locator('.page-tree-close').click();
+    await wachtTot(async () => (await boom.count()) === 0, { melding: 'de boom ging niet weg' });
+    await sluitPagina(page);
+    await inhoud(page).locator('.odrv-row').filter({ hasText: `Los hernoemd ${tag}` }).first().click();
+    await page.locator('.page-editor').waitFor({ timeout: 20000 });
+    await wachtTot(async () => (await titelVan()) === `Los hernoemd ${tag}`, { melding: 'de pagina ging niet open' });
+    gelijk(await boom.count(), 0, 'de verborgen boom kwam terug bij een andere pagina');
+    await knop.click();
+    await regel(`Handboek ${tag}`).waitFor({ timeout: 10000 });
+    // Op de telefoon: geen kolom maar een lade, die met terug dichtgaat.
+    const breed = page.viewportSize();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await wachtTot(async () => (await boom.count()) === 0, { melding: 'op de telefoon staat de boom over de pagina' });
+    await knop.click();
+    await page.locator('.page-tree.is-drawer').waitFor({ timeout: 5000 });
+    await page.goBack();
+    await wachtTot(async () => (await boom.count()) === 0, { melding: 'terug sloot de lade niet' });
+    gelijk(await titelVan(), `Los hernoemd ${tag}`, 'terug sloot de pagina in plaats van de lade');
+    await knop.click();
+    await regel(`Handboek ${tag}`).locator('.page-tree-page').click();
+    await wachtTot(async () => (await titelVan()) === `Handboek ${tag}`, { melding: 'kiezen in de lade opende de pagina niet' });
+    await wachtTot(async () => (await boom.count()) === 0, { melding: 'de lade bleef open na het kiezen' });
+    if (breed) await page.setViewportSize(breed);
+    // Weer breed: de kolom staat er weer.
+    await regel(`Handboek ${tag}`).waitFor({ timeout: 10000 });
+    await sluitPagina(page);
+  });
 }
 
 // ── Bank: mutaties met de hand boeken ──────────────────────────────────────

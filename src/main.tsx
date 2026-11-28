@@ -5078,6 +5078,7 @@ function App() {
       canWrite={orgCanWrite && permissions.canWrite('content')}
       nameOf={(userId: string) => memberName(userId, organizationContext.teamMembers ?? [], currentUserId)}
       backTo={pageTrail[pageTrail.length - 1] ?? null}
+      ownDossierName={data.companySettings?.company_name?.trim() || 'Eigen dossier'}
       onOpenPage={(step) => {
         const from = pageEditDoc.id;
         setPageTrail(trail => (step.how === 'terug' ? trail.slice(0, -1) : [...trail, from]));

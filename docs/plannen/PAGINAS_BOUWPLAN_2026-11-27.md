@@ -510,6 +510,7 @@ akkoord is.
 | 1A-5a | De boom in de lijst van de drive (uitklappen), een pagina op een pagina slepen, een subpagina terug naar een map, het kruimelpad in de editor. ("Pagina" in het Nieuw-menu kwam al in 1A-3a.) | gebouwd op 28 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_BOOM_2026-11-28.md` |
 | 1A-5b | De prullenbak: weggooien zet `archived_at` op de pagina en haar subpagina's, 30 dagen terugzetten, daarna definitief weg met de bijlagen via de opruimwachtrij. Een pagina in de prullenbak is nergens zichtbaar. | gebouwd op 28 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_PRULLENBAK_2026-11-28.md` |
 | 1A-5c | Het eigen dossier met logo en naam, bovenaan de drive, in plaats van "Geen klant". | gebouwd op 28 november, op de branch; zie `docs/changelog/CHANGELOG_EIGEN_DOSSIER_2026-11-28.md` |
+| 1A-5e | De boom van het dossier naast de pagina (§4, "het pagina-scherm"): een kolom op een breed scherm, een lade op de telefoon. | gebouwd op 28 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_DOSSIERBOOM_2026-11-28.md` |
 | 1A-5d | De tekstdocumenten omzetten naar pagina's (§10). | wacht op 1C en op een besluit van de gebruiker (zie de stand hieronder) |
 | 1B-1 | Proef: huisstijlletters en emoji in een PDF via Collabora (§9). | gepland |
 | 1B-2 | Export: `page-export`, de DOCX-module, het interne PDF-pad, het exportvenster, vastleggen in het dossier, de Word-kopie. | de DOCX-module is gebouwd op 28 november, op de branch (`_shared/pageDocx.ts`); zie `docs/changelog/CHANGELOG_PAGINAS_WORD_2026-11-28.md`. De rest wacht op Collabora. |
@@ -575,6 +576,8 @@ akkoord is.
   XSD's van ECMA-376 gecontroleerd en in LibreOffice naar PDF omgezet. De zip-schrijver van
   "Alles exporteren" staat daarvoor nu in `_shared`. `page-export` zelf, het exportvenster en de
   PDF wachten op Collabora.
+- **Daarna gebouwd, op de branch:** 1A-5e, de boom van het dossier naast de pagina (een
+  kolom die je kunt verbergen, op de telefoon een lade).
 - **1A-5d (omzetten) wacht.** Omzetten bij het openen gaat één kant op, en het neemt een
   document dingen af tot 1C er is:
   - een pagina kun je niet delen (`drive_shares_no_pages_yet`);
@@ -589,10 +592,10 @@ akkoord is.
 - **UI-tests in drie scenario's**, elk binnen de tien minuten van een begrensde Docker-run:
   - `ui.mjs documenten` (10 stappen);
   - `paginas`, de editor en zijn blokken (18);
-  - `paginadrive`, de boom, de prullenbak en het eigen dossier (5).
-- **Volgende stappen die geen bestaande gegevens raken:**
-  - de boom van het dossier naast de pagina (§4, "het pagina-scherm");
-  - de laatste "Geen klant"-teksten elders in de app.
+  - `paginadrive`, de boom in de drive, de prullenbak, het eigen dossier en de boom naast de
+    pagina (6).
+- **Volgende stap die geen bestaande gegevens raakt:** de laatste "Geen klant"-teksten
+  elders in de app.
 
   Het edge-deel en de PDF-weg wachten tot de office-server (Collabora) er is; die is niet in
   een cloudsessie te draaien. 1C (delen) pas als de gebruiker terug is.

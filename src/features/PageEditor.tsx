@@ -36,7 +36,7 @@ import type { Editor, JSONContent } from '@tiptap/react';
 import {
   AlignCenter, AlignLeft, AlignRight, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, BetweenHorizontalEnd, BetweenHorizontalStart,
   BetweenVerticalEnd, BetweenVerticalStart, Bold, Braces, ChevronLeft, Copy, Heading1, Heading2, Heading3, History, Info, Italic, Lightbulb, Link2,
-  List, ListChecks, ListOrdered, Minus, OctagonAlert, PanelTop, Pilcrow, Plus, Quote, Redo2, Strikethrough, TableCellsMerge,
+  List, ListChecks, ListOrdered, Minus, OctagonAlert, PanelLeft, PanelTop, Pilcrow, Plus, Quote, Redo2, Strikethrough, TableCellsMerge,
   TableCellsSplit, Trash2, TriangleAlert, Underline as UnderlineIcon, Undo2, X,
 } from 'lucide-react';
 import { isInTable, moveTableColumn, moveTableRow, selectedRect } from '@tiptap/pm/tables';
@@ -51,6 +51,7 @@ import {
 } from '../lib/repository';
 import { useBackStep } from '../lib/useBackStep';
 import { PageFilePicker, type FileChoice } from './PageFilePicker';
+import { PageTree, saveTreePreference, treePreference, useTreeDrawer } from './PageTree';
 import {
   BlockMenu, closeSlashMenu, pageBlocksFor, runPageBlock, slashMenuExtension, type BlockMenuState, type SlashBridge,
 } from './PageBlockMenu';
@@ -94,7 +95,7 @@ function whenLabel(value: string): string {
 /** Naar een andere pagina: verder (een subpagina, of omhoog) of terug langs de weg die je kwam. */
 export type PageStep = { id: string; how: 'vooruit' | 'terug' };
 
-export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClose, onOpenPage, backTo = null }: {
+export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClose, onOpenPage, backTo = null, ownDossierName = 'Eigen dossier' }: {
   documentId: string;
   organizationId: string;
   /** Schrijfrechten op Inhoud. Zonder: alleen lezen, en geen claim. */
@@ -106,6 +107,8 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
   onOpenPage?: (step: PageStep) => void;
   /** De pagina waar je vandaan kwam: de terugknop gaat daarheen in plaats van dicht. */
   backTo?: string | null;
+  /** De naam van het eigen dossier (het bedrijf), boven de boom. */
+  ownDossierName?: string;
 }) {
   const [mode, setModeState] = useState<Mode>('laden');
   const [saveState, setSaveState] = useState<SaveState>('opgeslagen');
@@ -122,6 +125,13 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
   const [filePicker, setFilePicker] = useState<{ files: DossierFile[] | null; error: string | null; resolve: (choice: FileChoice) => void } | null>(null);
   /** Het dossier van de pagina, voor de kiezer. */
   const placeRef = useRef<{ client_id: string | null; project_id: string | null }>({ client_id: null, project_id: null });
+  /** Hetzelfde voor de boom links, die opnieuw moet tekenen als het bekend is. */
+  const [place, setPlace] = useState<{ client_id: string | null; project_id: string | null } | null>(null);
+  /** De boom van het dossier (§4): een kolom op een breed scherm, een lade op een smal. */
+  const treeDrawer = useTreeDrawer();
+  const [treeOpen, setTreeOpen] = useState(() => !treeDrawer && treePreference());
+  /** Telt op als hier een subpagina bij komt: dan haalt de boom opnieuw op. */
+  const [treeVersion, setTreeVersion] = useState(0);
 
   const modeRef = useRef<Mode>('laden');
   const titleRef = useRef('');
@@ -215,6 +225,10 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
     const ed = editorRef.current;
     if (!ed) return;
     const row = await loadPage(documentId, organizationId);
+    // Vóór de controle op de blokken: ook een pagina die hier niet open kan,
+    // hoort in de boom van haar dossier.
+    setPlace(current => (current && current.client_id === row.client_id && current.project_id === row.project_id
+      ? current : { client_id: row.client_id, project_id: row.project_id }));
     const fit = pageBodyFit(ed.schema, row.body);
     if (!fit.ok) {
       // Niets in de editor zetten: Tiptap zou er een lege pagina van maken.
@@ -454,6 +468,16 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
   // anders dicht, zoals Sluiten.
   useBackStep(true, () => { void close(false, backTo ? { id: backTo, how: 'terug' } : undefined); });
 
+  // Van breed naar smal (een tablet draaien): de lade komt dan niet ineens over
+  // de pagina. Terug naar breed: de kolom zoals je hem had.
+  useEffect(() => { setTreeOpen(!treeDrawer && treePreference()); }, [treeDrawer]);
+  const showTree = useCallback((open: boolean) => {
+    setTreeOpen(open);
+    if (!treeDrawer) saveTreePreference(open);
+  }, [treeDrawer]);
+  // Een open lade sluit met terug, vóór de pagina zelf.
+  useBackStep(treeDrawer && treeOpen, () => setTreeOpen(false));
+
   // Subpagina's (stap 1A-4b): wat het blok nodig heeft. Een andere pagina
   // openen gaat via close(), zodat deze eerst is opgeslagen, een versie heeft
   // en de claim los is.
@@ -485,6 +509,7 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
         try {
           const page = await createPage(organizationId, { parent_id: documentId, title: 'Naamloze pagina' });
           titles.set(page.id, Promise.resolve(page.title));
+          setTreeVersion(count => count + 1);
           return page.id;
         } catch (error) {
           setMessage((error as { message?: string } | null)?.message || 'De subpagina kon niet worden gemaakt.');
@@ -630,6 +655,14 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
     <div className="page-editor" role="dialog" aria-modal="true" aria-label={title || 'Pagina'}>
       <div className="page-editor-bar">
         <button type="button" className="page-editor-close" onClick={() => void close()} aria-label="Pagina sluiten"><X size={18} /></button>
+        <button
+          type="button"
+          className={`page-editor-action page-editor-tree-button${treeOpen ? ' is-active' : ''}`}
+          onClick={() => showTree(!treeOpen)}
+          aria-expanded={treeOpen}
+          aria-controls={treeOpen ? 'page-tree' : undefined}
+          title="De pagina's van dit dossier"
+        ><PanelLeft size={15} /><span>Pagina's</span></button>
         {ancestors.length > 0 && <nav className="page-editor-crumbs" aria-label="Bovenliggende pagina's">
           {ancestors.map((ancestor, index) => (
             <button
@@ -677,18 +710,35 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
         onClose={() => setVersionsOpen(false)}
       />}
 
-      <div className="page-editor-scroll">
-        <div className="page-editor-sheet">
-          <input
-            className="page-editor-title"
-            value={title}
-            placeholder="Naamloze pagina"
-            aria-label="Titel van de pagina"
-            readOnly={!editable}
-            onChange={event => { setTitle(event.target.value); scheduleRef.current(); }}
-            onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); editor?.commands.focus('start'); } }}
-          />
-          <EditorContent editor={editor} className="page-prose" />
+      <div className="page-editor-main">
+        {treeOpen && <PageTree
+          organizationId={organizationId}
+          pageId={documentId}
+          place={place}
+          currentTitle={title}
+          ownDossierName={ownDossierName}
+          version={treeVersion}
+          drawer={treeDrawer}
+          onOpen={pageId => {
+            if (treeDrawer) setTreeOpen(false);
+            void close(false, { id: pageId, how: 'vooruit' });
+          }}
+          onClose={() => showTree(false)}
+        />}
+        {treeDrawer && treeOpen && <div className="page-tree-backdrop" aria-hidden="true" onClick={() => setTreeOpen(false)} />}
+        <div className="page-editor-scroll">
+          <div className="page-editor-sheet">
+            <input
+              className="page-editor-title"
+              value={title}
+              placeholder="Naamloze pagina"
+              aria-label="Titel van de pagina"
+              readOnly={!editable}
+              onChange={event => { setTitle(event.target.value); scheduleRef.current(); }}
+              onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); editor?.commands.focus('start'); } }}
+            />
+            <EditorContent editor={editor} className="page-prose" />
+          </div>
         </div>
       </div>
     </div>

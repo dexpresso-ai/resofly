@@ -17,6 +17,7 @@ import type { CoreData, DataGroup, GroupData } from './dataGroups';
 import { formatISODate } from './dates';
 import { vatPeriodKey, vatPeriodsToFile, type VatPeriodDue } from './vatPeriods';
 import { runMatchRounds } from './bankMatch';
+import { dossierClientOf, type TreeFolder, type TreePage } from './pageTree';
 import { letterheadMissing, withoutUnloadedLetterhead } from './letterhead';
 import type { IbCorrectionCode, IncomeTaxInputs, IncomeTaxProfile } from './inkomstenbelasting';
 import type { XafReferences } from './xaf';
@@ -7458,11 +7459,9 @@ export async function listDossierFiles(
   if (projectsRes.error) throw projectsRes.error;
   if (foldersRes.error) throw foldersRes.error;
   const projectClient = new Map((projectsRes.data as Array<{ id: UUID; client_id: UUID | null }>).map(p => [p.id, p.client_id]));
-  const dossierOf = (clientId: UUID | null, projectId: UUID | null) =>
-    projectId && projectClient.has(projectId) ? (projectClient.get(projectId) ?? clientId) : clientId;
-  const pageClient = dossierOf(page.client_id, page.project_id);
+  const pageClient = dossierClientOf(page.client_id, page.project_id, projectClient);
   const folders = (foldersRes.data as Array<{ id: UUID; name: string; client_id: UUID | null; project_id: UUID | null }>)
-    .filter(f => dossierOf(f.client_id, f.project_id) === pageClient);
+    .filter(f => dossierClientOf(f.client_id, f.project_id, projectClient) === pageClient);
   const folderName = new Map(folders.map(f => [f.id, f.name]));
   const rows: Array<DossierFile & { entity_id: UUID }> = [];
   const columns = 'id,name,size_bytes,mime_type,created_at,entity_id';
@@ -7483,6 +7482,73 @@ export async function listDossierFiles(
   return rows
     .map(({ entity_id: _entity, ...file }) => file)
     .sort((a, b) => a.name.localeCompare(b.name, 'nl'));
+}
+
+/** De pagina's van één dossier, voor de boom naast de pagina (zie pageTree.ts). */
+export type DossierPages = {
+  pages: TreePage[];
+  folders: Map<UUID, TreeFolder>;
+  projects: Map<UUID, string>;
+  /** De klant van het dossier; null is het eigen dossier. */
+  client: UUID | null;
+  /** De naam van die klant. */
+  clientName: string | null;
+  /** false als de limiet bereikt is: dan staat niet elke pagina in de boom. */
+  complete: boolean;
+};
+
+const DOSSIER_PAGE_LIMIT = 1000;
+
+/**
+ * De pagina's in het dossier van een pagina: zonder inhoud, alleen wat de boom
+ * nodig heeft. Het dossier volgt dezelfde regel als listDossierFiles hierboven
+ * (de klant van het project telt). RLS bepaalt wat je ziet, en de prullenbak
+ * houdt de database al buiten beeld.
+ */
+export async function listDossierPages(
+  organizationId: UUID, page: { client_id: UUID | null; project_id: UUID | null },
+): Promise<DossierPages> {
+  const [projectsRes, foldersRes] = await Promise.all([
+    supabase.from('projects').select('id,name,client_id').eq('organization_id', organizationId),
+    supabase.from('content_folders').select('id,name,parent_id,client_id,project_id').eq('organization_id', organizationId),
+  ]);
+  if (projectsRes.error) throw projectsRes.error;
+  if (foldersRes.error) throw foldersRes.error;
+  const projects = projectsRes.data as Array<{ id: UUID; name: string; client_id: UUID | null }>;
+  const projectClient = new Map(projects.map(p => [p.id, p.client_id]));
+  const client = dossierClientOf(page.client_id, page.project_id, projectClient);
+  const columns = 'id,title,parent_id,folder_id,client_id,project_id,position';
+  const pagesOf = () => supabase.from('documents').select(columns)
+    .eq('organization_id', organizationId).eq('format', 'page').order('title').limit(DOSSIER_PAGE_LIMIT);
+  // De pagina's van de klant zelf, en die in zijn projecten: een pagina in een
+  // project kan zonder klant zijn opgeslagen.
+  const requests = [client ? pagesOf().eq('client_id', client) : pagesOf().is('client_id', null)];
+  const ownProjects = client ? projects.filter(p => p.client_id === client).map(p => p.id) : [];
+  // In stukken: een lange in-lijst past niet in één adres.
+  for (let i = 0; i < ownProjects.length; i += 100) requests.push(pagesOf().in('project_id', ownProjects.slice(i, i + 100)));
+  const [results, clientRes] = await Promise.all([
+    Promise.all(requests),
+    client ? supabase.from('clients').select('name').eq('id', client).eq('organization_id', organizationId).maybeSingle() : null,
+  ]);
+  const byId = new Map<UUID, TreePage>();
+  let complete = true;
+  for (const result of results) {
+    if (result.error) throw result.error;
+    const rows = result.data as TreePage[];
+    if (rows.length >= DOSSIER_PAGE_LIMIT) complete = false;
+    for (const row of rows) {
+      if (dossierClientOf(row.client_id, row.project_id, projectClient) === client) byId.set(row.id, row);
+    }
+  }
+  if (clientRes?.error) throw clientRes.error;
+  return {
+    pages: [...byId.values()],
+    folders: new Map((foldersRes.data as TreeFolder[]).map(f => [f.id, { id: f.id, name: f.name, parent_id: f.parent_id }])),
+    projects: new Map(projects.map(p => [p.id, p.name])),
+    client,
+    clientName: (clientRes?.data as { name: string } | null | undefined)?.name ?? null,
+    complete,
+  };
 }
 
 export async function loadAttachmentRef(id: UUID, organizationId: UUID): Promise<{ id: UUID; storage_key: string; organization_id: UUID; entity_type: string; entity_id: UUID }> {
