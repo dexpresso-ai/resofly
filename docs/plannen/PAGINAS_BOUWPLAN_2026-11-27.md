@@ -552,6 +552,10 @@ branch tot de gebruiker zegt dat het naar staging mag.
   - Een naam opslaan kan later nog. Hem uit versies en de zoekindex halen kan niet.
 - **Wie de naam niet mag zien, ziet de soort:** "klant", "project", "factuur". De chip opent dan
   niets.
+- **Een kopie voor het dossier heeft geen namen:** de Word-kopie en de vastgelegde PDF. Die kan
+  iedereen met Inhoud openen. Een download heeft ze wel, met de rechten van wie downloadt. Om
+  dezelfde reden staat op het voorblad van zo'n kopie geen klant of project meer (gevonden bij
+  2-1a; dat lek zat er sinds 1B-4a).
 - **Bij de klant (portaal, geheime link): de strenge standaard.** De klant ziet alleen de soort,
   geen naam. Dat volgt de regel van een subpagina die niet gedeeld is. Of de klant de naam wel
   mag zien, is een vraag aan de gebruiker; het rapport noemt hem.

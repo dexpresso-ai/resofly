@@ -36,7 +36,13 @@ op 1A-5d na. Fase 2 staat nu in stappen in §18 van het bouwplan.
     wie kijkt, en anders staat de soort er.
   - Een migratie: `20261128160000_paginas_vermeldingen.sql`.
   - Kiezen met @ en "Genoemd in" volgen (2-1b en 2-1c).
-- Dit staat op de branch tot je zegt dat het naar staging mag.
+  - Een kopie voor het dossier (de Word-kopie, de vastgelegde PDF) krijgt geen namen meer,
+    ook niet op het voorblad (vraag 12).
+  - Nog niet door de CI: de migratie vanaf een lege database en `deno check` op de nieuwe
+    code. Lokaal is alles groen.
+- Dit staat op de branch tot je zegt dat het naar staging mag. De migratie moet uiterlijk
+  samen met de @-kiezer naar staging. Komt de app eerder live dan de migratie, dan weigert de
+  database de vermeldingen die de kiezer maakt.
 
 ## Wat ik van je nodig heb, op volgorde
 
@@ -187,6 +193,11 @@ op 1A-5d na. Fase 2 staat nu in stappen in §18 van het bouwplan.
     - Wel de naam: de klant ziet bijvoorbeeld "Verbouwing 2026" of "F-2026-014". Dat lekt
       niets als het over hemzelf gaat, maar wel als de pagina een andere klant noemt.
     - Een middenweg: alleen namen van de klant zelf en zijn eigen projecten.
+    - Hetzelfde geldt voor een kopie in het dossier: de Word-kopie en de vastgelegde PDF. Die
+      kan iedereen met Inhoud openen, ook wie de klant niet mag zien. Daar staat nu ook de
+      soort, en op het voorblad geen klant of project meer. Dat laatste deden ze sinds 1B-4a,
+      en het staat op staging. Een download houdt de namen. Wil je de namen ook in een kopie,
+      zeg het dan.
 
 ## Gevonden en gerepareerd
 

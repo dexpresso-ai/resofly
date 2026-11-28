@@ -850,9 +850,13 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
           throw new Error('De pagina kon niet worden opgeslagen, dus er is ook geen PDF van gemaakt. Probeer het zo nog eens.');
         }
         // Het briefpapier ook als het een PDF is: de server legt het eronder.
+        // Namen (vermeldingen, de klant op het voorblad) alleen in een download:
+        // een vastgelegde PDF kan iedereen met Inhoud openen, ook wie de klant
+        // niet mag zien.
         const pdf = await exportPagePdf(documentId, {
           cover: wordOptions.cover, toc: wordOptions.toc, chapters: wordOptions.chapters.length > 0,
           letterhead: exportOptions.letterhead && letterheadKind !== null,
+          names: action === 'pdf',
         });
         const base = wordFileName(title).replace(/\.docx$/, '');
         if (action === 'pdf') {
@@ -884,7 +888,8 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
             throw new Error('De pagina kon niet worden opgeslagen, dus er is ook geen Word-document van gemaakt. Probeer het zo nog eens.');
           }
           const { buildPageWord, createPageWordCopy } = await import('../lib/pageWordExport');
-          const { blob } = await buildPageWord(documentId, organizationId, houseStyle, wordOptions);
+          // Zonder namen van klanten en de rest: de kopie staat in het dossier (zie PageWordOptions.names).
+          const { blob } = await buildPageWord(documentId, organizationId, houseStyle, { ...wordOptions, names: false });
           copy = await createPageWordCopy(documentId, organizationId, title, blob);
           wordCopyRef.current = { doc: copy, edits, options: optionsKey };
         }
@@ -899,7 +904,7 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
         throw new Error('De pagina kon niet worden opgeslagen, dus ook niet als Word-bestand. Probeer het zo nog eens.');
       }
       const { buildPageWord, saveFile } = await import('../lib/pageWordExport');
-      const { blob, fileName } = await buildPageWord(documentId, organizationId, houseStyle, wordOptions);
+      const { blob, fileName } = await buildPageWord(documentId, organizationId, houseStyle, { ...wordOptions, names: true });
       saveFile(blob, fileName);
       setExportOpen(false);
     } catch (error) {

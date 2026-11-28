@@ -17,8 +17,15 @@ Kiezen met @ komt in 2-1b, en "Genoemd in" bij een klant of project in 2-1c.
   - De chip toont de naam van nu, met de rechten van wie kijkt.
   - Wie de klant of de factuur niet mag zien, of als die niet meer bestaat, ziet de soort:
     "@klant", "@factuur". Die chip is gedempt.
-- **Word en de PDF** zetten de naam erin als je die mag zien, en anders de soort. Een export
-  toont dus nooit meer dan wie hem maakt.
+- **Word en de PDF downloaden** zetten de naam erin als je die mag zien, en anders de soort.
+- **Een kopie voor het dossier** heeft alleen de soort: de Word-kopie ("Maak er een
+  Word-document van") en de vastgelegde PDF. Die kan iedereen met Inhoud openen, ook wie de
+  klant of de factuur niet mag zien.
+  - Om dezelfde reden staat er op hun voorblad geen klant en geen project meer. Dat deden ze
+    sinds 1B-4a (Word-kopie) en 1B-5 (vastleggen), en het staat al op staging: een lek tegen
+    regel 3, gevonden bij het nalezen van deze stap.
+  - Een download houdt het voorblad zoals het was. Wie downloadt, ziet alleen wat hij mag zien,
+    en het bestand blijft bij hem.
 - **De klant** (portaal en geheime link) ziet alleen de soort, geen naam. Dat is de strenge
   standaard, zoals bij een subpagina die niet gedeeld is. Of de klant de naam wel mag zien, is
   een vraag aan de gebruiker; het rapport noemt hem.
@@ -67,6 +74,9 @@ een naam (`label`) of inhoud wordt geweigerd.
 - **Word en PDF**: `exportMentionNames` in `_shared/pageExport.ts` vraagt per tabel de namen
   op, met een functie die de app en `page-export` elk zelf meegeven. Lukt het lezen niet, dan
   blijft de soort staan: een naam is geen reden om de export te laten mislukken.
+  - Alleen bij een download: `names` in `PageWordOptions` en in het verzoek aan `page-export`.
+  - Zonder die keuze komen er geen namen in. Die regel geldt ook voor de klant en het project op
+    het voorblad.
 - **De klant**: `pageHtml.ts` zet `<span class="rf-mention">klant</span>`, zonder id.
 - **De data-export** neemt `page_mentions` niet mee: de tabel is afgeleid uit de pagina's, en
   die gaan wel mee.
@@ -98,6 +108,12 @@ een naam (`label`) of inhoud wordt geweigerd.
   - de PDF van de medewerker heeft de naam van de klant, en bij een taak die er niet is de soort;
   - iemand met Inhoud maar zonder Klanten krijgt de soort;
   - een klant van de buren weigert de database via de API.
+- **`ui.mjs paginaexport`: 9 stappen, 0 fout.** De subpagina noemt nu de klant:
+  - Word downloaden en de PDF downloaden hebben zijn naam, en de PDF vraagt `names`;
+  - de Word-kopie en de vastgelegde PDF hebben "klant", en nergens zijn naam, ook niet op het
+    voorblad.
+- **De stroomtest** kijkt ook een PDF voor het dossier na: geen klant op het voorblad, en bij
+  de vermelding de soort.
 - **`ui.mjs paginas`: 20 stappen, 0 fout.** De nieuwe stap:
   - een chip met de naam van de klant, en een gedempte "@taak";
   - typen en opslaan houdt de vermeldingen;

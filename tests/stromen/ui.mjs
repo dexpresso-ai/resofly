@@ -3545,8 +3545,10 @@ async function scenarioPaginaexport() {
     { type: 'heading', attrs: { level: 1 }, content: [woord('Afspraken')] },
     { type: 'paragraph' },
   ] }, { folder: map });
+  // Met een @-vermelding van de klant (stap 2-1a): in een download de naam, in
+  // een kopie voor het dossier de soort.
   const kind = nieuwePagina(`Export kind ${tag}`, { type: 'doc', content: [
-    { type: 'paragraph', content: [woord(`Tekst van het hoofdstuk ${tag}`)] },
+    { type: 'paragraph', content: [woord(`Tekst van het hoofdstuk ${tag}`), woord(' voor '), { type: 'mention', attrs: { kind: 'client', id: w.klantA.id } }] },
     { type: 'paragraph' },
   ] }, { ouder });
   verwacht(sqlRij(`select folder_id from public.documents where id = ${q(kind)}`).folder_id === null, 'een subpagina heeft zelf geen map');
@@ -3689,6 +3691,8 @@ async function scenarioPaginaexport() {
     verwacht(rest.includes('<w:pStyle w:val="Heading3"/></w:pPr><w:r><w:t xml:space="preserve">Kop in het kleinkind</w:t>'), 'de kop in het kleinkind schoof niet op');
     const volgorde = ['Afspraken', `Tekst van het hoofdstuk ${tag}`, `Tekst van het kleinkind ${tag}`].map(zin => rest.lastIndexOf(zin));
     gelijk([...volgorde].sort((a, b) => a - b), volgorde, 'de volgorde: de pagina, het kind, het kleinkind');
+    // Een download: de vermelding in het kind krijgt de naam van de klant (een eigen run).
+    verwacht(rest.includes(`<w:t xml:space="preserve">${w.klantA.name}</w:t>`), 'de vermelding in een download heeft de naam van de klant niet');
     // Elke stijl die het bestand gebruikt, bestaat.
     const stijlen = new Set([...(delen.get('word/styles.xml')?.toString('utf8') ?? '').matchAll(/w:styleId="([^"]+)"/g)].map(m => m[1]));
     for (const [, stijl] of xml.matchAll(/<w:pStyle w:val="([^"]+)"\/>/g)) verwacht(stijlen.has(stijl), `de stijl ${stijl} ontbreekt`);
@@ -3742,6 +3746,9 @@ async function scenarioPaginaexport() {
     gelijk(sessies, [kopie.id], 'Word opent de kopie');
     const xml = docxDelen(geupload[0].bytes).get('word/document.xml')?.toString('utf8') ?? '';
     for (const zin of [`Export kind ${tag}`, `Tekst van het hoofdstuk ${tag}`, `Laatste zin ${tag}`]) verwacht(xml.includes(zin), `"${zin}" staat niet in het Word-document`);
+    // Een kopie voor het dossier (stap 2-1a): bij de vermelding de soort, en nergens de
+    // naam van de klant. Die kopie kan iedereen met Inhoud openen, ook wie Klanten niet mag zien.
+    verwacht(xml.includes('<w:t xml:space="preserve">klant</w:t>') && !xml.includes(w.klantA.name), 'de Word-kopie noemt de klant bij naam');
     // De pagina zelf: opgeslagen, en weer vrij voor anderen.
     verwacht(sqlRij(`select content from public.documents where id = ${q(kind)}`).content.includes(`Laatste zin ${tag}`), 'de pagina is niet opgeslagen');
     gelijk(sqlRij(`select count(*)::int as n from public.document_edit_claims where document_id = ${q(kind)}`).n, 0, 'de pagina is nog geclaimd');
@@ -3847,18 +3854,27 @@ async function scenarioPaginaexport() {
     const voor = post.paginaPdf.verzoeken.length;
     const onderweg = page.waitForEvent('download', { timeout: 120000 });
     onderweg.catch(() => {});
+    const pdfVerzoek = page.waitForRequest((req) => req.url().includes('/page-export') && req.method() === 'POST', { timeout: 30000 });
     await venster.locator('.page-export-pdf').click();
+    // Een download: met namen (stap 2-1a).
+    gelijk((await pdfVerzoek).postDataJSON()?.names, true, 'een PDF-download vraagt de namen');
     const download = await onderweg;
     gelijk(download.suggestedFilename(), `Export-kind-${tag}.pdf`, 'de naam van de PDF');
     gelijk(readFileSync(await download.path()).subarray(0, 5).toString(), '%PDF-', 'een PDF');
     gelijk(post.paginaPdf.verzoeken.length, voor + 1, 'één keer omgezet');
     const xml = docxDelen(Buffer.from(post.paginaPdf.verzoeken.at(-1).bytes)).get('word/document.xml')?.toString('utf8') ?? '';
     verwacht(xml.includes(`Tekst van het hoofdstuk ${tag}`) && xml.includes('<w:titlePg/>'), 'de Word-file van de PDF mist de tekst of het voorblad');
+    verwacht(xml.includes(`<w:t xml:space="preserve">${w.klantA.name}</w:t>`), 'de PDF-download heeft de naam bij de vermelding niet');
     // Vastleggen: een vast bestand in de map van de bovenste pagina.
     await openVenster();
     await wachtTot(async () => tekst(await venster.locator('.page-export-vastleggen').innerText().catch(() => '')).includes(`Exportmap ${tag}`), { melding: 'het venster noemt de map niet' });
+    const vastVerzoek = page.waitForRequest((req) => req.url().includes('/page-export') && req.method() === 'POST', { timeout: 30000 });
     await venster.locator('.page-export-vastleggen').click();
+    // Voor het dossier: zonder namen. Die PDF kan iedereen met Inhoud openen (stap 2-1a).
+    verwacht((await vastVerzoek).postDataJSON()?.names !== true, 'vastleggen vraagt namen');
     await venster.waitFor({ state: 'detached', timeout: 120000 });
+    const vastXml = docxDelen(Buffer.from(post.paginaPdf.verzoeken.at(-1).bytes)).get('word/document.xml')?.toString('utf8') ?? '';
+    verwacht(vastXml.includes('<w:t xml:space="preserve">klant</w:t>') && !vastXml.includes(w.klantA.name), 'de vastgelegde PDF noemt de klant bij naam');
     await wachtTot(async () => tekst(await page.locator('.page-editor-banner').innerText().catch(() => '')).includes(`De PDF staat in de map "Exportmap ${tag}"`), { melding: 'geen melding na vastleggen' });
     const vast = sqlRij(`select name, mime_type, entity_type, entity_id, storage_key from public.attachments where organization_id = ${q(w.orgId)} and entity_type = 'folder' and entity_id = ${q(map)} and name like ${q(`Export kind ${tag} (%).pdf`)}`);
     verwacht(vast && vast.mime_type === 'application/pdf', `de PDF staat niet in de map: ${JSON.stringify(vast)}`);

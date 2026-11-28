@@ -88,14 +88,26 @@ export type PageWordOptions = {
   letterhead?: boolean;
   /** De subpagina's als hoofdstukken, in de volgorde van de boom (listSubpages). */
   chapters?: Array<{ id: string; title: string; depth: number }>;
+  /**
+   * Namen van klanten, projecten en de rest (stap 2-1a): bij @-vermeldingen,
+   * en de klant en het project op het voorblad. Met de rechten van wie
+   * exporteert, en alleen bij een download. Een Word-kopie staat in het
+   * dossier, en die kan iedereen met Inhoud openen, ook wie de klant of de
+   * factuur niet mag zien (regel 3). Daar staat bij een vermelding de soort,
+   * en op het voorblad geen klant of project. Eerst kwam de klant ook op het
+   * voorblad van een kopie.
+   */
+  names?: boolean;
 };
 
 /** Zoveel subpagina's tegelijk ophalen: genoeg voor snelheid, zonder de verbinding te verstoppen. */
 const CHAPTER_LOADS = 6;
 
-async function coverOf(row: PageRow, organizationId: string, houseStyle: PageWordHouseStyle | null, logo: PageDocxImage | null): Promise<PageDocxCover> {
-  // Mag je de klant of het project niet zien, dan staat die regel er niet.
-  const names = await dossierNames(row.client_id ?? null, row.project_id ?? null, organizationId).catch(() => ({ client: null, project: null }));
+async function coverOf(row: PageRow, organizationId: string, houseStyle: PageWordHouseStyle | null, logo: PageDocxImage | null, withNames: boolean): Promise<PageDocxCover> {
+  // Mag je de klant of het project niet zien, dan staat die regel er niet;
+  // in een kopie voor het dossier nooit (zie PageWordOptions.names).
+  const names = !withNames ? { client: null, project: null }
+    : await dossierNames(row.client_id ?? null, row.project_id ?? null, organizationId).catch(() => ({ client: null, project: null }));
   return exportCover({
     clientName: names.client,
     projectName: names.project,
@@ -197,11 +209,11 @@ export async function buildPageWord(
     })),
     loadFont(fonts.body),
     fonts.heading.key === fonts.body.key ? null : loadFont(fonts.heading),
-    options.cover ? coverOf(row, organizationId, houseStyle, logo) : null,
+    options.cover ? coverOf(row, organizationId, houseStyle, logo, options.names === true) : null,
     options.letterhead ? letterheadOf(houseStyle) : null,
     // De namen bij @-vermeldingen (stap 2-1a), met jouw rechten: wat de
     // database je niet geeft, wordt in het bestand de soort.
-    exportMentionNames(refs.mentions, async (source, ids) => {
+    !options.names ? [] : exportMentionNames(refs.mentions, async (source, ids) => {
       const { data, error } = await supabase.from(source.table).select(`${source.idColumn},${source.nameColumn}`)
         .eq('organization_id', organizationId).in(source.idColumn, ids);
       return error ? [] : (data ?? []) as unknown as Array<Record<string, unknown>>;

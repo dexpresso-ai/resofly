@@ -2220,7 +2220,7 @@ export async function pageFolder(pageId: UUID, organizationId: UUID): Promise<{ 
  */
 export async function exportPagePdf(
   pageId: UUID,
-  choice: { cover: boolean; toc: boolean; chapters: boolean; letterhead: boolean },
+  choice: { cover: boolean; toc: boolean; chapters: boolean; letterhead: boolean; names: boolean },
 ): Promise<Blob> {
   const { data, error } = await supabase.functions.invoke('page-export', { body: { pageId, ...choice } });
   if (error) {

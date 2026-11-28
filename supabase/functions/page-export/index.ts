@@ -108,6 +108,12 @@ serve(async (req) => {
       toc: body.toc === true,
       chapters: body.chapters === true,
       letterhead: body.letterhead === true,
+      // Namen (bij @-vermeldingen, en de klant en het project op het
+      // voorblad) alleen als de app erom vraagt: bij een download. Een PDF die
+      // in het dossier komt, kan iedereen met Inhoud openen, ook wie de klant
+      // of de factuur niet mag zien (regel 3, stap 2-1a). Eerst kwam de klant
+      // ook op het voorblad van een vastgelegde PDF.
+      names: body.names === true,
     });
     return new Response(pdf, {
       status: 200,
@@ -239,7 +245,7 @@ async function letterheadOf(settings: Settings | null): Promise<{ docx: PageDocx
 async function pagePdf(
   db: SupabaseClient,
   page: PageRow,
-  choice: { cover: boolean; toc: boolean; chapters: boolean; letterhead: boolean },
+  choice: { cover: boolean; toc: boolean; chapters: boolean; letterhead: boolean; names: boolean },
 ): Promise<ArrayBuffer> {
   const org = page.organization_id;
   const chapters = choice.chapters ? await loadChapters(db, page) : [];
@@ -258,7 +264,7 @@ async function pagePdf(
     rowsById<{ id: string; storage_key: string; mime_type: string }>(db, 'attachments', 'id,storage_key,mime_type', org, refs.images),
     // De namen bij @-vermeldingen (stap 2-1a), met de rechten van wie
     // exporteert: wat de database niet geeft, wordt de soort.
-    exportMentionNames(refs.mentions, (source, ids) => mentionRows(db, org, source, ids)),
+    choice.names ? exportMentionNames(refs.mentions, (source, ids) => mentionRows(db, org, source, ids)) : [],
   ]);
   const titleOf = new Map(titleRows.map(row => [row.id, row.title]));
   const nameOf = new Map(fileRows.map(row => [row.id, row.name]));
@@ -272,7 +278,7 @@ async function pagePdf(
     })),
     loadFont(fonts.body),
     fonts.heading.key === fonts.body.key ? null : loadFont(fonts.heading),
-    choice.cover ? dossierNames(db, page) : null,
+    choice.cover ? (choice.names ? dossierNames(db, page) : { client: null, project: null }) : null,
   ]);
   const context = exportContext({
     titles: refs.pages.map((id): [string, string | null] => [id, titleOf.get(id) ?? null]),
