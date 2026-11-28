@@ -612,7 +612,7 @@ akkoord is.
   - run 306 (0bff935, de knop "Word" en alles ervoor): helemaal groen, ook de mobiele
     lay-outtest, laden, de inrichting en de terugknop;
   - de run voor de laatste commit (met Gerrie die aanvult, het afdrukken en de reparatie van
-    het zwarte scherm) is gestart rond 03:50. Zie GitHub Actions, "Frontend checks" op deze
+    het zwarte scherm, d7dfc69) is gestart rond 03:39. Zie GitHub Actions, "Frontend checks" op deze
     branch.
 - **Nog niet door `deno check`:** `_shared/pageDocx.ts`, `_shared/woff.ts` en `_shared/zipWriter.ts`. Dat gebeurt
   vanzelf zodra `page-export` ze importeert en in de lijst van
