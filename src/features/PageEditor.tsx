@@ -392,8 +392,17 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
   };
 
   // Laden, dan claimen.
+  //
+  // Elk effect hier stopt bij een vernietigde editor (isDestroyed). Tiptap
+  // ruimt een editor 1 ms na het opruimen van zijn effect op, tenzij het
+  // effect er dan al weer is. Draaiden de effecten later opnieuw met dezelfde
+  // staat (in de UI-test: zodra calendar-integrations echt antwoordde en de
+  // boom naast de pagina erbij kwam), dan kregen ze die vernietigde editor:
+  // zijn storage is dan leeg, `storage.subpage.links = …` gooide, en de hele
+  // app werd zwart (PageLoadBoundary vangt alleen laadfouten). Nu wachten ze
+  // op de nieuwe editor die useEditor daarna zelf maakt.
   useEffect(() => {
-    if (!editor) return;
+    if (!editor || editor.isDestroyed) return;
     let cancelled = false;
     (async () => {
       try {
@@ -495,7 +504,7 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
     if (mediaRef.current) store.image.media = { ...mediaRef.current, upload: async () => null, refuse: () => {}, chooseFile: async () => null };
   }, []);
   useEffect(() => {
-    if (!editor) return;
+    if (!editor || editor.isDestroyed) return;
     const titles = new Map<string, Promise<string | null>>();
     const links: PageLinks = {
       titleOf: pageId => {
@@ -528,7 +537,7 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
   // Bearer-token, dat kan een <img> niet sturen), uploaden als bijlage van deze
   // pagina. De blob-URL's gaan weg als de editor sluit.
   useEffect(() => {
-    if (!editor) return;
+    if (!editor || editor.isDestroyed) return;
     const urls = new Map<string, Promise<string | null>>();
     const made: string[] = [];
     const remember = (blob: Blob) => { const url = URL.createObjectURL(blob); made.push(url); return url; };
@@ -1038,7 +1047,7 @@ function VersionPreview({ title, body, connect }: { title: string; body: unknown
   const editor = useEditor({ extensions: pageEditorExtensions({ placeholder: '' }), editable: false, content: '' }, []);
   const [problem, setProblem] = useState<string | null>(null);
   useEffect(() => {
-    if (!editor) return;
+    if (!editor || editor.isDestroyed) return;
     // Vóór de inhoud: de blokken halen bij het tekenen hun titel en afbeelding op.
     connect(editor);
     const fit = pageBodyFit(editor.schema, body);

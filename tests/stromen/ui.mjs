@@ -434,6 +434,22 @@ function uiStap(naam, fn, { toegestaan = [], foutmelding = null } = {}) {
     } catch (error) {
       const afdrukken = [];
       for (const s of betrokken()) afdrukken.push(await schermafdruk(naam, s));
+      // Ook de JavaScript-fouten van deze stap: een stap die op iets wacht dat
+      // nooit kwam, meldde anders alleen de wachttijd, terwijl de app was
+      // vastgelopen (een zwart scherm, en geen woord over waarom).
+      const fouten = betrokken().flatMap((s) => {
+        const b = begin.get(s) ?? { fouten: 0, console: 0 };
+        return [
+          ...s.fouten.slice(b.fouten).map((f) => `JavaScript-fout bij ${s.naam}: ${f.split('\n').slice(0, 3).join(' | ')}`),
+          ...s.console.slice(b.console).filter((c) => !RUIS_CONSOLE.some((r) => r.test(c.tekst))).map((c) => `console.error bij ${s.naam}: ${c.tekst.slice(0, 300)}`),
+        ];
+      });
+      if (fouten.length) {
+        error.message = `${error.message}\n${fouten.join('\n')}`;
+        // toets.mjs drukt de eerste regels van de stack af: de fouten daar vooraan.
+        const stack = String(error.stack || error.message).split('\n');
+        error.stack = [stack[0], ...fouten.slice(0, 3), ...stack.slice(1)].join('\n');
+      }
       if (afdrukken.length) error.message = `${error.message}\nschermafdruk: ${afdrukken.join(', ')}`;
       throw error;
     } finally {
@@ -2492,6 +2508,15 @@ async function scenarioPaginas() {
     const beeldTerug = editorVak(terug).locator('.page-image img');
     await wachtTot(async () => (await beeldTerug.count()) === 3 && (await geladen(beeldTerug)), { melding: 'de afbeeldingen komen niet terug' });
     await terug.waitForTimeout(1500);
+    // Word: de afbeeldingen komen van de worker en gaan mee in het bestand. De
+    // export slaat alleen op als er iets veranderd is, dus ook dit verandert niets.
+    const wordOnderweg = terug.waitForEvent('download', { timeout: 30000 });
+    wordOnderweg.catch(() => {});
+    await terug.locator('.page-editor-word').click();
+    const docx = new Map(leesZip(readFileSync(await (await wordOnderweg).path())).map((deel) => [deel.name, deel.data]));
+    const media = [...docx.keys()].filter((naam) => naam.startsWith('word/media/'));
+    gelijk(media.length, 3, `de afbeeldingen in het Word-bestand: ${media.join(', ')}`);
+    gelijk((docx.get('word/document.xml')?.toString('utf8').match(/<w:drawing>/g) ?? []).length, 3, 'de afbeeldingen in document.xml');
     await sluitPagina(terug);
     const na = blokRijInDb();
     gelijk([na.edit_version, na.gewijzigd], [voor.edit_version, voor.gewijzigd], 'openen met afbeeldingen verandert niets');

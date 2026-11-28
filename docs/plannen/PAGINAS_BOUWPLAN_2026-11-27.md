@@ -650,5 +650,7 @@ akkoord is.
   - Na een `npm install` de testpakketten opnieuw zetten, alle drie tegelijk (los weghalen kan
     de andere):
     `npm install --no-save xss@1.0.15 fast-xml-parser@4.5.0 ical.js@2.1.0`.
-    Zonder `ical.js` laadt calendar-integrations niet in de UI-test, en faalt elke stap die het
-    venster van een notitie opent op een CORS-fout.
+    Zonder `ical.js` laadt calendar-integrations niet in de UI-test. Dan faalt elke stap die
+    het venster van een notitie opent op een CORS-fout, en blijft een fout in de editor
+    verborgen die met `ical.js` wel optrad
+    (`docs/changelog/CHANGELOG_PAGINAS_EDITOR_ZWART_SCHERM_2026-11-28.md`).
