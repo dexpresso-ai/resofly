@@ -3,6 +3,10 @@
 // test kan nagaan wat er de deur uit ging (aan wie, met welke bijlage) en wat
 // er bij Mollie gebeurde. Met `storing` kun je een dienst laten falen.
 import { createHash, randomUUID } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
 import { API_URL, MEDIA, R2_GEHEIM } from './omgeving.mjs';
 
@@ -32,6 +36,12 @@ export const post = {
   media: new Map(),
   /** Elke vraag om getekende downloadlinks: { organizationId, files, ttlSeconds, … }. */
   getekend: [],
+  /**
+   * De PDF van een pagina (/internal/office/convert-page, stap 1B-5): elke
+   * DOCX die page-export stuurde, met de organisatie. `ontbreekt`: doe alsof
+   * de worker nog niet is bijgewerkt (404, "Route not found").
+   */
+  paginaPdf: { verzoeken: [], ontbreekt: false },
   mollie: {
     teller: 0,
     betalingen: new Map(),
@@ -53,6 +63,27 @@ export function wisPost() {
 export function mailsAan(email) {
   const doel = String(email).toLowerCase();
   return post.mails.filter((mail) => mail.to.map((adres) => adres.toLowerCase()).includes(doel));
+}
+
+/**
+ * Een DOCX naar PDF met LibreOffice, als dat er is (de motor van Collabora).
+ * Zo toetst een stroomtest ook dat de DOCX van page-export een echte PDF
+ * wordt. Zonder LibreOffice (de CI) een nep-PDF met de eerste woorden.
+ */
+let libreOffice = null;
+async function pdfVanDocx(bytes, tekst) {
+  if (libreOffice === null) {
+    try { execFileSync('soffice', ['--version'], { stdio: 'ignore' }); libreOffice = true; } catch { libreOffice = false; }
+  }
+  if (!libreOffice) return nepPdf(tekst);
+  const map = mkdtempSync(join(tmpdir(), 'stromen-pdf-'));
+  try {
+    writeFileSync(join(map, 'bron.docx'), bytes);
+    execFileSync('soffice', [`-env:UserInstallation=file://${join(map, 'profiel')}`, '--headless', '--convert-to', 'pdf', '--outdir', map, join(map, 'bron.docx')], { stdio: 'ignore', timeout: 120000 });
+    return new Uint8Array(readFileSync(join(map, 'bron.pdf')));
+  } finally {
+    rmSync(map, { recursive: true, force: true });
+  }
 }
 
 function json(status, data) {
@@ -301,6 +332,16 @@ async function media(request, url) {
     const bytes = post.r2.get(sleutel) ?? (post.media.has(sleutel) ? new TextEncoder().encode(post.media.get(sleutel)) : null);
     if (!bytes) return json(404, { error: 'Niet gevonden' });
     return new Response(bytes, { status: 200, headers: { 'content-type': 'application/octet-stream' } });
+  }
+  // De PDF van een pagina (stap 1B-5): zoals de echte worker, alleen met het
+  // interne geheim, een organisatie en een .docx; niets in R2.
+  if (request.method === 'POST' && pad === '/internal/office/convert-page') {
+    if (post.paginaPdf.ontbreekt) return json(404, { error: 'Route not found' });
+    if (request.headers.get('authorization') !== `Bearer ${R2_GEHEIM}`) return json(403, { error: 'Ongeldig intern token.' });
+    if (request.headers.get('content-type') !== 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') return json(415, { error: 'Alleen een .docx' });
+    const bytes = new Uint8Array(await request.arrayBuffer());
+    post.paginaPdf.verzoeken.push({ organizationId: request.headers.get('x-organization-id'), bytes });
+    return new Response(await pdfVanDocx(bytes, 'PDF van een pagina'), { status: 200, headers: { 'content-type': 'application/pdf' } });
   }
   if (request.method === 'POST' && pad === '/internal/office/convert-pdf') {
     const body = await request.json();

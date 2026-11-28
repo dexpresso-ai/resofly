@@ -17,7 +17,8 @@ import type { CoreData, DataGroup, GroupData } from './dataGroups';
 import { formatISODate } from './dates';
 import { vatPeriodKey, vatPeriodsToFile, type VatPeriodDue } from './vatPeriods';
 import { runMatchRounds } from './bankMatch';
-import { dossierClientOf, subpagesOf, type TreeFolder, type TreePage } from './pageTree';
+import { dossierClientOf, type TreeFolder, type TreePage } from './pageTree';
+import { collectSubpages, EXPORT_SUBPAGE_LIMIT } from '../../supabase/functions/_shared/pageExport.ts';
 import { letterheadMissing, withoutUnloadedLetterhead } from './letterhead';
 import type { IbCorrectionCode, IncomeTaxInputs, IncomeTaxProfile } from './inkomstenbelasting';
 import type { XafReferences } from './xaf';
@@ -2170,22 +2171,18 @@ export async function pageTreePlace(pageId: UUID, organizationId: UUID): Promise
   };
 }
 
-/** Zoveel subpagina's gaan hoogstens als hoofdstukken mee in één export (stap 1B-4). */
-export const EXPORT_SUBPAGE_LIMIT = 200;
+// Zoveel subpagina's gaan hoogstens als hoofdstukken mee in één export (stap 1B-4).
+export { EXPORT_SUBPAGE_LIMIT } from '../../supabase/functions/_shared/pageExport.ts';
 
 /**
  * De subpagina's onder een pagina, in de volgorde van de boom (stap 1B-4: de
- * subpagina's als hoofdstukken). Per laag één vraag op parent_id. Wat je niet
- * mag zien, of wat in de prullenbak ligt, geeft de database niet (RLS).
- * Hoogstens 20 lagen, zoals de boom in de database. `tooMany`: meer dan
- * EXPORT_SUBPAGE_LIMIT; dan is de lijst niet compleet, en exporteren we ze niet.
+ * subpagina's als hoofdstukken). Per laag één vraag op parent_id, met de
+ * rechten van wie exporteert (RLS). Het lopen door de lagen staat in
+ * _shared/pageExport.ts: de server (page-export) vindt zo dezelfde hoofdstukken.
  */
 export async function listSubpages(pageId: UUID, organizationId: UUID): Promise<{ subpages: Array<{ page: TreePage; depth: number }>; tooMany: boolean }> {
-  const pages: TreePage[] = [];
-  const seen = new Set<UUID>([pageId]);
-  let parents: UUID[] = [pageId];
-  for (let depth = 0; parents.length > 0 && depth < 20; depth += 1) {
-    const level: TreePage[] = [];
+  return collectSubpages<TreePage>(pageId, async (parents) => {
+    const rows: TreePage[] = [];
     // In stukken: een lange in-lijst past niet in één adres.
     for (let i = 0; i < parents.length; i += 100) {
       const { data, error } = await supabase.from('documents')
@@ -2194,17 +2191,50 @@ export async function listSubpages(pageId: UUID, organizationId: UUID): Promise<
         .in('parent_id', parents.slice(i, i + 100))
         .limit(EXPORT_SUBPAGE_LIMIT + 1);
       if (error) throw error;
-      for (const row of data as TreePage[]) {
-        if (seen.has(row.id)) continue;
-        seen.add(row.id);
-        level.push(row);
-      }
+      rows.push(...(data as TreePage[]));
     }
-    pages.push(...level);
-    if (pages.length > EXPORT_SUBPAGE_LIMIT) return { subpages: [], tooMany: true };
-    parents = level.map(page => page.id);
+    return rows;
+  });
+}
+
+/**
+ * De map waar een PDF van een pagina vastgelegd wordt (stap 1B-5, "Vastleggen
+ * in dossier"): de map van de bovenste pagina van de boom. Zonder map null: de
+ * drive toont alleen bestanden in een map, dus daarbuiten zou de PDF zoekraken.
+ */
+export async function pageFolder(pageId: UUID, organizationId: UUID): Promise<{ id: UUID; name: string } | null> {
+  const place = await pageTreePlace(pageId, organizationId);
+  if (!place.folder_id) return null;
+  const { data, error } = await supabase.from('content_folders').select('id,name')
+    .eq('id', place.folder_id).eq('organization_id', organizationId).maybeSingle();
+  if (error) throw error;
+  const folder = data as { id: UUID; name: string } | null;
+  return folder ? { id: folder.id, name: folder.name.trim() || 'Naamloze map' } : null;
+}
+
+/**
+ * De PDF van een pagina (stap 1B-5, §9 van het bouwplan): de server bouwt de
+ * DOCX met jouw rechten (page-export), en Collabora maakt er een PDF van.
+ * Dezelfde keuzes als bij Word. Kan de PDF hier (nog) niet, dan zegt de
+ * functie waarom (bijvoorbeeld een media-worker die nog niet is bijgewerkt).
+ */
+export async function exportPagePdf(
+  pageId: UUID,
+  choice: { cover: boolean; toc: boolean; chapters: boolean; letterhead: boolean },
+): Promise<Blob> {
+  const { data, error } = await supabase.functions.invoke('page-export', { body: { pageId, ...choice } });
+  if (error) {
+    // Staat de functie nog niet op deze omgeving, dan antwoordt Supabase zelf
+    // met 404, zonder onze melding ("Requested function was not found").
+    const response = (error as { context?: unknown }).context;
+    if (response instanceof Response && response.status === 404) {
+      const payload = await response.clone().json().catch(() => null) as { error?: unknown } | null;
+      if (typeof payload?.error !== 'string') throw new Error('De PDF-export staat nog niet op deze omgeving. Word downloaden kan wel.');
+    }
+    await throwFunctionError(error, 'De PDF kon niet worden gemaakt.');
   }
-  return { subpages: subpagesOf(pages, pageId), tooMany: false };
+  if (!(data instanceof Blob) || data.size === 0) throw new Error('De PDF kon niet worden gemaakt.');
+  return data;
 }
 
 /** De naam van de klant en het project van een pagina, voor het voorblad (stap 1B-4). Wat je niet mag zien, blijft leeg. */

@@ -10,17 +10,25 @@
 // Sinds stap 1B-3 ook "Maak er een Word-document van": dezelfde .docx, als
 // Word-document in het dossier (createPageWordCopy).
 //
+// Sinds stap 1B-5 bouwt de server (page-export) dezelfde .docx voor de PDF.
+// Wat er met de opgehaalde gegevens gebeurt, staat daarom in
+// _shared/pageExport.ts; hier alleen het ophalen, met de rechten van wie
+// exporteert.
+//
 // De editor laadt dit bestand pas bij een klik (import()), zodat hij er niet
 // zwaarder van wordt.
 // ============================================================
 
 import {
-  buildPageDocx, type PageDocxChapter, type PageDocxContext, type PageDocxCover, type PageDocxFont, type PageDocxImage, type PageDocxLetterhead,
+  buildPageDocx, type PageDocxChapter, type PageDocxCover, type PageDocxFont, type PageDocxImage, type PageDocxLetterhead,
 } from '../../supabase/functions/_shared/pageDocx.ts';
+import {
+  exportBrand, exportContext, exportCover, exportLogo, exportOptions, exportReferences, letterheadMargins,
+} from '../../supabase/functions/_shared/pageExport.ts';
 import { pageExportFonts, type PageExportFont } from '../../supabase/functions/_shared/pageExportFonts.ts';
 import { sfntFamilyName, woffToSfnt } from '../../supabase/functions/_shared/woff.ts';
-import { LETTERHEAD_PDF_MESSAGE, pageReferences, wordFileName } from './pageExportParts';
-import { dataUrlBytes, documentAssetsFromSettings, PAGE_HEIGHT, parseDocumentLayouts, resolveDocumentLayout } from './documentLayout';
+import { LETTERHEAD_PDF_MESSAGE, wordFileName } from './pageExportParts';
+import { documentAssetsFromSettings, PAGE_HEIGHT, parseDocumentLayouts, resolveDocumentLayout } from './documentLayout';
 import { uploadDocumentDocx } from './office';
 import { fetchStoredFileBlob } from './r2';
 import { deleteR2Object } from './r2-api';
@@ -84,23 +92,16 @@ export type PageWordOptions = {
 /** Zoveel subpagina's tegelijk ophalen: genoeg voor snelheid, zonder de verbinding te verstoppen. */
 const CHAPTER_LOADS = 6;
 
-/** Het logo voor het voorblad en de kop, als png, jpeg of gif; iets anders (svg, webp) kan Word niet tonen (pageDocx laat het dan weg). */
-function logoImage(dataUrl: string | null | undefined): PageDocxImage | null {
-  const logo = dataUrlBytes(dataUrl);
-  if (!logo) return null;
-  const contentType = logo.mime === 'image/jpg' ? 'image/jpeg' : logo.mime;
-  return /^image\/(png|jpeg|gif)$/.test(contentType) ? { bytes: logo.bytes, contentType } : null;
-}
-
 async function coverOf(row: PageRow, organizationId: string, houseStyle: PageWordHouseStyle | null, logo: PageDocxImage | null): Promise<PageDocxCover> {
   // Mag je de klant of het project niet zien, dan staat die regel er niet.
   const names = await dossierNames(row.client_id ?? null, row.project_id ?? null, organizationId).catch(() => ({ client: null, project: null }));
-  return {
-    lines: [names.client ? `Klant: ${names.client}` : '', names.project ? `Project: ${names.project}` : ''],
+  return exportCover({
+    clientName: names.client,
+    projectName: names.project,
     date: new Date().toLocaleDateString('nl-NL', { day: 'numeric', month: 'long', year: 'numeric' }),
-    company: houseStyle?.company_name?.trim() || null,
+    company: houseStyle?.company_name ?? null,
     logo,
-  };
+  });
 }
 
 /**
@@ -131,9 +132,7 @@ async function letterheadOf(style: PageWordHouseStyle | null): Promise<PageDocxL
   const layout = resolveDocumentLayout(parseDocumentLayouts(style.document_layouts), 'invoice', { letterhead: true });
   return {
     image: { bytes: paper.bytes, contentType: paper.type === 'png' ? 'image/png' : 'image/jpeg' },
-    // Punten (1/72 inch) naar twips (1/20 punt). pageDocx houdt minstens de gewone marge aan.
-    top: Math.round(layout.continueTop * 20),
-    bottom: Math.round((PAGE_HEIGHT - layout.footerTop) * 20),
+    ...letterheadMargins(layout, PAGE_HEIGHT),
   };
 }
 
@@ -177,15 +176,9 @@ export async function buildPageWord(
   const row = await loadPage(pageId, organizationId);
   const chapters = options.chapters?.length ? await loadChapters(options.chapters, organizationId) : [];
   // Wat de pagina en haar hoofdstukken noemen, samen: één bestand, één context.
-  const all = [row.body, ...chapters.map(chapter => chapter.body)].map(pageReferences);
-  const unique = (ids: string[]) => [...new Set(ids)];
-  const refs = {
-    pages: unique(all.flatMap(found => found.pages)),
-    files: unique(all.flatMap(found => found.files)),
-    images: unique(all.flatMap(found => found.images)),
-  };
+  const refs = exportReferences([row.body, ...chapters.map(chapter => chapter.body)]);
   const fonts = pageExportFonts(houseStyle);
-  const logo = logoImage(houseStyle?.brand_logo_data_url);
+  const logo = exportLogo(houseStyle?.brand_logo_data_url);
   type Entry<T> = [string, T | null];
   const [titles, fileNames, images, body, heading, cover, letterhead] = await Promise.all([
     Promise.all(refs.pages.map(async (id): Promise<Entry<string>> => [id, await pageTitle(id, organizationId).catch(() => null)])),
@@ -206,23 +199,8 @@ export async function buildPageWord(
     options.cover ? coverOf(row, organizationId, houseStyle, logo) : null,
     options.letterhead ? letterheadOf(houseStyle) : null,
   ]);
-  const known = <T,>(entries: Entry<T>[]): Record<string, T> =>
-    Object.fromEntries(entries.filter((entry): entry is [string, T] => entry[1] !== null));
-  const context: PageDocxContext = {
-    // Een titel die we niet mogen of kunnen zien, laat pageDocx als "Pagina niet gevonden" staan.
-    pageTitles: known(titles),
-    fileNames: known(fileNames),
-    images: known(images),
-    font: body,
-    headingFont: heading ?? body,
-    // Kop en voet in de huisstijl (stap 1B-4c); met briefpapier laat pageDocx ze weg.
-    brand: {
-      logo,
-      color: houseStyle?.brand_accent_color ?? null,
-      footerText: houseStyle?.brand_footer_text?.trim() || houseStyle?.company_name?.trim() || null,
-    },
-  };
-  const blob = await buildPageDocx(row.title, row.body, context, { cover, toc: Boolean(options.toc), chapters, letterhead });
+  const context = exportContext({ titles, fileNames, images, font: body, headingFont: heading, brand: exportBrand(houseStyle, logo) });
+  const blob = await buildPageDocx(row.title, row.body, context, exportOptions({ cover, toc: Boolean(options.toc), chapters, letterhead }));
   return { blob, fileName: wordFileName(row.title) };
 }
 

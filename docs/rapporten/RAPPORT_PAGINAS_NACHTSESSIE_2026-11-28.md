@@ -13,15 +13,24 @@ van 27 november 17:07 (`416b997`), en wat ik je wil vragen.
 Het bouwplan is `docs/plannen/PAGINAS_BOUWPLAN_2026-11-27.md`. In §18 staan de stappen en de
 stand voor de overdracht.
 
-**Na de merge, op de branch: de export (1B-3 tot en met 1B-4c).** Het exportvenster, de
-Word-kopie, het voorblad, de inhoudsopgave, de hoofdstukken, het briefpapier, en de kop en voet
-in de huisstijl. Wat nu nog in fase 1 zit, wacht op jou. Daarom bouw ik niet verder.
+**Om 11:46 UTC ook de export naar staging gezet, op jouw verzoek** (`3be4452`): 1B-3 tot en
+met 1B-4c.
+- Wat erin zit: het exportvenster, de Word-kopie, het voorblad, de inhoudsopgave, de
+  hoofdstukken, het briefpapier, en de kop en voet in de huisstijl.
+- De uitrol is geslaagd, met de rooktest. Er zijn geen migraties.
+- Daarna ga ik verder met de PDF (1B-5), zoals §9 het zegt: de server bouwt de Word-file, en
+  Collabora maakt er via de media-worker een PDF van. Die worker rol jij uit. Dat staat op de
+  branch tot je weer zegt dat het naar staging mag.
 
 ## Wat ik van je nodig heb, op volgorde
 
-1. **De PDF (1B-5): twee antwoorden** (vraag 10).
-   - Rol jij de media-worker uit?
-   - Moet de server de Word-file bouwen, of mag dat in de app blijven? Dat is ook vraag 5.
+1. **De PDF (1B-5) is gebouwd, op de branch** (vraag 10). Na je "ga door met het plan" heb
+   ik hem gebouwd zoals §9 zegt: de server maakt de Word-file.
+   - Een briefpapier dat een PDF is, komt onder elke bladzijde van de PDF. In Word komt het
+     niet; dat zegt het venster.
+   - Zeg of hij naar staging mag. Rol daarna de media-worker uit; hoe dat gaat, staat in
+     `docs/setup/PAGINA_PDF_SETUP.md`.
+   - Tot de worker is uitgerold, zegt het exportvenster dat de PDF er nog niet is.
 2. **Open de vier proefbestanden in echte Word** (vragen 4 en 11):
    - zonder huisstijl;
    - met huisstijl;
@@ -30,7 +39,7 @@ in de huisstijl. Wat nu nog in fase 1 zit, wacht op jou. Daarom bouw ik niet ver
 
    Zeg wat er niet klopt.
 3. **Bevestig de keuzes van 1C** (vraag 8).
-4. **Zeg of ik de export naar staging mag mergen.** Daarna op staging:
+4. **De export staat op staging** (`3be4452`). Loop daar na:
    - één Word-kopie bewerken en bewaren in Collabora (vraag 11);
    - één gedeelde pagina met een afbeelding in het portaal bekijken (vraag 9);
    - open tabbladen verversen (vraag 6).
@@ -139,6 +148,10 @@ in de huisstijl. Wat nu nog in fase 1 zit, wacht op jou. Daarom bouw ik niet ver
       - In de app (zoals nu) is het eenvoudiger; dan bouwt de server alleen de PDF.
 
     Tot dan kun je afdrukken via Exporteren, en in het afdrukvenster "Opslaan als PDF" kiezen.
+
+    Na de merge van 11:46 zei je "ga door met het plan". Ik lees dat als de weg van §9: de
+    server bouwt de Word-file (`page-export`). De eerste vraag, wie de worker uitrolt, blijft
+    staan.
 11. **Na de volgende merge: maak één Word-document van een pagina op staging, bewerk het en
     bewaar het.** Dat is "Maak er een Word-document van" (1B-3). Open ook
     `docs/rapporten/PROEF_WORD_OPTIES_2026-11-28.docx` in echte Word: een voorblad met logo,
@@ -179,7 +192,10 @@ in de huisstijl. Wat nu nog in fase 1 zit, wacht op jou. Daarom bouw ik niet ver
     vast met precies deze fout; met de reparatie slaagt hij.
   - Zie `docs/changelog/CHANGELOG_PAGINAS_EDITOR_ZWART_SCHERM_2026-11-28.md`.
 
-## Na de merge gebouwd (op de branch, nog niet op staging)
+## Na de merge van 09:34 gebouwd
+
+1B-3 tot en met 1B-4c staan sinds 11:46 UTC op staging (`3be4452`). 1B-5 staat op de branch,
+en gaat pas naar staging als je het zegt.
 
 | Stap | Wat | Changelog |
 | --- | --- | --- |
@@ -187,10 +203,12 @@ in de huisstijl. Wat nu nog in fase 1 zit, wacht op jou. Daarom bouw ik niet ver
 | 1B-4a | De opties voor Word: een voorblad (logo, titel, klant, project, datum), een inhoudsopgave vooraan, en de subpagina's als hoofdstukken. | `CHANGELOG_PAGINAS_EXPORTEREN_2026-11-28.md` |
 | 1B-4b | Het briefpapier achter elke bladzijde, als het een afbeelding is (een PDF kan niet in Word), met de marges uit Documentopmaak. Gerepareerd: het voorblad overleefde opnieuw opslaan in Collabora niet goed. | `CHANGELOG_PAGINAS_EXPORTEREN_2026-11-28.md` |
 | 1B-4c | De kop en voet in de huisstijl: het logo en een lijn in de merkkleur, de voettekst en het paginanummer. De controle met LibreOffice is nu een script (`scripts/proef-word-rondgang.sh`). | `CHANGELOG_PAGINAS_EXPORTEREN_2026-11-28.md` |
+| 1B-5 | Na de merge van 11:46, op de branch: "PDF downloaden" en "Vastleggen in het dossier". De server maakt de Word-file (`page-export`) en de media-worker de PDF (`/internal/office/convert-page`). Een briefpapier dat een PDF is, komt onder elke bladzijde van de PDF (niet in Word). De worker rol jij uit. | `CHANGELOG_PAGINAS_PDF_2026-11-28.md` |
 
-Geen migraties.
+Geen migraties. 1B-5 brengt een nieuwe edge function mee (`page-export`), en een nieuw pad in
+de media-worker, die je zelf uitrolt.
 
-## Wat er op 28 november naar staging ging
+## Wat er op 28 november om 09:34 naar staging ging
 
 | Stap | Wat | Changelog |
 | --- | --- | --- |
@@ -221,14 +239,17 @@ Ze mogen opnieuw draaien, en de databasetests lopen ze na.
 
 ## Getest
 
-- **De CI op de branch:** runs 304 tot en met 310, en 312, zijn helemaal groen:
+- **De CI op de branch:** runs 304 tot en met 310, 312, 313, 315 en 316 zijn helemaal groen:
   - 308 is fe9a4d7 (1C-1 en 1C-2);
   - 309 is a080604 (1C-3 en 1C-4);
   - 310 is 983b12d, met de verhuisreparatie (migratie `20261128150000`);
-  - 312 is 9b92cc4: na de merge, 1B-3 en 1B-4a.
+  - 312 is 9b92cc4: na de merge, 1B-3 en 1B-4a;
+  - 313 is 0d3ccbe: 1B-4b en 1B-4c;
+  - 315 is 504a3f9: 1B-5 deel 1 tot en met 3, de PDF;
+  - 316 is 6de3b5d: 1B-5 deel 4, het briefpapier als PDF.
 
-  Run 311 op staging (59fab7e, dezelfde code na de merge) is ook helemaal groen. Run 313
-  (0d3ccbe, met 1B-4b en 1B-4c) loopt nog. Groen betekent:
+  Runs 311 en 314 op staging (59fab7e en 3be4452, dezelfde code na elke merge) zijn ook
+  helemaal groen. Groen betekent:
   - de migraties vanaf nul met de databasetests;
   - `deno check`;
   - typecheck en de unit tests;

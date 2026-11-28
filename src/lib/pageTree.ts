@@ -23,12 +23,10 @@ export type TreeFolder = { id: string; name: string; parent_id: string | null };
 export type TreeNode = { page: TreePage; children: TreeNode[] };
 export type TreeGroup = { key: string; label: string | null; roots: TreeNode[] };
 
-/** Zoals de drive subpagina's sorteert (ContentLibrary): eerst position, dan de titel. */
-export function comparePages(a: TreePage, b: TreePage): number {
-  return ((a.position ?? 0) - (b.position ?? 0))
-    || (a.title || '').localeCompare(b.title || '', 'nl', { numeric: true })
-    || a.id.localeCompare(b.id);
-}
+// De volgorde (comparePages, subpagesOf) staat in _shared: de server zet de
+// subpagina's van een PDF-export in dezelfde volgorde (page-export).
+export { comparePages, subpagesOf } from '../../supabase/functions/_shared/pageTreeOrder.ts';
+import { comparePages } from '../../supabase/functions/_shared/pageTreeOrder.ts';
 
 /**
  * Bij welke klant hoort iets in de drive: de klant van zijn project, anders
@@ -110,33 +108,5 @@ export function ancestorIds(pages: TreePage[], id: string): string[] {
     out.push(next);
     next = byId.get(next)?.parent_id ?? null;
   }
-  return out;
-}
-
-/**
- * Alle subpagina's onder een pagina, in de volgorde van de boom, met hun
- * diepte (1 is een directe subpagina). Voor het deelvenster (stap 1C-3): elke
- * subpagina vink je apart aan. Bestand tegen kringen, en nooit dieper dan 20.
- */
-export function subpagesOf(pages: TreePage[], rootId: string): Array<{ page: TreePage; depth: number }> {
-  const children = new Map<string, TreePage[]>();
-  for (const page of pages) {
-    if (!page.parent_id || page.id === rootId) continue;
-    const list = children.get(page.parent_id) ?? [];
-    list.push(page);
-    children.set(page.parent_id, list);
-  }
-  const out: Array<{ page: TreePage; depth: number }> = [];
-  const seen = new Set<string>([rootId]);
-  const walk = (parentId: string, depth: number) => {
-    if (depth > 20) return;
-    for (const page of [...(children.get(parentId) ?? [])].sort(comparePages)) {
-      if (seen.has(page.id)) continue;
-      seen.add(page.id);
-      out.push({ page, depth });
-      walk(page.id, depth + 1);
-    }
-  };
-  walk(rootId, 1);
   return out;
 }

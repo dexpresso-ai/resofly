@@ -75,6 +75,14 @@ check "client-portal weigert zonder inlog" 401 'Niet ingelogd' \
   -X POST "$base/client-portal" -H 'Content-Type: application/json' --data '{"action":"getPortalData"}'
 check "client-portal weigert een verzonnen sleutel" 401 'session_unbound' \
   -X POST "$base/client-portal" -H 'x-portal-token: rooktest-rooktest-rooktest-rooktest-01' -H 'Content-Type: application/json' --data '{"action":"getPortalData"}'
+# De PDF van een pagina (stap 1B-5): staat page-export er? Zonder de functie
+# antwoordt Supabase zelf met 404, en dan kan de PDF in de app niet. Met
+# origin "null": dat weigert de functie altijd (403), wat de omgeving ook
+# toestaat. Eerst stond hier een verzoek zonder Origin, met 401 verwacht; dat
+# gaf op staging 403, want zonder Origin mag alleen lokaal (ALLOW_LOCAL_DEV),
+# en de uitrol was rood geworden.
+check "page-export staat er en weigert een verzoek zonder herkomst" 403 'zonder herkomst' \
+  -X POST "$base/page-export" -H 'Origin: null' -H 'Content-Type: application/json' --data '{"pageId":"00000000-0000-4000-8000-000000000000"}'
 # De API-laag (docs/rapporten/CONTROLE_API_LAAG_2026-11-10.md): het
 # OpenAPI-document, de MCP-server en de autorisatieserver antwoorden in de echte
 # runtime, en de deuren zonder login weigeren zonder bewijs.

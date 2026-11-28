@@ -624,6 +624,28 @@ test('briefpapier dat Word niet kan tonen (een pdf, svg of webp): geen kop, en d
   }
 });
 
+test('briefpapier dat een PDF is (stap 1B-5): geen afbeelding, wel de ruimte, en de kop en voet van een briefpapier', () => {
+  // Het briefpapier zelf komt na het omzetten onder de PDF (pdfLetterhead.ts).
+  const brand = { logo: { bytes: pngHeader(600, 200), contentType: 'image/png' }, color: '#1d4ed8', footerText: 'Studio Noord · Havenstraat 1' };
+  const letterhead = { image: null, top: 3000, bottom: 2040 };
+  const all = new Map(pageDocxFiles('Handboek', RICH, { brand }, { letterhead }).map(file => [file.path, file.data]));
+  // Geen kop: geen afbeelding van het briefpapier, en geen logo of lijn eroverheen.
+  assert.ok(!all.has('word/header1.xml'));
+  assert.ok(![...all.keys()].some(path => /briefpapier|logo-kop/.test(path)));
+  const xml = all.get('word/document.xml') as string;
+  assert.doesNotMatch(xml, /headerReference/);
+  // Dezelfde marges als bij een briefpapier dat een afbeelding is; het nummer net boven zijn voet.
+  assert.match(xml, /<w:pgMar w:top="3000" w:right="1418" w:bottom="2040" w:left="1418" w:header="709" w:footer="1720" w:gutter="0"\/>/);
+  assert.doesNotMatch(all.get('word/footer1.xml') as string, /Studio Noord/);
+  assert.doesNotMatch(all.get('word/styles.xml') as string, /w:styleId="Header"/);
+  for (const [path, data] of all) if (typeof data === 'string') assertWellFormed(data, path);
+  assertStylesExist(all, 'briefpapier als PDF');
+  // Met een voorblad: de eerste bladzijde zonder voet, en nog steeds geen kop.
+  const withCover = pageDocxFiles('Handboek', RICH, { brand }, { letterhead, cover: { date: '28 november 2026' } }).find(file => file.path === 'word/document.xml')?.data as string;
+  assert.match(withCover, /<w:sectPr><w:footerReference w:type="default" r:id="rId4"\/><w:pgSz [^>]*\/><w:pgMar w:top="3000" [^>]*\/>.*<w:titlePg\/><\/w:sectPr>/);
+  assert.doesNotMatch(withCover, /headerReference/);
+});
+
 test('kop en voet in de huisstijl: het logo rechts in de kop met een lijn in de merkkleur, de voettekst links en het nummer rechts', () => {
   const brand = { logo: { bytes: pngHeader(600, 200), contentType: 'image/png' }, color: '#1d4ed8', footerText: 'Studio Noord · Havenstraat 1' };
   const all = new Map(pageDocxFiles('Handboek', RICH, { brand }).map(file => [file.path, file.data]));

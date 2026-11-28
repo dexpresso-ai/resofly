@@ -10,8 +10,11 @@
 //
 //   npm run test:stromen -- documenten
 import { randomUUID } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { inflateRawSync } from 'node:zlib';
+import { decodePDFRawStream, PDFArray, PDFDocument, StandardFonts } from 'pdf-lib';
 import { roep } from './functies.mjs';
-import { mailsAan } from './nepdiensten.mjs';
+import { mailsAan, post } from './nepdiensten.mjs';
 import { maakGebruiker, rest, sql, sqlRij } from './supabase.mjs';
 import { gelijk, gelukt, geweigerd, groep, nietsVeranderd, stap, verwacht } from './toets.mjs';
 import { maakWereld } from './wereld.mjs';
@@ -47,6 +50,27 @@ async function wijzig(tabel, token, id, body) {
 async function lees(tabel, token, id, select = '*') {
   const res = await rest(`${tabel}?id=eq.${id}&select=${select}`, { token });
   return Array.isArray(res.json) ? res.json : [];
+}
+
+/** De delen van een zip (zoals een .docx): naam → inhoud. Alleen opgeslagen of met deflate ingepakt. */
+function leesZip(bytes) {
+  const buffer = Buffer.from(bytes);
+  const eind = buffer.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+  const aantal = buffer.readUInt16LE(eind + 10);
+  let pos = buffer.readUInt32LE(eind + 16);
+  const delen = new Map();
+  for (let i = 0; i < aantal; i += 1) {
+    const methode = buffer.readUInt16LE(pos + 10);
+    const grootte = buffer.readUInt32LE(pos + 20);
+    const naamLengte = buffer.readUInt16LE(pos + 28);
+    const begin = buffer.readUInt32LE(pos + 42);
+    const naam = buffer.subarray(pos + 46, pos + 46 + naamLengte).toString('utf8');
+    const data = begin + 30 + buffer.readUInt16LE(begin + 26) + buffer.readUInt16LE(begin + 28);
+    const ruw = buffer.subarray(data, data + grootte);
+    delen.set(naam, methode === 8 ? inflateRawSync(ruw) : Buffer.from(ruw));
+    pos += 46 + naamLengte + buffer.readUInt16LE(pos + 30) + buffer.readUInt16LE(pos + 32);
+  }
+  return delen;
 }
 
 const VEILIGE_INHOUD = '<h2>Werkafspraken</h2><p>Oplevering in <strong>week 48</strong>.</p><ul><li>Concept</li><li>Definitief</li></ul>';
@@ -539,6 +563,141 @@ export default async function documentenScenario() {
     gelijk(lezen.text?.title, 'Handboek', 'titel');
     verwacht(lezen.text?.html?.includes('Koffie is gratis.') && !JSON.stringify(lezen).includes('een euro'), `de gedeelde versie: ${JSON.stringify(lezen).slice(0, 300)}`);
   });
+
+  groep('Pagina\'s: de PDF (page-export, stap 1B-5)');
+  const pdfPagina = await stap('een pagina met een hoofdstuk, een afbeelding en een subpagina in de prullenbak', async () => {
+    const pagina = gelukt(await maak('documents', w.medewerker.token, {
+      organization_id: w.orgId, created_by: w.medewerker.id, title: 'Handleiding PDF', format: 'page', client_id: w.klantA.id,
+      body: { type: 'doc', content: [{ type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: 'Begin' }] }, { type: 'paragraph', content: [{ type: 'text', text: 'Tekst voor de PDF.' }] }] },
+    }), 'pagina')[0];
+    const kind = gelukt(await maak('documents', w.medewerker.token, {
+      organization_id: w.orgId, created_by: w.medewerker.id, title: 'Hoofdstuk PDF', format: 'page', parent_id: pagina.id,
+      body: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Tekst van het hoofdstuk.' }] }] },
+    }), 'subpagina')[0];
+    const weg = gelukt(await maak('documents', w.medewerker.token, {
+      organization_id: w.orgId, created_by: w.medewerker.id, title: 'Weggegooid hoofdstuk', format: 'page', parent_id: pagina.id,
+      body: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Mag niet in de PDF.' }] }] },
+    }), 'tweede subpagina')[0];
+    sql(`update public.documents set archived_at = now() where id = ${q(weg.id)}`);
+    // Een afbeelding in de pagina, zoals de editor hem opslaat: een bijlage van de pagina zelf.
+    const sleutel = `${w.orgId}/document/${pagina.id}/${randomUUID()}-plaatje.png`;
+    const png = Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000000', 'hex');
+    post.r2.set(sleutel, new Uint8Array(png));
+    sql(`insert into public.attachments (organization_id, entity_type, entity_id, name, mime_type, size_bytes, storage_key, created_by)
+      values (${q(w.orgId)}, 'document', ${q(pagina.id)}, 'plaatje.png', 'image/png', ${png.length}, ${q(sleutel)}, ${q(w.medewerker.id)})`);
+    const bijlage = sqlRij(`select id from public.attachments where storage_key = ${q(sleutel)}`);
+    gelukt(await wijzig('documents', w.medewerker.token, pagina.id, { body: { type: 'doc', content: [
+      { type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: 'Begin' }] },
+      { type: 'paragraph', content: [{ type: 'text', text: 'Tekst voor de PDF.' }] },
+      { type: 'image', attrs: { attachmentId: bijlage.id, alt: 'Plaatje' } },
+    ] } }), 'afbeelding in de pagina');
+    return { pagina, kind, weg, png };
+  });
+
+  if (pdfPagina) {
+    const exporteer = (token, body) => roep('page-export', { token, body: { pageId: pdfPagina.pagina.id, ...body } });
+    await stap('de PDF: met de sessie van wie exporteert; de worker krijgt een .docx met de pagina, het hoofdstuk en de afbeelding, zonder de prullenbak', async () => {
+      const voor = post.paginaPdf.verzoeken.length;
+      const res = await exporteer(w.medewerker.token, { cover: true, toc: true, chapters: true });
+      gelijk(res.status, 200, `status ${res.tekst.slice(0, 200)}`);
+      gelijk(res.headers.get('content-type'), 'application/pdf', 'soort');
+      gelijk(Buffer.from(res.bytes.slice(0, 5)).toString(), '%PDF-', 'een PDF');
+      gelijk(post.paginaPdf.verzoeken.length, voor + 1, 'één keer omgezet');
+      const verzoek = post.paginaPdf.verzoeken.at(-1);
+      gelijk(verzoek.organizationId, w.orgId, 'de organisatie van de pagina');
+      const delen = leesZip(verzoek.bytes);
+      const xml = delen.get('word/document.xml')?.toString('utf8') ?? '';
+      for (const tekst of ['Handleiding PDF', 'Tekst voor de PDF.', 'Hoofdstuk PDF', 'Tekst van het hoofdstuk.', `Klant: ${w.klantA.name}`]) {
+        verwacht(xml.includes(tekst), `"${tekst}" staat niet in de .docx`);
+      }
+      verwacht(!xml.includes('Weggegooid hoofdstuk') && !xml.includes('Mag niet in de PDF.'), 'een subpagina uit de prullenbak staat in de PDF');
+      verwacht(xml.includes('<w:titlePg/>') && xml.includes('TOC \\o'), 'geen voorblad of inhoudsopgave');
+      const media = [...delen.keys()].filter((naam) => naam.startsWith('word/media/afbeelding'));
+      verwacht(media.length === 1 && delen.get(media[0]).equals(pdfPagina.png), `de afbeelding uit R2: ${media.join(', ')}`);
+      // Met LibreOffice in deze omgeving is het een echte PDF: dan staat de tekst erin.
+      try {
+        const tekst = execFileSync('pdftotext', ['-', '-'], { input: Buffer.from(res.bytes) }).toString('utf8');
+        if (tekst.trim()) verwacht(tekst.includes('Tekst voor de PDF.') && tekst.includes('Hoofdstuk PDF'), `de PDF zelf: ${tekst.slice(0, 200)}`);
+      } catch { /* geen pdftotext: de nep-PDF is genoeg */ }
+    });
+
+    await stap('wie Inhoud alleen mag lezen, krijgt een PDF; zonder Inhoud, van de buren of zonder sessie niets', async () => {
+      gelijk((await exporteer(w.kijker.token, {})).status, 200, 'de kijker');
+      geweigerd(await exporteer(zonderInhoud?.geen.token, {}), 'Inhoud "geen"', [403, 404]);
+      if (ander) geweigerd(await exporteer(ander.medewerker.token, {}), 'de buren', [403, 404]);
+      geweigerd(await exporteer(null, {}), 'zonder sessie', [401]);
+      // Precies het verzoek van de rooktest na de uitrol (scripts/supabase-smoke-test.sh):
+      // origin "null", zonder sessie, met een verzonnen pagina.
+      const rooktest = await roep('page-export', { origin: 'null', body: { pageId: '00000000-0000-4000-8000-000000000000' } });
+      gelijk(rooktest.status, 403, `het verzoek van de rooktest: ${rooktest.tekst.slice(0, 200)}`);
+      verwacht(rooktest.tekst.includes('zonder herkomst'), `de rooktest zoekt "zonder herkomst": ${rooktest.tekst.slice(0, 200)}`);
+      geweigerd(await roep('page-export', { token: w.medewerker.token, body: { pageId: 'geen-uuid' } }), 'geen geldige pagina', [400]);
+      geweigerd(await roep('page-export', { token: w.medewerker.token, body: { pageId: pdfPagina.weg.id } }), 'een pagina in de prullenbak', [404]);
+    });
+
+    await stap('een media-worker die het pad nog niet kent: een eigen code, zodat de app het kan uitleggen', async () => {
+      post.paginaPdf.ontbreekt = true;
+      try {
+        const res = await exporteer(w.medewerker.token, {});
+        gelijk([res.status, res.json?.code], [501, 'pdf_niet_beschikbaar'], `antwoord: ${res.tekst.slice(0, 200)}`);
+        verwacht(/media-worker/.test(res.json?.error ?? ''), `de melding: ${res.json?.error}`);
+      } finally {
+        post.paginaPdf.ontbreekt = false;
+      }
+    });
+
+    await stap('briefpapier: zonder of kapot een duidelijke melding en geen PDF; een PDF als briefpapier komt onder elke bladzijde', async () => {
+      const zet = (soort, dataUrl) => sql(`update public.company_settings set invoice_template_kind = ${q(soort)},
+        invoice_template_data_url = ${dataUrl ? q(dataUrl) : 'null'},
+        invoice_template_mime_type = ${soort === 'pdf' ? q('application/pdf') : 'null'} where organization_id = ${q(w.orgId)}`);
+      const voor = post.paginaPdf.verzoeken.length;
+      try {
+        zet('none', null);
+        const zonder = await exporteer(w.medewerker.token, { letterhead: true });
+        gelijk(zonder.status, 422, 'zonder briefpapier');
+        verwacht(/geen briefpapier ingesteld/.test(zonder.json?.error ?? ''), `de melding: ${zonder.json?.error}`);
+        // Alleen de kop van een PDF: de melding komt vóór het omzetten, niet na een minuut Collabora.
+        zet('pdf', 'data:application/pdf;base64,JVBERi0xLjQK');
+        const kapot = await exporteer(w.medewerker.token, { letterhead: true });
+        gelijk(kapot.status, 422, 'een kapotte PDF als briefpapier');
+        verwacht(/geen bruikbare PDF/.test(kapot.json?.error ?? ''), `de melding: ${kapot.json?.error}`);
+        gelijk(post.paginaPdf.verzoeken.length, voor, 'niets naar de worker');
+
+        // Een echte PDF als briefpapier (stap 1B-5).
+        const papier = await PDFDocument.create();
+        papier.addPage([595.28, 841.89]).drawText('BRIEFPAPIER PROEF', { x: 40, y: 800, size: 16, font: await papier.embedFont(StandardFonts.Helvetica) });
+        zet('pdf', `data:application/pdf;base64,${Buffer.from(await papier.save()).toString('base64')}`);
+        const met = await exporteer(w.medewerker.token, { letterhead: true, chapters: true });
+        gelijk(met.status, 200, `een PDF als briefpapier: ${met.tekst.slice(0, 200)}`);
+        // De worker kreeg de ruimte voor het briefpapier, zonder afbeelding en zonder kop in de huisstijl.
+        const delen = leesZip(post.paginaPdf.verzoeken.at(-1).bytes);
+        verwacht(![...delen.keys()].some((naam) => naam === 'word/header1.xml' || naam.startsWith('word/media/briefpapier')), `de .docx: ${[...delen.keys()].join(', ')}`);
+        const xml = delen.get('word/document.xml')?.toString('utf8') ?? '';
+        // De marges van een briefpapier, net als bij een afbeelding (ui.mjs, paginaexport): zonder eigen
+        // opmaak de standaard van een factuur (voet vanaf 768 pt), en boven nooit minder dan de gewone marge.
+        verwacht(xml.includes('<w:pgMar w:top="1418" w:right="1418" w:bottom="1478" w:left="1418" w:header="709" w:footer="1158" w:gutter="0"/>'), `de marges: ${xml.match(/<w:pgMar [^>]*>/)?.[0]}`);
+        // In de PDF: op elke bladzijde eerst het briefpapier (een ingesloten pagina), dan de pagina.
+        const pdf = await PDFDocument.load(met.bytes);
+        verwacht(pdf.getPageCount() >= 1, 'geen bladzijden');
+        for (const [i, blad] of pdf.getPages().entries()) {
+          const inhoud = blad.node.Contents();
+          const eerste = pdf.context.lookup(inhoud instanceof PDFArray ? inhoud.get(0) : inhoud);
+          const tekst = Buffer.from(decodePDFRawStream(eerste).decode()).toString('latin1');
+          verwacht(/EmbeddedPdfPage-\d+ Do/.test(tekst), `bladzijde ${i + 1}: het briefpapier staat niet onderop: ${tekst.slice(0, 120)}`);
+        }
+        try {
+          const tekst = execFileSync('pdftotext', ['-', '-'], { input: Buffer.from(met.bytes) }).toString('utf8');
+          if (tekst.trim()) {
+            const bladen = tekst.split('\f').filter((blad) => blad.trim());
+            verwacht(bladen.length === pdf.getPageCount() && bladen.every((blad) => blad.includes('BRIEFPAPIER PROEF')), `het briefpapier op elke bladzijde: ${bladen.length} bladen`);
+            verwacht(tekst.includes('Tekst voor de PDF.') && tekst.includes('Hoofdstuk PDF'), `de pagina zelf: ${tekst.slice(0, 200)}`);
+          }
+        } catch { /* geen pdftotext: de volgorde hierboven is genoeg */ }
+      } finally {
+        zet('none', null);
+      }
+    });
+  }
 
   groep('Documenten: wie deelde en wie introk');
   await stap('wie een deling maakte of introk, ligt vast', async () => {

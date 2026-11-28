@@ -2,8 +2,9 @@
 
 28 november 2026. Zie `docs/plannen/PAGINAS_BOUWPLAN_2026-11-27.md`, §9 en §18.
 
-Gebouwd na de merge naar staging van die ochtend (`59fab7e`). Het staat op de branch, en gaat
-pas naar staging als de gebruiker het zegt.
+Gebouwd na de merge naar staging van die ochtend (`59fab7e`). Op verzoek van de gebruiker met
+1B-4a tot en met 1B-4c op staging gezet, op 28 november om 11:46 UTC (`3be4452`). De uitrol is
+geslaagd, met de rooktest; er zijn geen migraties.
 
 ## Wat er nu kan
 

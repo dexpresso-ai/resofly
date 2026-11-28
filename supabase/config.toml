@@ -149,6 +149,13 @@ verify_jwt = false
 [functions.file-share]
 verify_jwt = false
 
+# page-export (stap 1B-5) maakt de PDF van een pagina. Handelt CORS en auth
+# zelf af: requireUser(), en het lezen gaat met de sessie van de gebruiker
+# (createUserClient, RLS); daarna requireOrganizationAccess() en
+# assertModuleAccess('content', 'read') voor de organisatie van die pagina.
+[functions.page-export]
+verify_jwt = false
+
 # file-share-public bedient /gedeeld/<token>: de ontvanger van een deellink is
 # per definitie niet ingelogd. De token in de body IS de sleutel; de database
 # bewaart alleen sha256(token) en bewaakt intrekken + verlopen.

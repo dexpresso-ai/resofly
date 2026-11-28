@@ -213,6 +213,10 @@ async function routeRequest(request: Request, env: Env, context: RouteContext): 
   if (method === 'POST' && pathname === '/internal/office/convert-pdf') {
     return handleInternalOfficeConvertPdf(request, env, context);
   }
+  // De PDF van een pagina (stap 1B-5): page-export stuurt de DOCX mee.
+  if (method === 'POST' && pathname === '/internal/office/convert-page') {
+    return handleInternalPageConvertPdf(request, env, context);
+  }
 
   // ── Internal media put/fetch (shared secret) — laat een edge-functie
   //    server-side objecten wegschrijven (bijlagen van de factuur-inbox) en
@@ -3925,11 +3929,24 @@ async function handleInternalOfficeConvertPdf(request: Request, env: Env, contex
   if (!object) throw new HttpError(404, 'Bronbestand niet gevonden.');
 
   const sourceMime = object.httpMetadata?.contentType || OFFICE_NEW_MIME.docx;
+  const pdf = await convertOfficeBytesToPdf(env, new Uint8Array(await object.arrayBuffer()), sourceMime);
+  return pdfResponse(pdf, context);
+}
+
+/**
+ * Een office-bestand naar PDF met Collabora's convert-to. Gedeeld door het
+ * contractpad en het pad voor pagina's. De office-server laat convert-to
+ * uitsluitend door met OFFICE_CONVERT_SECRET, zodat onze render-container geen
+ * publieke conversiedienst is.
+ */
+async function convertOfficeBytesToPdf(env: Env, bytes: Uint8Array<ArrayBuffer>, sourceMime: string): Promise<Uint8Array<ArrayBuffer>> {
+  if (!env.COLLABORA_URL) throw new HttpError(500, 'Office-editor niet geconfigureerd (COLLABORA_URL).');
+  if (!env.OFFICE_CONVERT_SECRET) throw new HttpError(500, 'Conversie niet geconfigureerd (OFFICE_CONVERT_SECRET).');
   const ext = OFFICE_MIME_EXT[sourceMime] || 'docx';
   const form = new FormData();
   // Collabora leidt het invoerformaat af uit de bestandsnaam-extensie; de naam
   // zelf komt verder nergens terug.
-  form.append('data', new Blob([await object.arrayBuffer()], { type: sourceMime }), `bron.${ext}`);
+  form.append('data', new Blob([bytes], { type: sourceMime }), `bron.${ext}`);
 
   const convertUrl = `${env.COLLABORA_URL.replace(/\/$/, '')}/cool/convert-to/pdf`;
   const init: RequestInit = {
@@ -3946,18 +3963,52 @@ async function handleInternalOfficeConvertPdf(request: Request, env: Env, contex
 
   const pdf = new Uint8Array(await res.arrayBuffer());
   // Collabora antwoordt op een mislukte conversie soms met 200 + lege/niet-PDF
-  // body; die mag niet als contract-PDF de deur uit.
+  // body; die mag niet als PDF de deur uit.
   if (pdf.byteLength < 5 || String.fromCharCode(...pdf.slice(0, 5)) !== '%PDF-') {
     console.error('Collabora convert-to gaf geen PDF terug', { bytes: pdf.byteLength });
     throw new HttpError(502, 'De PDF-conversie leverde geen geldig PDF-bestand op.');
   }
+  return pdf;
+}
 
+function pdfResponse(pdf: Uint8Array<ArrayBuffer>, context: RouteContext): Response {
   const headers = new Headers(context.corsHeaders);
   headers.set('Content-Type', 'application/pdf');
   headers.set('Content-Length', String(pdf.byteLength));
   headers.set('Cache-Control', 'private, no-store');
   headers.set('X-Request-Id', context.requestId);
   return new Response(pdf, { status: 200, headers });
+}
+
+/**
+ * De PDF van een pagina (stap 1B-5, §9 van het bouwplan). Alleen intern:
+ * page-export bouwt de DOCX met de rechten van wie exporteert, en stuurt hem
+ * hier mee. Wij zetten hem om en geven de PDF terug.
+ *
+ * Afwijking van §9, waar de DOCX eerst in R2 staat (segment `page-export`):
+ * hier gaat hij in het verzoek mee, en komt er niets in R2. Een map die deze
+ * worker niet kent (zoals `page-export`) mag elk lid via /file/<sleutel>
+ * lezen (levelWithoutModule), dus een tijdelijk bestand daar zou leesbaar
+ * zijn zolang het bestond; en wat er niet is, hoeft niet opgeruimd. Het
+ * contractpad blijft alleen contracten omzetten.
+ */
+async function handleInternalPageConvertPdf(request: Request, env: Env, context: RouteContext): Promise<Response> {
+  requireInternalSecret(request, env);
+  const organizationId = (request.headers.get('x-organization-id') || '').trim();
+  if (!isUuid(organizationId)) throw new HttpError(400, 'Ongeldige organization id.');
+  const mime = (request.headers.get('content-type') || '').split(';')[0].trim();
+  if (mime !== OFFICE_NEW_MIME.docx) throw new HttpError(415, 'Alleen een Word-bestand (.docx) kan hier worden omgezet.');
+  const bytes = new Uint8Array(await request.arrayBuffer());
+  if (bytes.byteLength === 0) throw new HttpError(400, 'Lege upload.');
+  if (bytes.byteLength > OFFICE_MAX_BYTES) {
+    throw new HttpError(413, `De pagina is te groot voor een PDF. Maximum is ${Math.round(OFFICE_MAX_BYTES / 1024 / 1024)} MB.`);
+  }
+  // Een .docx is een zip: wat niet met PK begint, gaat niet naar Collabora.
+  if (bytes[0] !== 0x50 || bytes[1] !== 0x4b || bytes[2] !== 0x03 || bytes[3] !== 0x04) {
+    throw new HttpError(415, 'Dit is geen Word-bestand.');
+  }
+  const pdf = await convertOfficeBytesToPdf(env, bytes, mime);
+  return pdfResponse(pdf, context);
 }
 
 /** Download de originele bytes van een Office-modus document, in het native formaat. */
