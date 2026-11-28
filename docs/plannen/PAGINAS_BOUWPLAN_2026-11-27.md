@@ -525,16 +525,18 @@ akkoord is.
 **Fase 2, in tussenstappen (ingedeeld op 28 november, na "Merge naar staging en houw verder"):**
 
 Fase 1 is af, op 1A-5d na (dat wacht op twee besluiten). Fase 2 volgt §13. Alles blijft op de
-branch tot de gebruiker zegt dat het naar staging mag.
+branch tot de gebruiker zegt dat het naar staging mag. 2-0 tot en met 2-2a staan sinds 28
+november 16:48 op staging (`7250aff`), op verzoek van de gebruiker.
 
 | Stap | Wat | Status |
 | --- | --- | --- |
 | 2-0 | Kolommen: twee of drie naast elkaar, op de telefoon onder elkaar (§3, en open punt in §16). De database, de klantweergave en de export kennen ze al; de editor kan ze nog niet maken. | gebouwd op 28 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_KOLOMMEN_2026-11-28.md`. Geen migratie. CI-run 318 (c07b98f) helemaal groen. |
 | 2-1a | @-vermeldingen, de basis: een knoop `mention` met alleen de soort (klant, project, taak, factuur, collega) en het id. De database neemt hem aan, en weigert een vermelding van iets uit een andere organisatie. De editor toont hem; Word, PDF, de zoekindex, Gerrie en de klant krijgen de naam alleen met de rechten van wie kijkt. Een tabel voor "Genoemd in", bijgehouden door de database. | gebouwd op 28 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_VERMELDINGEN_2026-11-28.md`. Migratie `20261128160000_paginas_vermeldingen.sql` (`page_mentions`). CI-run 319 (3af67b4) helemaal groen, met de migraties vanaf nul en de databasetests. |
 | 2-1b | De @-kiezer in de editor: na @ zoeken in de klanten, projecten, taken, facturen en collega's die je mag zien. De chip toont de naam van nu, en opent wat hij noemt. | gebouwd op 28 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_VERMELDINGEN_2026-11-28.md` (stap 2-1b). Moet samen met de migratie van 2-1a naar staging. CI-run 319 (3af67b4) helemaal groen. |
-| 2-1c | "Genoemd in" bij een klant en een project: de pagina's die hen noemen, voor zover je die mag lezen. | gebouwd op 28 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_VERMELDINGEN_2026-11-28.md` (stap 2-1c). Geen migratie; leest `page_mentions` van 2-1a, dus samen met of na die migratie naar staging. |
-| 2-2a | Actiepunten worden taken: een regel in een takenlijst wordt met één klik een taak, in het project van de pagina. De taak onthoudt uit welke pagina en regel ze komt. In de pagina een label met de stand van de taak; in het taakvenster "Uit pagina". | gebouwd op 28 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_TAKEN_2026-11-28.md`. Migratie `20261128170000_paginas_taken.sql` (`tasks.page_id`, `tasks.page_block_id`). |
-| 2-2b | Het vinkje en de taak samen: aanvinken in de pagina zet de taak op Klaar, uitvinken terug op Te doen. Bij delen en export volgt het vinkje de taak (een momentopname). | nog te bouwen, na 2-2a |
+| 2-1c | "Genoemd in" bij een klant en een project: de pagina's die hen noemen, voor zover je die mag lezen. | gebouwd op 28 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_VERMELDINGEN_2026-11-28.md` (stap 2-1c). Geen migratie; leest `page_mentions` van 2-1a, dus samen met of na die migratie naar staging. CI-run 320 (0c042f1) helemaal groen. |
+| 2-2a | Actiepunten worden taken: een regel in een takenlijst wordt met één klik een taak, in het project van de pagina. De taak onthoudt uit welke pagina en regel ze komt. In de pagina een label met de stand van de taak; in het taakvenster "Uit pagina". | gebouwd op 28 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_TAKEN_2026-11-28.md`. Migratie `20261128170000_paginas_taken.sql` (`tasks.page_id`, `tasks.page_block_id`). CI-run 320 (0c042f1) helemaal groen, met de migraties vanaf nul en de databasetests. |
+| 2-2b | Het vinkje en de taak samen: aanvinken in de pagina zet de taak op Klaar, uitvinken terug op Te doen. Bij delen en export volgt het vinkje de taak (een momentopname). | het vinkje gebouwd op 28 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_TAKEN_2026-11-28.md` (stap 2-2b). Geen migratie. Delen en export: 2-2c. |
+| 2-2c | Bij delen en export volgt het vinkje de taak: een download met de vinkjes van de taken, en in de editor "lopen achter op hun taak · Bijwerken". | gebouwd op 28 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_TAKEN_2026-11-28.md` (stap 2-2c). Geen migratie; `page-export` leest nu ook de taken. |
 | 2-3 | Levende blokken: open taken, uren tegen budget, openstaande facturen, met de rechten van wie kijkt; bij delen en export een momentopname. | nog te ontwerpen |
 | 2-4 | Sjablonen met `mergeTokens`, en projectsjablonen die een paginaboom aanmaken. | nog te ontwerpen |
 | 2-5 | Opmerkingen bij een blok. | nog te ontwerpen |
@@ -614,6 +616,25 @@ branch tot de gebruiker zegt dat het naar staging mag.
   dat de taak niet meegaat.
 - **De link per regel is nagelopen** (zie de changelog van 2-2a): hij blijft bij zijn regel of
   raakt kwijt, en komt nooit bij de tekst van een andere regel.
+
+**Keuzes voor 2-2c (vinkjes bij delen en export), 28 november:**
+
+- **Een download krijgt de vinkjes van de taken, een kopie voor het dossier niet.** De stand
+  van een taak is gegevens van Projecten. Een Word-kopie en een vastgelegde PDF kan iedereen met
+  Inhoud openen; die tonen de pagina zoals ze is opgeslagen. Dat is dezelfde regel als bij de
+  namen (2-1a), en hij hangt aan dezelfde keuze (`names`).
+- **De download leest de taken met de rechten van wie downloadt.** Word in de app, de PDF in
+  `page-export`, met de JWT van de aanroeper en nooit met de service-role. Wie Projecten niet mag
+  lezen, krijgt de vinkjes zoals ze in de pagina staan.
+- **Per pagina en per regel.** Een export met subpagina's als hoofdstukken heeft meer pagina's,
+  en een gekopieerde pagina heeft dezelfde id's per regel als het origineel. De vinkjes volgen
+  dus de taak van díe pagina en die regel.
+- **Delen schrijft niets vanzelf.** De klant leest een opgeslagen versie, dus de vinkjes moeten
+  in de pagina staan. Wie bewerkt, ziet "N vinkjes lopen achter op hun taak", met hoeveel er
+  aan en uit gaan, en een knop "Bijwerken". Dat is een klik, als transactie: het zet geen taak
+  om (2-2b). Zonder die klik deelt de pagina wat erin staat.
+- **Beide kanten op.** De taak is de waarheid: een regel van een taak die weer open is, gaat
+  uit. De melding zegt hoeveel aan en hoeveel uit gaan.
 
 **1C wordt gebouwd volgens de lezing van §1 (28 november):**
 

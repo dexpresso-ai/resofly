@@ -691,6 +691,45 @@ export default async function documentenScenario() {
       }
     });
 
+    await stap('vinkjes volgens hun taak (stap 2-2c): een download heeft het vinkje van de taak, een PDF voor het dossier en wie Projecten niet mag lezen het vinkje van de pagina', async () => {
+      const id = pdfPagina.pagina.id;
+      const voor = sqlRij(`select body from public.documents where id = ${q(id)}`).body;
+      const regel = randomUUID();
+      const metRegel = { ...voor, content: [...voor.content, { type: 'taskList', content: [
+        { type: 'taskItem', attrs: { checked: false, id: regel }, content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Vinkje volgens taak' }] }] },
+      ] }] };
+      let taak = null;
+      try {
+        gelukt(await wijzig('documents', w.medewerker.token, id, { body: metRegel }), 'een pagina met een takenregel opslaan');
+        sql(`insert into public.tasks (organization_id, created_by, title, status, page_id, page_block_id)
+          values (${q(w.orgId)}, ${q(w.medewerker.id)}, 'Vinkje volgens taak', 'done', ${q(id)}, ${q(regel)})`);
+        taak = sqlRij(`select id from public.tasks where page_id = ${q(id)} and page_block_id = ${q(regel)}`).id;
+        const docxVan = async (token, wie, keuze = { names: true }) => {
+          const res = await exporteer(token, keuze);
+          gelijk(res.status, 200, `${wie}: ${res.tekst.slice(0, 200)}`);
+          return leesZip(post.paginaPdf.verzoeken.at(-1).bytes).get('word/document.xml')?.toString('utf8') ?? '';
+        };
+        const vakje = (xml) => {
+          const plek = xml.indexOf('Vinkje volgens taak');
+          verwacht(plek > 0, 'de takenregel staat niet in de .docx');
+          const ervoor = xml.slice(Math.max(0, plek - 400), plek);
+          return ervoor.lastIndexOf('☒') > ervoor.lastIndexOf('☐') ? '☒' : '☐';
+        };
+        // Een download: de taak is Klaar, dus aangevinkt, al staat het vinkje in de pagina uit.
+        gelijk(vakje(await docxVan(w.medewerker.token, 'de medewerker')), '☒', 'een download volgt de taak');
+        // Voor het dossier: zoals de pagina het heeft.
+        gelijk(vakje(await docxVan(w.medewerker.token, 'voor het dossier', {})), '☐', 'een PDF voor het dossier volgt de taak');
+        // Inhoud lezen, Projecten niet: de taak bestaat voor hem niet, dus het vinkje van de pagina.
+        const zonderProjecten = await lidMet(w.orgId, 'pdf-zonder-projecten', { content: 'read', projects: 'none' });
+        gelijk(vakje(await docxVan(zonderProjecten.token, 'zonder Projecten')), '☐', 'wie Projecten niet mag lezen, ziet toch de stand van de taak');
+        // De pagina zelf is niet veranderd.
+        gelijk(sqlRij(`select count(*)::int as n from public.documents d, jsonb_path_query(d.body, ${q(`strict $.** ? (@.type == "taskItem" && @.attrs.id == "${regel}" && @.attrs.checked == true)`)}) x where d.id = ${q(id)}`).n, 0, 'de export veranderde de pagina');
+      } finally {
+        if (taak) sql(`delete from public.tasks where id = ${q(taak)}`);
+        gelukt(await wijzig('documents', w.medewerker.token, id, { body: voor }), 'terug zoals het was');
+      }
+    });
+
     await stap('briefpapier: zonder of kapot een duidelijke melding en geen PDF; een PDF als briefpapier komt onder elke bladzijde', async () => {
       const zet = (soort, dataUrl) => sql(`update public.company_settings set invoice_template_kind = ${q(soort)},
         invoice_template_data_url = ${dataUrl ? q(dataUrl) : 'null'},

@@ -255,6 +255,8 @@ Voor "Genoemd in" (2-1c) geldt hetzelfde, zie daar.
 - `npm test` (2458) en `npm run typecheck`.
 - Na het nalezen kwamen er twee dingen bij: het antwoord per klant of project, en de test van de
   ontbrekende tabel. Daarna draaide `ui.mjs paginas` opnieuw: 22 stappen, 0 fout.
+- **De CI** (run 320, 0c042f1, met 2-1c en 2-2a): helemaal groen, ook de mobiele lay-outtest
+  (42 minuten). De CI toont het paneel niet: de nagebootste backend heeft geen pagina's.
 
 ### Uitrollen
 

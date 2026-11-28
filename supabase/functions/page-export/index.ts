@@ -15,6 +15,7 @@ import { pageExportFonts, type PageExportFont } from '../_shared/pageExportFonts
 import { PDF_FONT_FILES } from '../_shared/pdfFonts.ts';
 import { LetterheadUnusable, loadLetterhead, underlayLetterhead, type UnderlayDocument } from '../_shared/pdfLetterhead.ts';
 import { sfntFamilyName, woffToSfnt } from '../_shared/woff.ts';
+import { taskChecksFor, withTaskChecks, type TaskCheckRow } from '../_shared/pageTaskChecks.ts';
 
 // ============================================================
 // ResoFly — De PDF van een pagina (page-export, stap 1B-5)
@@ -153,7 +154,7 @@ async function rowsById<T>(db: SupabaseClient, table: string, columns: string, o
  * (collectSubpages). Laadt er een niet, dan geen PDF: een bestand waar stil
  * een hoofdstuk uit ontbreekt, valt pas op als het bij de klant ligt.
  */
-async function loadChapters(db: SupabaseClient, page: PageRow): Promise<PageDocxChapter[]> {
+async function loadChapters(db: SupabaseClient, page: PageRow): Promise<Array<PageDocxChapter & { id: string }>> {
   const found = await collectSubpages<TreeRow>(page.id, async (parents) => {
     const rows: TreeRow[] = [];
     for (let i = 0; i < parents.length; i += 100) {
@@ -174,8 +175,28 @@ async function loadChapters(db: SupabaseClient, page: PageRow): Promise<PageDocx
   return found.subpages.map(({ page: sub, depth }) => {
     const row = bodies.get(sub.id);
     if (!row) throw new HttpError(`De subpagina "${sub.title.trim() || 'Naamloze pagina'}" kon niet worden geladen, dus er is geen PDF gemaakt. Probeer het zo nog eens.`, 409);
-    return { title: row.title, body: row.body, depth };
+    return { id: sub.id, title: row.title, body: row.body, depth };
   });
+}
+
+/**
+ * De taken achter de regels van deze pagina's (stap 2-2c), met de rechten
+ * van wie exporteert (de JWT in db, nooit de service-role): wie Projecten
+ * niet mag lezen, krijgt niets, en dan blijven de vinkjes zoals ze in de
+ * pagina staan. Een fout laat de PDF niet mislukken.
+ */
+async function pageTasks(db: SupabaseClient, organizationId: string, pageIds: string[]): Promise<TaskCheckRow[]> {
+  const out: TaskCheckRow[] = [];
+  for (let i = 0; i < pageIds.length; i += 100) {
+    const { data, error } = await db.from('tasks').select('page_id,page_block_id,status')
+      .eq('organization_id', organizationId).in('page_id', pageIds.slice(i, i + 100));
+    if (error) {
+      console.warn('page-export: taken bij de vinkjes niet gelezen', { error: error.message });
+      return [];
+    }
+    out.push(...((data ?? []) as TaskCheckRow[]));
+  }
+  return out;
 }
 
 /** Eén letter van de huisstijl, als TTF, uit de letters die de edge functions al hebben (pdfFonts.ts). */
@@ -249,6 +270,14 @@ async function pagePdf(
 ): Promise<ArrayBuffer> {
   const org = page.organization_id;
   const chapters = choice.chapters ? await loadChapters(db, page) : [];
+  // In een download volgt het vinkje van een regel met een taak de taak (stap
+  // 2-2c), per pagina en per regel. Vastleggen in het dossier niet: die PDF
+  // kan iedereen met Inhoud openen, en de stand van een taak is van Projecten.
+  if (choice.names) {
+    const tasks = await pageTasks(db, org, [page.id, ...chapters.map(chapter => chapter.id)]);
+    page = { ...page, body: withTaskChecks(page.body, taskChecksFor(page.id, tasks)).body };
+    for (const chapter of chapters) chapter.body = withTaskChecks(chapter.body, taskChecksFor(chapter.id, tasks)).body;
+  }
   const refs = exportReferences([page.body, ...chapters.map(chapter => chapter.body)]);
   const { data: settingsRow, error: settingsError } = await db.from('company_settings')
     .select('company_name,brand_logo_data_url,brand_accent_color,brand_footer_text,brand_heading_font,brand_body_font,invoice_template_kind,invoice_template_data_url,invoice_template_mime_type,document_layouts')

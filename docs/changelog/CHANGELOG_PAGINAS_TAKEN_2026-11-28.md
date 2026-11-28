@@ -1,4 +1,4 @@
-# Pagina's: actiepunten worden taken (stap 2-2a)
+# Pagina's: actiepunten worden taken (stap 2-2a tot en met 2-2c)
 
 28 november 2026. Zie `docs/plannen/PAGINAS_BOUWPLAN_2026-11-27.md`, §13 en §18 (fase 2, met de
 keuzes voor 2-2).
@@ -127,6 +127,10 @@ met een link terug naar de pagina. Het vinkje en de taak samen volgen in 2-2b.
   Daarna: 23 stappen, 0 fout. Met de stap voor het bewerken van een regel, en Enter aan het
   begin: 24 stappen, 0 fout.
 - `npm run test:terugknop` (18 gelukt, 0 mislukt): het taakvenster kan nu naar een pagina.
+- **De CI** (run 320, 0c042f1): helemaal groen. Dat zijn de migraties vanaf een lege database met
+  `20261128170000`, de databasetests (ook `paginas_taken.sql`), deno check, de typecheck, de
+  unit tests, de mobiele lay-outtest, laden, de inrichting en de terugknop. Het label en de
+  knop toetst alleen `ui.mjs`; dat draait niet in de CI.
 - `npm run test:mobile -- --pages=project,weekplanner --theme=both`: 12 metingen, 0 problemen.
   De nagebootste backend heeft geen taken uit een pagina; het label en "Uit pagina" toetst de
   schermtest hierboven.
@@ -134,12 +138,128 @@ met een link terug naar de pagina. Het vinkje en de taak samen volgen in 2-2b.
 ## Uitrollen
 
 Migratie `20261128170000` moet samen met of vóór de app naar staging. Zonder de kolommen
-mislukt "Maak er een taak van" met een fout.
+mislukt "Maak er een taak van" met een fout. Op 28 november om 16:48 samen met 2-0 tot en met
+2-1c naar staging gezet (`7250aff`); het deploylog noemt de migratie.
+
+## Stap 2-2b: het vinkje en de taak samen
+
+### Wat er nu kan
+
+- **Aanvinken zet de taak op Klaar.** Vink je een regel met een taak aan, dan gaat de taak op
+  Klaar. Uitvinken zet haar terug op Te doen.
+  - Een melding boven de pagina noemt de taak: "De taak "Offerte sturen" staat op Klaar." Een
+    regel kan zijn tekst kwijt zijn (knippen) en toch zijn taak houden; zo zie je welke er klaar
+    ging.
+  - "Ongedaan maken" in die melding zet de taak terug, en het vinkje in de pagina ook. De
+    melding verdwijnt na twaalf seconden vanzelf.
+  - Het label achter de regel volgt meteen: "Taak · Klaar".
+- **Alleen een klik telt.** Ongedaan maken in de editor (Ctrl+Z), een oude versie terugzetten of
+  opnieuw laden zet het vinkje in de pagina om, maar niet de taak.
+- **Een regel zonder taak** blijft een gewoon vinkje.
+- **Projecten alleen lezen**: het vinkje zet alleen de regel om. De melding zegt dat de taak
+  niet meegaat, zonder "Ongedaan maken".
+- **Al klaar**: stond de taak al op Klaar (elders afgevinkt) en vink je de regel aan, dan
+  verandert er aan de taak niets en komt er geen melding.
+- **Snel achter elkaar klikken** zet de taak waar het vinkje eindigt. De verzoeken per taak gaan
+  achter elkaar, en een klik vergelijkt met de laatst gevraagde stand. Eerst vergeleek de tweede
+  klik met een stand die nog niet was bijgewerkt: die deed dan niets, en de taak bleef op Klaar
+  met het vinkje uit (gevonden bij het nalezen; de test faalt op de oude code).
+
+### Hoe het werkt
+
+- `PageTaskLinks` luistert naar het `change`-event van een vinkje, op de editor zelf. Dat event
+  komt alleen van een klik; TaskItem zet de pagina zelf al om, en daarna zet `PageEditor` de
+  taak (`onSetTaskStatus`).
+- `main.tsx` zet de stand langs dezelfde weg als het kanbanbord (`updateRow`, onder de RLS),
+  met de rechten van wie klikt. Zonder Projecten schrijven krijgt de editor die functie niet.
+- "Ongedaan maken" zet het vinkje terug met een transactie, niet met een klik. Zo zet dat de
+  taak niet opnieuw om.
+
+### Getest
+
+- **`ui.mjs paginas`: 25 stappen, 0 fout.** De nieuwe stap:
+  - aanvinken: de taak op Klaar, de melding noemt haar, het label "Taak · Klaar";
+  - "Ongedaan maken": de taak op Te doen, het vinkje uit, ook in de opgeslagen pagina;
+  - aan en weer uit: de taak op Te doen, met een melding;
+  - twee snelle klikken (aan en meteen uit): het vinkje uit, de taak op Te doen;
+  - Ctrl+Z na aanvinken: het vinkje uit, de taak blijft Klaar;
+  - daarna weer aanvinken, met de taak al op Klaar: geen melding, de taak blijft Klaar;
+  - een regel zonder taak: geen melding, de taak verandert niet;
+  - met Projecten alleen lezen: "Alleen de regel is afgevinkt", geen "Ongedaan maken", de taak
+    verandert niet.
+- `npm test` (2460) en `npm run typecheck`.
+
+## Stap 2-2c: bij delen en export volgt het vinkje de taak
+
+### Wat er nu kan
+
+- **Een download** (Word downloaden, PDF downloaden) heeft bij een regel met een taak het vinkje
+  van de taak: aangevinkt als ze Klaar is, anders niet. Dat geldt ook als het vinkje in de pagina
+  nog anders staat, en per hoofdstuk (subpagina) apart.
+  - De taken komen met de rechten van wie downloadt. Wie Projecten niet mag lezen, krijgt de
+    vinkjes zoals ze in de pagina staan.
+  - De pagina zelf verandert er niet door.
+- **Een kopie voor het dossier** (de Word-kopie, de vastgelegde PDF) heeft de vinkjes zoals ze in
+  de pagina staan. Die kan iedereen met Inhoud openen, en de stand van een taak is van
+  Projecten. Dat is dezelfde regel als bij de namen (2-1a).
+- **In de editor een balk** als vinkjes achterlopen op hun taak: "2 vinkjes lopen achter op hun
+  taak: 1 gaat aan, 1 gaat uit", met "Bijwerken" en "Laat zo".
+  - "Bijwerken" zet ze gelijk, als transactie. Geen taak gaat om (2-2b), en de pagina slaat
+    gewoon op.
+  - "Laat zo" verbergt de balk voor precies die regels. Loopt er een andere regel achter, of
+    een regel de andere kant op, dan komt hij terug.
+  - Openen verandert niets: de balk vraagt het, de pagina doet niets vanzelf.
+  - Delen schrijft ook niets vanzelf. De klant leest de opgeslagen pagina; met "Bijwerken"
+    voor het delen ziet hij de vinkjes van de taken.
+  - Vinkt iemand met alleen Projecten lezen een regel bewust af, dan telt die regel niet als
+    achter: anders stelde de balk meteen voor om het terug te zetten.
+- **Geen flits na een klik.** De luisteraar op het vinkje loopt nu in de capture-fase, vóór
+  TaskItem. Daardoor staat de gevraagde stand al klaar als de pagina verandert. "Ongedaan maken"
+  zet om dezelfde reden eerst de taak in de rij, en dan pas het vinkje.
+- **Afdrukken** (alleen CSS): het label van een taak komt niet op papier, de vinkjes wel, zoals
+  op het scherm. Dat gold al sinds 2-2a op staging: daar staat het label nog wel op papier.
+
+### Hoe het werkt
+
+- `supabase/functions/_shared/pageTaskChecks.ts`: `taskChecksFor` (per pagina en per regel) en
+  `withTaskChecks` (de body met de vinkjes van de taken, met hoeveel er aan en uit gaan). Een
+  gekopieerde pagina heeft dezelfde id's per regel als het origineel; daarom telt de pagina mee.
+  Gedeeld door de app en `page-export`; de CI doet er `deno check` op.
+- **Word** (`src/lib/pageWordExport.ts`) en **PDF** (`page-export`) lezen bij een download de
+  taken van de pagina en haar hoofdstukken. `page-export` doet dat met de JWT van wie exporteert,
+  nooit met de service-role. Lukt het lezen niet, dan de vinkjes van de pagina.
+- **De editor**: `taskCheckDrift` en `syncTaskChecks` in `pageEditorExtensions.ts`. De balk telt
+  met de standen die een klik al vroeg (2-2b), zodat hij niet even opflitst.
+
+### Getest
+
+- `pageTaskChecks.test.ts` (3):
+  - twee pagina's met dezelfde regel-id, elk met de eigen taak;
+  - aan en uit, ook genest; een regel zonder taak blijft zoals hij is;
+  - dezelfde body als er niets verandert.
+- **`npm run test:stromen -- documenten`: 62 stappen, 0 fout.** De nieuwe stap:
+  - de PDF-download heeft `☒` bij een taak die Klaar is, al staat het vinkje in de pagina uit;
+  - een PDF voor het dossier heeft `☐`;
+  - wie Projecten niet mag lezen, krijgt `☐`;
+  - de pagina is daarna niet veranderd.
+- **`ui.mjs paginas`: 26 stappen, 0 fout.** De nieuwe stap:
+  - de balk "2 vinkjes lopen achter op hun taak: 1 gaat aan, 1 gaat uit";
+  - Word downloaden met de vinkjes van de taken, en de pagina onveranderd;
+  - "Bijwerken": de vinkjes gelijk in de editor en in de opgeslagen pagina, en geen taak om;
+  - een taak die weer open is: "1 gaat uit", en "Laat zo" laat het vinkje staan;
+  - afdrukken (`emulateMedia print`): geen label, wel het vinkje.
+- In de stap van 2-2b: na een bewuste klik met alleen Projecten lezen geen balk "loopt
+  achter".
+- De stap van 2-2b opnieuw, met de luisteraar in de capture-fase.
+- `npm test` (2463), `npm run typecheck`, en `tsc` op `page-export` en de gedeelde modules.
+
+### Uitrollen
+
+`page-export` leest nu ook `tasks` (met de rechten van wie exporteert). Dat werkt op staging pas
+na een merge en de uitrol van de edge functions. Geen migratie.
 
 ## Nog niet
 
-- **Het vinkje en de taak samen (2-2b).** Nu staan ze los: aanvinken in de pagina verandert de
-  taak niet. Het label laat zien hoe de taak ervoor staat.
 - **Een taak die elders verandert**, krijgt pas een nieuw label als de app ververst (bijvoorbeeld
   na het sluiten van een taak of de pagina).
 - **Meer regels tegelijk** ("Maak taken van alle open punten").
