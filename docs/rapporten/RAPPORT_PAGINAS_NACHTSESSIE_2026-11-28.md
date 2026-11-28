@@ -13,6 +13,22 @@ van 27 november 17:07 (`416b997`), en wat ik je wil vragen.
 Het bouwplan is `docs/plannen/PAGINAS_BOUWPLAN_2026-11-27.md`. In §18 staan de stappen en de
 stand voor de overdracht.
 
+**Om 16:48 UTC fase 2 tot en met 2-2a naar staging gezet, op jouw verzoek** (`7250aff`).
+- Wat erin zit:
+  - kolommen (2-0);
+  - @-vermeldingen met de kiezer (2-1a, 2-1b);
+  - "Genoemd in" bij een klant en een project (2-1c);
+  - actiepunten worden taken (2-2a);
+  - geen namen meer in een kopie voor het dossier (vraag 12).
+- De uitrol is geslaagd (run 269).
+  - Beide migraties zijn toegepast; het deploylog noemt `20261128160000_paginas_vermeldingen.sql`
+    en `20261128170000_paginas_taken.sql`.
+  - De edge functions staan er.
+  - De rooktest is geslaagd, ook "elke organisatietabel is afgeschermd" (met `page_mentions`).
+- De CI op staging (run 321) loopt nog.
+- Ververs open tabbladen. Een oude versie van de app kent kolommen en vermeldingen niet, en
+  opent zo'n pagina alleen om te lezen.
+
 **Om 14:39 UTC ook de PDF (1B-5) naar staging gezet, op jouw verzoek** (`abe8b06`).
 - De uitrol is geslaagd. `page-export` staat er; de rooktest heeft dat nagekeken.
 - De CI op staging (run 317) is helemaal groen.
@@ -55,7 +71,7 @@ op 1A-5d na. Fase 2 staat nu in stappen in §18 van het bouwplan.
     export zien een gewone takenlijst.
   - Een migratie: `20261128170000_paginas_taken.sql`.
   - Het vinkje en de taak samen komen in 2-2b.
-- Dit staat op de branch tot je zegt dat het naar staging mag. De migratie moet uiterlijk
+- Om 16:48 op staging gezet (`7250aff`), met beide migraties. Daarvoor gold: de migratie moest uiterlijk
   samen met de @-kiezer naar staging. Komt de app eerder live dan de migratie, dan weigert de
   database de vermeldingen die de kiezer maakt.
 
@@ -272,7 +288,7 @@ op 1A-5d na. Fase 2 staat nu in stappen in §18 van het bouwplan.
 Geen migraties. 1B-5 brengt een nieuwe edge function mee (`page-export`), en een nieuw pad in
 de media-worker, die je zelf uitrolt.
 
-Na de merge van 14:39, op de branch (fase 2):
+Na de merge van 14:39 gebouwd, en om 16:48 naar staging gezet (`7250aff`, fase 2):
 
 | Stap | Wat | Changelog |
 | --- | --- | --- |

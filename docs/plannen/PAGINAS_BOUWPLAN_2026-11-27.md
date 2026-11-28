@@ -525,7 +525,8 @@ akkoord is.
 **Fase 2, in tussenstappen (ingedeeld op 28 november, na "Merge naar staging en houw verder"):**
 
 Fase 1 is af, op 1A-5d na (dat wacht op twee besluiten). Fase 2 volgt §13. Alles blijft op de
-branch tot de gebruiker zegt dat het naar staging mag.
+branch tot de gebruiker zegt dat het naar staging mag. 2-0 tot en met 2-2a staan sinds 28
+november 16:48 op staging (`7250aff`), op verzoek van de gebruiker.
 
 | Stap | Wat | Status |
 | --- | --- | --- |
