@@ -20,6 +20,7 @@ import { GalleryTab, formatConfig, galleryFormatLabels, galleryStatusLabels } fr
 import { ProjectAuditFeed } from './AuditLog';
 import { DocumentGlyph, documentAccentColor, officeDocumentLabel } from '../components/DriveGlyphs';
 import { relativeTime, type AuditTarget } from '../lib/auditLog';
+import { MentionedIn } from './MentionedIn';
 import { recentProjectContent, type RecentContentItem } from '../lib/projectOverview';
 import type { Permissions } from '../lib/permissions';
 import { supabase } from '../lib/supabase';
@@ -1355,6 +1356,9 @@ export function ProjectPage({
                   })}
                 </div>}
           </article>}
+
+          {/* De pagina's die dit project met @ noemen (stap 2-1c). */}
+          {canReadContent && <MentionedIn organizationId={organizationId} kind="project" entityId={project.id} data={data} refreshKey={refreshKey} onOpen={onEditDocument} />}
 
           {/* De albums van dit project. Een tik opent het album in het tabblad
               Galerij; terug brengt je daar naar de lijst. */}

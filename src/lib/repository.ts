@@ -1957,6 +1957,32 @@ export async function loadPage(documentId: UUID, organizationId: UUID): Promise<
 }
 
 /**
+ * Welke pagina's een klant of project noemen (stap 2-1c, "Genoemd in"): alleen
+ * de ids. De rest staat al in data.documents.
+ *
+ * Lezen gaat langs de regels van documents (Inhoud lezen, niet in de
+ * prullenbak) en de modulepoort; de organisatie komt uit de sessie.
+ *
+ * Ontbreekt de tabel (de app staat eerder live dan migratie
+ * 20261128160000), dan niets, en geen fout op elk klant- en projectscherm.
+ * Alleen dat geval: een andere fout hoort het paneel te zeggen.
+ */
+export async function loadMentionedIn(organizationId: UUID, kind: 'client' | 'project', entityId: UUID): Promise<UUID[]> {
+  const { data, error } = await supabase
+    .from('page_mentions')
+    .select('document_id')
+    .eq('organization_id', organizationId)
+    .eq('kind', kind)
+    .eq('entity_id', entityId);
+  if (error) {
+    const message = `${error.message ?? ''} ${error.details ?? ''}`;
+    if (error.code === '42P01' || /page_mentions.*(does not exist|schema cache)|relation .*page_mentions/i.test(message)) return [];
+    throw error;
+  }
+  return (data ?? []).map(row => (row as { document_id: UUID }).document_id);
+}
+
+/**
  * Een pagina opslaan, maar alleen als niemand er intussen iets in schreef:
  * edit_version moet nog zijn wat de editor kent. De database verhoogt hem bij
  * elke nieuwe inhoud of titel (20261127130000). Geeft `ok: false` als iemand
