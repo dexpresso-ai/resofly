@@ -218,14 +218,19 @@ Voor "Genoemd in" (2-1c) geldt hetzelfde, zie daar.
   - Het haalt opnieuw op als de app ververst, ook na het sluiten van een pagina.
   - De lijst blijft daarbij staan tot het nieuwe antwoord er is. Leeg maken bij elke ververs
     deed het paneel na elke opslag terugspringen naar "Laden…".
+  - Elk antwoord hoort bij de klant of het project waarvoor het kwam. Het klantscherm blijft
+    staan als je naar een andere klant gaat (een chip met "Klant openen"). Een gewone state
+    toonde dan even de lijst van de vorige klant.
 - **Ontbreekt `page_mentions` nog** (de app eerder live dan de migratie), dan toont het paneel
-  niets in plaats van een fout op elk klant- en projectscherm. Alleen dat geval: elke andere fout
-  zegt het paneel.
+  niets in plaats van een fout op elk klant- en projectscherm (`isMissingMentionsTable`). Alleen
+  als de melding `page_mentions` noemt: elke andere fout, zoals geen rechten, zegt het paneel.
 
 ### Getest
 
-- `pageMentionedIn.test.ts` (3): de plek, ook "Ander dossier"; de volgorde; geen prullenbak,
-  geen andere documenten, en niets wat de app niet geladen heeft.
+- `pageMentionedIn.test.ts` (4): de plek, ook "Ander dossier"; de volgorde; geen prullenbak,
+  geen andere documenten, en niets wat de app niet geladen heeft. En de ontbrekende tabel, met
+  de melding zoals de lokale PostgREST die geeft (PGRST205); geen rechten of een andere tabel
+  blijven een fout.
 - **`ui.mjs paginas`: 22 stappen, 0 fout.** De nieuwe stap draait tegen de echte database:
   - bij de klant de pagina's die hem noemen, in de volgorde van de database, met het aantal en
     de plek (project, klant B, het eigen dossier);
@@ -243,7 +248,9 @@ Voor "Genoemd in" (2-1c) geldt hetzelfde, zie daar.
   nagebootste backend heeft geen pagina's, dus daar staat geen paneel; het gevulde paneel op een
   telefoon toetst de schermtest hierboven.
 - `npm run test:loading`: alle controles geslaagd.
-- `npm test` (2457) en `npm run typecheck`.
+- `npm test` (2458) en `npm run typecheck`.
+- Na het nalezen kwamen er twee dingen bij: het antwoord per klant of project, en de test van de
+  ontbrekende tabel. Daarna draaide `ui.mjs paginas` opnieuw: 22 stappen, 0 fout.
 
 ### Uitrollen
 

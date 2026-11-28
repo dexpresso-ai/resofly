@@ -28,25 +28,28 @@ export function MentionedIn({ organizationId, kind, entityId, data, refreshKey =
   onOpen: (doc: InternalDocument) => void;
 }) {
   const hasPages = data.documents.some(doc => doc.format === 'page');
-  const [ids, setIds] = useState<UUID[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [showAll, setShowAll] = useState(false);
-
-  // Leeg alleen bij een andere klant of een ander project. Bij een ververs
-  // blijft de lijst staan tot het nieuwe antwoord er is: de app ververst na
-  // elke opslag, en dan knipperde het paneel steeds naar "Laden…".
-  useEffect(() => {
-    setIds(null); setError(null); setShowAll(false);
-  }, [organizationId, kind, entityId]);
+  // Elk antwoord hoort bij de klant of het project waarvoor het kwam. Het
+  // klantscherm blijft staan als je naar een andere klant gaat (een chip met
+  // "Klant openen"); met een gewone state toonde het paneel dan even de lijst
+  // van de vorige klant. Bij een ververs blijft de lijst wel staan tot het
+  // nieuwe antwoord er is: de app ververst na elke opslag, en leeg maken liet
+  // het paneel steeds terugspringen naar "Laden…".
+  const target = `${organizationId}:${kind}:${entityId}`;
+  const [loaded, setLoaded] = useState<{ target: string; ids: UUID[] } | null>(null);
+  const [failed, setFailed] = useState<{ target: string; message: string } | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const ids = loaded?.target === target ? loaded.ids : null;
+  const error = failed?.target === target ? failed.message : null;
+  const showAll = expanded === target;
 
   useEffect(() => {
     if (!hasPages) return;
     let alive = true;
     loadMentionedIn(organizationId, kind, entityId)
-      .then(rows => { if (alive) { setIds(rows); setError(null); } })
-      .catch(e => { if (alive) setError(e instanceof Error ? e.message : 'Laden mislukt.'); });
+      .then(rows => { if (alive) { setLoaded({ target, ids: rows }); setFailed(null); } })
+      .catch(e => { if (alive) setFailed({ target, message: e instanceof Error ? e.message : 'Laden mislukt.' }); });
     return () => { alive = false; };
-  }, [organizationId, kind, entityId, refreshKey, hasPages]);
+  }, [organizationId, kind, entityId, target, refreshKey, hasPages]);
 
   // Uit de ids en de geladen pagina's samen. Het antwoord en het verversen van
   // de app komen in willekeurige volgorde binnen; zo klopt de lijst in beide.
@@ -83,7 +86,7 @@ export function MentionedIn({ organizationId, kind, entityId, data, refreshKey =
           </time>}
         </button>;
       })}
-      {rows.length > MENTIONED_IN_LIMIT && !showAll && <button type="button" className="client-overview-more-link" onClick={() => setShowAll(true)}>
+      {rows.length > MENTIONED_IN_LIMIT && !showAll && <button type="button" className="client-overview-more-link" onClick={() => setExpanded(target)}>
         +{rows.length - MENTIONED_IN_LIMIT} meer
       </button>}
     </div>}

@@ -533,7 +533,8 @@ branch tot de gebruiker zegt dat het naar staging mag.
 | 2-1a | @-vermeldingen, de basis: een knoop `mention` met alleen de soort (klant, project, taak, factuur, collega) en het id. De database neemt hem aan, en weigert een vermelding van iets uit een andere organisatie. De editor toont hem; Word, PDF, de zoekindex, Gerrie en de klant krijgen de naam alleen met de rechten van wie kijkt. Een tabel voor "Genoemd in", bijgehouden door de database. | gebouwd op 28 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_VERMELDINGEN_2026-11-28.md`. Migratie `20261128160000_paginas_vermeldingen.sql` (`page_mentions`). |
 | 2-1b | De @-kiezer in de editor: na @ zoeken in de klanten, projecten, taken, facturen en collega's die je mag zien. De chip toont de naam van nu, en opent wat hij noemt. | gebouwd op 28 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_VERMELDINGEN_2026-11-28.md` (stap 2-1b). Moet samen met de migratie van 2-1a naar staging. |
 | 2-1c | "Genoemd in" bij een klant en een project: de pagina's die hen noemen, voor zover je die mag lezen. | gebouwd op 28 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_VERMELDINGEN_2026-11-28.md` (stap 2-1c). Geen migratie; leest `page_mentions` van 2-1a, dus samen met of na die migratie naar staging. |
-| 2-2 | Actiepunten worden taken: een taak in een pagina wordt met één klik een taak in het project, met een link terug. | nog te ontwerpen |
+| 2-2a | Actiepunten worden taken: een regel in een takenlijst wordt met één klik een taak, in het project van de pagina. De taak onthoudt uit welke pagina en regel ze komt. In de pagina een label met de stand van de taak; in het taakvenster "Uit pagina". | ontworpen op 28 november (keuzes hieronder); nog te bouwen |
+| 2-2b | Het vinkje en de taak samen: aanvinken in de pagina zet de taak op Klaar, uitvinken terug op Te doen. Bij delen en export volgt het vinkje de taak (een momentopname). | nog te bouwen, na 2-2a |
 | 2-3 | Levende blokken: open taken, uren tegen budget, openstaande facturen, met de rechten van wie kijkt; bij delen en export een momentopname. | nog te ontwerpen |
 | 2-4 | Sjablonen met `mergeTokens`, en projectsjablonen die een paginaboom aanmaken. | nog te ontwerpen |
 | 2-5 | Opmerkingen bij een blok. | nog te ontwerpen |
@@ -567,6 +568,40 @@ branch tot de gebruiker zegt dat het naar staging mag.
   vermelding vallen die hij niet kent, zoals bij een afbeelding uit een ander dossier.
 - **"Genoemd in"** komt uit een tabel die de database bij elke opslag bijhoudt. De lijst loopt
   langs de regels van `documents`: Inhoud mogen lezen, en niet in de prullenbak.
+
+**Keuzes voor "actiepunten worden taken" (2-2), vastgelegd bij het ontwerpen (28 november):**
+
+- **Wie: wie klikt, met de eigen rechten.**
+  - Nodig zijn Inhoud schrijven (je werkt in de pagina) en Projecten schrijven (de taak).
+    Zonder Projecten schrijven is er geen knop.
+  - De taak komt langs dezelfde weg als "+ Taak" en "Op de planning" bij een ticket: een
+    insert onder de RLS, met de sessie van wie klikt.
+  - Gerrie, de MCP en de API maken in deze stap geen taken uit een pagina. Dat kan later als
+    voorstel (regel 2).
+- **Waar: het project van de pagina.**
+  - Staat de pagina bij een klant zonder project, dan wordt het een taak bij die klant zonder
+    project. In het eigen dossier wordt het een losse taak.
+  - Zonder datum. De taak staat dan bij het project onder Te doen, en in de weekplanner bij de
+    ongeplande taken.
+- **Wat: de tekst van de regel wordt de titel.**
+  - Vermeldingen gaan mee met de naam zoals jij die ziet. Een taak typ je ook zelf in.
+  - Een lege regel wordt geen taak.
+- **De link terug staat bij de taak, niet in de pagina.** Twee kolommen op `tasks`: `page_id`
+  en `page_block_id`. Dat laatste is het id dat elke regel al heeft (UniqueID).
+  - De pagina zelf verandert niet. Wie Projecten niet mag lezen, ziet een gewone takenlijst,
+    zonder iets van de taak (regel 3).
+  - De klant en de export zien de regel, niet de taak.
+  - Er komt geen nieuwe inhoud in de body, dus `page_body_problem` blijft zoals het is.
+  - De database controleert dat `page_id` een pagina is van dezelfde organisatie, en dat
+    degene die de taak maakt die pagina mag lezen. Zo gaat het nu ook met de klant, het project
+    en het ticket van een taak.
+  - Een regel die weg is, laat de taak staan. "Uit pagina" opent dan de pagina.
+- **In de editor: een label achter de regel** met de stand van de taak (Te doen, Bezig, Review,
+  Klaar), uit de geladen taken. Het label opent de taak.
+- **In het taakvenster: "Uit pagina"** met de titel van de pagina en een knop die haar opent.
+  Alleen met Inhoud lezen; zonder dat recht geeft de database de titel niet.
+- **Het vinkje volgt in 2-2b.** In 2-2a staan het vinkje in de pagina en de stand van de taak
+  nog los van elkaar; het label laat zien hoe de taak ervoor staat.
 
 **1C wordt gebouwd volgens de lezing van §1 (28 november):**
 

@@ -2,6 +2,7 @@ import type { DriveDragItem, DriveLocation } from './driveDnd';
 import type { ExportPageRequest } from './dataExport';
 import type { FolderShareGap } from './shares';
 import { DOCUMENT_CORE_COLUMNS } from './documentColumns';
+import { isMissingMentionsTable } from './pageMentionedIn';
 import { supabase, supabaseAuth } from './supabase';
 import { recordInvitationBlockedBySeats } from '../services/licenseService';
 import { deleteR2Object } from './r2-api';
@@ -1975,8 +1976,7 @@ export async function loadMentionedIn(organizationId: UUID, kind: 'client' | 'pr
     .eq('kind', kind)
     .eq('entity_id', entityId);
   if (error) {
-    const message = `${error.message ?? ''} ${error.details ?? ''}`;
-    if (error.code === '42P01' || /page_mentions.*(does not exist|schema cache)|relation .*page_mentions/i.test(message)) return [];
+    if (isMissingMentionsTable(error)) return [];
     throw error;
   }
   return (data ?? []).map(row => (row as { document_id: UUID }).document_id);

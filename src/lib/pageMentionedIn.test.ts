@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mentionedInPages, mentionedInPlace, type MentionedInPlaces } from './pageMentionedIn.ts';
+import { isMissingMentionsTable, mentionedInPages, mentionedInPlace, type MentionedInPlaces } from './pageMentionedIn.ts';
 
 // Stap 2-1c: "Genoemd in" maakt van de ids uit page_mentions pagina's met een
 // titel en een plek. Welke ids je krijgt, bepaalt de database (de RLS); dat
@@ -47,4 +47,16 @@ test('de pagina\'s achter de ids: het laatst bewerkt bovenaan, zonder prullenbak
 test('bij gelijke tijd op titel', () => {
   const documents = [doc('x', { title: 'Zomer' }), doc('y', { title: 'Actie' })];
   assert.deepEqual(mentionedInPages(['x', 'y'], documents, places).map(row => row.title), ['Actie', 'Zomer']);
+});
+
+test('een ontbrekende tabel page_mentions (de app eerder live dan de migratie): alleen dan niets, elke andere fout blijft een fout', () => {
+  // Zo antwoordt PostgREST (gezien tegen de lokale stack, met een tabel die niet bestaat).
+  assert.equal(isMissingMentionsTable({ code: 'PGRST205', details: null, message: "Could not find the table 'public.page_mentions' in the schema cache" }), true);
+  assert.equal(isMissingMentionsTable({ code: '42P01', message: 'relation "public.page_mentions" does not exist' }), true);
+  // Geen rechten, een andere tabel, een tabel met een langere naam, of geen fout: niet.
+  assert.equal(isMissingMentionsTable({ code: '42501', message: 'permission denied for table page_mentions' }), false);
+  assert.equal(isMissingMentionsTable({ code: 'PGRST205', message: "Could not find the table 'public.documents' in the schema cache" }), false);
+  assert.equal(isMissingMentionsTable({ code: 'PGRST205', message: "Could not find the table 'public.page_mentions_oud' in the schema cache" }), false);
+  assert.equal(isMissingMentionsTable({ code: '42P01', message: 'relation "public.documents" does not exist' }), false);
+  assert.equal(isMissingMentionsTable(null), false);
 });

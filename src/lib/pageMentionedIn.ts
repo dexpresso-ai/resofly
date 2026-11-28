@@ -48,6 +48,23 @@ export function mentionedInPlace(doc: Pick<Doc, 'client_id' | 'project_id'>, pla
 }
 
 /**
+ * Ontbreekt page_mentions nog? Dat is zo als de app eerder live staat dan
+ * migratie 20261128160000. Dan geeft "Genoemd in" niets, en geen fout op elk
+ * klant- en projectscherm.
+ *
+ * PostgREST zegt dan PGRST205 ("Could not find the table
+ * 'public.page_mentions' in the schema cache"), Postgres zelf 42P01. Alleen
+ * als de melding page_mentions noemt. Een andere fout, zoals geen rechten,
+ * hoort het paneel te zeggen.
+ */
+export function isMissingMentionsTable(error: { code?: string | null; message?: string | null; details?: string | null } | null | undefined): boolean {
+  if (!error) return false;
+  const text = `${error.message ?? ''} ${error.details ?? ''}`;
+  if (!/page_mentions\b/.test(text)) return false;
+  return error.code === 'PGRST205' || error.code === '42P01' || /does not exist|schema cache/i.test(text);
+}
+
+/**
  * De pagina's achter de ids, het laatst bewerkt bovenaan. Alleen pagina's, en
  * niets uit de prullenbak: de database geeft die ook niet, maar zo blijft het
  * kloppen als de geladen lijst achterloopt op de database.
