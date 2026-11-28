@@ -184,6 +184,6 @@ pas naar staging als de gebruiker het zegt.
 
   Het scenario: 5 stappen plus de voorbereiding, 0 fout.
 - **Schermafdrukken nagekeken:** het venster met de opties, licht en donker, en op de telefoon.
-- **De Word-stap met afbeeldingen in `ui.mjs paginas`** slaagt. De rest van `paginas` en
-  `paginadrive` liep nog bij het vastleggen.
+- **`ui.mjs paginas` (16 stappen) en `paginadrive` (8), elk plus de voorbereiding:** 0 fout, ook
+  de Word-stappen met afbeeldingen, de huisstijlletter en de subpagina.
 - **`npm test`** (2415) en **`npm run typecheck`**.
