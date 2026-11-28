@@ -9,6 +9,10 @@
 // Het venster doet zelf niets: de editor slaat eerst op en maakt het bestand
 // (PageEditor.tsx). Wat er loopt, houdt de editor bij. Sluit je het venster
 // terwijl er iets loopt, dan gaat dat door, en kan er geen tweede bij komen.
+//
+// Stap 1B-4: de opties voor Word (voorblad, inhoudsopgave, subpagina's als
+// hoofdstukken). Ze staan bij de twee Word-knoppen: afdrukken toont de
+// pagina zoals ze op het scherm staat, en kent ze niet.
 // ============================================================
 
 import { useEffect } from 'react';
@@ -17,12 +21,23 @@ import { useBackStep } from '../lib/useBackStep';
 
 export type PageExportAction = 'word' | 'kopie' | 'afdrukken';
 
-export function PageExportDialog({ busy, error, canCopy, onChoose, onClose }: {
+/** De opties voor Word (stap 1B-4). Standaard alles uit: dan is het bestand dat van 1B-3. */
+export type PageExportOptions = { cover: boolean; toc: boolean; chapters: boolean };
+
+export const NO_EXPORT_OPTIONS: PageExportOptions = { cover: false, toc: false, chapters: false };
+
+/** De subpagina's onder de pagina: hoeveel, of te veel. null zolang ze laden of als dat niet lukte. */
+export type PageExportSubpages = { count: number; tooMany: boolean; limit: number } | null;
+
+export function PageExportDialog({ busy, error, canCopy, options, subpages, onOptions, onChoose, onClose }: {
   /** Wat er nu loopt; zolang kun je niets anders kiezen. */
   busy: PageExportAction | null;
   error: string | null;
   /** Een Word-document in het dossier maken mag alleen wie Inhoud mag schrijven. */
   canCopy: boolean;
+  options: PageExportOptions;
+  subpages: PageExportSubpages;
+  onOptions: (options: PageExportOptions) => void;
   onChoose: (action: PageExportAction) => void;
   onClose: () => void;
 }) {
@@ -33,6 +48,17 @@ export function PageExportDialog({ busy, error, canCopy, onChoose, onClose }: {
     return () => document.removeEventListener('keydown', onKey);
   }, [onClose]);
 
+  const check = (key: keyof PageExportOptions, label: string, disabled = false) => (
+    <label className={`page-export-check${disabled ? ' is-disabled' : ''}`}>
+      <input
+        type="checkbox"
+        checked={options[key] && !disabled}
+        disabled={disabled || busy !== null}
+        onChange={event => onOptions({ ...options, [key]: event.target.checked })}
+      />
+      <span>{label}</span>
+    </label>
+  );
   const option = (action: PageExportAction, icon: JSX.Element, label: string, help: string) => (
     <button
       type="button"
@@ -57,12 +83,26 @@ export function PageExportDialog({ busy, error, canCopy, onChoose, onClose }: {
           <button type="button" className="page-editor-close" onClick={onClose} aria-label="Sluiten"><X size={16} /></button>
         </div>
         <p className="page-export-intro">Een kopie van de pagina zoals ze nu is, in je huisstijl. De pagina zelf verandert niet.</p>
+        <fieldset className="page-export-word-group">
+          <legend>Word</legend>
+          <div className="page-export-checks">
+            {check('cover', 'Voorblad: titel, klant, project, datum en logo')}
+            {check('toc', 'Inhoudsopgave vooraan')}
+            {subpages && subpages.count > 0 && check('chapters', `Subpagina's als hoofdstukken (${subpages.count})`)}
+            {subpages?.tooMany && <>
+              {check('chapters', 'Subpagina\'s als hoofdstukken', true)}
+              <p className="page-export-note">Er staan meer dan {subpages.limit} subpagina's onder deze pagina. Zoveel hoofdstukken passen niet in één bestand.</p>
+            </>}
+          </div>
+          <div className="page-export-options">
+            {option('word', <FileDown size={18} aria-hidden="true" />, 'Word downloaden', 'Een .docx-bestand op je computer.')}
+            {canCopy && option('kopie', <FilePlus2 size={18} aria-hidden="true" />, 'Maak er een Word-document van',
+              'Een Word-document naast de pagina, dat meteen opent. Voor de laatste puntjes: wat je daarin wijzigt, komt niet terug in de pagina.')}
+          </div>
+        </fieldset>
         <div className="page-export-options">
-          {option('word', <FileDown size={18} aria-hidden="true" />, 'Word downloaden', 'Een .docx-bestand op je computer.')}
-          {canCopy && option('kopie', <FilePlus2 size={18} aria-hidden="true" />, 'Maak er een Word-document van',
-            'Een Word-document naast de pagina, dat meteen opent. Voor de laatste puntjes: wat je daarin wijzigt, komt niet terug in de pagina.')}
           {option('afdrukken', <Printer size={18} aria-hidden="true" />, 'Afdrukken',
-            'Of bewaar de pagina als PDF: kies dat in het afdrukvenster van je browser.')}
+            'De pagina zoals op het scherm. Of bewaar haar als PDF: kies dat in het afdrukvenster van je browser.')}
         </div>
         {error && <p className="page-export-error" role="alert">{error}</p>}
       </div>

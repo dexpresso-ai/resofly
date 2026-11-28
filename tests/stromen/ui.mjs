@@ -3424,6 +3424,10 @@ async function scenarioPaginaexport() {
     { type: 'paragraph' },
   ] }, { ouder });
   verwacht(sqlRij(`select folder_id from public.documents where id = ${q(kind)}`).folder_id === null, 'een subpagina heeft zelf geen map');
+  const kleinkind = nieuwePagina(`Export kleinkind ${tag}`, { type: 'doc', content: [
+    { type: 'heading', attrs: { level: 1 }, content: [woord('Kop in het kleinkind')] },
+    { type: 'paragraph', content: [woord(`Tekst van het kleinkind ${tag}`)] },
+  ] }, { ouder: kind });
 
   const sluitPagina = async (page) => {
     await page.locator('.page-editor-bar .page-editor-close').click();
@@ -3513,6 +3517,54 @@ async function scenarioPaginaexport() {
     } finally {
       if (breed) await page.setViewportSize(breed);
     }
+    await sluitPagina(page);
+  });
+
+  await uiStap('Word met voorblad, inhoudsopgave vooraan en de subpagina\'s als hoofdstukken; de keuzes blijven bewaard', async () => {
+    const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+    const page = lid.page;
+    await openPagina(lid, ouder);
+    const venster = page.locator('.page-export');
+    await page.locator('.page-editor-export').click();
+    await venster.waitFor({ timeout: 10000 });
+    // Twee subpagina's onder de pagina: het kind en het kleinkind.
+    const hoofdstukken = venster.locator('.page-export-check').filter({ hasText: "Subpagina's als hoofdstukken (2)" });
+    await hoofdstukken.waitFor({ timeout: 10000 });
+    for (const optie of [venster.locator('.page-export-check').filter({ hasText: 'Voorblad' }), venster.locator('.page-export-check').filter({ hasText: 'Inhoudsopgave vooraan' }), hoofdstukken]) {
+      await optie.locator('input').check();
+    }
+    await beideThemas(lid, 'paginaexport-opties');
+    // Dicht en weer open: de keuzes staan er nog.
+    await page.keyboard.press('Escape');
+    await venster.waitFor({ state: 'detached', timeout: 5000 });
+    const download = await exporteerWord(page);
+    const delen = docxDelen(readFileSync(await download.path()));
+    const xml = delen.get('word/document.xml')?.toString('utf8') ?? '';
+    const [voorblad, rest] = xml.split('</w:sectPr></w:pPr></w:p>');
+    verwacht(rest, 'geen voorblad in een eigen sectie');
+    for (const zin of [`Export ouder ${tag}`, `Klant: ${w.klantA.name}`, new Date().getFullYear().toString()]) {
+      verwacht(voorblad.includes(zin), `"${zin}" staat niet op het voorblad`);
+    }
+    gelijk(xml.match(/<w:pStyle w:val="Title"\/>/g)?.length, 1, 'de titel staat één keer');
+    gelijk(xml.match(/fldCharType="begin"/g)?.length, 1, 'één inhoudsopgave');
+    const inhoudsopgave = rest.slice(rest.indexOf('TOCHeading'), rest.indexOf('fldCharType="end"'));
+    for (const regel of ['Afspraken', `Export kind ${tag}`, `Export kleinkind ${tag}`]) verwacht(inhoudsopgave.includes(regel), `"${regel}" staat niet in de inhoudsopgave`);
+    // Het kind begint op een nieuwe bladzijde als hoofdstuk; het kleinkind loopt door, een niveau lager.
+    verwacht(rest.includes(`<w:pStyle w:val="Heading1"/><w:pageBreakBefore/></w:pPr><w:r><w:t xml:space="preserve">Export kind ${tag}</w:t>`), 'het kind is geen hoofdstuk');
+    verwacht(rest.includes(`<w:pStyle w:val="Heading2"/></w:pPr><w:r><w:t xml:space="preserve">Export kleinkind ${tag}</w:t>`), 'het kleinkind staat niet onder het kind');
+    verwacht(rest.includes('<w:pStyle w:val="Heading3"/></w:pPr><w:r><w:t xml:space="preserve">Kop in het kleinkind</w:t>'), 'de kop in het kleinkind schoof niet op');
+    const volgorde = ['Afspraken', `Tekst van het hoofdstuk ${tag}`, `Tekst van het kleinkind ${tag}`].map(zin => rest.lastIndexOf(zin));
+    gelijk([...volgorde].sort((a, b) => a - b), volgorde, 'de volgorde: de pagina, het kind, het kleinkind');
+    // Elke stijl die het bestand gebruikt, bestaat.
+    const stijlen = new Set([...(delen.get('word/styles.xml')?.toString('utf8') ?? '').matchAll(/w:styleId="([^"]+)"/g)].map(m => m[1]));
+    for (const [, stijl] of xml.matchAll(/<w:pStyle w:val="([^"]+)"\/>/g)) verwacht(stijlen.has(stijl), `de stijl ${stijl} ontbreekt`);
+    // De keuzes zijn bewaard: weer open, alles nog aan.
+    await page.locator('.page-editor-export').click();
+    await venster.waitFor({ timeout: 10000 });
+    await hoofdstukken.waitFor({ timeout: 10000 });
+    gelijk(await venster.locator('.page-export-check input:checked').count(), 3, 'de keuzes zijn niet bewaard');
+    await venster.locator('.page-editor-close').click();
+    await venster.waitFor({ state: 'detached', timeout: 5000 });
     await sluitPagina(page);
   });
 

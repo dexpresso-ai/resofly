@@ -17,7 +17,7 @@ import type { CoreData, DataGroup, GroupData } from './dataGroups';
 import { formatISODate } from './dates';
 import { vatPeriodKey, vatPeriodsToFile, type VatPeriodDue } from './vatPeriods';
 import { runMatchRounds } from './bankMatch';
-import { dossierClientOf, type TreeFolder, type TreePage } from './pageTree';
+import { dossierClientOf, subpagesOf, type TreeFolder, type TreePage } from './pageTree';
 import { letterheadMissing, withoutUnloadedLetterhead } from './letterhead';
 import type { IbCorrectionCode, IncomeTaxInputs, IncomeTaxProfile } from './inkomstenbelasting';
 import type { XafReferences } from './xaf';
@@ -2167,6 +2167,57 @@ export async function pageTreePlace(pageId: UUID, organizationId: UUID): Promise
     project_id: page.project_id,
     folder_id: top.parent_id ? null : top.folder_id,
     document_type: page.document_type,
+  };
+}
+
+/** Zoveel subpagina's gaan hoogstens als hoofdstukken mee in één export (stap 1B-4). */
+export const EXPORT_SUBPAGE_LIMIT = 200;
+
+/**
+ * De subpagina's onder een pagina, in de volgorde van de boom (stap 1B-4: de
+ * subpagina's als hoofdstukken). Per laag één vraag op parent_id. Wat je niet
+ * mag zien, of wat in de prullenbak ligt, geeft de database niet (RLS).
+ * Hoogstens 20 lagen, zoals de boom in de database. `tooMany`: meer dan
+ * EXPORT_SUBPAGE_LIMIT; dan is de lijst niet compleet, en exporteren we ze niet.
+ */
+export async function listSubpages(pageId: UUID, organizationId: UUID): Promise<{ subpages: Array<{ page: TreePage; depth: number }>; tooMany: boolean }> {
+  const pages: TreePage[] = [];
+  const seen = new Set<UUID>([pageId]);
+  let parents: UUID[] = [pageId];
+  for (let depth = 0; parents.length > 0 && depth < 20; depth += 1) {
+    const level: TreePage[] = [];
+    // In stukken: een lange in-lijst past niet in één adres.
+    for (let i = 0; i < parents.length; i += 100) {
+      const { data, error } = await supabase.from('documents')
+        .select('id,title,parent_id,folder_id,client_id,project_id,position')
+        .eq('organization_id', organizationId).eq('format', 'page')
+        .in('parent_id', parents.slice(i, i + 100))
+        .limit(EXPORT_SUBPAGE_LIMIT + 1);
+      if (error) throw error;
+      for (const row of data as TreePage[]) {
+        if (seen.has(row.id)) continue;
+        seen.add(row.id);
+        level.push(row);
+      }
+    }
+    pages.push(...level);
+    if (pages.length > EXPORT_SUBPAGE_LIMIT) return { subpages: [], tooMany: true };
+    parents = level.map(page => page.id);
+  }
+  return { subpages: subpagesOf(pages, pageId), tooMany: false };
+}
+
+/** De naam van de klant en het project van een pagina, voor het voorblad (stap 1B-4). Wat je niet mag zien, blijft leeg. */
+export async function dossierNames(clientId: UUID | null, projectId: UUID | null, organizationId: UUID): Promise<{ client: string | null; project: string | null }> {
+  const [clientRes, projectRes] = await Promise.all([
+    clientId ? supabase.from('clients').select('name').eq('id', clientId).eq('organization_id', organizationId).maybeSingle() : null,
+    projectId ? supabase.from('projects').select('name').eq('id', projectId).eq('organization_id', organizationId).maybeSingle() : null,
+  ]);
+  if (clientRes?.error) throw clientRes.error;
+  if (projectRes?.error) throw projectRes.error;
+  return {
+    client: (clientRes?.data as { name?: string } | null | undefined)?.name?.trim() || null,
+    project: (projectRes?.data as { name?: string } | null | undefined)?.name?.trim() || null,
   };
 }
 

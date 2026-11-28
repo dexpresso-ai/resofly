@@ -14,14 +14,17 @@
 // zwaarder van wordt.
 // ============================================================
 
-import { buildPageDocx, type PageDocxContext, type PageDocxFont, type PageDocxImage } from '../../supabase/functions/_shared/pageDocx.ts';
+import {
+  buildPageDocx, type PageDocxChapter, type PageDocxContext, type PageDocxCover, type PageDocxFont, type PageDocxImage,
+} from '../../supabase/functions/_shared/pageDocx.ts';
 import { pageExportFonts, type PageExportFont } from '../../supabase/functions/_shared/pageExportFonts.ts';
 import { sfntFamilyName, woffToSfnt } from '../../supabase/functions/_shared/woff.ts';
 import { pageReferences, wordFileName } from './pageExportParts';
+import { dataUrlBytes } from './documentLayout';
 import { uploadDocumentDocx } from './office';
 import { fetchStoredFileBlob } from './r2';
 import { deleteR2Object } from './r2-api';
-import { attachmentInfo, insertRow, loadPage, pageTitle, pageTreePlace } from './repository';
+import { attachmentInfo, dossierNames, insertRow, loadPage, pageTitle, pageTreePlace, type PageRow } from './repository';
 import type { InternalDocument } from '../types';
 
 /**
@@ -45,20 +48,94 @@ async function loadFont(font: PageExportFont): Promise<PageDocxFont> {
   return { family, regular, bold };
 }
 
+/** Wat de export van de huisstijl gebruikt: de letters, en voor het voorblad de naam en het logo. */
+export type PageWordHouseStyle = {
+  brand_heading_font?: string | null;
+  brand_body_font?: string | null;
+  company_name?: string | null;
+  brand_logo_data_url?: string | null;
+};
+
+/** De keuzes in het exportvenster (stap 1B-4). */
+export type PageWordOptions = {
+  cover?: boolean;
+  toc?: boolean;
+  /** De subpagina's als hoofdstukken, in de volgorde van de boom (listSubpages). */
+  chapters?: Array<{ id: string; title: string; depth: number }>;
+};
+
+/** Zoveel subpagina's tegelijk ophalen: genoeg voor snelheid, zonder de verbinding te verstoppen. */
+const CHAPTER_LOADS = 6;
+
+/** Het logo als png, jpeg of gif; iets anders (svg, webp) kan Word niet tonen, en dan de naam (pageDocx). */
+function coverLogo(dataUrl: string | null | undefined): PageDocxImage | null {
+  const logo = dataUrlBytes(dataUrl);
+  if (!logo) return null;
+  const contentType = logo.mime === 'image/jpg' ? 'image/jpeg' : logo.mime;
+  return /^image\/(png|jpeg|gif)$/.test(contentType) ? { bytes: logo.bytes, contentType } : null;
+}
+
+async function coverOf(row: PageRow, organizationId: string, houseStyle: PageWordHouseStyle | null): Promise<PageDocxCover> {
+  // Mag je de klant of het project niet zien, dan staat die regel er niet.
+  const names = await dossierNames(row.client_id ?? null, row.project_id ?? null, organizationId).catch(() => ({ client: null, project: null }));
+  return {
+    lines: [names.client ? `Klant: ${names.client}` : '', names.project ? `Project: ${names.project}` : ''],
+    date: new Date().toLocaleDateString('nl-NL', { day: 'numeric', month: 'long', year: 'numeric' }),
+    company: houseStyle?.company_name?.trim() || null,
+    logo: coverLogo(houseStyle?.brand_logo_data_url),
+  };
+}
+
+/**
+ * De subpagina's als hoofdstukken, in de gegeven volgorde. Laadt er een niet,
+ * dan geen export: een bestand waar stil een hoofdstuk uit ontbreekt, valt
+ * pas op als het bij de klant ligt.
+ */
+async function loadChapters(chapters: NonNullable<PageWordOptions['chapters']>, organizationId: string): Promise<PageDocxChapter[]> {
+  const out: PageDocxChapter[] = new Array(chapters.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < chapters.length) {
+      const index = next;
+      next += 1;
+      const chapter = chapters[index];
+      try {
+        const row = await loadPage(chapter.id, organizationId);
+        out[index] = { title: row.title, body: row.body, depth: chapter.depth };
+      } catch {
+        throw new Error(`De subpagina "${chapter.title.trim() || 'Naamloze pagina'}" kon niet worden geladen, dus er is geen export gemaakt. Probeer het zo nog eens.`);
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(CHAPTER_LOADS, chapters.length) }, worker));
+  return out;
+}
+
 /**
  * De opgeslagen pagina als .docx, in de huisstijl. De editor slaat eerst op:
  * de export leest wat in de database staat, zoals de server dat straks ook doet.
+ * Met de opties van het exportvenster (stap 1B-4): een voorblad, een
+ * inhoudsopgave vooraan, en de subpagina's als hoofdstukken.
  */
 export async function buildPageWord(
   pageId: string,
   organizationId: string,
-  houseStyle: { brand_heading_font?: string | null; brand_body_font?: string | null } | null,
+  houseStyle: PageWordHouseStyle | null,
+  options: PageWordOptions = {},
 ): Promise<{ blob: Blob; fileName: string }> {
   const row = await loadPage(pageId, organizationId);
-  const refs = pageReferences(row.body);
+  const chapters = options.chapters?.length ? await loadChapters(options.chapters, organizationId) : [];
+  // Wat de pagina en haar hoofdstukken noemen, samen: één bestand, één context.
+  const all = [row.body, ...chapters.map(chapter => chapter.body)].map(pageReferences);
+  const unique = (ids: string[]) => [...new Set(ids)];
+  const refs = {
+    pages: unique(all.flatMap(found => found.pages)),
+    files: unique(all.flatMap(found => found.files)),
+    images: unique(all.flatMap(found => found.images)),
+  };
   const fonts = pageExportFonts(houseStyle);
   type Entry<T> = [string, T | null];
-  const [titles, fileNames, images, body, heading] = await Promise.all([
+  const [titles, fileNames, images, body, heading, cover] = await Promise.all([
     Promise.all(refs.pages.map(async (id): Promise<Entry<string>> => [id, await pageTitle(id, organizationId).catch(() => null)])),
     Promise.all(refs.files.map(async (id): Promise<Entry<string>> => [id, (await attachmentInfo(id, organizationId).catch(() => null))?.name ?? null])),
     Promise.all(refs.images.map(async (id): Promise<Entry<PageDocxImage>> => {
@@ -74,6 +151,7 @@ export async function buildPageWord(
     })),
     loadFont(fonts.body),
     fonts.heading.key === fonts.body.key ? null : loadFont(fonts.heading),
+    options.cover ? coverOf(row, organizationId, houseStyle) : null,
   ]);
   const known = <T,>(entries: Entry<T>[]): Record<string, T> =>
     Object.fromEntries(entries.filter((entry): entry is [string, T] => entry[1] !== null));
@@ -85,7 +163,8 @@ export async function buildPageWord(
     font: body,
     headingFont: heading ?? body,
   };
-  return { blob: await buildPageDocx(row.title, row.body, context), fileName: wordFileName(row.title) };
+  const blob = await buildPageDocx(row.title, row.body, context, { cover, toc: Boolean(options.toc), chapters });
+  return { blob, fileName: wordFileName(row.title) };
 }
 
 /** Laat de browser het bestand opslaan. */

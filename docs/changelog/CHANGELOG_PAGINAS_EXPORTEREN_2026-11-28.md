@@ -98,3 +98,92 @@ pas naar staging als de gebruiker het zegt.
 - **Schermafdrukken nagekeken:** het venster licht en donker, op een breed scherm en op de
   telefoon, en de geopende Word-editor.
 - **`npm test`** (2410), **`npm run typecheck`** en **`npm run test:terugknop`** (18 gelukt).
+
+## Later die dag: de opties voor Word (1B-4a)
+
+### Wat er nu kan
+
+- **In het exportvenster drie keuzes, bij de twee Word-knoppen.** Ze gelden voor Word downloaden
+  en voor "Maak er een Word-document van". Afdrukken toont de pagina zoals op het scherm, en
+  kent ze niet. De keuzes blijven bewaard in je browser.
+  - **Voorblad:**
+    - het logo, of de naam van je bedrijf als er geen logo is;
+    - de titel van de pagina;
+    - de klant en het project, als je die mag zien;
+    - de datum van vandaag.
+
+    Het voorblad heeft geen paginanummer, en de titel staat niet nog eens boven de tekst.
+  - **Inhoudsopgave vooraan:** van het hele bestand, met de hoofdstukken erin. Een
+    inhoudsopgave-blok in de pagina valt dan weg.
+  - **Subpagina's als hoofdstukken**, met het aantal erbij. De optie staat er alleen als er
+    subpagina's zijn.
+    - De volgorde is die van de boom.
+    - Een directe subpagina begint op een nieuwe bladzijde, met haar titel als kop 1. Haar
+      eigen koppen schuiven een niveau op.
+    - Een subpagina daaronder loopt door, als kop 2.
+- **Zonder opties is het bestand byte voor byte dat van 1B-3.** Nagelopen met de module van 1B-3,
+  met en zonder huisstijl.
+
+### Keuzes
+
+- **De nummering loopt door na het voorblad:** de eerste bladzijde tekst is "Pagina 2 van 5".
+  - Opnieuw bij 1 beginnen kan in Word, maar LibreOffice (en dus Collabora, de Word-kopie en
+    straks de PDF) telt het totaal dan verkeerd.
+  - In een proef kwam er "Pagina 1 van 1" en "totaal 5" bij vier bladen, ook na opnieuw
+    opslaan. Het aantal bladzijden van een sectie (SECTIONPAGES) kent LibreOffice niet.
+  - Doorlopend klopt het totaal, ook na opnieuw opslaan.
+- **Eén inhoudsopgave per bestand.** Een inhoudsopgave in Word somt na bijwerken altijd het
+  hele document op. Twee zouden dus dezelfde lijst tonen.
+  - Met "Inhoudsopgave vooraan" vallen de blokken in de pagina's weg.
+  - Zonder die optie blijft het blok in de pagina zelf, nu met de hoofdstukken erin. Een blok
+    in een hoofdstuk valt weg.
+- **Een hoofdstuk dat niet laadt, laat de export mislukken**, met de naam van de subpagina in de
+  melding. Een bestand waar stil een hoofdstuk uit ontbreekt, valt pas op als het bij de klant
+  ligt.
+  - Een subpagina die je niet mag zien, of die in de prullenbak ligt, telt niet mee. Die
+    geeft de database niet.
+- **Hoogstens 200 subpagina's.** Staan er meer onder de pagina, dan zegt het venster dat, en
+  kan de optie niet aan.
+- **Kop 4 tot en met 6** staan alleen in het bestand als er hoofdstukken zijn. Dieper dan kop 6
+  gaat het niet: daaronder wordt alles kop 6.
+- **Het logo als png, jpeg of gif.** Een svg of webp kan Word niet tonen; dan staat de naam van
+  het bedrijf er, zoals bij de PDF van een factuur.
+- **Nog niet: briefpapier (1B-4b).** Een briefpapier is in ResoFly een PDF of een afbeelding. In
+  een .docx kan alleen een afbeelding.
+
+### Getest (1B-4a)
+
+- **`pageDocx.test.ts`, vijf nieuwe tests:**
+  - zonder opties gelijk;
+  - het voorblad (eigen sectie zonder voet, het logo op maat, een svg-logo wordt de naam);
+  - de inhoudsopgave (één veld, de juiste niveaus);
+  - de hoofdstukken (diepte, opgeschoven koppen, nieuwe bladzijde, kop 6 als plafond, een
+    kapotte inhoud);
+  - alles tegelijk.
+
+  Elke stijl die het bestand gebruikt, bestaat in `styles.xml`; dat ziet de XSD niet.
+- **Een proefbestand met alles aan:** de proefpagina van 1B-2 met drie hoofdstukken, een
+  voorblad met logo, en de huisstijlletters.
+  - Het voldoet aan het schema (ECMA-376), ook na opnieuw opslaan in LibreOffice.
+  - Als PDF, vóór en na opnieuw opslaan, nagekeken:
+    - het voorblad zonder paginanummer;
+    - de inhoudsopgave met de hoofdstukken op hun niveau;
+    - elk hoofdstuk op een nieuwe bladzijde;
+    - "Pagina 3 van 5" klopt.
+  - Het bestand staat naast het rapport: `docs/rapporten/PROEF_WORD_OPTIES_2026-11-28.docx`.
+- **`ui.mjs paginaexport`, een nieuwe stap:**
+  - alle drie de opties aan bij een pagina met een kind en een kleinkind;
+  - in de download staan:
+    - het voorblad in een eigen sectie, met de klant en het jaar;
+    - de titel één keer;
+    - één inhoudsopgave, met beide subpagina's;
+    - het kind als hoofdstuk op een nieuwe bladzijde, en het kleinkind eronder;
+    - de koppen opgeschoven, en de volgorde goed;
+  - elke stijl bestaat;
+  - de keuzes zijn er nog als je het venster weer opent.
+
+  Het scenario: 5 stappen plus de voorbereiding, 0 fout.
+- **Schermafdrukken nagekeken:** het venster met de opties, licht en donker, en op de telefoon.
+- **De Word-stap met afbeeldingen in `ui.mjs paginas`** slaagt. De rest van `paginas` en
+  `paginadrive` liep nog bij het vastleggen.
+- **`npm test`** (2415) en **`npm run typecheck`**.

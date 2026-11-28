@@ -47,12 +47,12 @@ import { pageBodyFit } from '../lib/pageBodyCheck';
 import { warmupOfficeEditor } from '../lib/office';
 import type { InternalDocument } from '../types';
 import {
-  attachmentInfo, attachmentStorageKey, claimPageEdit, createPage, listDossierFiles, listPageVersions, loadPage, loadPageShareStatus, loadPageVersion, pageAncestors, pageTitle,
+  attachmentInfo, attachmentStorageKey, claimPageEdit, createPage, EXPORT_SUBPAGE_LIMIT, listDossierFiles, listPageVersions, listSubpages, loadPage, loadPageShareStatus, loadPageVersion, pageAncestors, pageTitle,
   releasePageEdit, releasePageToShares, restorePageVersion, savePage, type DossierFile,
   savePageVersion, type PageShareStatus, type PageVersionSummary,
 } from '../lib/repository';
 import { useBackStep } from '../lib/useBackStep';
-import { PageExportDialog, type PageExportAction } from './PageExportDialog';
+import { NO_EXPORT_OPTIONS, PageExportDialog, type PageExportAction, type PageExportOptions, type PageExportSubpages } from './PageExportDialog';
 import { PageFilePicker, type FileChoice } from './PageFilePicker';
 import { PageTree, saveTreePreference, treePreference, useTreeDrawer } from './PageTree';
 import {
@@ -60,6 +60,26 @@ import {
 } from './PageBlockMenu';
 
 const SAVE_DELAY_MS = 1500;
+
+/** De laatste keuzes in het exportvenster, per browser (stap 1B-4). Een gemak: zonder opslag gewoon alles uit. */
+const EXPORT_OPTIONS_KEY = 'resofly.paginaExport.opties';
+
+function readExportOptions(): PageExportOptions {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(EXPORT_OPTIONS_KEY) ?? 'null') as Partial<PageExportOptions> | null;
+    return { cover: saved?.cover === true, toc: saved?.toc === true, chapters: saved?.chapters === true };
+  } catch {
+    return NO_EXPORT_OPTIONS;
+  }
+}
+
+function saveExportOptions(options: PageExportOptions): void {
+  try {
+    window.localStorage.setItem(EXPORT_OPTIONS_KEY, JSON.stringify(options));
+  } catch {
+    // Privévenster of volle opslag: dan onthouden we het niet.
+  }
+}
 const HEARTBEAT_MS = 30_000;
 /** Een claim telt als vers zolang de laatste geslaagde hartslag niet ouder is. */
 const CLAIM_FRESH_MS = 75_000;
@@ -121,8 +141,10 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
   backTo?: string | null;
   /** De naam van het eigen dossier (het bedrijf), boven de boom. */
   ownDossierName?: string;
-  /** De letters van de huisstijl, voor de Word-export. */
-  houseStyle?: { brand_heading_font?: string | null; brand_body_font?: string | null } | null;
+  /** De huisstijl voor de Word-export: de letters, en voor het voorblad de naam en het logo. */
+  houseStyle?: {
+    brand_heading_font?: string | null; brand_body_font?: string | null; company_name?: string | null; brand_logo_data_url?: string | null;
+  } | null;
   /** Delen (stap 1C): het deelvenster openen; klaar als het open is. Zonder deze functie geen knop. */
   onShare?: (request: PageShareRequest) => Promise<void> | void;
   /**
@@ -151,7 +173,11 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
    * daarna het sluiten niet, dan opent een tweede klik deze, en maakt hij er
    * geen tweede bij, zolang je niets wijzigde.
    */
-  const wordCopyRef = useRef<{ doc: InternalDocument; edits: number } | null>(null);
+  const wordCopyRef = useRef<{ doc: InternalDocument; edits: number; options: string } | null>(null);
+  /** De opties voor Word (stap 1B-4), onthouden per browser; en de subpagina's eronder. */
+  const [exportOptions, setExportOptionsState] = useState<PageExportOptions>(readExportOptions);
+  const setExportOptions = (options: PageExportOptions) => { setExportOptionsState(options); saveExportOptions(options); };
+  const [exportSubpages, setExportSubpages] = useState<Awaited<ReturnType<typeof listSubpages>> | null>(null);
   const [refreshHelps, setRefreshHelps] = useState(true);
   /** Het kruimelpad: de bovenliggende pagina's, van boven naar de directe ouder. */
   const [ancestors, setAncestors] = useState<Array<{ id: string; title: string }>>([]);
@@ -780,18 +806,35 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
     setExportBusy(action);
     setExportError(null);
     try {
+      // De opties van het venster (stap 1B-4). Subpagina's als hoofdstukken:
+      // de lijst die het venster toonde, of nu opgehaald als die er nog niet was.
+      let subpages = exportSubpages;
+      if (exportOptions.chapters && !subpages) {
+        subpages = await listSubpages(documentId, organizationId);
+        setExportSubpages(subpages);
+      }
+      if (exportOptions.chapters && subpages?.tooMany) {
+        throw new Error(`Er staan meer dan ${EXPORT_SUBPAGE_LIMIT} subpagina's onder deze pagina. Zoveel hoofdstukken passen niet in één bestand.`);
+      }
+      const wordOptions = {
+        cover: exportOptions.cover,
+        toc: exportOptions.toc,
+        chapters: exportOptions.chapters ? (subpages?.subpages ?? []).map(({ page, depth }) => ({ id: page.id, title: page.title, depth })) : [],
+      };
       if (action === 'kopie') {
         if (!onOpenDocument) return;
         const edits = editCountRef.current;
-        let copy = wordCopyRef.current && wordCopyRef.current.edits === edits ? wordCopyRef.current.doc : null;
+        const optionsKey = JSON.stringify(wordOptions);
+        const earlier = wordCopyRef.current;
+        let copy = earlier && earlier.edits === edits && earlier.options === optionsKey ? earlier.doc : null;
         if (!copy) {
           if (!(await flushForShare())) {
             throw new Error('De pagina kon niet worden opgeslagen, dus er is ook geen Word-document van gemaakt. Probeer het zo nog eens.');
           }
           const { buildPageWord, createPageWordCopy } = await import('../lib/pageWordExport');
-          const { blob } = await buildPageWord(documentId, organizationId, houseStyle);
+          const { blob } = await buildPageWord(documentId, organizationId, houseStyle, wordOptions);
           copy = await createPageWordCopy(documentId, organizationId, title, blob);
-          wordCopyRef.current = { doc: copy, edits };
+          wordCopyRef.current = { doc: copy, edits, options: optionsKey };
         }
         setExportOpen(false);
         // Eerst netjes dicht (opslaan, een versie, de claim vrij), dan Word.
@@ -804,7 +847,7 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
         throw new Error('De pagina kon niet worden opgeslagen, dus ook niet als Word-bestand. Probeer het zo nog eens.');
       }
       const { buildPageWord, saveFile } = await import('../lib/pageWordExport');
-      const { blob, fileName } = await buildPageWord(documentId, organizationId, houseStyle);
+      const { blob, fileName } = await buildPageWord(documentId, organizationId, houseStyle, wordOptions);
       saveFile(blob, fileName);
       setExportOpen(false);
     } catch (error) {
@@ -871,6 +914,9 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
           onClick={() => {
             setExportError(null);
             setExportOpen(true);
+            // Hoeveel subpagina's er nu onder staan: voor de optie "als hoofdstukken".
+            setExportSubpages(null);
+            listSubpages(documentId, organizationId).then(setExportSubpages, () => setExportSubpages(null));
             // De Word-kopie opent in Collabora, en die start koud (tot een
             // minuut). Zo loopt het opstarten al terwijl je kiest (§9).
             if (canWrite && onOpenDocument) warmupOfficeEditor();
@@ -896,6 +942,9 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
         busy={exportBusy}
         error={exportError}
         canCopy={canWrite && Boolean(onOpenDocument)}
+        options={exportOptions}
+        subpages={exportSubpages ? { count: exportSubpages.subpages.length, tooMany: exportSubpages.tooMany, limit: EXPORT_SUBPAGE_LIMIT } : null}
+        onOptions={setExportOptions}
         onChoose={action => void runExport(action)}
         onClose={() => setExportOpen(false)}
       />}

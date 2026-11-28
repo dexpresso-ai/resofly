@@ -515,7 +515,7 @@ akkoord is.
 | 1B-1 | Proef: huisstijlletters en emoji in een PDF via Collabora (§9). | voorlopig gedaan op 28 november, met LibreOffice in de cloudsessie: .woff werkt niet, TTF wel, en een in de DOCX ingesloten letter ook. Nog te herhalen op de Collabora-container (de vervanger, emoji). Zie `docs/rapporten/PROEF_1B1_LETTERS_EMOJI_2026-11-28.md`. |
 | 1B-2 | Export: `page-export`, de DOCX-module, het interne PDF-pad, het exportvenster, vastleggen in het dossier, de Word-kopie. | gebouwd op 28 november, op staging gezet op 28 november: de DOCX-module (`_shared/pageDocx.ts`, met de huisstijlletters ingesloten via `_shared/woff.ts`), en de knop "Word" in de editor, die de DOCX in de app bouwt (zie de afwijking hieronder). Zie `docs/changelog/CHANGELOG_PAGINAS_WORD_2026-11-28.md`. Het exportvenster en de Word-kopie kwamen in 1B-3; `page-export`, de PDF en vastleggen in het dossier wachten op Collabora (1B-5). |
 | 1B-3 | Het exportvenster ("Exporteren" in de balk) met Word downloaden, "Maak er een Word-document van" (een Word-document naast de pagina, dat meteen opent in Collabora) en afdrukken. | gebouwd op 28 november, na de merge, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_EXPORTEREN_2026-11-28.md`. Op staging na te lopen: een Word-document bewerken en bewaren in Collabora. |
-| 1B-4 | De opties in het exportvenster: een voorblad (titel, klant, project, datum, logo), een inhoudsopgave vooraan, subpagina's als hoofdstukken, briefpapier aan of uit. | nog te doen |
+| 1B-4 | De opties in het exportvenster: een voorblad (titel, klant, project, datum, logo), een inhoudsopgave vooraan, subpagina's als hoofdstukken, briefpapier aan of uit. | 1B-4a (voorblad, inhoudsopgave vooraan, subpagina's als hoofdstukken) gebouwd op 28 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_EXPORTEREN_2026-11-28.md`. 1B-4b (briefpapier) nog te doen: in een .docx kan alleen een briefpapier dat een afbeelding is. Een briefpapier als PDF hoort bij de PDF (1B-5), met pdf-lib zoals bij facturen. |
 | 1B-5 | De PDF: `page-export` (de DOCX op de server, in R2 onder `page-export`), een intern pad in de media-worker naar Collabora, en "Vastleggen in dossier". | wacht op twee antwoorden van de gebruiker: rolt hij de media-worker uit (met wrangler, niet vanuit een cloudsessie), en moet de server de DOCX bouwen (zodat Gerrie en de API zonder browser kunnen exporteren) of mag dat in de app blijven? |
 | 1C-1 | De omzetting van een pagina naar HTML voor de klant (`_shared/pageHtml.ts`, `renderPageHtml`), zonder browser, en `pageReferences` in `_shared`. Verandert nog niets aan wat een klant ziet. | gebouwd op 28 november, op staging gezet op 28 november; zie `docs/changelog/CHANGELOG_PAGINAS_HTML_2026-11-28.md` |
 | 1C-2 | De vrijgave in de database: `drive_shares.document_version_id`, alleen een vrijgegeven versie van die pagina en organisatie. In dezelfde stap lezen het portaal en de geheime link die versie, via `renderPageHtml`. | gebouwd op 28 november, op staging gezet op 28 november; zie `docs/changelog/CHANGELOG_PAGINAS_DELEN_VRIJGAVE_2026-11-28.md`. Migratie `20261128120000_paginas_delen`. |
@@ -671,6 +671,14 @@ nieuwe blokken niet, en opent zo'n pagina alleen om te lezen.
   motor van Collabora): de kopie overleeft opnieuw opslaan, maar wordt daarna veel groter
   (107 kB werd 2 MB), omdat LibreOffice alle letters in hun geheel insluit. UI-scenario
   `paginaexport`.
+- **Daarna gebouwd, op de branch:** 1B-4a, de opties voor Word: een voorblad, een
+  inhoudsopgave vooraan, en de subpagina's als hoofdstukken. Zonder opties is het bestand byte
+  voor byte dat van 1B-3.
+  - De nummering loopt na het voorblad door. LibreOffice telt het totaal fout als ze opnieuw
+    begint.
+  - Er staat één inhoudsopgave in een bestand.
+  - Een hoofdstuk dat niet laadt, laat de export mislukken.
+  - Proefbestand: `docs/rapporten/PROEF_WORD_OPTIES_2026-11-28.docx`.
 - **De CI op de branch (Frontend checks, met de hand gestart):**
   - run 304 (ba3ee84): helemaal groen;
   - run 305 (bf471ad, met de boom naast de pagina): helemaal groen, ook de mobiele
@@ -689,8 +697,9 @@ nieuwe blokken niet, en opent zo'n pagina alleen om te lezen.
     met de knop "Delen" in de balk (41 minuten), `deno check` van `file-share`, `mcp` en
     `gerrie-agent` met de handelingen, en de migraties vanaf nul met
     `paginas_bijwerken.sql` en `paginas_portaal_bijlagen.sql`;
-  - run 310 (de verhuisreparatie, migratie `20261128150000`, en wat erna kwam): gestart op
-    28 november.
+  - run 310 (983b12d, de verhuisreparatie, migratie `20261128150000`): helemaal groen, ook
+    de mobiele lay-outtest, laden, de inrichting en de terugknop;
+  - run 311 (staging, 59fab7e, dezelfde code na de merge): helemaal groen.
 - **`deno check` op de modules van pagina's:** sinds 1C-1 een eigen stap in
   `.github/workflows/frontend-checks.yml` ("Deno-typecheck pagina's"): `pageDocx.ts`,
   `woff.ts`, `zipWriter.ts`, `pageExportFonts.ts`, `pageHtml.ts` en `pageReferences.ts`. Geen
