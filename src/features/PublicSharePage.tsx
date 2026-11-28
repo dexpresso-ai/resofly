@@ -179,7 +179,9 @@ export function PublicSharePage({ token }: { token: string }) {
               </div>)}
             </div>
           </div>)}
-      {!share.canDownload && <p className="muted">De afzender heeft downloaden voor deze deling uitgezet.</p>}
+      {/* Alleen als er iets te downloaden zou zijn. Bij een pagina staat downloaden
+          altijd uit (je leest haar hier), en dan klonk dit als een beperking. */}
+      {!share.canDownload && items.some(item => !item.readable) && <p className="muted">De afzender heeft downloaden voor deze deling uitgezet.</p>}
     </section>
 
     {reading && <ReadModal title={reading.title} html={reading.html} onClose={() => setReading(null)} />}

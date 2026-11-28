@@ -3300,6 +3300,7 @@ async function scenarioPaginadelen() {
       gevraagd.push(route.request().url());
       return route.fulfill({ status: 200, contentType: 'image/png', body: pngVlak(320, 120, [220, 38, 38]) });
     });
+    gelijk(await page.getByText('De afzender heeft downloaden voor deze deling uitgezet.').count(), 0, 'bij een pagina is "downloaden staat uit" geen beperking');
     await page.locator('.share-public-row').filter({ hasText: titel }).getByRole('button', { name: 'Lezen' }).click();
     const venster = page.locator('.share-read-modal .rich-text-viewer');
     await venster.locator('.rf-page').waitFor({ timeout: 15000 });
@@ -3337,7 +3338,24 @@ async function scenarioPaginadelen() {
     gelijk(dom.verboden, 0, 'geen style, id of data-* na de sanitizer');
     await wachtTot(async () => venster.locator('img').evaluate((img) => img.complete && img.naturalWidth === 320).catch(() => false), { melding: 'de afbeelding laadt niet' });
     verwacht(gevraagd.length >= 1 && gevraagd.every((url) => url.includes('inline=1')), `de afbeelding is niet inline gevraagd: ${JSON.stringify(gevraagd)}`);
-    await beideThemas(lezer, 'paginadelen-geheime-link');
+    // De openbare pagina volgt het thema van de huisstijl (brand_client_theme),
+    // niet dat van de app: donker is de standaard, dan licht.
+    await schermafdruk('paginadelen-geheime-link-donker', lezer);
+    sql(`update public.company_settings set brand_client_theme = 'light' where organization_id = ${q(w.orgId)}`);
+    try {
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await page.locator('.share-public-row').filter({ hasText: titel }).getByRole('button', { name: 'Lezen' }).click();
+      await venster.locator('.rf-page').waitFor({ timeout: 15000 });
+      await schermafdruk('paginadelen-geheime-link-licht', lezer);
+    } finally {
+      sql(`update public.company_settings set brand_client_theme = 'dark' where organization_id = ${q(w.orgId)}`);
+    }
+    // Op de telefoon: de tabel schuift in haar eigen vak, de pagina niet opzij.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await rustig(lezer);
+    const smal = await page.evaluate(() => ({ pagina: document.documentElement.scrollWidth, scherm: window.innerWidth }));
+    verwacht(smal.pagina <= smal.scherm, `het leesvenster loopt over op 390px: ${JSON.stringify(smal)}`);
+    await schermafdruk('paginadelen-geheime-link-telefoon', lezer);
     await page.locator('.share-read-modal .modal-close').click();
 
     // De notitie: de afgevinkte taak was na de sanitizer open (data-checked weg).

@@ -97,6 +97,18 @@ en bij een geheime link ziet. Het leesvenster (`ReadModal`) is voor beide hetzel
 - **tsc op `client-portal`, `file-share-public` en `file-share`**, tegen de typen van
   supabase-js.
 
+## Later die dag
+
+- **Op de pagina van een geheime link stond bij een pagina "De afzender heeft downloaden voor
+  deze deling uitgezet".** Bij een pagina staat downloaden altijd uit, want je leest haar
+  daar. Nu staat die zin er alleen als er iets te downloaden zou zijn. Het portaal zegt
+  "alleen bekijken", en dat klopt.
+- **De browserstap kijkt ook op 390px.** Het leesvenster past, en de tabel schuift binnen haar
+  eigen vak.
+- **De openbare deelpagina is altijd donker.** De huisstijl zet daar alleen kleur en letters.
+  Het lichte thema van een klant (`brand_client_theme`) is dus alleen via de variabelen
+  getoetst, niet op het scherm.
+
 ## Niet in een browser bekeken
 
 Het klantportaal zelf. Daar vraagt inloggen een mail met een link. Het portaal gebruikt

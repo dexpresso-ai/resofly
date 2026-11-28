@@ -50,7 +50,7 @@ stand voor de overdracht.
    ook. Op de container moet blijken welke letter hij neemt als de huisstijlletter ontbreekt,
    en of er een emoji-letter is. Zie `docs/rapporten/PROEF_1B1_LETTERS_EMOJI_2026-11-28.md`;
    het script is `scripts/proef-letters-docx.py`.
-8. **1C (pagina's delen) bouw ik nu, na je "Ga verder".** Het staat op de branch, en gaat pas
+8. **1C (pagina's delen) is gebouwd, na je "Ga verder".** Het staat op de branch, en gaat pas
    naar staging als jij het zegt. Ik bouw het zoals ik §1 van het plan lees. Bevestig graag
    vóór de merge:
    - **Wie mag delen?** Iedereen met schrijfrechten op Inhoud, zoals nu, altijd als bewuste
@@ -68,7 +68,9 @@ stand voor de overdracht.
      - "Bijwerken bij klant" stuurt geen mail;
      - deelt Gerrie een pagina, dan ziet de klant haar zoals ze was bij jouw akkoord, niet
        bij het voorstel;
-     - gooi je een pagina definitief weg (na de prullenbak), dan verdwijnt ook de deling.
+     - gooi je een pagina definitief weg (na de prullenbak), dan verdwijnt ook de deling;
+     - trek je de deling van een pagina in, dan blijven de delingen van haar subpagina's
+       staan: elke subpagina is een eigen deling, die je apart intrekt.
 
    Vóór 1C kon een pagina nergens bij een klant terechtkomen: gedeelde mappen en zendingen
    slaan pagina's over, en de database weigerde een deling. Sinds 1C-2 neemt de database een
@@ -80,7 +82,30 @@ stand voor de overdracht.
    hetzelfde leesvenster gebruikt als het portaal. Het portaal zelf is niet in een browser
    bekeken: inloggen vraagt een mail. Wat de server het portaal geeft, is wel getest.
 
+9. **Kijk na de merge één gedeelde pagina met een afbeelding na in het portaal op staging.**
+   - De afbeelding komt via een getekende link van de media-worker. Hier is dat alleen met
+     een nagebootste worker getest.
+   - Bij het lezen van de code klopt het: een upload krijgt de sleutel `org/document/…`, die
+     mag naar buiten, en het beeldtype dat de worker voor `inline=1` nodig heeft, wordt bij
+     het uploaden opgeslagen.
+   - Staat er alleen "[Afbeelding]", dan ligt het aan de koppeling met de worker.
+
 ## Gevonden en gerepareerd
+
+- **Een pagina die naar een andere klant verhuisde, liet haar subpagina's en delingen
+  achter.**
+  - Een pagina onder een pagina van een andere klant zetten (slepen in de drive, of via de
+    API) gaf haar de nieuwe klant, maar haar subpagina's bleven bij de oude.
+  - Haar delingen liepen door. Na "Bijwerken bij klant" kon een geheime link zo de tekst uit
+    het dossier van de nieuwe klant tonen.
+  - De oorzaak: een databasetrigger die alleen keek naar een wijziging van de klant zelf,
+    niet naar een nieuwe ouder.
+  - Gerepareerd met migratie `20261128150000`, en getest met `paginas_verhuizen.sql`. Zie
+    `docs/changelog/CHANGELOG_PAGINAS_VERHUIZEN_2026-11-28.md`.
+- **De sanitizer van het leesvenster haalde samengevoegde cellen en het startnummer van een
+  lijst weg**, en **een afgevinkte taak in een gedeelde notitie leek open.** Beide gevonden
+  met de nieuwe browsertest, en gerepareerd. Zie
+  `docs/changelog/CHANGELOG_PAGINAS_PORTAAL_WEERGAVE_2026-11-28.md`.
 
 - **Een zwart scherm bij het openen van een pagina, als de editor traag start.**
   - De oorzaak: Tiptap maakt de editor standaard al tijdens de eerste render, en ruimt hem na
@@ -112,13 +137,14 @@ stand voor de overdracht.
 | 1C-3 | Een pagina delen in de app: "Delen" in de editor en de drive, subpagina's aanvinken, en de melding "De klant ziet een oudere versie" met "Bijwerken bij klant". Gerrie deelt een pagina ook, met een vrijgave van wie goedkeurt. | `CHANGELOG_PAGINAS_BIJWERKEN_BIJ_KLANT_2026-11-28.md` |
 | 1C-4 | Wat de klant ziet: de pagina met opmaak, kaders, tabellen, taken en afbeeldingen, in het portaal en bij een geheime link. Gerepareerd: samengevoegde cellen en het startnummer van een lijst gingen verloren, en een afgevinkte taak in een gedeelde notitie leek open. | `CHANGELOG_PAGINAS_PORTAAL_WEERGAVE_2026-11-28.md` |
 
-Er komen zes migraties mee die nog niet op staging staan:
+Er komen zeven migraties mee die nog niet op staging staan:
 - `20261127140000_paginas_blokken`;
 - `20261127150000_paginas_verwijzingen`;
 - `20261128100000_paginas_prullenbak`;
 - `20261128120000_paginas_delen`;
 - `20261128130000_paginas_bijwerken_bij_klant`;
-- `20261128140000_paginas_portaal_bijlagen`.
+- `20261128140000_paginas_portaal_bijlagen`;
+- `20261128150000_paginas_verhuizen`.
 
 Ze mogen opnieuw draaien, en de databasetests lopen ze na.
 

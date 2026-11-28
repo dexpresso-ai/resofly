@@ -649,6 +649,9 @@ akkoord is.
   horen (`shared_page_attachments`). Gevonden en gerepareerd: de sanitizer haalde `colspan`,
   `start` en dergelijke weg, en een afgevinkte taak in een gedeelde notitie leek open. Zie
   `docs/changelog/CHANGELOG_PAGINAS_PORTAAL_WEERGAVE_2026-11-28.md`.
+- **Daarna gerepareerd, op de branch:** een pagina die met alleen `parent_id` naar een andere
+  klant verhuisde, liet haar subpagina's bij de oude klant en haar delingen lopen (migratie
+  `20261128150000`). Zie `docs/changelog/CHANGELOG_PAGINAS_VERHUIZEN_2026-11-28.md`.
 - **De CI op de branch (Frontend checks, met de hand gestart):**
   - run 304 (ba3ee84): helemaal groen;
   - run 305 (bf471ad, met de boom naast de pagina): helemaal groen, ook de mobiele

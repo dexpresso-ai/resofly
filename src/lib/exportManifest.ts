@@ -175,7 +175,9 @@ export const EXPORT_FORMAT_VERSION = 1;
 // of kolommen.
 // 20261128140000 (de bijlagen van een gedeelde pagina) zet een functie erbij;
 // geen tabellen of kolommen.
-export const EXPORT_SCHEMA_VERSION = '20261128140000';
+// 20261128150000 (een gedeelde pagina die verhuist) vervangt triggers en
+// functies; geen tabellen of kolommen.
+export const EXPORT_SCHEMA_VERSION = '20261128150000';
 
 export type TableKind =
   | 'export'
