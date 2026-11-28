@@ -2761,6 +2761,11 @@ async function scenarioPaginas() {
     await vinkje(page, gekoppeld).click();
     await wachtTot(async () => taakStand() === 'todo', { melding: 'uitvinken zette de taak niet op Te doen' });
     await wachtTot(async () => tekst(await melding(page).innerText().catch(() => '')).includes('staat weer op Te doen'), { melding: 'geen melding bij uitvinken' });
+    // Twee snelle klikken: aan en meteen weer uit. De taak eindigt waar het vinkje eindigt.
+    await vinkje(page, gekoppeld).dblclick();
+    await page.waitForTimeout(1500);
+    gelijk(await vinkje(page, gekoppeld).isChecked(), false, 'twee snelle klikken: het vinkje');
+    await wachtTot(async () => taakStand() === 'todo', { melding: `twee snelle klikken: de taak staat op ${taakStand()}` });
     // Ctrl+Z zet het vinkje in de pagina terug, maar niet de taak: alleen een klik telt.
     await vinkje(page, gekoppeld).click();
     await wachtTot(async () => taakStand() === 'done', { melding: 'aanvinken voor Ctrl+Z' });

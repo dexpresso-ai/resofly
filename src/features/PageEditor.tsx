@@ -686,6 +686,26 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
   const canMakeTasks = Boolean(onMakeTask);
   const onSetTaskStatusRef = useRef(onSetTaskStatus);
   onSetTaskStatusRef.current = onSetTaskStatus;
+  /**
+   * Per taak de laatst gevraagde stand, en de verzoeken achter elkaar. Twee
+   * snelle klikken op hetzelfde vinkje vergeleken de tweede met een stand die
+   * nog niet was bijgewerkt: die deed dan niets, en de taak bleef op Klaar
+   * met het vinkje uit. En twee verzoeken tegelijk konden in de verkeerde
+   * volgorde aankomen.
+   */
+  const taskQueueRef = useRef(new Map<string, { want: TaskStatus; chain: Promise<void> }>());
+  const queueTaskStatus = (taskId: string, want: TaskStatus): Promise<void> => {
+    const setStatus = onSetTaskStatusRef.current;
+    if (!setStatus) return Promise.reject(new Error('Je mag deze taak niet wijzigen.'));
+    const previous = taskQueueRef.current.get(taskId);
+    const chain = (previous?.chain ?? Promise.resolve()).catch(() => undefined).then(() => setStatus(taskId, want));
+    const entry = { want, chain };
+    taskQueueRef.current.set(taskId, entry);
+    void chain.finally(() => { if (taskQueueRef.current.get(taskId) === entry) taskQueueRef.current.delete(taskId); }).catch(() => undefined);
+    return chain;
+  };
+  const queueTaskStatusRef = useRef(queueTaskStatus);
+  queueTaskStatusRef.current = queueTaskStatus;
   // Een melding over een taak verdwijnt vanzelf; "Ongedaan maken" kan zolang ze er staat.
   useEffect(() => {
     if (!taskNotice) return;
@@ -712,21 +732,21 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
     // taak: een regel kan zijn tekst kwijt zijn (knippen) en toch zijn taak
     // houden, en zo zie je welke er klaar ging.
     store.checked = (link: PageTaskLink, checked: boolean, blockId: string) => {
-      if ((link.status === 'done') === checked) return;
-      const setStatus = onSetTaskStatusRef.current;
-      if (!setStatus) {
+      const current = taskQueueRef.current.get(link.id)?.want ?? link.status;
+      if ((current === 'done') === checked) return;
+      if (!onSetTaskStatusRef.current) {
         setTaskNotice({ text: `Alleen de regel is ${checked ? 'afgevinkt' : 'weer open'}. De taak "${link.title}" kun jij niet wijzigen.`, undo: null });
         return;
       }
-      const before = link.status;
-      setStatus(link.id, checked ? 'done' : 'todo')
+      const before = current;
+      queueTaskStatusRef.current(link.id, checked ? 'done' : 'todo')
         .then(() => setTaskNotice({
           text: checked ? `De taak "${link.title}" staat op Klaar.` : `De taak "${link.title}" staat weer op Te doen.`,
           // Terug: de taak naar wat ze was, en het vinkje in de pagina ook.
           undo: () => {
             setTaskNotice(null);
             setTaskItemChecked(editor, blockId, !checked);
-            void onSetTaskStatusRef.current?.(link.id, before).catch(error => {
+            void queueTaskStatusRef.current(link.id, before).catch(error => {
               setMessage((error as { message?: string } | null)?.message || 'De taak kon niet worden teruggezet.');
             });
           },

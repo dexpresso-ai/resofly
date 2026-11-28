@@ -156,6 +156,10 @@ mislukt "Maak er een taak van" met een fout. Op 28 november om 16:48 samen met 2
   niet meegaat, zonder "Ongedaan maken".
 - **Al klaar**: stond de taak al op Klaar (elders afgevinkt) en vink je de regel aan, dan
   verandert er aan de taak niets en komt er geen melding.
+- **Snel achter elkaar klikken** zet de taak waar het vinkje eindigt. De verzoeken per taak gaan
+  achter elkaar, en een klik vergelijkt met de laatst gevraagde stand. Eerst vergeleek de tweede
+  klik met een stand die nog niet was bijgewerkt: die deed dan niets, en de taak bleef op Klaar
+  met het vinkje uit (gevonden bij het nalezen; de test faalt op de oude code).
 
 ### Hoe het werkt
 
@@ -173,6 +177,7 @@ mislukt "Maak er een taak van" met een fout. Op 28 november om 16:48 samen met 2
   - aanvinken: de taak op Klaar, de melding noemt haar, het label "Taak · Klaar";
   - "Ongedaan maken": de taak op Te doen, het vinkje uit, ook in de opgeslagen pagina;
   - aan en weer uit: de taak op Te doen, met een melding;
+  - twee snelle klikken (aan en meteen uit): het vinkje uit, de taak op Te doen;
   - Ctrl+Z na aanvinken: het vinkje uit, de taak blijft Klaar;
   - daarna weer aanvinken, met de taak al op Klaar: geen melding, de taak blijft Klaar;
   - een regel zonder taak: geen melding, de taak verandert niet;

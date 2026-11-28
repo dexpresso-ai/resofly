@@ -71,6 +71,11 @@ op 1A-5d na. Fase 2 staat nu in stappen in §18 van het bouwplan.
     export zien een gewone takenlijst.
   - Een migratie: `20261128170000_paginas_taken.sql`.
   - Het vinkje en de taak samen komen in 2-2b.
+- **2-2b, het vinkje en de taak samen** (na de merge van 16:48, alleen op de branch): vink je
+  een regel met een taak aan, dan gaat de taak op Klaar, met een melding die haar noemt en
+  "Ongedaan maken". Uitvinken zet haar op Te doen. Alleen een klik telt: Ctrl+Z of een oude
+  versie terugzetten verandert geen taak.
+  - Op staging staan de labels wel, maar het vinkje en de taak nog niet samen.
 - Om 16:48 op staging gezet (`7250aff`), met beide migraties. Daarvoor gold: de migratie moest uiterlijk
   samen met de @-kiezer naar staging. Komt de app eerder live dan de migratie, dan weigert de
   database de vermeldingen die de kiezer maakt.
