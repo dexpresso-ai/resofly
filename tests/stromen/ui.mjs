@@ -2807,6 +2807,70 @@ async function scenarioPaginas() {
     await sluit(metLezen);
   });
 
+  await uiStap('vinkjes die achterlopen op hun taak (stap 2-2c): de balk zegt hoeveel er aan en uit gaan, "Bijwerken" zet ze gelijk zonder een taak om te zetten, "Laat zo" laat ze staan', async () => {
+    const tag = Date.now().toString(36);
+    const projectNaam = `Achter ${tag}`;
+    sql(`insert into public.projects (organization_id, created_by, client_id, name) values (${q(w.orgId)}, ${q(w.medewerker.id)}, ${q(w.klantA.id)}, ${q(projectNaam)})`);
+    const project = sqlRij(`select id from public.projects where organization_id = ${q(w.orgId)} and name = ${q(projectNaam)}`);
+    const [klaar, open] = [randomUUID(), randomUUID()];
+    const item = (id, checked, tekstRegel) => ({ type: 'taskItem', attrs: { checked, id }, content: [{ type: 'paragraph', content: [{ type: 'text', text: tekstRegel }] }] });
+    // In de pagina: "Klaar" staat uit, "Weer open" staat aan; de taken zeggen het omgekeerde.
+    const body = { type: 'doc', content: [{ type: 'taskList', content: [item(klaar, false, 'Klaar elders'), item(open, true, 'Weer open')] }] };
+    const titel = `Achter ${tag}`;
+    sql(`insert into public.documents (organization_id, created_by, title, format, body, client_id, project_id)
+      values (${q(w.orgId)}, ${q(w.medewerker.id)}, ${q(titel)}, 'page', ${q(JSON.stringify(body))}::jsonb, ${q(w.klantA.id)}, ${q(project.id)})`);
+    const pagina = sqlRij(`select id from public.documents where organization_id = ${q(w.orgId)} and title = ${q(titel)}`);
+    sql(`insert into public.tasks (organization_id, created_by, title, status, project_id, page_id, page_block_id) values
+      (${q(w.orgId)}, ${q(w.medewerker.id)}, 'Klaar elders', 'done', ${q(project.id)}, ${q(pagina.id)}, ${q(klaar)}),
+      (${q(w.orgId)}, ${q(w.medewerker.id)}, 'Weer open', 'todo', ${q(project.id)}, ${q(pagina.id)}, ${q(open)})`);
+    const standen = () => sqlRijen(`select page_block_id, status from public.tasks where page_id = ${q(pagina.id)} order by title`).map(rij => rij.status).join(',');
+    const gecheckt = (id) => sqlRij(`select count(*)::int as n from public.documents d, jsonb_path_query(d.body, ${q(`strict $.** ? (@.type == "taskItem" && @.attrs.id == "${id}" && @.attrs.checked == true)`)}) x where d.id = ${q(pagina.id)}`).n === 1;
+    const openPagina = async (lid) => {
+      const adres = new URL(lid.page.url());
+      adres.searchParams.set('pagina', pagina.id);
+      await lid.page.goto(adres.toString());
+      await lid.page.locator('.page-editor').waitFor({ timeout: 30000 });
+      await wachtOpgeslagen(lid.page, 'de pagina kwam niet in bewerken');
+    };
+    const balk = (page) => page.locator('.page-task-drift');
+    const vinkje = (page, id) => editorVak(page).locator(`li[data-checked][data-id="${id}"] input[type="checkbox"]`).first();
+
+    const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });
+    const page = lid.page;
+    await openPagina(lid);
+    await wachtTot(async () => tekst(await balk(page).innerText().catch(() => '')).includes('2 vinkjes lopen achter op hun taak: 1 gaat aan, 1 gaat uit'), { melding: `geen balk: ${tekst(await balk(page).innerText().catch(() => ''))}` });
+    // Openen veranderde niets: de pagina staat nog zoals ze was.
+    gelijk([gecheckt(klaar), gecheckt(open)], [false, true], 'openen veranderde de vinkjes');
+    // Word downloaden (in de app): de vinkjes volgens de taken, en de pagina blijft zoals ze is.
+    const xml = leesZip(readFileSync(await (await exporteerWord(page)).path())).find(deel => deel.name === 'word/document.xml')?.data.toString('utf8') ?? '';
+    const vakje = (regelTekst) => {
+      const plek = xml.indexOf(regelTekst);
+      verwacht(plek > 0, `"${regelTekst}" staat niet in de .docx`);
+      const ervoor = xml.slice(Math.max(0, plek - 400), plek);
+      return ervoor.lastIndexOf('☒') > ervoor.lastIndexOf('☐') ? '☒' : '☐';
+    };
+    gelijk([vakje('Klaar elders'), vakje('Weer open')], ['☒', '☐'], 'Word downloaden volgt de taken');
+    gelijk([gecheckt(klaar), gecheckt(open)], [false, true], 'Word downloaden veranderde de pagina');
+    await balk(page).getByRole('button', { name: 'Bijwerken' }).click();
+    await balk(page).waitFor({ state: 'detached', timeout: 5000 });
+    gelijk([await vinkje(page, klaar).isChecked(), await vinkje(page, open).isChecked()], [true, false], 'Bijwerken: de vinkjes in de editor');
+    await wachtOpgeslagen(page);
+    gelijk([gecheckt(klaar), gecheckt(open)], [true, false], 'Bijwerken: de vinkjes in de opgeslagen pagina');
+    gelijk(standen(), 'done,todo', 'Bijwerken zette een taak om');
+    await sluitPagina(page);
+
+    // "Laat zo": de balk weg, de vinkjes zoals ze staan.
+    sql(`update public.tasks set status = 'todo' where page_id = ${q(pagina.id)} and page_block_id = ${q(klaar)}`);
+    await ververs(lid);
+    await openPagina(lid);
+    await wachtTot(async () => tekst(await balk(page).innerText().catch(() => '')).includes('1 vinkje loopt achter op zijn taak: 1 gaat uit'), { melding: 'geen balk na een taak die weer open is' });
+    await balk(page).getByRole('button', { name: 'Laat zo' }).click();
+    await balk(page).waitFor({ state: 'detached', timeout: 5000 });
+    gelijk(await vinkje(page, klaar).isChecked(), true, '"Laat zo" veranderde het vinkje');
+    await sluitPagina(page);
+    await sluit(lid);
+  });
+
   await uiStap('plakken uit Excel of Word wordt een tabel, zonder de stijl van buiten', async () => {
     if (!blokPagina) throw new Error('geen pagina');
     const { page } = await openBlokPagina(w.medewerker, 'medewerker');

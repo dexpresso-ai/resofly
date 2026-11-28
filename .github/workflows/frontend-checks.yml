@@ -170,6 +170,7 @@ jobs:
             supabase/functions/_shared/pageHtml.ts supabase/functions/_shared/pageReferences.ts \
             supabase/functions/_shared/pageExport.ts supabase/functions/_shared/pageTreeOrder.ts \
             supabase/functions/_shared/pdfLetterhead.ts supabase/functions/_shared/pageMentions.ts \
+            supabase/functions/_shared/pageTaskChecks.ts \
             supabase/functions/page-export/index.ts
 
   # De hele migratieketen op een lege database, met de echte Supabase-images in

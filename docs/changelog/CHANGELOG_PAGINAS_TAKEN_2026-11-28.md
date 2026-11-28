@@ -1,4 +1,4 @@
-# Pagina's: actiepunten worden taken (stap 2-2a en 2-2b)
+# Pagina's: actiepunten worden taken (stap 2-2a tot en met 2-2c)
 
 28 november 2026. Zie `docs/plannen/PAGINAS_BOUWPLAN_2026-11-27.md`, §13 en §18 (fase 2, met de
 keuzes voor 2-2).
@@ -185,11 +185,70 @@ mislukt "Maak er een taak van" met een fout. Op 28 november om 16:48 samen met 2
     verandert niet.
 - `npm test` (2460) en `npm run typecheck`.
 
+## Stap 2-2c: bij delen en export volgt het vinkje de taak
+
+### Wat er nu kan
+
+- **Een download** (Word downloaden, PDF downloaden) heeft bij een regel met een taak het vinkje
+  van de taak: aangevinkt als ze Klaar is, anders niet. Dat geldt ook als het vinkje in de pagina
+  nog anders staat, en per hoofdstuk (subpagina) apart.
+  - De taken komen met de rechten van wie downloadt. Wie Projecten niet mag lezen, krijgt de
+    vinkjes zoals ze in de pagina staan.
+  - De pagina zelf verandert er niet door.
+- **Een kopie voor het dossier** (de Word-kopie, de vastgelegde PDF) heeft de vinkjes zoals ze in
+  de pagina staan. Die kan iedereen met Inhoud openen, en de stand van een taak is van
+  Projecten. Dat is dezelfde regel als bij de namen (2-1a).
+- **In de editor een balk** als vinkjes achterlopen op hun taak: "2 vinkjes lopen achter op hun
+  taak: 1 gaat aan, 1 gaat uit", met "Bijwerken" en "Laat zo".
+  - "Bijwerken" zet ze gelijk, als transactie. Geen taak gaat om (2-2b), en de pagina slaat
+    gewoon op.
+  - "Laat zo" verbergt de balk, tot er iets anders achterloopt.
+  - Openen verandert niets: de balk vraagt het, de pagina doet niets vanzelf.
+  - Delen schrijft ook niets vanzelf. De klant leest de opgeslagen pagina; met "Bijwerken"
+    voor het delen ziet hij de vinkjes van de taken.
+  - Vinkt iemand met alleen Projecten lezen een regel bewust af, dan telt die regel niet als
+    achter: anders stelde de balk meteen voor om het terug te zetten.
+- **Geen flits na een klik.** De luisteraar op het vinkje loopt nu in de capture-fase, vóór
+  TaskItem. Daardoor staat de gevraagde stand al klaar als de pagina verandert.
+
+### Hoe het werkt
+
+- `supabase/functions/_shared/pageTaskChecks.ts`: `taskChecksFor` (per pagina en per regel) en
+  `withTaskChecks` (de body met de vinkjes van de taken, met hoeveel er aan en uit gaan). Een
+  gekopieerde pagina heeft dezelfde id's per regel als het origineel; daarom telt de pagina mee.
+  Gedeeld door de app en `page-export`; de CI doet er `deno check` op.
+- **Word** (`src/lib/pageWordExport.ts`) en **PDF** (`page-export`) lezen bij een download de
+  taken van de pagina en haar hoofdstukken. `page-export` doet dat met de JWT van wie exporteert,
+  nooit met de service-role. Lukt het lezen niet, dan de vinkjes van de pagina.
+- **De editor**: `taskCheckDrift` en `syncTaskChecks` in `pageEditorExtensions.ts`. De balk telt
+  met de standen die een klik al vroeg (2-2b), zodat hij niet even opflitst.
+
+### Getest
+
+- `pageTaskChecks.test.ts` (3):
+  - twee pagina's met dezelfde regel-id, elk met de eigen taak;
+  - aan en uit, ook genest; een regel zonder taak blijft zoals hij is;
+  - dezelfde body als er niets verandert.
+- **`npm run test:stromen -- documenten`: 62 stappen, 0 fout.** De nieuwe stap:
+  - de PDF-download heeft `☒` bij een taak die Klaar is, al staat het vinkje in de pagina uit;
+  - een PDF voor het dossier heeft `☐`;
+  - wie Projecten niet mag lezen, krijgt `☐`;
+  - de pagina is daarna niet veranderd.
+- **`ui.mjs paginas`: 26 stappen, 0 fout.** De nieuwe stap:
+  - de balk "2 vinkjes lopen achter op hun taak: 1 gaat aan, 1 gaat uit";
+  - Word downloaden met de vinkjes van de taken, en de pagina onveranderd;
+  - "Bijwerken": de vinkjes gelijk in de editor en in de opgeslagen pagina, en geen taak om;
+  - een taak die weer open is: "1 gaat uit", en "Laat zo" laat het vinkje staan.
+- De stap van 2-2b opnieuw, met de luisteraar in de capture-fase.
+- `npm test` (2463), `npm run typecheck`, en `tsc` op `page-export` en de gedeelde modules.
+
+### Uitrollen
+
+`page-export` leest nu ook `tasks` (met de rechten van wie exporteert). Dat werkt op staging pas
+na een merge en de uitrol van de edge functions. Geen migratie.
+
 ## Nog niet
 
-- **Bij delen en export volgt het vinkje de taak nog niet.** Een taak die elders klaar ging,
-  staat in de pagina nog open tot iemand het vinkje aanklikt. Het label toont wel "Klaar". Dat
-  is de volgende stap.
 - **Een taak die elders verandert**, krijgt pas een nieuw label als de app ververst (bijvoorbeeld
   na het sluiten van een taak of de pagina).
 - **Meer regels tegelijk** ("Maak taken van alle open punten").

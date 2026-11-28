@@ -27,6 +27,7 @@ import {
 } from '../../supabase/functions/_shared/pageExport.ts';
 import { pageExportFonts, type PageExportFont } from '../../supabase/functions/_shared/pageExportFonts.ts';
 import { sfntFamilyName, woffToSfnt } from '../../supabase/functions/_shared/woff.ts';
+import { taskChecksFor, withTaskChecks, type TaskCheckRow } from '../../supabase/functions/_shared/pageTaskChecks.ts';
 import { LETTERHEAD_PDF_MESSAGE, wordFileName } from './pageExportParts';
 import { documentAssetsFromSettings, PAGE_HEIGHT, parseDocumentLayouts, resolveDocumentLayout } from './documentLayout';
 import { uploadDocumentDocx } from './office';
@@ -175,6 +176,23 @@ async function loadChapters(chapters: NonNullable<PageWordOptions['chapters']>, 
 }
 
 /**
+ * De taken achter de regels van deze pagina's (stap 2-2c), met jouw rechten:
+ * wie Projecten niet mag lezen, krijgt niets, en dan blijven de vinkjes zoals
+ * ze in de pagina staan. Een fout is geen reden om de export te laten
+ * mislukken; dan ook de vinkjes van de pagina.
+ */
+async function pageTasksFor(pageIds: string[], organizationId: string): Promise<TaskCheckRow[]> {
+  const out: TaskCheckRow[] = [];
+  for (let i = 0; i < pageIds.length; i += 100) {
+    const { data, error } = await supabase.from('tasks').select('page_id,page_block_id,status')
+      .eq('organization_id', organizationId).in('page_id', pageIds.slice(i, i + 100));
+    if (error) return [];
+    out.push(...((data ?? []) as TaskCheckRow[]));
+  }
+  return out;
+}
+
+/**
  * De opgeslagen pagina als .docx, in de huisstijl. De editor slaat eerst op:
  * de export leest wat in de database staat, zoals de server dat straks ook doet.
  * Met de opties van het exportvenster (stap 1B-4): een voorblad, een
@@ -188,6 +206,18 @@ export async function buildPageWord(
 ): Promise<{ blob: Blob; fileName: string }> {
   const row = await loadPage(pageId, organizationId);
   const chapters = options.chapters?.length ? await loadChapters(options.chapters, organizationId) : [];
+  // In een download volgt het vinkje van een regel met een taak de taak (stap
+  // 2-2c), per pagina en per regel. Een kopie voor het dossier niet: die kan
+  // iedereen met Inhoud openen, en de stand van een taak is van Projecten.
+  if (options.names) {
+    const ids = [pageId, ...(options.chapters ?? []).map(chapter => chapter.id)];
+    const tasks = await pageTasksFor(ids, organizationId);
+    row.body = withTaskChecks(row.body, taskChecksFor(pageId, tasks)).body;
+    chapters.forEach((chapter, index) => {
+      const id = options.chapters?.[index]?.id;
+      if (id) chapter.body = withTaskChecks(chapter.body, taskChecksFor(id, tasks)).body;
+    });
+  }
   // Wat de pagina en haar hoofdstukken noemen, samen: één bestand, één context.
   const refs = exportReferences([row.body, ...chapters.map(chapter => chapter.body)]);
   const fonts = pageExportFonts(houseStyle);

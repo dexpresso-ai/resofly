@@ -76,6 +76,11 @@ op 1A-5d na. Fase 2 staat nu in stappen in §18 van het bouwplan.
   "Ongedaan maken". Uitvinken zet haar op Te doen. Alleen een klik telt: Ctrl+Z of een oude
   versie terugzetten verandert geen taak.
   - Op staging staan de labels wel, maar het vinkje en de taak nog niet samen.
+- **2-2c, vinkjes bij delen en export** (alleen op de branch):
+  - een download (Word, PDF) heeft de vinkjes van de taken;
+  - een kopie voor het dossier heeft ze zoals de pagina;
+  - de editor zegt het als vinkjes achterlopen, met "Bijwerken". Delen schrijft niets vanzelf
+    (vraag 15).
 - Om 16:48 op staging gezet (`7250aff`), met beide migraties. Daarvoor gold: de migratie moest uiterlijk
   samen met de @-kiezer naar staging. Komt de app eerder live dan de migratie, dan weigert de
   database de vermeldingen die de kiezer maakt.
@@ -247,6 +252,11 @@ op 1A-5d na. Fase 2 staat nu in stappen in §18 van het bouwplan.
     zelf typt. Wie Projecten mag lezen maar Klanten niet, ziet die naam dan in de taak, en in
     het logboek. Dat is het omgekeerde van de kopieën in het dossier (vraag 12), waar ik de
     namen juist weglaat. Liever de soort ("klant") in de titel? Zeg het dan.
+15. **Bij delen ziet de klant de vinkjes zoals ze in de pagina staan** (2-2c). Ging een taak
+    elders op Klaar, dan zegt de editor "1 vinkje loopt achter op zijn taak", met "Bijwerken".
+    Dat zet ik niet vanzelf: zo komt de stand van een taak (Projecten) pas in de pagina en bij
+    de klant als iemand daarvoor kiest. Een download heeft de stand van de taken wel, met de
+    rechten van wie downloadt. Wil je dat delen de vinkjes vanzelf bijwerkt? Zeg het dan.
 
 ## Gevonden en gerepareerd
 

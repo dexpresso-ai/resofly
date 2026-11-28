@@ -30,6 +30,7 @@ import { calloutVariant, isAllowedPageLink } from './pageSchema.ts';
 import { MENTION_KIND_WORDS, mentionKind, mentionOf, type MentionKind } from '../../supabase/functions/_shared/pageMentions.ts';
 import type { MentionCandidate } from './pageMentionSearch.ts';
 import { TASK_STATUS_WORDS, type PageTaskLink } from './pageTasks.ts';
+import type { TaskStatus } from '../types';
 
 /** Blokken met een vast id (attrs.id): waar Gerrie straks per blok iets voorstelt. */
 export const PAGE_BLOCKS_WITH_ID = [
@@ -381,8 +382,10 @@ export const PageTaskLinks = Extension.create({
       // Het vinkje en de taak (stap 2-2b). Alleen een klik van iemand telt: het
       // change-event van het vinkje. Ongedaan maken, een oude versie
       // terugzetten of opnieuw laden na een conflict zetten `checked` in de
-      // pagina ook om, maar mogen geen taak afvinken. TaskItem zelf zet de
-      // pagina al om (zijn eigen luisteraar op het vinkje gaat eerst).
+      // pagina ook om, maar mogen geen taak afvinken. TaskItem zet de pagina
+      // zelf om. Wij luisteren in de capture-fase, dus vóór TaskItem: dan staat
+      // de gevraagde stand al klaar als zijn transactie komt, en flitst
+      // "loopt achter op zijn taak" (2-2c) niet even op.
       view: view => {
         const onChange = (event: Event) => {
           const box = event.target;
@@ -393,8 +396,8 @@ export const PageTaskLinks = Extension.create({
           if (!blockId || !link || !store?.checked) return;
           store.checked(link, box.checked, blockId);
         };
-        view.dom.addEventListener('change', onChange);
-        return { destroy: () => view.dom.removeEventListener('change', onChange) };
+        view.dom.addEventListener('change', onChange, true);
+        return { destroy: () => view.dom.removeEventListener('change', onChange, true) };
       },
       props: {
         decorations: state => {
@@ -419,6 +422,45 @@ export const PageTaskLinks = Extension.create({
     })];
   },
 });
+
+/**
+ * De vinkjes die achterlopen op hun taak (stap 2-2c), met waar ze heen
+ * moeten. `pending` zijn standen die al gevraagd zijn maar nog niet terug
+ * (een klik, stap 2-2b): anders stond er na elke klik even "loopt achter".
+ */
+export function taskCheckDrift(
+  doc: PmNode,
+  links: ReadonlyMap<string, PageTaskLink>,
+  pending?: ReadonlyMap<string, TaskStatus>,
+  skip?: ReadonlySet<string>,
+): Array<{ pos: number; checked: boolean }> {
+  const out: Array<{ pos: number; checked: boolean }> = [];
+  if (links.size === 0) return out;
+  doc.descendants((node, pos) => {
+    if (node.type.name !== 'taskItem') return true;
+    const link = typeof node.attrs.id === 'string' && !skip?.has(node.attrs.id) ? links.get(node.attrs.id) : undefined;
+    if (link) {
+      const want = (pending?.get(link.id) ?? link.status) === 'done';
+      if ((node.attrs.checked === true) !== want) out.push({ pos, checked: want });
+    }
+    return true;
+  });
+  return out;
+}
+
+/**
+ * Zet die vinkjes gelijk met hun taak, in één transactie. Geen klik op een
+ * vinkje: dat zou de taak weer omzetten (stap 2-2b).
+ */
+export function syncTaskChecks(editor: Editor, drift: ReadonlyArray<{ pos: number; checked: boolean }>): void {
+  if (editor.isDestroyed || drift.length === 0) return;
+  const tr = editor.state.tr;
+  for (const { pos, checked } of drift) {
+    const node = tr.doc.nodeAt(pos);
+    if (node?.type.name === 'taskItem') tr.setNodeMarkup(pos, undefined, { ...node.attrs, checked });
+  }
+  if (tr.docChanged) editor.view.dispatch(tr);
+}
 
 /** Een fragment zonder de vermeldingen die `keep` niet houdt; hetzelfde fragment als er niets weg hoeft. */
 export function withoutUnknownMentions(fragment: Fragment, keep: (node: PmNode) => boolean): Fragment {

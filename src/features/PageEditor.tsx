@@ -42,8 +42,10 @@ import {
 import { isInTable, moveTableColumn, moveTableRow, selectedRect } from '@tiptap/pm/tables';
 import { NodeSelection } from '@tiptap/pm/state';
 import {
-  MENTION_OPENS, mentionNamesOf, mentionOpenOf, PAGE_TASK_LINKS_KEY, pageEditorExtensions, pageTaskLinksOf, type PageLinks, type PageMedia, type PageMentionNames,
+  MENTION_OPENS, mentionNamesOf, mentionOpenOf, PAGE_TASK_LINKS_KEY, pageEditorExtensions, pageTaskLinksOf, syncTaskChecks, taskCheckDrift,
+  type PageLinks, type PageMedia, type PageMentionNames,
 } from '../lib/pageEditorExtensions';
+import { taskCheckSummary } from '../../supabase/functions/_shared/pageTaskChecks.ts';
 import { TASK_STATUS_WORDS, taskTitleFromItem, type PageTaskLink } from '../lib/pageTasks';
 import { closeMentionMenu, MentionMenu, mentionMenuExtension, type MentionBridge, type MentionMenuState } from './PageMentionMenu';
 import type { MentionCandidate } from '../lib/pageMentionSearch';
@@ -706,6 +708,31 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
   };
   const queueTaskStatusRef = useRef(queueTaskStatus);
   queueTaskStatusRef.current = queueTaskStatus;
+  // Vinkjes die achterlopen op hun taak (stap 2-2c): een taak ging elders op
+  // Klaar of weer open. De klant leest bij delen de opgeslagen pagina, dus de
+  // vinkjes moeten erin staan; maar alleen als iemand dat kiest. "Laat zo"
+  // verbergt de balk tot er iets anders achterloopt.
+  const pendingStatuses = () => new Map([...taskQueueRef.current].map(([id, entry]) => [id, entry.want] as const));
+  /** Regels die iemand zonder Projecten schrijven bewust alleen in de pagina omzette: die lopen niet "achter". */
+  const ownChecksRef = useRef(new Set<string>());
+  const taskDrift = useEditorState({
+    editor,
+    selector: ({ editor: ed }) => {
+      if (!ed || ed.isDestroyed || !ed.isEditable) return { on: 0, off: 0 };
+      const links = pageTaskLinksOf(ed)?.links;
+      if (!links || links.size === 0) return { on: 0, off: 0 };
+      const drift = taskCheckDrift(ed.state.doc, links, pendingStatuses(), ownChecksRef.current);
+      return { on: drift.filter(entry => entry.checked).length, off: drift.filter(entry => !entry.checked).length };
+    },
+  }) ?? { on: 0, off: 0 };
+  const [driftDismissed, setDriftDismissed] = useState<string | null>(null);
+  const driftKey = `${taskDrift.on}:${taskDrift.off}`;
+  const driftShown = taskDrift.on + taskDrift.off > 0 && driftDismissed !== driftKey;
+  const syncDrift = () => {
+    if (!editor) return;
+    const links = pageTaskLinksOf(editor)?.links;
+    if (links) syncTaskChecks(editor, taskCheckDrift(editor.state.doc, links, pendingStatuses(), ownChecksRef.current));
+  };
   // Een melding over een taak verdwijnt vanzelf; "Ongedaan maken" kan zolang ze er staat.
   useEffect(() => {
     if (!taskNotice) return;
@@ -735,6 +762,7 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
       const current = taskQueueRef.current.get(link.id)?.want ?? link.status;
       if ((current === 'done') === checked) return;
       if (!onSetTaskStatusRef.current) {
+        ownChecksRef.current.add(blockId);
         setTaskNotice({ text: `Alleen de regel is ${checked ? 'afgevinkt' : 'weer open'}. De taak "${link.title}" kun jij niet wijzigen.`, undo: null });
         return;
       }
@@ -1176,6 +1204,12 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
         {mode === 'conflict' && <button type="button" className="btn" onClick={() => void reloadAfterConflict()}>Opnieuw laden</button>}
         {mode === 'onbekend' && refreshHelps && <button type="button" className="btn" onClick={() => window.location.reload()}>App verversen</button>}
         {closeAnyway && <button type="button" className="btn" onClick={() => void close(true)}>Toch sluiten</button>}
+      </div>}
+
+      {driftShown && <div className="page-editor-banner page-task-drift" role="status">
+        <span>{taskDrift.on + taskDrift.off === 1 ? '1 vinkje loopt achter op zijn taak' : `${taskDrift.on + taskDrift.off} vinkjes lopen achter op hun taak`}: {taskCheckSummary(taskDrift.on, taskDrift.off)}.</span>
+        <button type="button" className="btn" onClick={syncDrift}>Bijwerken</button>
+        <button type="button" className="btn" onClick={() => setDriftDismissed(driftKey)}>Laat zo</button>
       </div>}
 
       {taskNotice && <div className="page-editor-banner page-task-banner" role="status">
