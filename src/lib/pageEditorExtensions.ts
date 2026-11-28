@@ -316,6 +316,8 @@ export type PageMedia = {
   imageUrl: (attachmentId: string) => Promise<string | null>;
   /** Een bestand bij deze pagina zetten; geeft het id van de bijlage, of null als het niet lukte. */
   upload: (file: File) => Promise<string | null>;
+  /** Zeggen waarom iets niet kan (in de balk van de editor). */
+  refuse: (reason: string) => void;
 };
 
 export function pageMediaOf(editor: Editor): PageMedia | null {
@@ -330,10 +332,38 @@ export function imageFilesOf(list: FileList | File[] | null | undefined): File[]
   return Array.from(list ?? []).filter(file => IMAGE_TYPES.test(file.type));
 }
 
+/**
+ * De plaatjes van een plakactie, alleen als het plakken écht om het plaatje
+ * gaat: een schermafdruk (geen HTML), of "Afbeelding kopiëren" in een browser
+ * (HTML met alleen één <img>). Excel en Word zetten naast de tabel of tekst
+ * ook een plaatje van de selectie op het klembord; dat werd anders geüpload
+ * in plaats van dat er een tabel kwam.
+ */
+export function pastedImageFiles(data: DataTransfer | null | undefined): File[] {
+  if (!data) return [];
+  const files = imageFilesOf(data.files);
+  if (files.length === 0) return [];
+  const html = data.getData('text/html');
+  if (!html.trim()) return files;
+  const body = new DOMParser().parseFromString(html, 'text/html').body;
+  const onlyOneImage = body.querySelectorAll('img').length === 1 && !(body.textContent ?? '').trim() && !body.querySelector('table');
+  return onlyOneImage ? files : [];
+}
+
+const PROBE_ATTACHMENT_ID = '00000000-0000-4000-8000-000000000000';
+
 /** Uploaden en invoegen, op `pos` of waar de cursor staat. Eén voor één, in volgorde. */
 export async function insertImages(editor: Editor, files: File[], pos?: number): Promise<void> {
   const media = pageMediaOf(editor);
-  if (!media) return;
+  if (!media || files.length === 0) return;
+  // Eerst kijken of hier een afbeelding mag (niet in een callout of codeblok):
+  // anders stond er een geüpload bestand in de opslag dat niemand ziet.
+  const probe = { type: 'image', attrs: { attachmentId: PROBE_ATTACHMENT_ID, alt: '' } };
+  const fits = typeof pos === 'number' ? editor.can().insertContentAt(pos, probe) : editor.can().insertContent(probe);
+  if (!fits) {
+    media.refuse('Hier kan geen afbeelding staan. Zet de cursor op een gewone regel.');
+    return;
+  }
   let at = pos;
   for (const file of files) {
     const attachmentId = await media.upload(file);
@@ -379,6 +409,9 @@ const imageView: NodeViewRenderer = ({ editor, node }) => {
   };
   const load = (attachmentId: string | null) => {
     const media = pageMediaOf(editor);
+    // Het id (geen adres) op de weergave: zo is een blok terug te vinden.
+    if (attachmentId) dom.dataset.attachmentId = attachmentId;
+    else delete dom.dataset.attachmentId;
     if (!attachmentId || !media) { show('weg'); return; }
     show('laden');
     media.imageUrl(attachmentId).then(url => {
@@ -447,7 +480,7 @@ export const PageImage = Node.create({
       props: {
         // Een plaatje plakken of erop slepen: uploaden als bijlage van deze pagina.
         handlePaste: (view, event) => {
-          const files = imageFilesOf(event.clipboardData?.files);
+          const files = pastedImageFiles(event.clipboardData);
           if (files.length === 0 || !view.editable || !pageMediaOf(editor)) return false;
           event.preventDefault();
           void insertImages(editor, files);
@@ -455,9 +488,13 @@ export const PageImage = Node.create({
         },
         handleDrop: (view, event, _slice, moved) => {
           if (moved) return false;
-          const files = imageFilesOf((event as DragEvent).dataTransfer?.files);
-          if (files.length === 0 || !view.editable || !pageMediaOf(editor)) return false;
+          const dropped = Array.from((event as DragEvent).dataTransfer?.files ?? []);
+          if (dropped.length === 0 || !view.editable) return false;
+          // Elk bestand dat erop valt, houden we tegen: anders opent de browser
+          // het en verlaat je de app.
           event.preventDefault();
+          const files = imageFilesOf(dropped);
+          if (files.length < dropped.length) pageMediaOf(editor)?.refuse('Alleen afbeeldingen kun je hier neerzetten.');
           const pos = view.posAtCoords({ left: (event as DragEvent).clientX, top: (event as DragEvent).clientY })?.pos;
           void insertImages(editor, files, pos);
           return true;

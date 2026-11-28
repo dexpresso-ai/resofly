@@ -2130,7 +2130,8 @@ async function scenarioDocumenten() {
     // over de bestaande heen (zo hoort het daar), en Ctrl+End verlaat een cel niet.
     await editorVak(page).locator('h2').filter({ hasText: 'Planning' }).click();
     await page.keyboard.press('Control+End');
-    await page.evaluate(() => {
+    const bijlagenVoor = sqlRij(`select count(*)::int as n from public.attachments where entity_id = ${q(blokPagina.id)}`).n;
+    await page.evaluate((png) => {
       const html = '<meta charset="utf-8"><table border=0 cellpadding=0 cellspacing=0 width=200 style="border-collapse:collapse;width:150pt">'
         + '<col width=100 style="width:75pt"><col width=100>'
         + '<tr height=20><td class=xl65 style="background:url(https://volg.test/pixel.gif);text-align:center">Product</td><td>Prijs</td></tr>'
@@ -2138,14 +2139,19 @@ async function scenarioDocumenten() {
       const data = new DataTransfer();
       data.setData('text/html', html);
       data.setData('text/plain', 'Product\tPrijs\nThee\t1,80');
+      // Excel zet er ook een plaatje van de cellen bij: dat hoort geen
+      // afbeelding te worden.
+      data.items.add(new File([Uint8Array.from(atob(png), (teken) => teken.charCodeAt(0))], 'cellen.png', { type: 'image/png' }));
       document.querySelector('.page-editor .tiptap').dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
-    });
+    }, PNG.toString('base64'));
     await wachtTot(async () => (await editorVak(page).locator('table').count()) === 2, { melding: 'geen tweede tabel na plakken' });
     await wachtOpgeslagen(page);
     const rij = blokRijInDb();
     verwacht(rij.content.includes('Product Prijs Thee 1,80'), `tekst uit de geplakte tabel: ${rij.content}`);
     verwacht(!JSON.stringify(rij.body).includes('volg.test'), 'een adres van buiten staat in body');
     gelijk(telBlok(rij.id, '@.type == "tableCell" && @.attrs.align == "center"'), 1, 'uitlijnen uit de stijl van de geplakte cel');
+    gelijk(telBlok(rij.id, '@.type == "image"'), 0, 'het plaatje van Excel werd een afbeelding');
+    gelijk(sqlRij(`select count(*)::int as n from public.attachments where entity_id = ${q(blokPagina.id)}`).n, bijlagenVoor, 'bijlagen na plakken uit Excel');
     await sluitPagina(page);
   });
 
@@ -2372,16 +2378,20 @@ async function scenarioDocumenten() {
   };
   const geladen = (beelden) => beelden.evaluateAll((imgs) => imgs.length > 0 && imgs.every((img) => img.complete && img.naturalWidth > 0));
 
-  await uiStap('afbeeldingen: kiezen via /afbeelding en plakken; een plaatje van buiten wordt niets; een verdwenen afbeelding zegt het', async () => {
+  await uiStap('afbeeldingen: kiezen, plakken en slepen; een plaatje van buiten wordt niets; uit een ander dossier zegt de editor waarom; een verdwenen afbeelding zegt het', async () => {
     if (!blokPagina) throw new Error('geen pagina');
     const page = await openMetMedia();
     await editorVak(page).locator('h2').filter({ hasText: 'Planning' }).click();
     await page.keyboard.press('Control+End');
+    // Eerst luisteren, dan pas Enter: Playwright vangt de bestandskiezer pas op
+    // als het luisteren loopt, en dat wordt los van de toets aangezet.
+    const kiezerOnderweg = page.waitForEvent('filechooser', { timeout: 30000 });
     await page.keyboard.type('/afb');
     const menu = page.locator('.page-block-menu');
     await menu.waitFor({ timeout: 10000 });
     await wachtTot(async () => tekst(await menu.locator('.page-block-item.is-active .page-block-label').innerText().catch(() => '')) === 'Afbeelding', { melding: 'Afbeelding staat niet bovenaan' });
-    const [kiezer] = await Promise.all([page.waitForEvent('filechooser'), page.keyboard.press('Enter')]);
+    await page.keyboard.press('Enter');
+    const kiezer = await kiezerOnderweg;
     await kiezer.setFiles({ name: 'foto.png', mimeType: 'image/png', buffer: PNG });
     const beeld = editorVak(page).locator('.page-image img');
     await wachtTot(async () => (await beeld.count()) === 1 && (await geladen(beeld)), { melding: 'de afbeelding staat niet in beeld' });
@@ -2414,12 +2424,40 @@ async function scenarioDocumenten() {
     gelijk(await beeld.count(), 2, 'afbeeldingen na een plaatje van buiten');
     await wachtOpgeslagen(page);
     verwacht(!JSON.stringify(blokRijInDb().body).includes('volg.test'), 'het adres van buiten staat in body');
+    // Slepen: een plaatje op de regel "Onder de foto" wordt een derde afbeelding.
+    const doel = await editorVak(page).locator('p').filter({ hasText: 'Onder de foto' }).first().boundingBox();
+    await page.evaluate(({ png, x, y }) => {
+      const data = new DataTransfer();
+      data.items.add(new File([Uint8Array.from(atob(png), (teken) => teken.charCodeAt(0))], 'gesleept.png', { type: 'image/png' }));
+      document.querySelector('.page-editor .tiptap').dispatchEvent(new DragEvent('drop', { dataTransfer: data, clientX: x, clientY: y, bubbles: true, cancelable: true }));
+    }, { png: PNG.toString('base64'), x: doel.x + 4, y: doel.y + doel.height / 2 });
+    await wachtTot(async () => (await beeld.count()) === 3 && (await geladen(beeld)), { melding: 'een gesleept plaatje werd geen afbeelding' });
+    await wachtOpgeslagen(page);
+    verwacht(sqlRij(`select count(*)::int as n from public.attachments where entity_id = ${q(blokPagina.id)} and name = 'gesleept.png'`).n === 1, 'het gesleepte plaatje is geen bijlage');
+    // Een afbeelding uit een ander dossier (geplakt uit een andere pagina): de
+    // database weigert het opslaan, de editor zegt waarom, en zonder dat blok
+    // slaat hij weer op.
+    sql(`insert into public.attachments (organization_id, entity_type, entity_id, name, mime_type, size_bytes, storage_key)
+      values (${q(w.orgId)}, 'client', ${q(w.klantB.id)}, 'vreemd.png', 'image/png', 10, ${q(`${w.orgId}/client/${w.klantB.id}/${randomUUID()}-vreemd.png`)})`);
+    const vreemd = sqlRij(`select id from public.attachments where organization_id = ${q(w.orgId)} and name = 'vreemd.png'`);
+    await page.evaluate((id) => {
+      const data = new DataTransfer();
+      data.setData('text/html', `<img data-attachment-id="${id}" alt="">`);
+      document.querySelector('.page-editor .tiptap').dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+    }, vreemd.id);
+    const banner = page.locator('.page-editor-banner');
+    await wachtTot(async () => tekst(await banner.innerText().catch(() => '')).includes('ander dossier'), { melding: `geen uitleg bij een geweigerde opslag: ${tekst(await banner.innerText().catch(() => ''))}` });
+    await editorVak(page).locator(`.page-image[data-attachment-id="${vreemd.id}"]`).click();
+    await page.keyboard.press('Backspace');
+    await wachtOpgeslagen(page, 'zonder het vreemde blok slaat de pagina niet op');
+    gelijk(await banner.count(), 0, 'de melding staat er nog na opslaan');
+    gelijk(telBlok(blokPagina.id, `@.type == "image" && @.attrs.attachmentId == "${vreemd.id}"`), 0, 'het vreemde blok in body');
     await sluitPagina(page);
     // Opnieuw openen: de afbeeldingen komen terug van de worker, en openen verandert niets.
     const voor = blokRijInDb();
     const terug = await openMetMedia();
     const beeldTerug = editorVak(terug).locator('.page-image img');
-    await wachtTot(async () => (await beeldTerug.count()) === 2 && (await geladen(beeldTerug)), { melding: 'de afbeeldingen komen niet terug' });
+    await wachtTot(async () => (await beeldTerug.count()) === 3 && (await geladen(beeldTerug)), { melding: 'de afbeeldingen komen niet terug' });
     await terug.waitForTimeout(1500);
     await sluitPagina(terug);
     const na = blokRijInDb();
@@ -2430,7 +2468,8 @@ async function scenarioDocumenten() {
     const weg = editorVak(zonder).locator('.page-image.is-missing');
     await wachtTot(async () => tekst(await weg.innerText().catch(() => '')) === 'Afbeelding niet gevonden', { melding: 'een verdwenen afbeelding toont geen melding' });
     await sluitPagina(zonder);
-  });
+  // De geweigerde opslag met de vreemde afbeelding is precies wat deze stap toetst.
+  }, { toegestaan: [{ tabel: 'documents', methode: 'PATCH', status: 400, antwoord: /ander dossier/ }] });
 }
 
 // ── Bank: mutaties met de hand boeken ──────────────────────────────────────

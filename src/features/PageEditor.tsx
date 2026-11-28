@@ -130,6 +130,8 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
   const releasedRef = useRef(false);
   const editorRef = useRef<Editor | null>(null);
   const scheduleRef = useRef<() => void>(() => {});
+  /** Staat er een melding dat opslaan mislukte? Die verdwijnt zodra het weer klopt. */
+  const saveErrorShownRef = useRef(false);
 
   const setMode = (next: Mode) => { modeRef.current = next; setModeState(next); };
   const setTitle = (next: string) => { titleRef.current = next; setTitleState(next); };
@@ -288,6 +290,7 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
       if (modeRef.current !== 'bewerken' || Date.now() - lastClaimOkRef.current > CLAIM_FRESH_MS) {
         setSaveState('fout');
         setMessage('Er is geen verbinding: je laatste wijzigingen zijn nog niet opgeslagen.');
+        saveErrorShownRef.current = true;
         return false;
       }
     }
@@ -300,6 +303,7 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
         baselineRef.current = snap;
         savedThisSessionRef.current = true;
         setMessage(null);
+        saveErrorShownRef.current = false;
         setSaveState(currentSnapshot() === baselineRef.current ? 'opgeslagen' : 'wijzigingen');
         if (Date.now() - lastVersionAtRef.current > VERSION_EVERY_MS) {
           lastVersionAtRef.current = Date.now();
@@ -319,9 +323,16 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
       }
       setSaveState('fout');
       return false;
-    } catch {
+    } catch (error) {
       setSaveState('fout');
-      setMessage('Opslaan is niet gelukt. Het wordt opnieuw geprobeerd bij je volgende wijziging.');
+      // De database weigerde de inhoud (22023): zeg waarom, want opnieuw
+      // proberen helpt dan niet. Bijvoorbeeld een geplakte afbeelding uit een
+      // ander dossier. Haal je dat blok weg, dan slaat de pagina weer op.
+      const refused = (error as { code?: string; message?: string } | null);
+      setMessage(refused?.code === '22023' && refused.message
+        ? `Opslaan lukt niet: ${refused.message} Haal dat weg; dan slaat de pagina weer op.`
+        : 'Opslaan is niet gelukt. Het wordt opnieuw geprobeerd bij je volgende wijziging.');
+      saveErrorShownRef.current = true;
       return false;
     }
   }, [currentSnapshot, documentId, organizationId, tryClaim]);
@@ -341,6 +352,9 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
     if (currentSnapshot() === baselineRef.current) {
       if (timerRef.current) { window.clearTimeout(timerRef.current); timerRef.current = null; }
       setSaveState('opgeslagen');
+      // Weer precies wat er is opgeslagen (bijvoorbeeld een geweigerd blok weer
+      // weggehaald): dan klopt een melding dat opslaan mislukte niet meer.
+      if (saveErrorShownRef.current) { saveErrorShownRef.current = false; setMessage(null); }
       return;
     }
     setSaveState('wijzigingen');
@@ -439,7 +453,7 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
   const connectPreview = useCallback((preview: Editor) => {
     const store = preview.storage as unknown as Record<string, Record<string, unknown>>;
     if (linksRef.current) store.subpage.links = { ...linksRef.current, open: () => {}, create: async () => null };
-    if (mediaRef.current) store.image.media = { ...mediaRef.current, upload: async () => null };
+    if (mediaRef.current) store.image.media = { ...mediaRef.current, upload: async () => null, refuse: () => {} };
   }, []);
   useEffect(() => {
     if (!editor) return;
@@ -505,6 +519,7 @@ export function PageEditor({ documentId, organizationId, canWrite, nameOf, onClo
           return null;
         }
       },
+      refuse: reason => setMessage(reason),
     };
     (editor.storage as unknown as Record<string, { media: PageMedia | null }>).image.media = media;
     mediaRef.current = media;
