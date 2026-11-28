@@ -71,6 +71,23 @@ export function plainText(html: unknown): string {
     .trim();
 }
 
+/** Zoveel alinea's zet één voorstel hoogstens onderaan een pagina. */
+const MAX_PAGE_PARAGRAPHS = 200;
+
+/**
+ * De tekst van een voorstel als alinea's voor een pagina (§12 van het bouwplan
+ * voor pagina's): elke regel een alinea, alleen tekst. Koppen, lijsten en opmaak
+ * komen met voorstellen per blok (fase 2). Lege regels gaan eruit: een alinea
+ * met een lege tekst neemt de editor niet aan, en dan ging de pagina niet meer
+ * open om te bewerken.
+ */
+export function pageParagraphs(content: string): string[] {
+  return plainText(content).split('\n')
+    .map((line) => line.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .slice(0, MAX_PAGE_PARAGRAPHS);
+}
+
 /** De woorden waarop gezocht wordt: minstens drie tekens, hoogstens zes. */
 function searchTerms(query: string): string[] {
   const words = query.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 3);
@@ -344,7 +361,8 @@ export const CONTENT_ACTIONS: ActionDef[] = [
     description:
       'Werkt een bestaand intern document bij: de titel, de tekst (vervangen of iets toevoegen onderaan), de soort (algemeen, contract, beleid, procedure, overig), of aan welke klant of welk project het hangt. ' +
       'Lees het eerst met `content.get`. Met `content_mode: "append"` voeg je tekst onderaan toe; met "replace" (standaard) vervang je de hele tekst — geef dan de volledige nieuwe tekst. ' +
-      'Een Word-document (format "word") bewerk je niet hier maar in de Word-editor; titel, soort, klant en project kunnen wel.',
+      'Een Word-document (format "word") bewerk je niet hier maar in de Word-editor; titel, soort, klant en project kunnen wel. ' +
+      'Een pagina (format "page") vul je alleen aan, met `content_mode: "append"`: elke regel wordt een alinea onderaan; vervangen kan niet.',
     keywords: ['document', 'bijwerken', 'aanpassen', 'wijzigen', 'bewerken', 'aanvullen', 'herschrijven', 'tekst', 'procedure', 'beleid', 'titel'],
     input: {
       document_id: { type: 'string', description: 'Id van het document (uit content.search of list_content).' },
@@ -708,11 +726,12 @@ async function planContentUpdate(ctx: ActionCtx, input: Record<string, unknown>,
   const label = isNote ? 'Notitie' : 'Document';
   const current = await row<{ title: string | null; content: string | null; client_id: string | null; project_id: string | null; storage_key?: string | null; format?: string | null }>(
     ctx, table, itemId, isNote ? 'title, content, client_id, project_id' : 'title, content, client_id, project_id, storage_key, format', label);
-  // Bij een pagina komt de tekst uit de blokken; de database weigert een wijziging
-  // van alleen de tekst (20261127130000). Voorstellen per blok komen later.
-  if (!isNote && current.format === 'page' && typeof input.content === 'string' && input.content.trim()) {
-    throw new ActionError('Tekst toevoegen aan een pagina kan nog niet via Gerrie. Open de pagina en typ het erbij; de titel aanpassen kan wel.');
-  }
+  // Bij een pagina komt de tekst uit de blokken (body); de database weigert een
+  // wijziging van alleen de tekst (20261127130000). Aanvullen kan wel: de app
+  // zet de alinea's uit `page_paragraphs` onderaan body (§12). Vervangen niet,
+  // dat zou tabellen, afbeeldingen en subpagina's weghalen.
+  const isPage = !isNote && current.format === 'page';
+  let paragraphs: string[] | null = null;
 
   const patch: Record<string, unknown> = {};
   const changes: string[] = [];
@@ -727,6 +746,16 @@ async function planContentUpdate(ctx: ActionCtx, input: Record<string, unknown>,
       throw new ActionError('Dit is een Word-document: de tekst staat in het bestand zelf. Die bewerk je in de Word-editor in ResoFly; titel, soort, klant en project kan ik wel aanpassen.');
     }
     if (content.length > 100000) throw new ActionError('Die tekst is te lang (meer dan 100.000 tekens).');
+    if (isPage) {
+      if (mode !== 'append') {
+        throw new ActionError('Een pagina vul je alleen aan: geef content_mode "append" mee. Vervangen zou de tabellen, afbeeldingen en subpagina\'s van de pagina weghalen.');
+      }
+      paragraphs = pageParagraphs(content);
+      if (paragraphs.length === 0) throw new ActionError('Er staat geen tekst in om onderaan de pagina te zetten.');
+    }
+    // Ook bij een pagina blijft de tekst in het patch: een app van vóór het
+    // aanvullen van pagina's stuit dan op de weigering van de database, in
+    // plaats van "bijgewerkt" te melden zonder dat er iets bij kwam.
     patch.content = content;
     replaces = mode === 'replace' && plainText(current.content).length > 0;
     const preview = plainText(content).replace(/\s+/g, ' ').slice(0, 70);
@@ -765,9 +794,10 @@ async function planContentUpdate(ctx: ActionCtx, input: Record<string, unknown>,
   }
 
   if (Object.keys(patch).length === 0) throw new ActionError('Geef minstens één ding dat moet veranderen (titel, tekst, soort, klant of project).');
-  const name = current.title || label;
+  const shown = isPage ? 'Pagina' : label;
+  const name = current.title || shown;
   return {
-    title: `${label} "${name}" bijwerken`,
+    title: isPage && paragraphs ? `Pagina "${name}" aanvullen` : `${shown} "${name}" bijwerken`,
     sub: joinShort(changes, 160),
     kind: 'work' as const,
     // Vervangen gooit de oude tekst weg; er is geen vorige versie om naar terug te gaan.
@@ -775,6 +805,7 @@ async function planContentUpdate(ctx: ActionCtx, input: Record<string, unknown>,
     payload: {
       kind, item_id: itemId, title: name, patch, content_mode: content ? mode : null,
       client_name: clientName, project_name: projectName,
+      ...(paragraphs ? { page_paragraphs: paragraphs } : {}),
     },
   };
 }

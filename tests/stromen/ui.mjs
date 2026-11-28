@@ -23,7 +23,7 @@
  */
 import path from 'node:path';
 import os from 'node:os';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { inflateRawSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
@@ -2909,6 +2909,52 @@ async function scenarioPaginadrive() {
     }
     await sluitPagina(page);
   });
+  // ── Gerrie vult een pagina aan (§12) ──────────────────────────────────────
+  await uiStap('Gerrie vult een pagina aan: een voorstel via een gekoppelde AI, "Uitvoeren" in de wachtrij, en de alinea\'s staan onderaan met een versie', async () => {
+    const tag = Date.now().toString(36);
+    const body = { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Bestaande tekst.' }] }, { type: 'paragraph' }] };
+    sql(`insert into public.documents (organization_id, created_by, title, format, body, client_id)
+      values (${q(w.orgId)}, ${q(w.medewerker.id)}, ${q(`Aanvulproef ${tag}`)}, 'page', ${q(JSON.stringify(body))}::jsonb, ${q(w.klantA.id)})`);
+    const pagina = sqlRij(`select id, edit_version from public.documents where organization_id = ${q(w.orgId)} and title = ${q(`Aanvulproef ${tag}`)}`);
+    // Een echte MCP-koppeling van de beheerder, zoals mcp-oauth hem uitgeeft (zie videovergadering.mjs).
+    const clientId = `stromen-${randomUUID()}`;
+    sql(`insert into public.mcp_clients (client_id, client_name, redirect_uris) values (${q(clientId)}, 'Stromen-AI', array['https://stromen.test/cb'])`);
+    const grantId = sql(`insert into public.mcp_grants (organization_id, user_id, client_id, scope, label)
+                         values (${q(w.orgId)}, ${q(w.beheerder.id)}, ${q(clientId)}, 'read propose', 'stromen') returning id`);
+    const selector = randomBytes(16).toString('base64url');
+    const verifier = randomBytes(32).toString('base64url');
+    const salt = randomBytes(16).toString('hex');
+    sql(`insert into public.mcp_tokens (grant_id, kind, selector, verifier_hash, salt, expires_at)
+         values (${q(grantId)}, 'access', ${q(selector)}, ${q(createHash('sha256').update(`${salt}:${verifier}`).digest('hex'))}, ${q(salt)}, now() + interval '1 hour')`);
+    const voorstel = async (input) => {
+      const res = await roep('mcp', { token: `rsfmcp.${selector}.${verifier}`, body: { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'propose_action', arguments: { action_id: 'document.update', input } } } });
+      return { fout: res.json?.result?.isError === true, tekst: res.json?.result?.content?.[0]?.text ?? '' };
+    };
+    // Vervangen weigert de server, met de reden voor de AI.
+    const vervangen = await voorstel({ document_id: pagina.id, content: 'Alles nieuw' });
+    verwacht(vervangen.fout && /append/.test(vervangen.tekst), `vervangen werd niet geweigerd: ${vervangen.tekst}`);
+    const aanvullen = await voorstel({ document_id: pagina.id, content: `<p>Eerste regel ${tag}</p><p>Tweede regel ${tag}</p>`, content_mode: 'append' });
+    verwacht(!aanvullen.fout, `aanvullen klaarzetten: ${aanvullen.tekst}`);
+    const audit = sqlRij(`select id, params from public.ai_action_audit where mcp_grant_id = ${q(grantId)} and status = 'proposed' order by created_at desc limit 1`);
+    verwacht(audit, 'geen voorstel in de wachtrij');
+    gelijk(sqlRij(`select content from public.documents where id = ${q(pagina.id)}`).content.includes(tag), false, 'er is al iets veranderd vóór het akkoord');
+    // Het akkoord: als beheerder, op het startscherm.
+    const beheer = await openWerkruimte(w.beheerder, 'beheerder', w.orgId, { tijdelijk: true });
+    const page = beheer.page;
+    await page.locator('.sidebar-nav .nav-item').filter({ hasText: /^Dashboard/ }).first().click();
+    const rij = page.locator('.ag-queue-row').filter({ hasText: `Aanvulproef ${tag}` }).first();
+    await rij.waitFor({ timeout: 20000 });
+    verwacht(/aanvullen/.test(tekst(await rij.innerText())), `de regel in de wachtrij: ${tekst(await rij.innerText())}`);
+    const versies = Number(sqlRij(`select count(*)::int as n from public.document_versions where document_id = ${q(pagina.id)}`).n);
+    await rij.locator('.ag-btn-go').click();
+    await wachtTot(async () => sqlRij(`select content from public.documents where id = ${q(pagina.id)}`).content.includes(`Tweede regel ${tag}`), { melding: 'de alinea\'s kwamen niet op de pagina' });
+    const na = sqlRij(`select body, edit_version from public.documents where id = ${q(pagina.id)}`);
+    const teksten = na.body.content.map((blok) => (blok.content ?? []).map((t) => t.text).join(''));
+    gelijk(teksten, ['Bestaande tekst.', `Eerste regel ${tag}`, `Tweede regel ${tag}`], 'de alinea\'s onderaan, zonder lege regel ertussen');
+    gelijk(na.edit_version, pagina.edit_version + 1, 'edit_version');
+    await wachtTot(async () => Number(sqlRij(`select count(*)::int as n from public.document_versions where document_id = ${q(pagina.id)}`).n) === versies + 1, { melding: 'geen versie na het aanvullen' });
+    await wachtTot(async () => sqlRij(`select status from public.ai_action_audit where id = ${q(audit.id)}`).status !== 'proposed', { melding: 'het voorstel bleef in de wachtrij staan' });
+  }, { toegestaan: [{ soort: 'functie', functie: 'mcp' }] });
   // ── Afdrukken (§9: "Ctrl+P blijft werken, met een nette printstijl") ───────
   await uiStap('afdrukken: alleen de pagina, over de hele lengte, met de uitklapper open', async () => {
     const tag = Date.now().toString(36);

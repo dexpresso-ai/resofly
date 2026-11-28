@@ -1992,6 +1992,36 @@ export async function releasePageEdit(documentId: UUID): Promise<void> {
   if (error) throw error;
 }
 
+/**
+ * Alinea's onderaan een pagina zetten: het aanvullen door Gerrie, de MCP of de
+ * API, na een akkoord (§12 van het bouwplan voor pagina's). Met edit_version,
+ * zoals de editor opslaat: schreef iemand er net in, dan één keer opnieuw met
+ * de nieuwe stand, en anders een melding. Wie de pagina op dat moment open
+ * heeft, krijgt bij zijn volgende opslag de bekende melding "opnieuw laden".
+ * Daarna een versie, zodat de aanvulling in het versiepaneel staat.
+ */
+export async function appendParagraphsToPage(pageId: UUID, organizationId: UUID, paragraphs: string[], title?: string): Promise<void> {
+  const lines = paragraphs.map(line => line.trim()).filter(Boolean);
+  if (lines.length === 0) throw new Error('Er is niets om onderaan de pagina te zetten.');
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const page = await loadPage(pageId, organizationId);
+    if (page.format !== 'page') throw new Error('Dit is geen pagina.');
+    const body = page.body && typeof page.body === 'object' && !Array.isArray(page.body) ? page.body as { content?: unknown[] } : {};
+    const content = Array.isArray(body.content) ? [...body.content] : [];
+    // Een lege laatste alinea (de editor zet er altijd een) eerst weg: anders
+    // stond er een lege regel tussen de tekst en de aanvulling.
+    const last = content[content.length - 1] as { type?: string; content?: unknown[] } | undefined;
+    if (last?.type === 'paragraph' && (!Array.isArray(last.content) || last.content.length === 0)) content.pop();
+    const next = { ...body, type: 'doc', content: [...content, ...lines.map(text => ({ type: 'paragraph', content: [{ type: 'text', text }] }))] };
+    const saved = await savePage(pageId, organizationId, { title: title ?? page.title, body: next }, page.edit_version);
+    if (saved.ok) {
+      await savePageVersion(pageId).catch(() => {});
+      return;
+    }
+  }
+  throw new Error('De pagina werd net door iemand anders gewijzigd. Probeer het zo nog eens.');
+}
+
 /** Een versie vastleggen van wat er nu staat (save_page_version). */
 export async function savePageVersion(documentId: UUID, reason: 'sessie' | 'vastgelegd' = 'sessie'): Promise<void> {
   const { error } = await supabase.rpc('save_page_version', { p_document_id: documentId, p_reason: reason });

@@ -1,6 +1,6 @@
 import {
-  attachmentLockReason, loadAttachmentRef, loadContentHtml, moveAttachmentToFolder, renameAttachment, revokeDriveShare,
-  shareDriveItem, updateRow, type DriveShareRecipientInput,
+  appendParagraphsToPage, attachmentLockReason, documentFormat, loadAttachmentRef, loadContentHtml, moveAttachmentToFolder,
+  renameAttachment, revokeDriveShare, shareDriveItem, updateRow, type DriveShareRecipientInput,
 } from '../repository';
 import { sanitizeRichText } from '../../components/RichTextEditor';
 import { optText, patchOf, text, type ActionExecutor, type ActionRunCtx } from './types';
@@ -25,6 +25,21 @@ async function updateContent(payload: Record<string, unknown>, ctx: ActionRunCtx
   const table = kind === 'note' ? 'notes' : 'documents';
   const itemId = text(payload, 'item_id');
   const patch = { ...patchOf(payload) };
+  // Een pagina: de tekst komt als alinea's onderaan body (§12), nooit via
+  // content. Die weigert de database bij een pagina. Wat de kaart beloofde,
+  // staat in `page_paragraphs`; de app zet ze onder wat er NU staat.
+  if (kind === 'document' && typeof patch.content === 'string' && await documentFormat(itemId, ctx.organizationId) === 'page') {
+    const paragraphs = Array.isArray(payload.page_paragraphs)
+      ? (payload.page_paragraphs as unknown[]).filter((line): line is string => typeof line === 'string' && line.trim() !== '')
+      : [];
+    if (payload.content_mode !== 'append' || paragraphs.length === 0) {
+      throw new Error('Een pagina kan alleen worden aangevuld, met de alinea\'s uit het voorstel. Vraag Gerrie het opnieuw klaar te zetten.');
+    }
+    const { content: _content, title, ...rest } = patch;
+    await appendParagraphsToPage(itemId, ctx.organizationId, paragraphs, typeof title === 'string' ? title : undefined);
+    if (Object.keys(rest).length > 0) await updateRow(table, itemId, rest, ctx.organizationId);
+    return `Pagina "${String(title ?? optText(payload, 'title') ?? '')}" aangevuld`.replace(' ""', '');
+  }
   if (typeof patch.content === 'string') {
     const addition = sanitizeRichText(patch.content);
     if (payload.content_mode === 'append') {

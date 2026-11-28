@@ -600,6 +600,9 @@ akkoord is.
     context), met de .woff van de server omgezet door `_shared/woff.ts`.
   - Nog te doen op de Collabora-container: welke letter hij neemt als de huisstijlletter
     ontbreekt, of hij de ingesloten letter gebruikt, en of er een emoji-letter is.
+- **Daarna gebouwd, op de branch:** §12, Gerrie vult een pagina aan. Elke regel wordt een
+  alinea onderaan, na een akkoord in de wachtrij; vervangen weigert de server. Zie
+  `docs/changelog/CHANGELOG_PAGINAS_GERRIE_AANVULLEN_2026-11-28.md`.
 - **Daarna gebouwd, op de branch:** afdrukken met Ctrl+P (§9), alleen de pagina, zie
   `docs/changelog/CHANGELOG_PAGINAS_AFDRUKKEN_2026-11-28.md`.
 - **De CI op de branch (Frontend checks, met de hand gestart):**
@@ -627,7 +630,7 @@ akkoord is.
   - `ui.mjs documenten` (10 stappen);
   - `paginas`, de editor en zijn blokken (18);
   - `paginadrive`, de boom in de drive, de prullenbak, het eigen dossier, de boom naast de
-    pagina, Word en afdrukken (8).
+    pagina, Word, Gerrie die aanvult, en afdrukken (9).
 - **De "Geen klant"-teksten in de documentenomgeving zijn weg** (de vensters van notities en
   documenten, de kaart van een document). Waar het blijft, staat in
   `docs/changelog/CHANGELOG_EIGEN_DOSSIER_2026-11-28.md`.

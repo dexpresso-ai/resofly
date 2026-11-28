@@ -228,3 +228,32 @@ test('instellingen zijn alleen voor owners en admins', () => {
   assert.equal(action('settings.set_ticket_emails').adminOnly, true);
   assert.equal(action('settings.save_jitsi_server').adminOnly, true);
 });
+
+test('een pagina vult Gerrie alleen aan: elke regel een alinea onderaan, vervangen kan niet (§12)', async () => {
+  const update = action('document.update');
+  const rows = { documents: [{ title: 'Handboek', content: 'Inleiding', client_id: null, project_id: null, storage_key: null, format: 'page' }] };
+  // Vervangen (de standaard) zou tabellen, afbeeldingen en subpagina's weghalen.
+  await refuses(update.plan!(ctx(rows), { document_id: ID, content: 'Nieuwe tekst' }), /content_mode "append"/);
+  const plan = await update.plan!(ctx(rows), { document_id: ID, content: '<p>Eerste regel</p><p> </p><p>Tweede &amp; <b>laatste</b></p>', content_mode: 'append' });
+  const payload = plan.payload as { page_paragraphs: string[]; patch: Record<string, unknown>; content_mode: string };
+  assert.deepEqual(payload.page_paragraphs, ['Eerste regel', 'Tweede & laatste']);
+  assert.equal(payload.content_mode, 'append');
+  assert.match(plan.title, /Pagina "Handboek" aanvullen/);
+  assert.equal(plan.risk, undefined);
+  // De tekst blijft in het patch: een oude app stuit dan op de database.
+  assert.equal(typeof payload.patch.content, 'string');
+  await refuses(update.plan!(ctx(rows), { document_id: ID, content: '<p> </p><br>', content_mode: 'append' }), /geen tekst/);
+  // De titel van een pagina kan wel, zonder tekst en zonder alinea's.
+  const titel = await update.plan!(ctx(rows), { document_id: ID, title: 'Handboek 2027' });
+  assert.equal((titel.payload as { page_paragraphs?: unknown }).page_paragraphs, undefined);
+  assert.match(titel.title, /Pagina "Handboek" bijwerken/);
+});
+
+test('de alinea\'s voor een pagina: per regel, zonder lege, en hoogstens 200', async () => {
+  const { pageParagraphs } = await import('./actions/content.ts');
+  assert.deepEqual(pageParagraphs('Regel 1\n\n  Regel   2  \n'), ['Regel 1', 'Regel 2']);
+  assert.deepEqual(pageParagraphs('<h2>Kop</h2><ul><li>een</li><li>twee</li></ul>'), ['Kop', '• een', '• twee']);
+  assert.deepEqual(pageParagraphs('a<br>b'), ['a', 'b']);
+  assert.deepEqual(pageParagraphs('<p></p>'), []);
+  assert.equal(pageParagraphs(Array.from({ length: 250 }, (_, i) => `r${i}`).join('\n')).length, 200);
+});

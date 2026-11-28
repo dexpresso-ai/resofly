@@ -77,6 +77,7 @@ stand voor de overdracht.
 | 1A-5c | Het eigen dossier met mappen, bovenaan de drive, in plaats van "Geen klant"; ook in de vensters van notities en documenten. | `CHANGELOG_EIGEN_DOSSIER_2026-11-28.md` |
 | 1A-5e | De boom van het dossier naast de pagina: een kolom, op de telefoon een lade. | `CHANGELOG_PAGINAS_DOSSIERBOOM_2026-11-28.md` |
 | §9 | Afdrukken met Ctrl+P: alleen de pagina, over de hele lengte, zwart op wit. | `CHANGELOG_PAGINAS_AFDRUKKEN_2026-11-28.md` |
+| §12 | Gerrie (of een gekoppelde AI, een agent, de API) vult een pagina aan: elke regel een alinea onderaan, na een akkoord. Vervangen kan niet. | `CHANGELOG_PAGINAS_GERRIE_AANVULLEN_2026-11-28.md` |
 | 1B-2 (deel) | De knop "Word" in de editor: de pagina als .docx, in de letters van de huisstijl. PDF en het exportvenster wachten op Collabora. | `CHANGELOG_PAGINAS_WORD_2026-11-28.md` |
 
 Er komen drie migraties mee die nog niet op staging staan:
@@ -97,5 +98,5 @@ Ze mogen opnieuw draaien, en de databasetests lopen ze na.
   - de drie UI-scenario's voor pagina's, alle stappen goed:
     - `documenten` (10 stappen);
     - `paginas` (18);
-    - `paginadrive` (8).
+    - `paginadrive` (9).
 - **De mobiele lay-outtest** duurt lokaal te lang voor een sessie; die draait in de CI.
