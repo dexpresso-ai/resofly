@@ -517,7 +517,7 @@ akkoord is.
 | 1C-1 | De omzetting van een pagina naar HTML voor de klant (`_shared/pageHtml.ts`, `renderPageHtml`), zonder browser, en `pageReferences` in `_shared`. Verandert nog niets aan wat een klant ziet. | gebouwd op 28 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_HTML_2026-11-28.md` |
 | 1C-2 | De vrijgave in de database: `drive_shares.document_version_id`, alleen een vrijgegeven versie van die pagina en organisatie. In dezelfde stap lezen het portaal en de geheime link die versie, via `renderPageHtml`. | gebouwd op 28 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_DELEN_VRIJGAVE_2026-11-28.md`. Migratie `20261128120000_paginas_delen`. |
 | 1C-3 | Het deelvenster voor een pagina: vrijgeven, subpagina's aanvinken, "De klant ziet een oudere versie" met "Bijwerken bij klant", het logboek. | gebouwd op 28 november, op de branch: 1C-3a (database en server: `file-share` met de vrijgave, `page_share_status`, `release_page_to_shares`, migratie `20261128130000`) en 1C-3b (het venster, de knop en de melding in de editor, Gerrie); zie `docs/changelog/CHANGELOG_PAGINAS_BIJWERKEN_BIJ_KLANT_2026-11-28.md` |
-| 1C-4 | De weergave in het portaal en bij een geheime link: de opmaak, en afbeeldingen die de server alleen tekent als ze in de gedeelde versie staan. Een klantpagina gaat alleen naar het portaal. | gepland |
+| 1C-4 | De weergave in het portaal en bij een geheime link: de opmaak, en afbeeldingen die de server alleen tekent als ze in de gedeelde versie staan. Een klantpagina gaat alleen naar het portaal. | gebouwd op 28 november, op de branch; zie `docs/changelog/CHANGELOG_PAGINAS_PORTAAL_WEERGAVE_2026-11-28.md`. Migratie `20261128140000`. Een klantpagina via een losse link weigerde de database al. |
 
 **1C wordt gebouwd volgens de lezing van §1 (28 november):**
 
@@ -530,8 +530,8 @@ akkoord is.
     niet;
   - dat de klant de naam van een bestand in de pagina ziet, maar het bestand zelf alleen als
     het ook gedeeld is.
-- **Merge 1C-2 en 1C-3 pas samen met 1C-4.** Vanaf 1C-3 kan de app een pagina delen. Wat de
-  klant in het portaal ziet (de opmaak van taken, kaders, afbeeldingen), komt pas in 1C-4.
+- **Merge 1C-2, 1C-3 en 1C-4 samen.** Vanaf 1C-3 kan de app een pagina delen; wat de klant
+  dan ziet (de opmaak van taken, kaders, afbeeldingen), kwam in 1C-4.
 - **De volgorde is een veiligheidskeuze.** Het portaal toont nu bij een tekstdocument de
   levende tekst (`content`). Zou de database een pagina eerder laten delen dan het portaal de
   vrijgegeven versie leest, dan zag de klant de pagina zoals ze op dat moment is. Daarom komen
@@ -644,6 +644,11 @@ akkoord is.
   het deelvenster met subpagina's, "De klant ziet een oudere versie" met "Bijwerken bij
   klant", en Gerrie die een pagina deelt met een vrijgave van wie goedkeurt. UI-scenario
   `paginadelen` (6 stappen).
+- **Daarna gebouwd, op de branch:** 1C-4, wat de klant ziet: de opmaak in het leesvenster,
+  afbeeldingen (getekend, inline, een uur), en bijlagen alleen als ze nú nog in het dossier
+  horen (`shared_page_attachments`). Gevonden en gerepareerd: de sanitizer haalde `colspan`,
+  `start` en dergelijke weg, en een afgevinkte taak in een gedeelde notitie leek open. Zie
+  `docs/changelog/CHANGELOG_PAGINAS_PORTAAL_WEERGAVE_2026-11-28.md`.
 - **De CI op de branch (Frontend checks, met de hand gestart):**
   - run 304 (ba3ee84): helemaal groen;
   - run 305 (bf471ad, met de boom naast de pagina): helemaal groen, ook de mobiele

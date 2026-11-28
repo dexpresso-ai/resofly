@@ -85,3 +85,11 @@ blijft voor een pagina geweigerd tot de vrijgave er is (stap 1C-2).
 - **`npm test`:** 2399 gelukt.
 - **`npm run typecheck`.**
 - **`deno check`** op de zes modules uit de nieuwe CI-stap.
+
+## Later die dag: correctie
+
+De lijst overleefde de sanitizer van het portaal niet helemaal. `colspan`, `rowspan`, `start`,
+`width`, `height` en `loading` gingen weg: de sanitizer toetst elk attribuut dat DOMPurify niet
+als "URI-veilig" kent aan de eigen regel voor adressen. De test hierboven keek alleen naar
+verboden namen. Gevonden en gerepareerd in stap 1C-4; zie
+`docs/changelog/CHANGELOG_PAGINAS_PORTAAL_WEERGAVE_2026-11-28.md`.

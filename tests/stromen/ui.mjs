@@ -25,7 +25,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
-import { inflateRawSync } from 'node:zlib';
+import { crc32, deflateSync, inflateRawSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
 import { chromium } from '@playwright/test';
@@ -91,6 +91,20 @@ const regexVan = (woorden) => new RegExp(`^${String(woorden).replace(/[.*+?^${}(
 const slaap = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** De datum van vandaag in Nederland (JJJJ-MM-DD), plus `dagen`. */
+/** Een PNG van één kleur, voor een afbeelding die de nep-media-worker "levert". */
+function pngVlak(breedte, hoogte, [r, g, b]) {
+  const blok = (soort, data) => {
+    const lengte = Buffer.alloc(4); lengte.writeUInt32BE(data.length);
+    const som = Buffer.alloc(4); som.writeUInt32BE(crc32(Buffer.concat([Buffer.from(soort), data])) >>> 0);
+    return Buffer.concat([lengte, Buffer.from(soort), data, som]);
+  };
+  const kop = Buffer.alloc(13);
+  kop.writeUInt32BE(breedte, 0); kop.writeUInt32BE(hoogte, 4); kop[8] = 8; kop[9] = 2;
+  const regel = Buffer.concat([Buffer.from([0]), Buffer.from(Array.from({ length: breedte }, () => [r, g, b]).flat())]);
+  const pixels = deflateSync(Buffer.concat(Array.from({ length: hoogte }, () => regel)));
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), blok('IHDR', kop), blok('IDAT', pixels), blok('IEND', Buffer.alloc(0))]);
+}
+
 function datum(dagen = 0) {
   const vandaag = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
   const d = new Date(`${vandaag}T12:00:00Z`);
@@ -3241,6 +3255,99 @@ async function scenarioPaginadelen() {
     const html = await lezenInPortaal(pagina);
     verwacht(html.includes(`Na het voorstel gewijzigd ${tag}`) && !html.includes('Versie van het akkoord'), `het portaal: ${html.slice(0, 300)}`);
   }, { toegestaan: [{ soort: 'functie', functie: 'mcp' }] });
+
+  await uiStap('de geheime link in de browser: de pagina met opmaak, kader, tabel, taken, uitklapper, link en afbeelding; ook een afgevinkte taak in een notitie', async () => {
+    // Een pagina in het eigen dossier: die mag via een geheime link.
+    const titel = `Leesproef ${tag}`;
+    sql(`insert into public.documents (organization_id, created_by, title, format, body)
+      values (${q(w.orgId)}, ${q(w.medewerker.id)}, ${q(titel)}, 'page', '{"type":"doc","content":[{"type":"paragraph"}]}'::jsonb)`);
+    const pagina = sqlRij(`select id from public.documents where organization_id = ${q(w.orgId)} and title = ${q(titel)}`).id;
+    const foto = sql(`insert into public.attachments (organization_id, entity_type, entity_id, name, mime_type, size_bytes, storage_key)
+      values (${q(w.orgId)}, 'document', ${q(pagina)}, 'plattegrond.png', 'image/png', 10, ${q(`${w.orgId}/document/${pagina}/${randomUUID()}-plattegrond.png`)}) returning id`);
+    const cel = (type, text, attrs = {}) => ({ type, attrs: { colspan: 1, rowspan: 1, colwidth: null, ...attrs }, content: [{ type: 'paragraph', content: [woord(text)] }] });
+    const taak = (checked, text) => ({ type: 'taskItem', attrs: { checked }, content: [{ type: 'paragraph', content: [woord(text)] }] });
+    sql(`update public.documents set body = ${q(JSON.stringify({ type: 'doc', content: [
+      { type: 'heading', attrs: { level: 1 }, content: [woord('Afspraken')] },
+      { type: 'callout', attrs: { variant: 'tip' }, content: [{ type: 'paragraph', content: [woord('Bel ons gerust.')] }] },
+      { type: 'table', content: [
+        { type: 'tableRow', content: [cel('tableHeader', 'Brede kop', { colspan: 2 })] },
+        { type: 'tableRow', content: [cel('tableCell', 'Links'), cel('tableCell', 'Midden', { align: 'center' })] },
+      ] },
+      { type: 'taskList', content: [taak(true, 'Klaar'), taak(false, 'Nog te doen')] },
+      { type: 'details', content: [{ type: 'detailsSummary', content: [woord('Meer lezen')] }, { type: 'detailsContent', content: [{ type: 'paragraph', content: [woord('Verborgen tekst')] }] }] },
+      { type: 'paragraph', content: [{ type: 'text', text: 'onze site', marks: [{ type: 'link', attrs: { href: 'https://voorbeeld.nl' } }] }] },
+      { type: 'image', attrs: { attachmentId: foto, alt: 'Plattegrond' } },
+    ] }))}::jsonb where id = ${q(pagina)}`);
+    const versie = gelukt(await rest('rpc/save_page_version', { method: 'POST', token: w.medewerker.token, body: { p_document_id: pagina, p_reason: 'vrijgave' } }), 'vrijgeven');
+    const adres = `lezer.${tag}@elders.test`;
+    gelukt(await roep('file-share', { token: w.medewerker.token, body: {
+      action: 'share', organizationId: w.orgId, itemType: 'document', itemId: pagina, recipients: [{ kind: 'link', email: adres }], documentVersionId: versie.id,
+    } }), 'pagina delen');
+    // Een notitie met een afgevinkte taak, zoals de editor van notities hem opslaat.
+    const notitie = sql(`insert into public.notes (organization_id, created_by, title, content)
+      values (${q(w.orgId)}, ${q(w.medewerker.id)}, ${q(`Takennotitie ${tag}`)}, ${q('<ul class="rf-task-list"><li data-checked="true" aria-checked="true"><span class="rf-task-checkbox" contenteditable="false" role="checkbox" aria-checked="true" tabindex="0"></span><span class="rf-task-content">Notitie klaar</span></li><li data-checked="false" aria-checked="false"><span class="rf-task-checkbox" contenteditable="false" role="checkbox" aria-checked="false" tabindex="0"></span><span class="rf-task-content">Notitie open</span></li></ul>')}) returning id`);
+    const notitieAdres = `notitie.${tag}@elders.test`;
+    gelukt(await roep('file-share', { token: w.medewerker.token, body: {
+      action: 'share', organizationId: w.orgId, itemType: 'note', itemId: notitie, recipients: [{ kind: 'link', email: notitieAdres }],
+    } }), 'notitie delen');
+
+    const lezer = await openAlsKlant(linkUit(mailsAan(adres).at(-1), 'gedeeld'), 'lezer');
+    const page = lezer.page;
+    // De getekende links van de nep-media-worker wijzen naar een verzonnen
+    // https-adres (nepdiensten.mjs); hier levert de browser er een echte PNG.
+    const gevraagd = [];
+    await lezer.context.route(/^https:\/\/media\.stromen\.test\//, (route) => {
+      gevraagd.push(route.request().url());
+      return route.fulfill({ status: 200, contentType: 'image/png', body: pngVlak(320, 120, [220, 38, 38]) });
+    });
+    await page.locator('.share-public-row').filter({ hasText: titel }).getByRole('button', { name: 'Lezen' }).click();
+    const venster = page.locator('.share-read-modal .rich-text-viewer');
+    await venster.locator('.rf-page').waitFor({ timeout: 15000 });
+    const dom = await venster.evaluate((root) => {
+      const stijl = (el, pseudo) => (el ? getComputedStyle(el, pseudo ?? null) : null);
+      const kader = root.querySelector('.rf-callout.rf-callout-tip');
+      const afgevinkt = root.querySelector('li.rf-task-checked > .rf-task-checkbox[role="img"][aria-label="Afgevinkt"]');
+      const open = root.querySelector('li:not(.rf-task-checked) > .rf-task-checkbox[aria-label="Niet afgevinkt"]');
+      const link = root.querySelector('a[href="https://voorbeeld.nl"]');
+      const img = root.querySelector('img');
+      return {
+        kop: root.querySelector('h2')?.textContent ?? null,
+        kader: kader ? stijl(kader).backgroundColor : null,
+        brede: root.querySelector('table.rf-table th[colspan="2"]')?.textContent ?? null,
+        midden: root.querySelector('td.rf-align-center') ? stijl(root.querySelector('td.rf-align-center')).textAlign : null,
+        vinkje: afgevinkt ? stijl(afgevinkt, '::before').content : null,
+        open: open ? stijl(open, '::before').content : null,
+        doorgestreept: root.querySelector('li.rf-task-checked > .rf-task-content') ? stijl(root.querySelector('li.rf-task-checked > .rf-task-content')).textDecorationLine : null,
+        uitklapper: root.querySelector('details.rf-details > summary')?.textContent ?? null,
+        dicht: root.querySelector('details.rf-details')?.open ?? null,
+        link: link ? [link.getAttribute('target'), link.getAttribute('rel')] : null,
+        img: img ? [img.getAttribute('src'), img.getAttribute('alt')] : null,
+        verboden: [...root.querySelectorAll('[style],[id]')].length + [...root.querySelectorAll('*')].filter((el) => [...el.attributes].some((a) => a.name.startsWith('data-'))).length,
+      };
+    });
+    gelijk(dom.kop, 'Afspraken', 'de kop');
+    verwacht(dom.kader && dom.kader !== 'rgba(0, 0, 0, 0)', `het kader heeft geen kleur: ${dom.kader}`);
+    gelijk(dom.brede, 'Brede kop', 'een kopcel over twee kolommen');
+    gelijk(dom.midden, 'center', 'uitlijnen in een cel');
+    gelijk([dom.vinkje, dom.open], ['"✓"', '""'], 'een afgevinkte taak toont een vinkje, een open taak niet');
+    gelijk(dom.doorgestreept, 'line-through', 'een afgevinkte taak is doorgestreept');
+    gelijk([dom.uitklapper, dom.dicht], ['Meer lezen', false], 'de uitklapper, dicht');
+    gelijk(dom.link, ['_blank', 'noopener noreferrer nofollow'], 'een link opent in een nieuw tabblad');
+    verwacht(dom.img && dom.img[0].startsWith('https://media.stromen.test/signed/') && dom.img[0].includes('inline=1') && dom.img[1] === 'Plattegrond', `de afbeelding: ${JSON.stringify(dom.img)}`);
+    gelijk(dom.verboden, 0, 'geen style, id of data-* na de sanitizer');
+    await wachtTot(async () => venster.locator('img').evaluate((img) => img.complete && img.naturalWidth === 320).catch(() => false), { melding: 'de afbeelding laadt niet' });
+    verwacht(gevraagd.length >= 1 && gevraagd.every((url) => url.includes('inline=1')), `de afbeelding is niet inline gevraagd: ${JSON.stringify(gevraagd)}`);
+    await beideThemas(lezer, 'paginadelen-geheime-link');
+    await page.locator('.share-read-modal .modal-close').click();
+
+    // De notitie: de afgevinkte taak was na de sanitizer open (data-checked weg).
+    const notitieLezer = await openAlsKlant(linkUit(mailsAan(notitieAdres).at(-1), 'gedeeld'), 'notitielezer');
+    await notitieLezer.page.locator('.share-public-row').filter({ hasText: `Takennotitie ${tag}` }).getByRole('button', { name: 'Lezen' }).click();
+    const notitieVenster = notitieLezer.page.locator('.share-read-modal .rich-text-viewer');
+    await notitieVenster.locator('.rf-task-list').waitFor({ timeout: 15000 });
+    const vinkjes = await notitieVenster.evaluate((root) => [...root.querySelectorAll('.rf-task-list > li > .rf-task-checkbox')].map((el) => getComputedStyle(el, '::before').content));
+    gelijk(vinkjes, ['"✓"', '""'], 'in een gedeelde notitie toont een afgevinkte taak een vinkje');
+  });
 
   await uiStap('de drive: "Delen…" bij een pagina opent het venster voor een pagina, met wie de klant ziet', async () => {
     const lid = await openWerkruimte(w.medewerker, 'medewerker', w.orgId, { tijdelijk: true });

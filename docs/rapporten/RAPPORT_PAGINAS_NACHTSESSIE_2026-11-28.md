@@ -75,9 +75,10 @@ stand voor de overdracht.
    deling aan, maar alleen met een vrijgegeven versie, en het portaal en de geheime link tonen
    alleen die versie. Sinds 1C-3 kun je in de app een pagina delen en bijwerken.
 
-   **Merge 1C-2 en 1C-3 niet zonder 1C-4.** Wat de klant in het portaal ziet, is nog niet in
-   een browser bekeken. Afgevinkte taken lijken daar waarschijnlijk open, kaders hebben geen
-   kleur, en afbeeldingen zijn nog "[Afbeelding]". Daar werk ik nu aan.
+   **Merge 1C-2, 1C-3 en 1C-4 samen.** In 1C-4 kwam wat de klant ziet: opmaak, afbeeldingen
+   en bijlagen die nog in het dossier horen. Bekeken in de browser via een geheime link, die
+   hetzelfde leesvenster gebruikt als het portaal. Het portaal zelf is niet in een browser
+   bekeken: inloggen vraagt een mail. Wat de server het portaal geeft, is wel getest.
 
 ## Gevonden en gerepareerd
 
@@ -109,13 +110,15 @@ stand voor de overdracht.
 | 1C-1 | De omzetting van een pagina naar HTML voor de klant, op de server. Een klant ziet nog niets: delen blijft voor een pagina geweigerd tot de vrijgave er is (1C-2). | `CHANGELOG_PAGINAS_HTML_2026-11-28.md` |
 | 1C-2 | Delen is vrijgeven, in de database: een deling van een pagina draagt de vrijgegeven versie, en het portaal en de geheime link tonen alleen die. In de app kun je een pagina nog niet delen (dat is 1C-3). | `CHANGELOG_PAGINAS_DELEN_VRIJGAVE_2026-11-28.md` |
 | 1C-3 | Een pagina delen in de app: "Delen" in de editor en de drive, subpagina's aanvinken, en de melding "De klant ziet een oudere versie" met "Bijwerken bij klant". Gerrie deelt een pagina ook, met een vrijgave van wie goedkeurt. | `CHANGELOG_PAGINAS_BIJWERKEN_BIJ_KLANT_2026-11-28.md` |
+| 1C-4 | Wat de klant ziet: de pagina met opmaak, kaders, tabellen, taken en afbeeldingen, in het portaal en bij een geheime link. Gerepareerd: samengevoegde cellen en het startnummer van een lijst gingen verloren, en een afgevinkte taak in een gedeelde notitie leek open. | `CHANGELOG_PAGINAS_PORTAAL_WEERGAVE_2026-11-28.md` |
 
-Er komen vijf migraties mee die nog niet op staging staan:
+Er komen zes migraties mee die nog niet op staging staan:
 - `20261127140000_paginas_blokken`;
 - `20261127150000_paginas_verwijzingen`;
 - `20261128100000_paginas_prullenbak`;
 - `20261128120000_paginas_delen`;
-- `20261128130000_paginas_bijwerken_bij_klant`.
+- `20261128130000_paginas_bijwerken_bij_klant`;
+- `20261128140000_paginas_portaal_bijlagen`.
 
 Ze mogen opnieuw draaien, en de databasetests lopen ze na.
 

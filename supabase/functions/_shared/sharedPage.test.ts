@@ -16,11 +16,20 @@ import { sharedDocumentText } from './sharedPage.ts';
 
 type Row = Record<string, unknown>;
 
-/** Genoeg van supabase-js voor sharedPage.ts: from().select().eq().in(), en maybeSingle() of await. */
+/**
+ * Genoeg van supabase-js voor sharedPage.ts: from().select().eq().in(), en
+ * maybeSingle() of await; en rpc(). Een rpc geeft de rijen uit
+ * tables['rpc:<naam>'] die bij de argumenten horen (hier: de deling).
+ */
 function fakeAdmin(tables: Record<string, Row[]>, failOn?: string) {
   const calls: string[] = [];
   return {
     calls,
+    async rpc(name: string, args: Record<string, unknown>) {
+      calls.push(`rpc:${name}`);
+      if (failOn === `rpc:${name}`) return { data: null, error: { message: `kapot: rpc:${name}` } };
+      return { data: (tables[`rpc:${name}`] ?? []).filter(row => row.p_share_id === args.p_share_id), error: null };
+    },
     from(table: string) {
       const filters: Array<(row: Row) => boolean> = [];
       const result = () => {
@@ -51,6 +60,8 @@ const OTHER_PAGE = '33333333-3333-4333-8333-333333333333';
 const TEXT_DOC = '44444444-4444-4444-8444-444444444444';
 const FILE = '55555555-5555-4555-8555-555555555555';
 const FILE_B = '66666666-6666-4666-8666-666666666666';
+const IMAGE = '99999999-9999-4999-8999-999999999999';
+const SVG = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const SHARE = '77777777-7777-4777-8777-777777777777';
 const VERSION = '88888888-8888-4888-8888-888888888888';
 
@@ -75,11 +86,16 @@ function world(overrides: Partial<Record<string, Row[]>> = {}): Record<string, R
         { type: 'subpage', attrs: { pageId: 'geen-uuid' } },
         { type: 'fileBlock', attrs: { attachmentId: FILE } },
         { type: 'fileBlock', attrs: { attachmentId: FILE_B } },
+        { type: 'image', attrs: { attachmentId: IMAGE, alt: 'Plattegrond' } },
+        { type: 'image', attrs: { attachmentId: SVG, alt: 'Logo' } },
       ),
     }],
-    attachments: [
-      { id: FILE, organization_id: ORG, name: 'Offerte.pdf' },
-      { id: FILE_B, organization_id: ORG_B, name: 'Van een ander.pdf' },
+    // Wat de database nu nog bij het dossier rekent (shared_page_attachments).
+    // FILE_B staat er niet in: dat bestand verhuisde naar een andere klant.
+    'rpc:shared_page_attachments': [
+      { p_share_id: SHARE, attachment_id: FILE, kind: 'fileBlock', name: 'Offerte.pdf', storage_key: `${ORG}/folder/x/offerte.pdf`, mime_type: 'application/pdf' },
+      { p_share_id: SHARE, attachment_id: IMAGE, kind: 'image', name: 'plattegrond.png', storage_key: `${ORG}/document/${PAGE}/plattegrond.png`, mime_type: 'image/png' },
+      { p_share_id: SHARE, attachment_id: SVG, kind: 'image', name: 'logo.svg', storage_key: `${ORG}/document/${PAGE}/logo.svg`, mime_type: 'image/svg+xml' },
     ],
     ...overrides,
   };
@@ -100,10 +116,32 @@ test('een pagina: de gedeelde versie, nooit de titel of tekst van nu', async () 
   assert.doesNotMatch(result?.html ?? '', /levende tekst|Werktitel/);
 });
 
-test('bestanden: alleen de naam uit dezelfde organisatie', async () => {
+test('bestanden en afbeeldingen: alleen wat de database nu nog bij het dossier rekent', async () => {
   const html = (await read(world()))?.html ?? '';
   assert.match(html, /Bijlage: Offerte\.pdf/);
-  assert.doesNotMatch(html, /Van een ander/);
+  assert.doesNotMatch(html, /Van een ander|FILE_B/);
+  // Zonder iemand die tekent: de afbeeldingen als "[Afbeelding: …]".
+  assert.match(html, /\[Afbeelding: Plattegrond\]/);
+  assert.doesNotMatch(html, /<img/);
+});
+
+test('afbeeldingen: getekend door de aanroeper, alleen veilige beeldtypes, en een fout houdt de pagina niet tegen', async () => {
+  let asked: Array<{ id: string; key: string; name: string }> = [];
+  const images = async (files: Array<{ id: string; key: string; name: string }>) => {
+    asked = files;
+    return Object.fromEntries(files.map(file => [file.id, `https://media.example/signed/${file.name}?t=1&inline=1`]));
+  };
+  const html = (await read(world(), PAGE, { images }))?.html ?? '';
+  // Geen svg: dat kan script bevatten, en de worker toont het niet inline.
+  assert.deepEqual(asked.map(file => file.id), [IMAGE]);
+  assert.match(html, /<img src="https:\/\/media\.example\/signed\/plattegrond\.png\?t=1&amp;inline=1" alt="Plattegrond" loading="lazy">/);
+  assert.match(html, /\[Afbeelding: Logo\]/);
+  // Tekenen mislukt: de pagina komt er toch, met "[Afbeelding]".
+  const failing = await read(world(), PAGE, { images: async () => { throw new Error('opslag weg'); } });
+  assert.match(failing?.html ?? '', /gedeelde tekst.*\[Afbeelding: Plattegrond\]/s);
+  // Een adres van buiten de https-regel komt er nooit in (renderPageHtml).
+  const http = await read(world(), PAGE, { images: async () => ({ [IMAGE]: 'http://media.example/x' }) });
+  assert.doesNotMatch(http?.html ?? '', /<img/);
 });
 
 test('subpagina\'s: alleen wat de aanroeper zichtbaar noemt; zonder hem geen enkele', async () => {
@@ -136,7 +174,7 @@ test('bij twijfel niets: geen versie, een andere pagina, een andere organisatie,
 });
 
 test('een fout van de database gaat door, en wordt niet stil "niets"', async () => {
-  for (const table of ['documents', 'drive_shares', 'document_versions', 'attachments']) {
+  for (const table of ['documents', 'drive_shares', 'document_versions', 'rpc:shared_page_attachments']) {
     await assert.rejects(sharedDocumentText(fakeAdmin(world(), table) as never, share, PAGE), { message: `kapot: ${table}` }, table);
   }
 });

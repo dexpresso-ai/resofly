@@ -35,6 +35,7 @@ import {
   storageKeyBelongsOnlyTo,
   itemForRecipient,
   loadTransferItems,
+  pageImageSigner,
   recordTransferEvent,
   signedDownloadUrls,
   transferIsOpen,
@@ -927,6 +928,7 @@ async function downloadSharedFile(user: PortalUser, body: Record<string, unknown
     // lezer gedeeld is.
     const text = await sharedDocumentText(supabaseAdmin, share, item.item_id, {
       subpages: (pageIds) => visibleSubpages(shares, share, pageIds),
+      images: pageImageSigner(supabaseAdmin, String(share.organization_id)),
     });
     if (!text) throw new PortalError('Dit item bestaat niet meer.', 404);
     return { text };

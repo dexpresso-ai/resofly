@@ -15,6 +15,7 @@ import assert from 'node:assert/strict';
 import { CALLOUT_VARIANTS, PAGE_MARK_TYPES, PAGE_NODE_TYPES } from '../../../src/lib/pageSchema.ts';
 import { escapeHtml, PAGE_HTML_ATTRIBUTES, PAGE_HTML_CALLOUTS, PAGE_HTML_TAGS, renderPageHtml, type PageHtmlContext } from './pageHtml.ts';
 import { pageReferences } from './pageReferences.ts';
+import { RICH_CONTENT_URI_SAFE_ATTRS } from '../../../src/lib/sanitizeHtml.ts';
 
 type Node = { type: string; attrs?: Record<string, unknown>; content?: Node[]; text?: string; marks?: Array<{ type: string; attrs?: Record<string, unknown> }> };
 
@@ -80,6 +81,22 @@ test('de lijst overleeft de sanitizer van het portaal: geen id, style, data-* of
   for (const [name, attributes] of Object.entries(PAGE_HTML_ATTRIBUTES)) {
     assert.ok((PAGE_HTML_TAGS as readonly string[]).includes(name), `attributen voor een tag die niet bestaat: ${name}`);
     for (const attr of attributes) assert.doesNotMatch(attr, /^(id|style|data-.*|on.*)$/, `${name} ${attr}`);
+  }
+});
+
+test('elk attribuut zonder adres houdt de sanitizer van het portaal heel', () => {
+  // DOMPurify toetst elk attribuut dat hij niet als URI-veilig kent aan de
+  // adresregel van de app (alleen https:, mailto: …). colspan="2" en start="3"
+  // gingen zo verloren, en de Node-test hierboven zag dat niet: hij keek alleen
+  // naar verboden namen (gevonden met ui.mjs paginadelen, 28 november 2026).
+  // href en src zijn adressen; alt en role kent DOMPurify als veilig; aria-*
+  // laat hij staan; target en rel zet de hook van sanitizeHtml.ts bij elke link.
+  const vanzelf = new Set(['href', 'src', 'alt', 'role', 'target', 'rel']);
+  for (const [tag, attributes] of Object.entries(PAGE_HTML_ATTRIBUTES)) {
+    for (const attr of attributes) {
+      if (vanzelf.has(attr) || attr.startsWith('aria-')) continue;
+      assert.ok((RICH_CONTENT_URI_SAFE_ATTRS as readonly string[]).includes(attr), `<${tag} ${attr}> verdwijnt in het portaal`);
+    }
   }
 });
 

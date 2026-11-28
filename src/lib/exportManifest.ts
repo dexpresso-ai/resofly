@@ -173,7 +173,9 @@ export const EXPORT_FORMAT_VERSION = 1;
 // versie van een pagina die de klant ziet. Gaat met de delingen mee.
 // 20261128130000 (bijwerken bij klant) zet twee functies erbij; geen tabellen
 // of kolommen.
-export const EXPORT_SCHEMA_VERSION = '20261128130000';
+// 20261128140000 (de bijlagen van een gedeelde pagina) zet een functie erbij;
+// geen tabellen of kolommen.
+export const EXPORT_SCHEMA_VERSION = '20261128140000';
 
 export type TableKind =
   | 'export'

@@ -1249,6 +1249,66 @@ html,body,#root{height:100%}body{background:var(--bg);color:var(--text);font-fam
 .rich-text-viewer .rf-task-list li[data-checked="true"]>.rf-task-content{text-decoration:line-through;text-decoration-color:rgba(var(--accent-rgb),.62);text-decoration-thickness:2px;color:var(--muted)}
 .rich-text-editor .rf-task-list li[data-checked="true"],
 .rich-text-viewer .rf-task-list li[data-checked="true"]{text-decoration:none!important}
+/* Afgevinkt, in het leesvenster van het portaal en de geheime link. Dat
+   haalt de HTML door sanitizeRichContentHtml, en die laat geen data-*
+   staan: li[data-checked] hierboven trof daar nooit, en een afgevinkte taak
+   leek open. Een pagina zegt het met een klasse (rf-task-checked), een
+   notitie met aria-checked op het vakje (dat blijft staan). */
+.rich-text-viewer .rf-task-list li.rf-task-checked,
+.rich-text-viewer .rf-task-list li:has(>.rf-task-checkbox[aria-checked="true"]){color:var(--muted)}
+.rich-text-viewer .rf-task-list li.rf-task-checked>.rf-task-checkbox,
+.rich-text-viewer .rf-task-list li>.rf-task-checkbox[aria-checked="true"]{border-color:var(--accent);background:rgba(var(--accent-rgb),.18)}
+.rich-text-viewer .rf-task-list li.rf-task-checked>.rf-task-checkbox:before,
+.rich-text-viewer .rf-task-list li>.rf-task-checkbox[aria-checked="true"]:before{content:'✓'}
+.rich-text-viewer .rf-task-list li.rf-task-checked>.rf-task-content,
+.rich-text-viewer .rf-task-list li:has(>.rf-task-checkbox[aria-checked="true"])>.rf-task-content{text-decoration:line-through;text-decoration-color:rgba(var(--accent-rgb),.62);text-decoration-thickness:2px;color:var(--muted)}
+.rich-text-viewer .rf-task-content>p{margin:0}
+
+/* Een gedeelde pagina (stap 1C-4): de HTML uit renderPageHtml
+   (supabase/functions/_shared/pageHtml.ts), na sanitizeRichContentHtml. Geen
+   id, style of data-*: alles via de rf-klassen. */
+.rich-text-viewer .rf-page{line-height:1.6;overflow-wrap:anywhere}
+.rich-text-viewer .rf-page h2{font-size:1.35em;margin:1.2em 0 .4em}
+.rich-text-viewer .rf-page h3{font-size:1.15em;margin:1.1em 0 .35em}
+.rich-text-viewer .rf-page h4{font-size:1em;margin:1em 0 .3em}
+.rich-text-viewer .rf-page p{margin:.5em 0}
+.rich-text-viewer .rf-page li>p{margin:.15em 0}
+.rich-text-viewer .rf-page blockquote{margin:.8em 0;padding:.1em 0 .1em 14px;border-left:3px solid var(--border2);color:var(--muted2)}
+.rich-text-viewer .rf-page pre{overflow-x:auto;margin:.8em 0;padding:10px 12px;border-radius:10px;background:var(--bg3);font-size:12.5px;line-height:1.5}
+.rich-text-viewer .rf-page code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.92em}
+.rich-text-viewer .rf-page :not(pre)>code{padding:1px 5px;border-radius:6px;background:var(--bg3)}
+.rich-text-viewer .rf-page mark{padding:0 2px;border-radius:3px;background:rgba(250,204,21,.38);color:inherit}
+.rich-text-viewer .rf-page hr{margin:1.2em 0;border:0;border-top:1px solid var(--border)}
+.rich-text-viewer .rf-page img{display:block;max-width:100%;height:auto;border-radius:10px}
+/* Sinds de sanitizer width en height laat staan (RICH_CONTENT_URI_SAFE_ATTRS),
+   mag een geplakte afbeelding in een gedeelde notitie het venster niet verbreden. */
+.share-read-modal .rich-text-viewer img{max-width:100%;height:auto}
+.rich-text-viewer .rf-image-missing,.rich-text-viewer .rf-file{color:var(--muted2);font-style:italic}
+.rich-text-viewer .rf-subpage{font-weight:600}
+.rich-text-viewer .rf-table-wrap{max-width:100%;margin:.8em 0;overflow-x:auto}
+.rich-text-viewer .rf-table{min-width:100%;border-collapse:collapse}
+.rich-text-viewer .rf-table th,.rich-text-viewer .rf-table td{padding:6px 9px;border:1px solid var(--border);text-align:left;vertical-align:top}
+.rich-text-viewer .rf-table th{background:var(--bg3);font-weight:600}
+.rich-text-viewer .rf-table p{margin:0}
+.rich-text-viewer .rf-table .rf-align-center{text-align:center}
+.rich-text-viewer .rf-table .rf-align-right{text-align:right}
+.rich-text-viewer .rf-callout{margin:.8em 0;padding:10px 14px;border:1px solid;border-left-width:4px;border-radius:10px}
+.rich-text-viewer .rf-callout>:first-child{margin-top:0}
+.rich-text-viewer .rf-callout>:last-child{margin-bottom:0}
+.rich-text-viewer .rf-callout-info{border-color:rgba(59,130,246,.45);background:rgba(59,130,246,.08)}
+.rich-text-viewer .rf-callout-tip{border-color:rgba(16,185,129,.45);background:rgba(16,185,129,.08)}
+.rich-text-viewer .rf-callout-let-op{border-color:rgba(245,158,11,.5);background:rgba(245,158,11,.09)}
+.rich-text-viewer .rf-callout-waarschuwing{border-color:rgba(239,68,68,.5);background:rgba(239,68,68,.08)}
+.rich-text-viewer .rf-details{margin:.6em 0;padding:6px 12px;border:1px solid var(--border);border-radius:10px}
+.rich-text-viewer .rf-details>summary{cursor:pointer;font-weight:600}
+.rich-text-viewer .rf-details-content{padding-top:4px}
+.rich-text-viewer .rf-columns{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;margin:.8em 0}
+.rich-text-viewer .rf-toc{margin:.8em 0;padding:10px 14px;border:1px solid var(--border);border-radius:10px;background:var(--bg2)}
+.rich-text-viewer .rf-toc-title{margin:0 0 4px;font-weight:600}
+.rich-text-viewer .rf-toc ul{margin:0;padding-left:0;list-style:none}
+.rich-text-viewer .rf-toc li:before{content:none!important}
+.rich-text-viewer .rf-toc-2{padding-left:14px}
+.rich-text-viewer .rf-toc-3{padding-left:28px}
 
 /* Quote approval + Resend workflow */
 .fin-item-rich { display: block; padding: 0; overflow: hidden; }

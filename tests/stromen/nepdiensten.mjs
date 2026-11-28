@@ -30,6 +30,8 @@ export const post = {
   r2Storing: { aantal: 0 },
   /** Word-documenten in de media-opslag (body_storage_key → tekst). */
   media: new Map(),
+  /** Elke vraag om getekende downloadlinks: { organizationId, files, ttlSeconds, … }. */
+  getekend: [],
   mollie: {
     teller: 0,
     betalingen: new Map(),
@@ -304,6 +306,20 @@ async function media(request, url) {
     const body = await request.json();
     if (!post.media.has(body.storageKey)) return json(404, { error: 'Word-document niet gevonden' });
     return new Response(await nepPdf(`Word-contract ${post.media.get(body.storageKey)}`), { status: 200, headers: { 'content-type': 'application/pdf' } });
+  }
+  // Getekende downloadlinks (signedDownloadUrls in _shared/fileTransferServer.ts).
+  // Op een verzonnen https-adres: niets haalt ze hier echt op, maar een gedeelde
+  // pagina toont een afbeelding alleen met https (renderPageHtml). Zonder deze
+  // route viel het portaal terug op base64, en een pagina op "[Afbeelding]".
+  if (request.method === 'POST' && pad === '/internal/signed-urls') {
+    if (request.headers.get('authorization') !== `Bearer ${R2_GEHEIM}`) return json(401, { error: 'Geen toegang' });
+    const body = await request.json();
+    post.getekend.push(body);
+    const files = (Array.isArray(body.files) ? body.files : []).map((file) => ({
+      key: file.key,
+      url: `https://media.stromen.test/signed/${encodeURIComponent(file.key)}?t=nep-${post.getekend.length}`,
+    }));
+    return json(200, { files, zipUrl: null });
   }
   // De kijk-tokens van een album (gallery-public, client-portal). Verzonnen,
   // maar alleen met het interne geheim, net als bij de echte worker.

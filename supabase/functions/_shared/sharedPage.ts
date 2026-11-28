@@ -13,6 +13,11 @@
 //
 // De service-role slaat RLS over. Daarom filtert elke vraag hier zelf op de
 // organisatie van de deling (CLAUDE.md, regel 1), en op de pagina zelf.
+//
+// Afbeeldingen en bestandsnamen komen uit shared_page_attachments
+// (20261128140000): alleen bijlagen uit de gedeelde versie die nú nog in het
+// dossier van de pagina horen. De versie ligt vast, maar een bestand kan
+// daarna naar een andere klant verhuizen.
 // ============================================================
 
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
@@ -34,6 +39,18 @@ export type VisibleSubpages = (pageIds: string[]) => Promise<PageHtmlContext['su
 export type SharedDocumentText = { title: string; html: string };
 
 /**
+ * Getekende adressen voor afbeeldingen: attachmentId → https-adres. De
+ * aanroeper tekent (pageImageSigner in fileTransferServer.ts); zonder deze
+ * functie staat er "[Afbeelding]".
+ */
+export type SignPageImages = (files: Array<{ id: string; key: string; name: string }>) => Promise<Record<string, string>>;
+
+type SharedOptions = { subpages?: VisibleSubpages; images?: SignPageImages };
+
+/** De beeldtypes die de worker inline toont, en die een browser in <img> laat zien. Geen svg: dat kan script bevatten. */
+const IMAGE_TYPES = /^image\/(png|jpeg|gif|webp|avif)$/i;
+
+/**
  * De tekst van een gedeeld document (een tekstdocument of een pagina), of
  * null als er niets te tonen is.
  */
@@ -41,7 +58,7 @@ export async function sharedDocumentText(
   admin: SupabaseClient,
   share: SharedDocumentShare,
   documentId: string,
-  options: { subpages?: VisibleSubpages } = {},
+  options: SharedOptions = {},
 ): Promise<SharedDocumentText | null> {
   if (!UUID.test(documentId)) return null;
   const { data, error } = await admin
@@ -62,7 +79,7 @@ async function sharedPageText(
   admin: SupabaseClient,
   share: SharedDocumentShare,
   pageId: string,
-  options: { subpages?: VisibleSubpages },
+  options: SharedOptions,
 ): Promise<SharedDocumentText | null> {
   // De versie staat op de deling zelf. Alleen een deling van precies deze
   // pagina telt: een map neemt geen pagina's mee (drive_folder_tree_items).
@@ -88,17 +105,23 @@ async function sharedPageText(
   if (!version) return null;
 
   const refs = pageReferences(version.body);
-  const fileIds = refs.files.filter(id => UUID.test(id));
   const pageIds = refs.pages.filter(id => UUID.test(id) && id !== pageId);
   const context: PageHtmlContext = {};
-  if (fileIds.length > 0) {
-    const { data: files, error: filesError } = await admin
-      .from('attachments')
-      .select('id,name')
-      .eq('organization_id', share.organization_id)
-      .in('id', fileIds);
-    if (filesError) throw filesError;
-    context.fileNames = Object.fromEntries(((files ?? []) as Array<{ id: string; name: string }>).map(file => [file.id, file.name]));
+  if (refs.files.length > 0 || refs.images.length > 0) {
+    const { data: attachmentData, error: attachmentError } = await admin.rpc('shared_page_attachments', { p_share_id: share.id });
+    if (attachmentError) throw attachmentError;
+    const attachments = (attachmentData ?? []) as Array<{ attachment_id: string; kind: string; name: string; storage_key: string | null; mime_type: string | null }>;
+    context.fileNames = Object.fromEntries(attachments.filter(row => row.kind === 'fileBlock').map(row => [row.attachment_id, row.name]));
+    const images = attachments.filter(row => row.kind === 'image' && row.storage_key && IMAGE_TYPES.test(row.mime_type ?? ''));
+    if (images.length > 0 && options.images) {
+      try {
+        const signed = await options.images(images.map(row => ({ id: row.attachment_id, key: row.storage_key as string, name: row.name })));
+        context.images = Object.fromEntries(Object.entries(signed).map(([id, src]) => [id, { src }]));
+      } catch (error) {
+        // Geen getekend adres (de opslag is even weg): dan "[Afbeelding]", maar de pagina zelf wel.
+        console.warn('sharedPage: afbeeldingen niet getekend', error instanceof Error ? error.message : error);
+      }
+    }
   }
   if (pageIds.length > 0 && options.subpages) context.subpages = await options.subpages(pageIds);
 

@@ -2,7 +2,7 @@ import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 import { clientOriginMismatch, clientOriginOf, rememberClientOrigin } from '../_shared/clientLinks.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 import { BRANDING_COLUMNS, sanitizeBranding, withoutNewestBrandingColumns } from '../_shared/branding.ts';
-import { signedDownloadUrls, storageKeyBelongsOnlyTo } from '../_shared/fileTransferServer.ts';
+import { pageImageSigner, signedDownloadUrls, storageKeyBelongsOnlyTo } from '../_shared/fileTransferServer.ts';
 import { officeDownloadName } from '../_shared/fileTransfer.ts';
 import { sharedDocumentText } from '../_shared/sharedPage.ts';
 
@@ -264,7 +264,9 @@ async function loadTextItem(share: ShareRow, item: ShareItem): Promise<{ title: 
     // Bij een pagina de gedeelde versie, nooit de pagina zoals ze nu is
     // (_shared/sharedPage.ts). Een geheime link is één deling: subpagina's
     // staan er niet in.
-    const text = await sharedDocumentText(supabaseAdmin, share, item.item_id);
+    const text = await sharedDocumentText(supabaseAdmin, share, item.item_id, {
+      images: pageImageSigner(supabaseAdmin, share.organization_id),
+    });
     if (!text) throw new ShareError('Dit item bestaat niet meer.', 404);
     return text;
   }
